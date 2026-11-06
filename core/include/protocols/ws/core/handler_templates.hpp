@@ -3,6 +3,7 @@
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/model/Response.hpp"
 #include "protocols/ws/Envelope.hpp"
+#include "protocols/ws/core/Refusal.hpp"
 #include "ops/Error.hpp"
 #include "protocols/ws/Fwd.hpp"
 
@@ -16,51 +17,6 @@
 using json = nlohmann::json;
 
 namespace vh::protocols::ws::core {
-    // What an ERROR response carries for the exception being handled (call only inside a catch block). An ops
-    // refusal gets a stable machine-readable `data.code` so clients can render a typed state instead of matching
-    // message text: Denied "denied", NotFound "not_found", Invalid "invalid", Conflict "conflict", and
-    // NeedsConfirmation its own code (the client asks, then resends with the acceptance set), Refused its own code
-    // (device pairing: no_pairing_window, rate_limited, device_unknown). Anything that is not
-    // an ops::Error is a fault: the message, no code.
-    struct ErrorReply {
-        std::string message;
-        json data{};
-    };
-
-    // A typed refusal whose answer carries more than its code: data is `details` plus {code} (meta.hello's
-    // protocol_unsupported names the server's range and version). ws handlers only; ops:: never raise it.
-    struct DetailedRefusal : ops::Refused {
-        json details;
-        DetailedRefusal(std::string code_, const std::string &text, json details_)
-            : Refused(std::move(code_), text), details(std::move(details_)) {}
-    };
-
-    inline ErrorReply describeCurrentError() {
-        try {
-            throw;
-        } catch (const ops::NeedsConfirmation &e) {
-            return {e.what(), json{{"code", e.code}}};
-        } catch (const DetailedRefusal &e) {
-            json data = e.details.is_object() ? e.details : json::object();
-            data["code"] = e.code;
-            return {e.what(), std::move(data)};
-        } catch (const ops::Refused &e) {
-            return {e.what(), json{{"code", e.code}}};
-        } catch (const ops::Denied &e) {
-            return {e.what(), json{{"code", "denied"}}};
-        } catch (const ops::NotFound &e) {
-            return {e.what(), json{{"code", "not_found"}}};
-        } catch (const ops::Invalid &e) {
-            return {e.what(), json{{"code", "invalid"}}};
-        } catch (const ops::Conflict &e) {
-            return {e.what(), json{{"code", "conflict"}}};
-        } catch (const std::exception &e) {
-            return {e.what()};
-        } catch (...) {
-            return {"Unknown error"};
-        }
-    }
-
     inline void respondWithCurrentError(std::string &&cmd, json &&msg, const std::shared_ptr<Session> &session) {
         auto reply = describeCurrentError();
         model::Response(std::move(cmd), std::move(msg), model::Status::ERROR, std::move(reply.data),

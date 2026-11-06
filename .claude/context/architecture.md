@@ -241,8 +241,8 @@ against the frozen `core/usage/protocol/v<kProtocolVersion>.json`. Policy: `docs
 
 The web client builds `ws(s)://<host>/ws` in `web/src/util/getUrl.ts` (overridable with `NEXT_PUBLIC_VAULTHALLA_WS_ORIGIN`).
 `web/src/stores/useWebSocket.ts` handles reconnect, the pending-request map keyed by `requestId`, and token injection.
-Router allowlists are **exact and per session mode**: unauthenticated, human, pending-share, ready-share, and on the
-device listener device and device-pairing (see "Device listener and pairing" below).
+Router allowlists are **exact and per session mode**: unauthenticated, pending-MFA (#357), human, pending-share,
+ready-share, and on the device listener device and device-pairing (see "Device listener and pairing" below).
 Only the session-lifecycle commands (`auth.login`, `auth.logout`, `auth.refresh`, `auth.isAuthenticated`) skip
 access-token validation (`isSessionLifecycleCommand`, mirrored by the web's
 `SESSION_LIFECYCLE_COMMANDS`). Every other `auth.*` command (register, user update/delete/get/list, password change)
@@ -374,8 +374,8 @@ warns while generated + file present and offers rotate / delete file / continue 
 
 ### WebAuthn verifier (`auth/webauthn/`, #355)
 
-The relying-party half of passkeys (design `docs/dev/mfa-design.md` 4.1, decision D5), not yet wired into sign-in
-(#357). Its own library with no daemon includes (`tools/contracts/test_webauthn_contract.py`), namespace
+The relying-party half of passkeys (design `docs/dev/mfa-design.md` 4.1, decision D5); the daemon's adapter is
+`auth/mfa/Passkeys.hpp` (#357, below). Its own library with no daemon includes (`tools/contracts/test_webauthn_contract.py`), namespace
 `vh::auth::webauthn`, so it can be extracted as a `vl-*` library. `Verifier` = check 1 (`ChallengeStore`: in-memory,
 single use, 120 s, bound to ws session, `Purpose`, user and scope, burnt before any signature check) + the pure
 `verifyRegistration`/`verifyAssertion` (checks 2-14). Persistence is the caller's: `CredentialLookup` is an
@@ -410,8 +410,8 @@ adopted again. A socket's refresh JWT is minted at its own handshake: `Validator
 **only from the stored row** (the old prior-session shortcut, which let a socket adopt another live socket's rowless
 cookie, is gone), so a planted cookie is rotated away at the handshake. `auth.login` on a socket that already has a
 user is `ops::Refused` `already_signed_in` (before any lookup; not counted by the login rate limit). The MFA policy
-hook `auth::session::assurance` (`Assurance.hpp`; no policy installed until #360) is checked against the row on every
-use: `rehydrateFromStoredRefreshToken` (handshake, validate, auth.refresh), the HTTP lanes' stored-row path, and
+hook `auth::session::assurance` (`Assurance.hpp`; the daemon installs `auth::mfa::policy::rowSatisfies` at startup,
+#357) is checked against the row on every use: `rehydrateFromStoredRefreshToken` (handshake, validate, auth.refresh), the HTTP lanes' stored-row path, and
 `Manager::endIfBelowPolicy` on every `validate`/`renewAccessToken`/`validateRawRefreshToken`; a row below policy is
 revoked (`auth.session.revoke`, reason `assurance_policy`). `assurance::setPolicy` / `policyChanged()` bump
 `rbac::policyEpoch()`, so the 30 s cache can't hide a change. Sessions list/revoke: `ops::sessions` (own account
@@ -426,8 +426,8 @@ connection that comes up already signed in (another tab won) answers `already_si
 `WsAuthRouting.AuthLoginOnASignedInSocketIsAlreadySignedIn`, `SqlDeployerHistoryDb.RefreshTokenAssurance*`.
 
 **MFA factor storage (#356, migration 120; MFA design note §4.2, §4.3, §9).** `auth::mfa` (`core/{include,src}/auth/mfa/`)
-is the storage and model layer, keyed by user id (a pending sign-in has no `session->user`); no ws command or sign-in
-flow uses it yet (#357). Tables: `user_mfa` (random 32-byte `webauthn_user_handle`, `required`, cooldown),
+is the storage and model layer, keyed by user id (a pending sign-in has no `session->user`); the sign-in flow below
+(#357) is its user. Tables: `user_mfa` (random 32-byte `webauthn_user_handle`, `required`, cooldown),
 `webauthn_credentials`, `totp_factors`, `recovery_code_batches`, `recovery_codes`. Two internal secrets in
 `crypto::secrets::Manager` via `Manager::sealedKey` (seal-and-read-back; an unreadable row throws and is never
 replaced; a missing row while dependents exist is `MasterSecretLost`, `secrets::dependents::mfaSeal/mfaPepper`):
@@ -447,6 +447,44 @@ the `auth/webauthn` verifier (#355): `fromVerified(webauthn::NewCredential, …)
 `ws::LogRedaction` redacts codes, seeds, `otpauth:` URIs (by value) and WebAuthn material. `vh secrets export
 mfa-seal|mfa-pepper` (base64). Tests: `MfaTotp*`, `MfaRecoveryCodes*`, `MfaSeal*`, `MfaLogRedaction*`,
 `MfaFactorsDb*`, `SqlDeployerHistoryDb.MfaFactors*`.
+
+**Pending-MFA sign-in and guided enrollment (#357; MFA design note §5.2, §7.1, §7.2, §8).** `auth::mfa::policy`
+(`Policy.hpp`): level `admins` on every install (D2; `optional | admins | all`, configurable in #360) plus
+`user_mfa.required`; "privileged" = super admin, or an admin role that may add/edit/delete users or admins or reset
+their passwords, add/edit/delete admin or vault roles, edit any settings section, or export/rotate encryption keys
+(auditor/unprivileged are not). It is applied twice: `rowSatisfies` (installed into `assurance` by `main.cpp`) refuses
+and revokes an aal 1 row of an account that must have MFA on its next use (no grandfathering; aal 2 rows skip the
+lookup; `user_mfa.required` cached per policy epoch, a DB error refuses the request without revoking), and
+`auth::Manager::loginUser` (now `bool`) asks `signin::beginIfDue` after a correct password: an account with a usable
+factor (whatever the policy) or one that must have MFA is left **pending** (`auth/mfa/Pending.hpp`:
+`ws::Session::mfa()` holds `Pending {user_id, kind Mfa|Enrollment, methods, expires_at, failures, enrolled_amr,
+recovery_batch}` in memory; `session->user` stays null, no access token, no refresh row, so auth.refresh, a
+reconnect, another tab and the HTTP lanes refuse the cookie by construction). `auth.login` then answers ERROR
+`mfa_required` / `mfa_enrollment_required` with `data.pending {kind, expires_at, methods, attempts_remaining,
+webauthn?: {publicKey}}` (`handler::Mfa::throwPending`; not a login failure for the rate limit). Router: before the
+human branch, a pending socket runs exactly `kPendingCommands` (`auth.mfa.verify|cancel`, `auth.logout`) plus
+`kPendingEnrollmentCommands` (`auth.mfa.webauthn.register.options|finish`, `auth.mfa.totp.enroll.start|confirm`,
+`auth.mfa.recovery.acknowledge`) while enrolling; everything else (auth.login, meta.hello) is UNAUTHORIZED. Mirrored
+in the web's `LIFECYCLE` (`tools/contracts/test_mfa_pending_contract.py`). Ends after 5 min (10 enrolling), 5 failed
+factors, cancel, logout, or the socket closing (`Session::close` clears it and `passkeys::forgetSession`). A second
+cap across sockets: 5 factor failures per account in 15 min → `rate_limited {retry_after}` (`signin::
+accountRetryAfter`; in memory; #360 adds the doubling backoff). `signin::complete` is the only promotion: clears
+pending, `setAuthenticatedUser` + `promote(Proof{2, {pwd, hwk|swk|otp|rec}})` (one row), last login,
+`auth.login.success {method, aal, amr}`. `auth.mfa.verify {method webauthn|totp|recovery_code}`: passkeys through
+`auth/mfa/Passkeys.hpp` (RP from `config.auth.webauthn`, one process-wide `ChallengeStore`, purpose `mfa` bound to
+the socket uuid and user; `{method: webauthn}` without a credential answers `mfa_required` with a fresh challenge,
+not an attempt); `mfa_invalid {attempts_remaining, pending}`; a recovery code → RecoveryRestricted: amr `rec`,
+`user_mfa.recovery_cooldown_until` = now + 24 h (`startRecoveryCooldown`; what it refuses is #360), every other web
+session revoked through `ops::sessions::revoke(all_others)` (paired devices untouched, D4), answer `recovery`.
+Enrollment: the first factor (UV passkey registration or a confirmed TOTP code) answers ten recovery codes; on a
+pending socket `auth.mfa.recovery.acknowledge` of that batch completes the sign-in at aal 2. The same commands
+(plus `auth.mfa.status`, `auth.mfa.factor.rename {kind, id, label}`, `auth.mfa.recovery.generate`) serve signed-in web
+sessions (Account › Security); device sessions are denied (Desktop never sees an MFA prompt). Replacing an active
+recovery batch needs a second factor proven on the session within 5 min (or a recovery sign-in) until step-up (#359):
+`step_up_required {family: account.credentials, max_age_seconds}`. No factor removal yet (#359). Contract auth levels
+`pending` / `enrollment`; model `MfaFactor`. Tests: `test_mfa_signin.cpp` (`WsAuthRouting.APending*`,
+`MfaSignInDb.*`: no session during pending, one aal 2 row, drift/replay, recovery replay and revocation, expiry,
+5 failures, account throttle, D2 aal 1 refusal, passkey enroll/sign-in/UV refused with a software authenticator).
 
 **Identities (`identities::Manager`, `core/{include,src}/identities/`).** One canonical `User`/`Group` object per id,
 handed out as the same `shared_ptr` everywhere (sessions, engines, FUSE, HTTP, S3). Each holds an immutable

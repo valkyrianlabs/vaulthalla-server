@@ -235,6 +235,19 @@ export interface WebSocketCommandMap {
   // Exactly one of id / all_others. Revoked sessions end at once (sockets closed, cookies refused).
   'auth.sessions.revoke': WsContract['auth.sessions.revoke']
 
+  // MFA (#357). auth.login may refuse with mfa_required / mfa_enrollment_required and data.pending (models/mfa.ts):
+  // the socket is then pending, runs only these, and finishes with auth.mfa.verify or auth.mfa.recovery.acknowledge.
+  'auth.mfa.verify': WsContract['auth.mfa.verify']
+  'auth.mfa.cancel': WsContract['auth.mfa.cancel']
+  'auth.mfa.status': WsContract['auth.mfa.status']
+  'auth.mfa.webauthn.register.options': WsContract['auth.mfa.webauthn.register.options']
+  'auth.mfa.webauthn.register.finish': WsContract['auth.mfa.webauthn.register.finish']
+  'auth.mfa.totp.enroll.start': WsContract['auth.mfa.totp.enroll.start']
+  'auth.mfa.totp.enroll.confirm': WsContract['auth.mfa.totp.enroll.confirm']
+  'auth.mfa.factor.rename': WsContract['auth.mfa.factor.rename']
+  'auth.mfa.recovery.generate': WsContract['auth.mfa.recovery.generate']
+  'auth.mfa.recovery.acknowledge': WsContract['auth.mfa.recovery.acknowledge']
+
   // Vault commands
 
   'storage.vault.list': { payload: null; response: { vaults: Vault[] } }

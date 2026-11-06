@@ -3872,6 +3872,107 @@
       "name": "LoggingConfig"
     },
     {
+      "description": "One of the account's sign-in factors (#356/#357): auth::mfa::to_json(Factor), core/src/auth/mfa/Factors.cpp. Carries no secret and no credential id. id is unique per kind only: name a factor by {kind, id}.",
+      "fields": [
+        {
+          "minimum": 0,
+          "name": "id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "webauthn: a passkey or security key; totp: an authenticator app.",
+          "enum": [
+            "webauthn",
+            "totp"
+          ],
+          "name": "kind",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "1..64 characters, the person's own name for it.",
+          "name": "label",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "created_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Unix seconds; null until first used to sign in.",
+          "name": "last_used_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "A passkey refused after a sign-count regression (possible clone).",
+          "name": "suspended",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Enrolled from a recovery-code sign-in.",
+          "name": "created_during_recovery",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Passkeys: a synced passkey (1Password, iCloud Keychain, Google).",
+          "name": "backup_eligible",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Passkeys: currently backed up, as last reported.",
+          "name": "backup_state",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Passkeys: the browser's transport hints (usb, nfc, ble, internal, hybrid).",
+          "items": "string",
+          "name": "transports",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Passkeys: the authenticator model's AAGUID, when it reported one.",
+          "name": "aaguid",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "name": "MfaFactor"
+    },
+    {
       "description": "Filesystem operation queue and share upload figures, one vault or the system (core/src/stats/model/OperationStats.cpp to_json).",
       "fields": [
         {
@@ -18032,7 +18133,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "75746a34a0edbc59efe901a6be90b066819a626f309eb5be3888f001fa884a1c",
+  "models_hash": "adece020e347877b41fa73042a73e55267d7acc9d2ad7ae3bf1208f0c66e1136",
   "protocol": {
     "min": 1,
     "version": 1
@@ -18307,7 +18408,7 @@
       "client_timeout_ms": 20000,
       "command": "auth.login",
       "confirmations": [],
-      "description": "Sign in with a username and password. The access token comes back in the response envelope (`token`), the refresh token as an HttpOnly cookie set at the handshake. A connection signs in once: one that already has a user (signed in, or restored from its cookie) is refused with data.code already_signed_in; sign in again on a new connection. The session's sign-in is recorded as aal 1, amr [\"pwd\"] (auth.sessions.list).",
+      "description": "Sign in with a username and password. The access token comes back in the response envelope (`token`), the refresh token as an HttpOnly cookie set at the handshake. A connection signs in once: one that already has a user (signed in, or restored from its cookie) is refused with data.code already_signed_in; sign in again on a new connection. A password alone signs in (aal 1, amr [\"pwd\"]) only an account with no factor that need not have MFA. Otherwise the right password answers ERROR mfa_required (a factor is enrolled: finish with auth.mfa.verify) or mfa_enrollment_required (the MFA policy requires one and there is none: set it up with the enrollment commands), and the connection is pending: not signed in, no access token, no session row, so auth.refresh, a reconnect, another tab and the HTTP lanes all refuse it. It may run only auth.mfa.verify, auth.mfa.cancel and auth.logout (plus the enrollment commands while enrolling) and ends after 5 minutes (10 enrolling), 5 failed factors or with the socket. mfa_unavailable: the account's factors can't be used on this server. data.pending is {kind: \"mfa\" | \"enrollment\", expires_at (Unix seconds), methods: [\"webauthn\" | \"totp\" | \"recovery_code\"], attempts_remaining, webauthn?: {publicKey: PublicKeyCredentialRequestOptionsJSON}}.",
       "input": "payload",
       "operation": "auth.login",
       "payload": [
@@ -18336,11 +18437,17 @@
       ],
       "refusal_codes": [
         "error",
-        "already_signed_in"
+        "already_signed_in",
+        "mfa_required",
+        "mfa_enrollment_required",
+        "mfa_unavailable"
       ],
       "refusal_kinds": [
         "error",
-        "already_signed_in"
+        "already_signed_in",
+        "mfa_required",
+        "mfa_enrollment_required",
+        "mfa_unavailable"
       ],
       "response": [
         {
@@ -18369,6 +18476,1261 @@
       "refusal_codes": [],
       "refusal_kinds": [],
       "response": [],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "pending",
+      "client_timeout_ms": 15000,
+      "command": "auth.mfa.cancel",
+      "confirmations": [],
+      "description": "End a pending sign-in now; the connection is anonymous again (sign in again with the password).",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "unauthorized"
+      ],
+      "response": [],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.mfa.factor.rename",
+      "confirmations": [],
+      "description": "Rename one of the caller's factors (named by kind and id).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "enum": [
+            "webauthn",
+            "totp"
+          ],
+          "name": "kind",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "int_range",
+            "max": 1000,
+            "min": 1
+          },
+          "minimum": 0,
+          "name": "id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "1..64 characters.",
+          "generator": {
+            "fresh": true,
+            "kind": "pattern",
+            "pattern": "key_{a}{a}{a}{9}{9}{a}{9}"
+          },
+          "name": "label",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "MfaFactor",
+          "name": "factor",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "enrollment",
+      "client_timeout_ms": 15000,
+      "command": "auth.mfa.recovery.acknowledge",
+      "confirmations": [],
+      "description": "The person saved the codes of batch_id: they come into force and the previous batch stops working. On a pending enrollment this completes the sign-in (aal 2, amr [\"pwd\", the new factor's]) and answers the user, with the access token in the envelope.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{*}{*}{*}{*}{*}{*}{*}{*}"
+          },
+          "name": "batch_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "error",
+        "mfa_expired"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "error",
+        "mfa_expired"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "remaining",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Present when this completed a pending enrollment.",
+          "model": "SessionUser",
+          "name": "user",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "maximum": 2,
+          "minimum": 2,
+          "name": "aal",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.mfa.recovery.generate",
+      "confirmations": [],
+      "description": "Make ten new recovery codes, shown once. They replace the current ones only when acknowledged. The account needs a factor (invalid otherwise). Replacing codes that are in force needs a second factor proven on this session within the last 5 minutes (or a recovery-code sign-in): step_up_required {family, max_age_seconds} otherwise.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "unauthorized",
+        "error",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "unauthorized",
+        "error",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "name": "batch_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "XXXXX-XXXXX.",
+          "items": "string",
+          "name": "codes",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "auth.mfa.status",
+      "confirmations": [],
+      "description": "The caller's MFA: whether the policy requires it and why (policy admins: the super admin and accounts whose admin role may add, edit or delete users or admins or reset their passwords, add, edit or delete admin or vault roles, edit any settings section, or export or rotate encryption keys; policy all: every account; user_required: set for this account), whether passkeys are configured, the factors, the recovery codes, and the recovery cooldown. Web sessions only (a paired device is denied).",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "enum": [
+                "optional",
+                "admins",
+                "all"
+              ],
+              "name": "level",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "required",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "enum": [
+                "none",
+                "policy_admins",
+                "policy_all",
+                "user_required"
+              ],
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "auth.webauthn.rp_id and origins are configured.",
+              "name": "webauthn_available",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "admin_webauthn_only",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "admin_device_bound_only",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            }
+          ],
+          "name": "policy",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "items": "object",
+          "model": "MfaFactor",
+          "name": "factors",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "description": "An acknowledged batch is in force.",
+              "name": "active",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Its unused codes.",
+              "minimum": 0,
+              "name": "remaining",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "acknowledged",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "A generated batch waits for its acknowledgement.",
+              "name": "pending",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            }
+          ],
+          "name": "recovery",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Unix seconds: the recovery cooldown, if one ran.",
+          "name": "cooldown_until",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "This session signed in with a recovery code.",
+          "name": "recovery_restricted",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "enrollment",
+      "client_timeout_ms": 15000,
+      "command": "auth.mfa.totp.enroll.confirm",
+      "confirmations": [],
+      "description": "Finish the authenticator setup with its current code (one step of drift either way). The account's first factor answers its recovery codes too. invalid: the code didn't match; not_found: the setup expired or is finished.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "int_range",
+            "max": 1000,
+            "min": 1
+          },
+          "minimum": 0,
+          "name": "enrollment_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{9}{9}{9}{9}{9}{9}"
+          },
+          "name": "code",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "error",
+        "mfa_expired"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "error",
+        "mfa_expired"
+      ],
+      "response": [
+        {
+          "model": "MfaFactor",
+          "name": "factor",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "The account's first factor only (and every factor of a pending enrollment): its recovery codes.",
+          "fields": [
+            {
+              "name": "batch_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Ten codes, XXXXX-XXXXX, shown once. Inactive until auth.mfa.recovery.acknowledge.",
+              "items": "string",
+              "name": "codes",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "name": "recovery_codes",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "enrollment",
+      "client_timeout_ms": 15000,
+      "command": "auth.mfa.totp.enroll.start",
+      "confirmations": [],
+      "description": "Start setting up an authenticator app (RFC 6238, SHA-1, 6 digits, 30 s). The secret and otpauth URI are shown once (the console draws the QR code itself); the factor is unusable until auth.mfa.totp.enroll.confirm, within 10 minutes. Starting again replaces an unfinished setup.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "1..64 characters (default \"Authenticator app\").",
+          "generator": {
+            "fresh": true,
+            "kind": "pattern",
+            "pattern": "app_{a}{a}{a}{9}{9}{a}{9}"
+          },
+          "name": "label",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "error",
+        "mfa_expired"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "error",
+        "mfa_expired"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "enrollment_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "secret_base32",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "otpauth_uri",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "pending",
+      "client_timeout_ms": 20000,
+      "command": "auth.mfa.verify",
+      "confirmations": [],
+      "description": "Finish a pending sign-in with a second factor: {method: \"webauthn\", credential} (a UV assertion over the pending challenge), or {method: \"totp\" | \"recovery_code\", code}. Success signs the connection in: one session row at aal 2 with amr [\"pwd\", \"hwk\" | \"swk\" | \"otp\" | \"rec\"], the access token in the envelope. A recovery code signs every other web session of the account out (paired devices are not touched), starts the recovery cooldown and answers `recovery`. Refusals: mfa_invalid {attempts_remaining, pending?} (the 5th ends the sign-in), mfa_expired (start again with the password), rate_limited {retry_after} (5 failed factors on the account in 15 minutes), mfa_required {pending} for {method: \"webauthn\"} without a credential: a fresh passkey challenge, not an attempt. data.pending is {kind: \"mfa\" | \"enrollment\", expires_at (Unix seconds), methods: [\"webauthn\" | \"totp\" | \"recovery_code\"], attempts_remaining, webauthn?: {publicKey: PublicKeyCredentialRequestOptionsJSON}}.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "enum": [
+            "webauthn",
+            "totp",
+            "recovery_code"
+          ],
+          "name": "method",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "method webauthn: AuthenticationResponseJSON.",
+          "fields": [
+            {
+              "name": "id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "base64url; equals id.",
+              "name": "rawId",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "public-key"
+              ],
+              "name": "type",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "base64url.",
+                  "name": "clientDataJSON",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "authenticatorData",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "signature",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "userHandle",
+                  "required": false,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "response",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "authenticatorAttachment",
+              "required": false,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "fields": [
+                    {
+                      "name": "rk",
+                      "required": false,
+                      "types": [
+                        "boolean"
+                      ]
+                    }
+                  ],
+                  "name": "credProps",
+                  "required": false,
+                  "types": [
+                    "object"
+                  ]
+                }
+              ],
+              "name": "clientExtensionResults",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "generator": {
+            "kind": "const",
+            "values": [
+              "{}"
+            ]
+          },
+          "name": "credential",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "totp: six digits; recovery_code: XXXXX-XXXXX.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{9}{9}{9}{9}{9}{9}"
+          },
+          "name": "code",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "invalid",
+        "denied",
+        "unauthorized",
+        "error",
+        "mfa_invalid",
+        "mfa_expired",
+        "mfa_required",
+        "rate_limited"
+      ],
+      "refusal_kinds": [
+        "invalid",
+        "denied",
+        "unauthorized",
+        "error",
+        "mfa_invalid",
+        "mfa_expired",
+        "mfa_required",
+        "rate_limited"
+      ],
+      "response": [
+        {
+          "description": "The signed-in user; role permissions reduced to {qualified, value}.",
+          "model": "SessionUser",
+          "name": "user",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "maximum": 2,
+          "minimum": 2,
+          "name": "aal",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Present after a recovery-code sign-in.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "codes_remaining",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unix seconds: sensitive actions wait until then.",
+              "name": "cooldown_until",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Other web sessions signed out.",
+              "minimum": 0,
+              "name": "sessions_revoked",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "recovery",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "enrollment",
+      "client_timeout_ms": 20000,
+      "command": "auth.mfa.webauthn.register.finish",
+      "confirmations": [],
+      "description": "Verify and store the passkey (attestation none or packed self; UV required). The account's first factor answers its recovery codes too; a pending enrollment then finishes with auth.mfa.recovery.acknowledge. invalid: the ceremony didn't verify; not_found: the registration expired (120 s) or was used.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "{*}{*}{*}{*}{*}{*}{*}{*}"
+          },
+          "name": "registration_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "RegistrationResponseJSON (PublicKeyCredential.toJSON() after create()).",
+          "fields": [
+            {
+              "name": "id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "base64url; equals id.",
+              "name": "rawId",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "public-key"
+              ],
+              "name": "type",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "base64url.",
+                  "name": "clientDataJSON",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url.",
+                  "name": "attestationObject",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "getTransports(): a hint, never trusted.",
+                  "items": "string",
+                  "name": "transports",
+                  "required": false,
+                  "types": [
+                    "array"
+                  ]
+                },
+                {
+                  "description": "Ignored: the daemon reads attestationObject.",
+                  "name": "authenticatorData",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Ignored.",
+                  "name": "publicKey",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Ignored.",
+                  "name": "publicKeyAlgorithm",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "response",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "authenticatorAttachment",
+              "required": false,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "fields": [
+                    {
+                      "name": "rk",
+                      "required": false,
+                      "types": [
+                        "boolean"
+                      ]
+                    }
+                  ],
+                  "name": "credProps",
+                  "required": false,
+                  "types": [
+                    "object"
+                  ]
+                }
+              ],
+              "name": "clientExtensionResults",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "generator": {
+            "kind": "const",
+            "values": [
+              "{}"
+            ]
+          },
+          "name": "credential",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "generator": {
+            "fresh": true,
+            "kind": "pattern",
+            "pattern": "key_{a}{a}{a}{9}{9}{a}{9}"
+          },
+          "name": "label",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "error",
+        "mfa_expired"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "error",
+        "mfa_expired"
+      ],
+      "response": [
+        {
+          "model": "MfaFactor",
+          "name": "factor",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "The account's first factor only (and every factor of a pending enrollment): its recovery codes.",
+          "fields": [
+            {
+              "name": "batch_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Ten codes, XXXXX-XXXXX, shown once. Inactive until auth.mfa.recovery.acknowledge.",
+              "items": "string",
+              "name": "codes",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "name": "recovery_codes",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "enrollment",
+      "client_timeout_ms": 15000,
+      "command": "auth.mfa.webauthn.register.options",
+      "confirmations": [],
+      "description": "Start registering a passkey (\"Passkey / Security key\": 1Password, the device's passkey manager, a security key) on the caller's account, or as the first factor of a pending enrollment. Pass publicKey to navigator.credentials.create() and the result to auth.mfa.webauthn.register.finish with registration_id. invalid when passkeys are not configured (auth.webauthn.rp_id).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "1..64 characters (default \"Passkey\").",
+          "generator": {
+            "fresh": true,
+            "kind": "pattern",
+            "pattern": "key_{a}{a}{a}{9}{9}{a}{9}"
+          },
+          "name": "label",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "error",
+        "mfa_expired"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "error",
+        "mfa_expired"
+      ],
+      "response": [
+        {
+          "name": "registration_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "PublicKeyCredentialCreationOptionsJSON for navigator.credentials.create().",
+          "fields": [
+            {
+              "fields": [
+                {
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "rp",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "base64url of the account's random 32-byte WebAuthn handle (never the numeric id).",
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "displayName",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "user",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "base64url, 32 bytes, single use, 120 s, bound to this connection.",
+              "name": "challenge",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "-8 (Ed25519), -7 (ES256), -257 (RS256), in that order.",
+              "fields": [
+                {
+                  "enum": [
+                    "public-key"
+                  ],
+                  "name": "type",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "alg",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "pubKeyCredParams",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "description": "Milliseconds.",
+              "minimum": 0,
+              "name": "timeout",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The account's passkeys: not registered twice.",
+              "fields": [
+                {
+                  "enum": [
+                    "public-key"
+                  ],
+                  "name": "type",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "base64url credential id.",
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "items": "string",
+                  "name": "transports",
+                  "required": true,
+                  "types": [
+                    "array"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "excludeCredentials",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "enum": [
+                    "preferred"
+                  ],
+                  "name": "residentKey",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "requireResidentKey",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "enum": [
+                    "required"
+                  ],
+                  "name": "userVerification",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "authenticatorSelection",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "enum": [
+                "none"
+              ],
+              "name": "attestation",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "credProps",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                }
+              ],
+              "name": "extensions",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "name": "publicKey",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
       "response_model": null,
       "untyped_refusals": [],
       "variants": []
@@ -40212,5 +41574,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "523f85def9d6794eba2f6baa4438b4757ce700d37b4b62d2d1282a81f8a7f007"
+  "ws_hash": "a0833cc2acdf26a6666f0c4a7c3ba141a2626cf2cc93e40dbf773a7268c74521"
 }

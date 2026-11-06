@@ -25,6 +25,27 @@
   never lets a socket adopt another socket's cookie), and treats `already_signed_in` as "another tab won": it
   `auth.refresh`es instead. Account › Security › Sessions (`features/account/SessionsPanel.tsx`) lists and revokes
   the user's sessions (`auth.sessions.list|revoke`).
+- **MFA sign-in (#357):** `login()` returns `{status: 'signed_in'}` or `{status: 'pending', code, pending}` when
+  `auth.login` refuses with `mfa_required` / `mfa_enrollment_required` (`WsError.data` carries refusal data;
+  `models/mfa.ts` `readPending`). The socket that sent the password is pending until a factor succeeds on it, so
+  `LIFECYCLE` also holds the pending allowlist (`auth.mfa.verify|cancel` and the five enrollment commands; core
+  `auth/mfa/Pending.hpp`, `tools/contracts/test_mfa_pending_contract.py`), and `completeSignIn(user)` marks the
+  session authenticated once the answer's envelope token arrived. `LoginForm` swaps the form for
+  `features/auth/mfa/MfaSignIn.tsx` (`next/dynamic`: not in `/login`'s first load): **SecondFactor** (Use passkey /
+  security key, authenticator code, "Use a recovery code"; a stale passkey challenge is renewed with
+  `auth.mfa.verify {method: 'webauthn'}` first; `mfa_invalid` carries the next challenge and attempts left;
+  unauthorized / `mfa_expired` / 0 attempts send it back to the password) and **Enrollment** (Create passkey
+  (recommended) or an authenticator app, then the ten recovery codes behind an "I saved them" checkbox; the
+  acknowledgement signs in; then a nudge to add a second passkey). A recovery-code sign-in lands on
+  `/account?recovery=1#security`. Shared setup pieces in `features/auth/mfa/setup.tsx` (`PasskeySetup`,
+  `TotpSetup`, `RecoveryCodes`). WebAuthn JSON in and out: `lib/webauthn.ts` (base64url, options from JSON,
+  credentials to the members the daemon reads; unit-tested). The TOTP QR code is drawn locally: `lib/qr.ts` (byte
+  mode, level M, versions 1..10; pinned matrices decoded with zbar) rendered by `components/ui/QrCode.tsx`. Wording:
+  "Passkey / Security key", hint "Works with 1Password, your device’s passkey manager, and security keys"
+  (`PASSKEY_LABEL`, `PASSKEY_HINT`). Account › Security › Sign-in factors (`features/account/MfaPanel.tsx`, itself
+  `next/dynamic` for the `/account` budget; dialog in `MfaSetupDialog.tsx`): `auth.mfa.status`, rename, add passkey /
+  authenticator app, recovery codes remaining and "Make new codes" (`step_up_required` explained), the recovery
+  banner. No factor removal yet (step-up, #359).
 - **Server data:** TanStack Query over ws (`src/lib/query.ts`: `useWs`, `useWsMutation`, `invalidate`, `fetchWs`).
   Polling = `refetchInterval` (deduped, ref-counted, paused in hidden tabs). No Zustand stores for server data;
   Zustand only for client state (transfers, UI prefs, confirm/palette state).
@@ -321,6 +342,14 @@ no 3D engine chunk on an image preview, preview-only vs download share links) wi
 (`page.routeWebSocket`), since the share dialog only offers presets. `recovery.spec.ts` scripts the `recovery.*` /
 `vault.recovery.*` answers on the console socket (`page.routeWebSocket`; everything else reaches the real daemon) and
 proves the console's own rules: history sheet, typed `RESTORE`, disclosure acknowledgements, unknown costs never $0.
+`mfa.spec.ts` (#357) runs against a real daemon with Chrome's virtual authenticator (CDP `WebAuthn.addVirtualAuthenticator`, ctap2,
+internal, resident key, UV) and TOTP codes from `node:crypto` (`helpers/totp.ts`): first-run passkey enrollment then
+password + passkey, a UV-less authenticator refused, authenticator-app enrollment and sign-in, a recovery code once.
+It needs `auth.webauthn {rp_id: localhost, origins: [http://localhost:3000]}`, the console on `http://localhost:3000`
+with `NEXT_PUBLIC_VAULTHALLA_WS_ORIGIN=ws://localhost:<port>` (same host: the cookie), and `VAULTHALLA_E2E_MFA_VH`
+(a `vh` that acts as the super admin; accounts are `--role admin`). `helpers/auth.ts` `signIn` finishes the second
+factor for the other specs: an admin's first sign-in enrolls an authenticator app (secret and last step in
+`test-results/.auth/totp-<user>.json`), later ones enter a code from a step not yet spent.
 `devices.spec.ts` scripts `device.*` the same way (list/rename/revoke, number matching right and wrong code, conflict
 never closed, countdown by `server_time`, the open's port in the instructions, super-admin remote switch with a
 non-default port, advertised endpoints and the `vaulthalla://pair` link, none from an older server) and patches the `auth.refresh` user to a super admin

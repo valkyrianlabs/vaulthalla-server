@@ -15,6 +15,8 @@
 #include "auth/session/Issuer.hpp"
 #include "auth/Bootstrap.hpp"
 #include "auth/session/Assurance.hpp"
+#include "auth/mfa/Pending.hpp"
+#include "auth/mfa/SignIn.hpp"
 #include "ops/Error.hpp"
 
 #include <sodium.h>
@@ -98,11 +100,13 @@ const std::string& unknownUserHash() {
 }
 }
 
-void Manager::loginUser(const std::string& name, const std::string& password, const std::shared_ptr<Session>& session) {
+bool Manager::loginUser(const std::string& name, const std::string& password, const std::shared_ptr<Session>& session) {
     if (!session) throw std::invalid_argument("Sign-in needs a session");
     // #354: a socket signs in once. One that already has a user (signed in, or rehydrated from its cookie) is refused
     // before any password is checked, so a planted cookie's session can never be re-promoted as someone else's.
     if (session->user) throw ops::Refused(std::string(kAlreadySignedIn), "This connection is already signed in");
+    // #357: a pending sign-in has had its password; it finishes with the factor or starts over on a new connection.
+    if (session->mfa().pendingKind()) throw std::runtime_error("This connection is finishing a sign-in");
     const auto credentials = db::query::identities::Loader::credentialsByName(name);
     if (!credentials) {
         (void)hash::verifyPassword(password, unknownUserHash());
@@ -114,18 +118,19 @@ void Manager::loginUser(const std::string& name, const std::string& password, co
     if (!credentials->active) refuseLogin(name, "account deactivated", session, credentials->id);
     if (!passwordOk) refuseLogin(name, "wrong password", session, credentials->id);
 
-    auto& identities = vh::identities::manager();
-    identities.recordLogin(credentials->id);
-    const auto user = identities.user(credentials->id);
+    const auto user = vh::identities::manager().user(credentials->id);
     if (!user) refuseLogin(name, "account removed during sign-in", session, credentials->id);
 
-    session->setAuthenticatedUser(user);
-    runtime::Deps::get().sessionManager->promote(session, auth::session::assurance::password());
+    // #357: when a second factor is due (an enrolled factor, or the MFA policy), the socket is left pending: no user,
+    // no access token, no refresh row. The factor's handler completes the sign-in.
+    if (mfa::signin::beginIfDue(session, user)) {
+        log::Registry::auth()->info("[AuthManager] Password accepted for {}; a second factor is due", name);
+        return false;
+    }
 
+    mfa::signin::complete(session, user, auth::session::assurance::password(), "password");
     log::Registry::auth()->info("[AuthManager] User logged in: {}", name);
-    audit::record({.action = "auth.login.success", .actor_id = user->id, .actor = name,
-                   .details = {{"method", "password"}, {"ip", session->ipAddress}}},
-                  "[auth] " + name + " signed in");
+    return true;
 }
 
 std::shared_ptr<User> Manager::changePassword(const uint32_t userId, const std::string& oldPassword,

@@ -2,6 +2,7 @@
 // overrides) against their declared shapes (see model_suites.hpp). DB-free: detached users and groups, built-in
 // roles, through the real serializers.
 
+#include "auth/mfa/Factors.hpp"
 #include "model_suites.hpp"
 
 #include "identities/Group.hpp"
@@ -122,6 +123,19 @@ void checkIdentityModels(Checker& c) {
     c.check(json(ops::sessions::Info{.id = std::string(32, 'b'), .aal = 2, .amr = {"pwd", "otp"}, .auth_time = kT0,
                                      .last_activity_at = kT0, .ip_address = "", .user_agent = ""}),
             "AuthSession", "other two-factor session");
+
+    // MfaFactor (auth.mfa.status, enrollment answers): a synced passkey with an AAGUID, one without, and a TOTP factor.
+    c.check(json(auth::mfa::Factor{.id = 3, .kind = auth::mfa::FactorKind::WebAuthn, .label = "1Password",
+                                   .created_at = kT0, .last_used_at = kT0 + 5, .backup_eligible = true,
+                                   .backup_state = true, .transports = {"internal", "hybrid"},
+                                   .aaguid = "bada5566-a7aa-401f-bd96-45619a55120d"}),
+            "MfaFactor", "synced passkey");
+    c.check(json(auth::mfa::Factor{.id = 4, .kind = auth::mfa::FactorKind::WebAuthn, .label = "YubiKey",
+                                   .created_at = kT0, .backup_eligible = false, .backup_state = false,
+                                   .suspended = true, .created_during_recovery = true}),
+            "MfaFactor", "device-bound passkey without an AAGUID");
+    c.check(json(auth::mfa::Factor{.id = 1, .kind = auth::mfa::FactorKind::Totp, .label = "Phone", .created_at = kT0}),
+            "MfaFactor", "authenticator app");
 
     // Group with a member (gid and updated_at set), a bare group, and a member whose account no longer resolves.
     identities::GroupState gs;

@@ -1,6 +1,7 @@
 import { expect, type Browser, type Page } from '@playwright/test'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { nextTotpStep, totpCode, totpStep } from './totp'
 
 // One file per worker: spec files run in parallel workers and each signs in from beforeAll; a shared file was
 // overwritten while other workers were loading it, leaving their tests on the login page.
@@ -22,14 +23,50 @@ export function e2eCredentials() {
   return { user, password }
 }
 
-// The console's sign-in form (labelled fields; the session cookie is HttpOnly, the access token lives in memory).
+// The authenticator-app secret the e2e account enrolled (#357), per account: the MFA policy (`admins`, the default)
+// makes an admin enroll a factor at its first sign-in and asks for it at every later one.
+const totpSecretPath = (user: string) => `test-results/.auth/totp-${user.replace(/[^A-Za-z0-9_-]/g, '_')}.json`
+
+async function finishSecondFactor(page: Page, user: string) {
+  const step = page.getByTestId('mfa-step')
+  const outcome = await Promise.race([
+    page.waitForURL(url => !url.pathname.endsWith('/login'), { timeout: 15_000 }).then(() => 'signed_in' as const),
+    step.waitFor({ timeout: 15_000 }).then(() => 'mfa' as const),
+  ])
+  if (outcome === 'signed_in') return
+  if (await page.getByTestId('mfa-choose-totp').isVisible()) {
+    // First run: an authenticator app, its secret kept for the next sign-ins of this account.
+    await page.getByTestId('mfa-choose-totp').click()
+    const secret = await page.getByTestId('mfa-totp-secret').getAttribute('data-secret')
+    if (!secret) throw new Error('no TOTP secret on the enrollment page')
+    const at = totpStep()
+    await page.getByTestId('mfa-totp-code').fill(totpCode(secret, at))
+    await page.getByTestId('mfa-totp-confirm').click()
+    await mkdir(dirname(totpSecretPath(user)), { recursive: true })
+    await writeFile(totpSecretPath(user), JSON.stringify({ secret, step: at }), { mode: 0o600 })
+    await page.getByTestId('mfa-recovery-saved').check()
+    await page.getByTestId('mfa-recovery-ack').click()
+    await page.getByTestId('mfa-enrollment-continue').click()
+  } else {
+    const saved = JSON.parse(await readFile(totpSecretPath(user), 'utf8')) as { secret: string; step: number }
+    // A step is accepted once: never reuse the one the last sign-in spent (other workers share the file).
+    const step = saved.step >= totpStep() ? await nextTotpStep(saved.step) : totpStep()
+    await writeFile(totpSecretPath(user), JSON.stringify({ secret: saved.secret, step }), { mode: 0o600 })
+    await page.getByTestId('mfa-code').fill(totpCode(saved.secret, step))
+    await page.getByTestId('mfa-submit-code').click()
+  }
+  await page.waitForURL(url => !url.pathname.endsWith('/login'), { timeout: 15_000 })
+}
+
+// The console's sign-in form (labelled fields; the session cookie is HttpOnly, the access token lives in memory),
+// then the second factor when the account has or needs one.
 export async function signIn(page: Page, user: string, password: string) {
   await page.goto('/login')
   await expect(page.getByRole('heading', { name: /sign in to vaulthalla/i })).toBeVisible()
   await page.getByLabel('Username').fill(user)
   await page.getByLabel('Password').fill(password)
   await page.getByRole('button', { name: /^sign in$/i }).click()
-  await page.waitForURL(url => !url.pathname.endsWith('/login'), { timeout: 15_000 })
+  await finishSecondFactor(page, user)
 }
 
 export async function loginThroughUi(page: Page) {

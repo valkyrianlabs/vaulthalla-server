@@ -15,6 +15,8 @@ export class WsError extends Error {
     public readonly kind: WsErrorKind,
     message: string,
     public readonly code?: string,
+    // The refusal's data beside its code (e.g. auth.login's mfa_required carries data.pending).
+    public readonly data?: Record<string, unknown>,
   ) {
     super(message)
     this.name = 'WsError'
@@ -35,8 +37,8 @@ export const wsErrorFromMessage = (message: Record<string, unknown>): WsError | 
 
   const data = message.data && typeof message.data === 'object' ? (message.data as Record<string, unknown>) : {}
   const code = typeof data.code === 'string' ? data.code : undefined
-  if (code && REFUSAL_CODES[code]) return new WsError(REFUSAL_CODES[code], text, code)
-  if (code) return new WsError('needs_confirmation', text, code)
+  if (code && REFUSAL_CODES[code]) return new WsError(REFUSAL_CODES[code], text, code, data)
+  if (code) return new WsError('needs_confirmation', text, code, data)
   if (DENIED_TEXT.test(text)) return new WsError('denied', text)
   return new WsError('error', text)
 }

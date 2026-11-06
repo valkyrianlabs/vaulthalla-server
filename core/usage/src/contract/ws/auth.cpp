@@ -13,6 +13,81 @@ WsField authSessionUserObject() { return object("user", "SessionUser"); }
 
 WsField authUserId(std::string name = "id") { return uinteger(std::move(name)).gen(gen::ref("user", {"id"})); }
 
+// ---- MFA (#357): the WebAuthn L3 JSON forms the console passes through (PublicKeyCredential.toJSON() and the
+// options parseCreationOptionsFromJSON / parseRequestOptionsFromJSON read), spelled out as far as the daemon reads
+// or writes them.
+
+WsField mfaDescriptors(std::string name) {
+    return objectArray(std::move(name), "",
+                       {str("type").oneOf({"public-key"}), str("id").desc("base64url credential id."),
+                        strArray("transports")});
+}
+
+WsField mfaCreationOptions() {
+    return object("publicKey", "",
+                  {object("rp", "", {str("id"), str("name")}),
+                   object("user", "", {str("id").desc("base64url of the account's random 32-byte WebAuthn handle "
+                                                      "(never the numeric id)."),
+                                       str("name"), str("displayName")}),
+                   str("challenge").desc("base64url, 32 bytes, single use, 120 s, bound to this connection."),
+                   objectArray("pubKeyCredParams", "", {str("type").oneOf({"public-key"}), integer("alg")})
+                       .desc("-8 (Ed25519), -7 (ES256), -257 (RS256), in that order."),
+                   uinteger("timeout").desc("Milliseconds."),
+                   mfaDescriptors("excludeCredentials").desc("The account's passkeys: not registered twice."),
+                   object("authenticatorSelection", "",
+                          {str("residentKey").oneOf({"preferred"}), boolean("requireResidentKey"),
+                           str("userVerification").oneOf({"required"})}),
+                   str("attestation").oneOf({"none"}),
+                   object("extensions", "", {boolean("credProps")})})
+        .desc("PublicKeyCredentialCreationOptionsJSON for navigator.credentials.create().");
+}
+
+WsField mfaCredential(const bool registration) {
+    std::vector<WsField> response{str("clientDataJSON").desc("base64url.")};
+    if (registration) {
+        response.push_back(str("attestationObject").desc("base64url."));
+        response.push_back(strArray("transports").opt().desc("getTransports(): a hint, never trusted."));
+        response.push_back(str("authenticatorData").opt().desc("Ignored: the daemon reads attestationObject."));
+        response.push_back(str("publicKey").opt().desc("Ignored."));
+        response.push_back(integer("publicKeyAlgorithm").opt().desc("Ignored."));
+    } else {
+        response.push_back(str("authenticatorData").desc("base64url."));
+        response.push_back(str("signature").desc("base64url."));
+        response.push_back(str("userHandle").opt().nullable().desc("base64url."));
+    }
+    return object("credential", "",
+                  {str("id"), str("rawId").desc("base64url; equals id."), str("type").oneOf({"public-key"}),
+                   object("response", "", std::move(response)),
+                   str("authenticatorAttachment").opt().nullable(),
+                   object("clientExtensionResults", "", {object("credProps", "", {boolean("rk").opt()}).opt()})
+                       .opt()})
+        .gen(gen::constant("{}"))
+        .desc(registration ? "RegistrationResponseJSON (PublicKeyCredential.toJSON() after create())."
+                           : "AuthenticationResponseJSON (PublicKeyCredential.toJSON() after get()).");
+}
+
+WsField mfaRecoveryCodes() {
+    return object("recovery_codes", "",
+                  {str("batch_id"),
+                   strArray("codes").desc("Ten codes, XXXXX-XXXXX, shown once. Inactive until "
+                                          "auth.mfa.recovery.acknowledge.")})
+        .opt()
+        .desc("The account's first factor only (and every factor of a pending enrollment): its recovery codes.");
+}
+
+WsField mfaSessionUser() {
+    return object("user", "SessionUser").desc("The signed-in user; role permissions reduced to {qualified, value}.");
+}
+
+// Pending-MFA (auth/mfa/Pending.hpp) as auth.login's mfa_required / mfa_enrollment_required and auth.mfa.verify's
+// refusals carry it in data.pending.
+constexpr const char* kMfaPendingShape =
+    "data.pending is {kind: \"mfa\" | \"enrollment\", expires_at (Unix seconds), methods: [\"webauthn\" | \"totp\" | "
+    "\"recovery_code\"], attempts_remaining, webauthn?: {publicKey: PublicKeyCredentialRequestOptionsJSON}}.";
+
+const std::vector<std::string> kMfaEnrollmentRefusals{"denied", "invalid", "not_found", "conflict", "unauthorized",
+                                                      "error", "mfa_expired"};
+
 }
 
 std::vector<WsCommandUsage> authCommands() {
@@ -21,15 +96,24 @@ std::vector<WsCommandUsage> authCommands() {
 
     out.push_back({
         .command = "auth.login",
-        .description = "Sign in with a username and password. The access token comes back in the response envelope "
+        .description = std::string(
+                       "Sign in with a username and password. The access token comes back in the response envelope "
                        "(`token`), the refresh token as an HttpOnly cookie set at the handshake. A connection signs in "
                        "once: one that already has a user (signed in, or restored from its cookie) is refused with "
-                       "data.code already_signed_in; sign in again on a new connection. The session's sign-in is "
-                       "recorded as aal 1, amr [\"pwd\"] (auth.sessions.list).",
+                       "data.code already_signed_in; sign in again on a new connection. A password alone signs in "
+                       "(aal 1, amr [\"pwd\"]) only an account with no factor that need not have MFA. Otherwise the "
+                       "right password answers ERROR mfa_required (a factor is enrolled: finish with auth.mfa.verify) "
+                       "or mfa_enrollment_required (the MFA policy requires one and there is none: set it up with the "
+                       "enrollment commands), and the connection is pending: not signed in, no access token, no "
+                       "session row, so auth.refresh, a reconnect, another tab and the HTTP lanes all refuse it. It "
+                       "may run only auth.mfa.verify, auth.mfa.cancel and auth.logout (plus the enrollment commands "
+                       "while enrolling) and ends after 5 minutes (10 enrolling), 5 failed factors or with the "
+                       "socket. mfa_unavailable: the account's factors can't be used on this server. ") +
+                       kMfaPendingShape,
         .auth = "session",
         .payload = {str("name").gen(gen::ref("user", {"name"})), str("password")},
         .response = {authSessionUserObject().desc("The signed-in user; role permissions reduced to {qualified, value}.")},
-        .refusal_codes = {"error", "already_signed_in"},
+        .refusal_codes = {"error", "already_signed_in", "mfa_required", "mfa_enrollment_required", "mfa_unavailable"},
         .operation = "auth.login",
         .client_timeout = 20s,
     });
@@ -175,6 +259,172 @@ std::vector<WsCommandUsage> authCommands() {
                     boolean("all_others").opt().gen(gen::boolean())},
         .response = {uinteger("revoked").desc("How many sessions were signed out.")},
         .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+
+    // ---- MFA (#357; docs/dev/mfa-design.md sections 5.2, 7.2, 8 and 10)
+
+    out.push_back({
+        .command = "auth.mfa.verify",
+        .description = std::string(
+                       "Finish a pending sign-in with a second factor: {method: \"webauthn\", credential} (a UV "
+                       "assertion over the pending challenge), or {method: \"totp\" | \"recovery_code\", code}. "
+                       "Success signs the connection in: one session row at aal 2 with amr [\"pwd\", \"hwk\" | "
+                       "\"swk\" | \"otp\" | \"rec\"], the access token in the envelope. A recovery code signs "
+                       "every other web session of the account out (paired devices are not touched), starts the "
+                       "recovery cooldown and answers `recovery`. Refusals: mfa_invalid {attempts_remaining, pending?} "
+                       "(the 5th ends the sign-in), mfa_expired (start again with the password), rate_limited "
+                       "{retry_after} (5 failed factors on the account in 15 minutes), mfa_required {pending} for "
+                       "{method: \"webauthn\"} without a credential: a fresh passkey challenge, not an attempt. ") +
+                       kMfaPendingShape,
+        .auth = "pending",
+        .payload = {str("method").oneOf({"webauthn", "totp", "recovery_code"}),
+                    mfaCredential(false).opt().desc("method webauthn: AuthenticationResponseJSON."),
+                    str("code").opt().gen(gen::pattern("{9}{9}{9}{9}{9}{9}"))
+                        .desc("totp: six digits; recovery_code: XXXXX-XXXXX.")},
+        .response = {mfaSessionUser(),
+                     uinteger("aal").min(2).max(2),
+                     object("recovery", "",
+                            {uinteger("codes_remaining"),
+                             integer("cooldown_until").desc("Unix seconds: sensitive actions wait until then."),
+                             uinteger("sessions_revoked").desc("Other web sessions signed out.")})
+                         .opt()
+                         .desc("Present after a recovery-code sign-in.")},
+        .refusal_codes = {"invalid", "denied", "unauthorized", "error", "mfa_invalid", "mfa_expired", "mfa_required",
+                          "rate_limited"},
+        .client_timeout = 20s,
+    });
+
+    out.push_back({
+        .command = "auth.mfa.cancel",
+        .description = "End a pending sign-in now; the connection is anonymous again (sign in again with the password).",
+        .auth = "pending",
+        .input = "none",
+        .response = {},
+        .refusal_codes = {"denied", "unauthorized"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.mfa.status",
+        .description = "The caller's MFA: whether the policy requires it and why (policy admins: the super admin and "
+                       "accounts whose admin role may add, edit or delete users or admins or reset their passwords, "
+                       "add, edit or delete admin or vault roles, edit any settings section, or export or rotate "
+                       "encryption keys; policy all: every account; user_required: set for this account), whether "
+                       "passkeys are configured, the factors, the recovery codes, and the recovery cooldown. Web "
+                       "sessions only (a paired device is denied).",
+        .input = "none",
+        .response = {object("policy", "",
+                            {str("level").oneOf({"optional", "admins", "all"}),
+                             boolean("required"),
+                             str("reason").oneOf({"none", "policy_admins", "policy_all", "user_required"}),
+                             boolean("webauthn_available").desc("auth.webauthn.rp_id and origins are configured."),
+                             boolean("admin_webauthn_only"),
+                             boolean("admin_device_bound_only")}),
+                     objectArray("factors", "MfaFactor"),
+                     object("recovery", "",
+                            {boolean("active").desc("An acknowledged batch is in force."),
+                             uinteger("remaining").desc("Its unused codes."),
+                             boolean("acknowledged"),
+                             boolean("pending").desc("A generated batch waits for its acknowledgement.")}),
+                     integer("cooldown_until").nullable().desc("Unix seconds: the recovery cooldown, if one ran."),
+                     boolean("recovery_restricted").desc("This session signed in with a recovery code.")},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.mfa.webauthn.register.options",
+        .description = "Start registering a passkey (\"Passkey / Security key\": 1Password, the device's passkey "
+                       "manager, a security key) on the caller's account, or as the first factor of a pending "
+                       "enrollment. Pass publicKey to navigator.credentials.create() and the result to "
+                       "auth.mfa.webauthn.register.finish with registration_id. invalid when passkeys are not "
+                       "configured (auth.webauthn.rp_id).",
+        .auth = "enrollment",
+        .payload = {str("label").opt().gen(gen::freshName("key_")).desc("1..64 characters (default \"Passkey\").")},
+        .response = {str("registration_id"), mfaCreationOptions()},
+        .refusal_codes = kMfaEnrollmentRefusals,
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.mfa.webauthn.register.finish",
+        .description = "Verify and store the passkey (attestation none or packed self; UV required). The account's "
+                       "first factor answers its recovery codes too; a pending enrollment then finishes with "
+                       "auth.mfa.recovery.acknowledge. invalid: the ceremony didn't verify; not_found: the "
+                       "registration expired (120 s) or was used.",
+        .auth = "enrollment",
+        .payload = {str("registration_id").gen(gen::pattern("{*}{*}{*}{*}{*}{*}{*}{*}")),
+                    mfaCredential(true),
+                    str("label").opt().gen(gen::freshName("key_"))},
+        .response = {object("factor", "MfaFactor"), mfaRecoveryCodes()},
+        .refusal_codes = kMfaEnrollmentRefusals,
+        .client_timeout = 20s,
+    });
+
+    out.push_back({
+        .command = "auth.mfa.totp.enroll.start",
+        .description = "Start setting up an authenticator app (RFC 6238, SHA-1, 6 digits, 30 s). The secret and "
+                       "otpauth URI are shown once (the console draws the QR code itself); the factor is unusable "
+                       "until auth.mfa.totp.enroll.confirm, within 10 minutes. Starting again replaces an unfinished "
+                       "setup.",
+        .auth = "enrollment",
+        .payload = {str("label").opt().gen(gen::freshName("app_")).desc("1..64 characters (default "
+                                                                        "\"Authenticator app\").")},
+        .response = {uinteger("enrollment_id"), str("secret_base32"), str("otpauth_uri"),
+                     integer("expires_at").desc("Unix seconds.")},
+        .refusal_codes = kMfaEnrollmentRefusals,
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.mfa.totp.enroll.confirm",
+        .description = "Finish the authenticator setup with its current code (one step of drift either way). The "
+                       "account's first factor answers its recovery codes too. invalid: the code didn't match; "
+                       "not_found: the setup expired or is finished.",
+        .auth = "enrollment",
+        .payload = {uinteger("enrollment_id").gen(gen::intRange(1, 1000)),
+                    str("code").gen(gen::pattern("{9}{9}{9}{9}{9}{9}"))},
+        .response = {object("factor", "MfaFactor"), mfaRecoveryCodes()},
+        .refusal_codes = kMfaEnrollmentRefusals,
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.mfa.factor.rename",
+        .description = "Rename one of the caller's factors (named by kind and id).",
+        .payload = {str("kind").oneOf({"webauthn", "totp"}),
+                    uinteger("id").gen(gen::intRange(1, 1000)),
+                    str("label").gen(gen::freshName("key_")).desc("1..64 characters.")},
+        .response = {object("factor", "MfaFactor")},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.mfa.recovery.generate",
+        .description = "Make ten new recovery codes, shown once. They replace the current ones only when "
+                       "acknowledged. The account needs a factor (invalid otherwise). Replacing codes that are in "
+                       "force needs a second factor proven on this session within the last 5 minutes (or a "
+                       "recovery-code sign-in): step_up_required {family, max_age_seconds} otherwise.",
+        .input = "none",
+        .response = {str("batch_id"), strArray("codes").desc("XXXXX-XXXXX.")},
+        .refusal_codes = {"denied", "invalid", "unauthorized", "error", "step_up_required"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "auth.mfa.recovery.acknowledge",
+        .description = "The person saved the codes of batch_id: they come into force and the previous batch stops "
+                       "working. On a pending enrollment this completes the sign-in (aal 2, amr [\"pwd\", the new "
+                       "factor's]) and answers the user, with the access token in the envelope.",
+        .auth = "enrollment",
+        .payload = {str("batch_id").gen(gen::pattern("{*}{*}{*}{*}{*}{*}{*}{*}"))},
+        .response = {uinteger("remaining"),
+                     mfaSessionUser().opt().desc("Present when this completed a pending enrollment."),
+                     uinteger("aal").min(2).max(2).opt()},
+        .refusal_codes = kMfaEnrollmentRefusals,
         .client_timeout = kDefaultTimeout,
     });
 

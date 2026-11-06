@@ -11,3 +11,7 @@ namespace vh::auth::session {
     class Manager;
     struct TokenClaims;
 }
+
+namespace vh::auth::mfa {
+    class SessionState;
+}

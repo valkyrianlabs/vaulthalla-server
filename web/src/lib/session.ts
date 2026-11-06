@@ -5,6 +5,7 @@ import { WsClient, type Command } from '@/lib/ws/client'
 import { WsError, isWsError } from '@/lib/ws/errors'
 import { checkServerContract } from '@/lib/ws/contract'
 import type { IUser } from '@/models/user'
+import { readPending, type MfaPending, type MfaPendingCode } from '@/models/mfa'
 
 export type SessionStatus = 'unknown' | 'authenticated' | 'unauthenticated'
 
@@ -18,8 +19,25 @@ interface SessionState {
 export const useSession = create<SessionState>(() => ({ status: 'unknown', user: null, token: null }))
 
 // Session-lifecycle commands work without (or with an expired) access token. Mirrors core's
-// isSessionLifecycleCommand (protocols/ws/Router.cpp).
-const LIFECYCLE: ReadonlySet<Command> = new Set<Command>(['auth.login', 'auth.logout', 'auth.refresh', 'auth.isAuthenticated'])
+// isSessionLifecycleCommand (protocols/ws/Router.cpp), plus the pending-MFA allowlist (core
+// auth/mfa/Pending.hpp kPendingCommands + kPendingEnrollmentCommands; tools/contracts/test_mfa_pending_contract.py
+// keeps them equal): a pending sign-in has no token, and an unauthorized answer there means it ended, never that a
+// refresh would help.
+const LIFECYCLE: ReadonlySet<Command> = new Set<Command>([
+  'auth.login',
+  'auth.logout',
+  'auth.refresh',
+  'auth.isAuthenticated',
+  // pending-MFA
+  'auth.mfa.verify',
+  'auth.mfa.cancel',
+  // pending enrollment
+  'auth.mfa.webauthn.register.options',
+  'auth.mfa.webauthn.register.finish',
+  'auth.mfa.totp.enroll.start',
+  'auth.mfa.totp.enroll.confirm',
+  'auth.mfa.recovery.acknowledge',
+])
 
 let refreshing: Promise<boolean> | null = null
 
@@ -57,21 +75,41 @@ export const refreshSession = (): Promise<boolean> => {
   return refreshing
 }
 
+export type LoginResult = { status: 'signed_in' } | { status: 'pending'; code: MfaPendingCode; pending: MfaPending }
+
+// A refusal that left this socket pending-MFA (#357): auth.login's mfa_required / mfa_enrollment_required, or
+// auth.mfa.verify's fresh challenge.
+export const pendingOf = (error: unknown): { code: MfaPendingCode; pending: MfaPending } | null => {
+  if (!isWsError(error) || (error.code !== 'mfa_required' && error.code !== 'mfa_enrollment_required')) return null
+  const pending = readPending(error.data)
+  return pending ? { code: error.code, pending } : null
+}
+
 // Signs in on a fresh connection: its handshake sets the refresh cookie this session will use (#354), so another tab
 // that loaded the sign-in page later can't leave this browser holding a cookie that isn't this session's. A
 // connection that comes up already signed in (another tab signed in meanwhile) answers already_signed_in: the browser
-// is signed in, so take that session.
-export const login = async (name: string, password: string) => {
+// is signed in, so take that session. When a second factor is due (#357) the connection is left pending: the caller
+// finishes on this same socket (auth.mfa.verify or the enrollment commands) and then calls completeSignIn.
+export const login = async (name: string, password: string): Promise<LoginResult> => {
   await api.reconnect()
   try {
     const { user } = await api.send('auth.login', { name, password })
-    if (!useSession.getState().token) throw new WsError('error', 'The server did not issue a session token')
-    useSession.setState({ status: 'authenticated', user: user as unknown as IUser })
-    void checkServerContract(api)
+    completeSignIn(user as unknown as IUser)
+    return { status: 'signed_in' }
   } catch (error) {
-    if (isWsError(error) && error.code === 'already_signed_in' && (await refreshSession())) return
+    if (isWsError(error) && error.code === 'already_signed_in' && (await refreshSession())) return { status: 'signed_in' }
+    const pending = pendingOf(error)
+    if (pending) return { status: 'pending', ...pending }
     throw error
   }
+}
+
+// The answer that signed this socket in (auth.login, auth.mfa.verify, the enrollment's auth.mfa.recovery.acknowledge)
+// carried the access token in its envelope.
+export const completeSignIn = (user: IUser) => {
+  if (!useSession.getState().token) throw new WsError('error', 'The server did not issue a session token')
+  useSession.setState({ status: 'authenticated', user })
+  void checkServerContract(api)
 }
 
 const resetHandlers = new Set<() => void>()
