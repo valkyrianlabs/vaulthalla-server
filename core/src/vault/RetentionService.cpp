@@ -1,6 +1,6 @@
 #include "vault/RetentionService.hpp"
 #include "vault/EncryptionManager.hpp"
-#include "vault/MasterRewrap.hpp"
+#include "crypto/secrets/Rewrap.hpp"
 #include "vault/Retention.hpp"
 #include "recovery/usage/Ledger.hpp"
 #include "log/Registry.hpp"
@@ -51,8 +51,9 @@ void RetentionService::runLoop() {
         // File recovery's local usage ledger rides on this loop: flushed every 60 s, cost alerts at most hourly.
         recovery::usage::tick(std::chrono::system_clock::now());
         retentionEvictIdleKeys();
-        // A vault master rotation's recovery window ends here when it expires (#352). Never throws.
-        (void)master::rewrap::expireIfDue();
+        // A master rotation's recovery window (vault_master, ak_master, s3gw_master: #352, #353) ends here when it
+        // expires. Never throws.
+        crypto::secrets::rewrap::expireAllIfDue();
 
         for (auto waited = std::chrono::milliseconds(0); waited < kInterval && !shouldStop(); waited += tick) {
             if (retention::takePassRequest()) break;

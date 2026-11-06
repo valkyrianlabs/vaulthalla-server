@@ -1,6 +1,5 @@
 #pragma once
 
-#include "crypto/secrets/KeyProvider.hpp"
 #include "vault/Fwd.hpp"
 #include <ctime>
 #include <memory>
@@ -12,6 +11,9 @@
 
 namespace vh::vault {
 
+// Provider API keys. Their secrets (and provider tokens) are wrapped under the API key master (ak_master), by version
+// (crypto/secrets/Versioned.hpp; `vh secret master rotate --slot api-keys` rewraps them, #353): each row is unwrapped
+// under the version it names and written inside a Writer.
 class APIKeyManager {
 public:
     APIKeyManager();
@@ -44,7 +46,6 @@ public:
 private:
     mutable std::mutex apiKeysMutex_;
     std::unordered_map<unsigned int, std::shared_ptr<model::APIKey>> apiKeys_;
-    std::unique_ptr<crypto::secrets::KeyProvider> tpmKeyProvider_;
 };
 
 }

@@ -1,5 +1,5 @@
 #include "vault/APIKeyManager.hpp"
-#include "crypto/secrets/Dependents.hpp"
+#include "crypto/secrets/Versioned.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/identities/User.hpp"
 #include "crypto/SecretBytes.hpp"
@@ -10,17 +10,27 @@
 
 #include <sodium.h>
 #include <stdexcept>
-#include <paths.h>
 
 using namespace vh::crypto;
 using namespace vh::crypto::util;
 using namespace vh::vault;
 using namespace vh::vault::model;
 
+namespace {
+
+constexpr auto kApiKeyMasterSlot = secrets::versioned::Slot::ApiKeyMaster;
+
+// The bytes `key` stores, unwrapped under the API key master the row names. The caller wipes the result.
+std::vector<uint8_t> unwrapStoredApiKeyBytes(const APIKey& key, const std::vector<uint8_t>& ciphertext,
+                                  const std::vector<uint8_t>& iv) {
+    return secrets::versioned::unwrap(kApiKeyMasterSlot, ciphertext, iv, key.master_version);
+}
+
+}
+
 APIKeyManager::APIKeyManager() {
-    const std::string tpmKeyName = paths::testMode ? "test_ak_master" : "ak_master";
-    tpmKeyProvider_ = std::make_unique<secrets::KeyProvider>(tpmKeyName);
-    tpmKeyProvider_->initGuarded(secrets::dependents::apiKeyMaster());
+    // The current API key master, unsealed now: generated only while no API key exists, else MasterSecretLost (#326).
+    (void)secrets::versioned::provider(kApiKeyMasterSlot, secrets::versioned::currentVersion(kApiKeyMasterSlot));
 
     initAPIKeys();
 }
@@ -40,18 +50,18 @@ unsigned int APIKeyManager::addAPIKey(std::shared_ptr<APIKey>& key) {
     if (!owner) throw std::runtime_error("API key owner not found");
     if (owner->systemOnly()) throw std::runtime_error("system-only users cannot receive normal API keys");
 
-    // --- Encrypt secret_access_key before storage ---
-    std::vector<uint8_t> iv;
-    const auto ciphertext = encrypt_aes256_gcm(viewBytes(key->secret_access_key), tpmKeyProvider_->getMasterKey(), iv);
+    // --- Encrypt secret_access_key before storage, and store it under the master that wrapped it ---
+    {
+        const secrets::versioned::Writer writer(kApiKeyMasterSlot);
+        auto wrapped = writer.wrap(viewBytes(key->secret_access_key));
+        key->encrypted_secret_access_key = std::move(wrapped.ciphertext);
+        key->iv = std::move(wrapped.iv);
+        key->master_version = wrapped.master_version;
+        wipeSecret(key->secret_access_key);
+        key->secret_access_key.clear();
 
-    // Replace sensitive data with encrypted representation
-    key->encrypted_secret_access_key = ciphertext;
-    key->iv = iv;
-    wipeSecret(key->secret_access_key);
-    key->secret_access_key.clear();
-
-    // Persist to DB
-    key->id = db::query::vault::APIKey::upsertAPIKey(key);
+        key->id = db::query::vault::APIKey::upsertAPIKey(key);
+    }
 
     // Refresh from DB (ensures created_at, etc. are up to date)
     key = db::query::vault::APIKey::getAPIKey(key->id);
@@ -64,6 +74,8 @@ unsigned int APIKeyManager::addAPIKey(std::shared_ptr<APIKey>& key) {
 
 void APIKeyManager::updateAPIKey(const std::shared_ptr<APIKey>& key) {
     std::scoped_lock lock(apiKeysMutex_);
+    // Held from the read to the write, so the stored wrap and the one written are under the same (current) master.
+    const secrets::versioned::Writer writer(kApiKeyMasterSlot);
 
     const auto stored = db::query::vault::APIKey::getAPIKey(key->id);
     if (!stored) throw std::runtime_error("API key not found");
@@ -71,11 +83,12 @@ void APIKeyManager::updateAPIKey(const std::shared_ptr<APIKey>& key) {
     if (key->secret_access_key.empty()) {
         key->encrypted_secret_access_key = stored->encrypted_secret_access_key;
         key->iv = stored->iv;
+        key->master_version = stored->master_version;
     } else {
-        std::vector<uint8_t> iv;
-        key->encrypted_secret_access_key =
-            encrypt_aes256_gcm(viewBytes(key->secret_access_key), tpmKeyProvider_->getMasterKey(), iv);
-        key->iv = iv;
+        auto wrapped = writer.wrap(viewBytes(key->secret_access_key));
+        key->encrypted_secret_access_key = std::move(wrapped.ciphertext);
+        key->iv = std::move(wrapped.iv);
+        key->master_version = wrapped.master_version;
         sodium_memzero(key->secret_access_key.data(), key->secret_access_key.size());
         key->secret_access_key.clear();
     }
@@ -107,18 +120,15 @@ std::shared_ptr<APIKey> APIKeyManager::getAPIKey(const unsigned int keyId) const
     auto key = db::query::vault::APIKey::getAPIKey(keyId);
     if (!key) throw std::runtime_error("API key not found");
 
-    // --- Decrypt secret_access_key before returning ---
-    const auto masterKey = tpmKeyProvider_->getMasterKey();
-    auto decrypted = decrypt_aes256_gcm(
-        key->encrypted_secret_access_key, masterKey, key->iv);
-
-    key->secret_access_key.assign(decrypted.begin(), decrypted.end());
-    sodium_memzero(decrypted.data(), decrypted.size());
+    // --- Decrypt secret_access_key (and the provider token) under the master the row names ---
+    {
+        const WipedKeyCopy decrypted(unwrapStoredApiKeyBytes(*key, key->encrypted_secret_access_key, key->iv));
+        key->secret_access_key.assign(decrypted.bytes.begin(), decrypted.bytes.end());
+    }
 
     if (!key->encrypted_provider_token.empty() && !key->provider_token_iv.empty()) {
-        auto token = decrypt_aes256_gcm(key->encrypted_provider_token, masterKey, key->provider_token_iv);
-        key->provider_token.assign(token.begin(), token.end());
-        sodium_memzero(token.data(), token.size());
+        const WipedKeyCopy token(unwrapStoredApiKeyBytes(*key, key->encrypted_provider_token, key->provider_token_iv));
+        key->provider_token.assign(token.bytes.begin(), token.bytes.end());
     }
 
     return key;
@@ -126,15 +136,15 @@ std::shared_ptr<APIKey> APIKeyManager::getAPIKey(const unsigned int keyId) const
 
 void APIKeyManager::setProviderToken(const unsigned int keyId, std::optional<std::string> token) {
     std::scoped_lock lock(apiKeysMutex_);
+    const secrets::versioned::Writer writer(kApiKeyMasterSlot);
     if (!db::query::vault::APIKey::getAPIKey(keyId)) throw std::runtime_error("API key not found");
 
     if (!token || token->empty()) {
         db::query::vault::APIKey::clearProviderToken(keyId);
     } else {
-        std::vector<uint8_t> iv;
-        const auto ciphertext = encrypt_aes256_gcm(viewBytes(*token), tpmKeyProvider_->getMasterKey(), iv);
+        const auto wrapped = writer.wrap(viewBytes(*token));
         wipeSecret(*token);
-        db::query::vault::APIKey::setProviderToken(keyId, ciphertext, iv);
+        db::query::vault::APIKey::setProviderToken(keyId, wrapped.ciphertext, wrapped.iv, wrapped.master_version);
     }
     if (auto refreshed = db::query::vault::APIKey::getAPIKey(keyId)) apiKeys_[keyId] = std::move(refreshed);
 }

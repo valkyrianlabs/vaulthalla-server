@@ -23,6 +23,7 @@ struct GatewayCredential {
     std::string access_key;
     std::vector<uint8_t> encrypted_secret_access_key;
     std::vector<uint8_t> iv;
+    unsigned int master_version{1};  // the S3 gateway master that wraps the secret (migration 124)
     bool enabled{true};
     bool enforce_budget_for_local_requests{false};
     std::string scope_mode{"user_access"};

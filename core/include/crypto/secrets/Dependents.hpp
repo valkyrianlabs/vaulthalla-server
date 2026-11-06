@@ -10,8 +10,11 @@
 //   s3gw_master:  S3 gateway credential secrets (s3_gateway_credentials)
 //   mfa_seal:     sealed TOTP seeds (totp_factors), an internal secret (Manager::sealedKey, #356)
 //   mfa_pepper:   recovery code hashes (recovery_codes), an internal secret (Manager::sealedKey, #356)
-// Other slots regenerate by design: master (the JWT secret: sessions sign in again), key_attest (old public keys stay
-// on record), device_tls (devices see the new identity and re-pair), psql (set from the installer).
+// vault_master, ak_master and s3gw_master rotate by a staged rewrap (crypto/secrets/Rewrap.hpp), never by regeneration.
+// Other slots: master wraps internal_secrets (the JWT secret, the MFA keys, the share-token pepper, email credentials),
+// so it is never regenerated either; the JWT secret inside it rotates on its own (`vh secret jwt rotate`: sessions sign
+// in again). key_attest regenerates (old public keys stay on record), device_tls rotates by regeneration (`vh secret
+// device-identity rotate`: devices are revoked and pair again), psql is set from the installer.
 namespace vh::crypto::secrets::dependents {
 
 [[nodiscard]] DependentsCheck vaultMaster();

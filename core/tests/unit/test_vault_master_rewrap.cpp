@@ -22,7 +22,7 @@
 #include "ops/Error.hpp"
 #include "ops/Users.hpp"
 #include "ops/VaultKeys.hpp"
-#include "ops/VaultMaster.hpp"
+#include "ops/MasterSecrets.hpp"
 #include "ops/Vaults.hpp"
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/commands/all.hpp"

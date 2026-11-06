@@ -2,6 +2,7 @@
 
 #include "device/Device.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -41,6 +42,9 @@ public:
     [[nodiscard]] static std::optional<Device> rename(uint32_t id, const std::string& name);
     // Sets revoked_at once (a revoked row keeps its first revocation time). Returns the row, or nullopt if absent.
     [[nodiscard]] static std::optional<Device> revoke(uint32_t id);
+    // Revokes every device that is not revoked yet (a server identity rotation, #353); how many.
+    static std::size_t revokeAll();
+    [[nodiscard]] static std::size_t countActive();
     // Compare-and-set rotation: previous = old, current = new, only while `oldSpki` is still current and the row is
     // live. False otherwise.
     [[nodiscard]] static bool rotate(uint32_t id, const std::string& oldSpki, const std::string& newSpki);

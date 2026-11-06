@@ -29,7 +29,12 @@ constexpr std::string_view kExposureReason =
     "whether devices on other hosts may connect is the node's network exposure, changed by a human";
 
 constexpr std::string_view kMasterReason =
-    "which master wraps the vault keys is changed by a human at the terminal, never by an agent";
+    "which master wraps the vault keys, API keys and gateway credentials is changed by a human at the terminal, never "
+    "by an agent";
+constexpr std::string_view kSignOutReason =
+    "rotating the JWT secret signs everyone out; a human at the terminal decides it, never an agent";
+constexpr std::string_view kRepairReason =
+    "rotating the device identity revokes every paired device; a human at the terminal decides it, never an agent";
 
 constexpr std::string_view kKeysReason =
     "key and secret material is never handled by agents (D4); the human runs this in a terminal themselves";
@@ -45,6 +50,8 @@ const std::vector<Exclusion>& exclusions() {
         {{"secrets", "master", "rotate"}, kMasterReason},
         {{"secrets", "master", "finalize"}, kMasterReason},
         {{"secrets", "master", "rollback"}, kMasterReason},
+        {{"secrets", "jwt", "rotate"}, kSignOutReason},
+        {{"secrets", "device-identity", "rotate"}, kRepairReason},
         {{"setup"}, "installation and lifecycle commands need root and a human at the terminal (this includes "
                     "setup set-super-admin-password)"},
         {{"setup", "set-super-admin-password"}, "the super-admin password is set by a human at the terminal"},

@@ -50,6 +50,11 @@ public:
     // Rebinds to the configured endpoint now. Returns the status after.
     ListenerStatus applyConfig();
 
+    // Presents `identity` from now on (a rotated server identity, #353): new connections handshake with it, the pin
+    // that pairing codes and device.server.identity report is its SPKI. Connections already open are the caller's to
+    // close (closeAllDeviceListenerSessions).
+    void replaceIdentity(std::shared_ptr<const vh::device::ServerIdentity> identity);
+
     // Tests: use this identity instead of unsealing (or generating and sealing) the daemon's.
     void setIdentityForTesting(std::shared_ptr<const vh::device::ServerIdentity> identity);
 

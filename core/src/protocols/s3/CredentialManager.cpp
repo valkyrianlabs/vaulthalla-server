@@ -1,19 +1,16 @@
 #include "protocols/s3/CredentialManager.hpp"
-#include "crypto/secrets/Dependents.hpp"
-
-#include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/SecretBytes.hpp"
-#include "crypto/util/encrypt.hpp"
+#include "crypto/secrets/Versioned.hpp"
 #include "db/query/s3/Gateway.hpp"
 
 #include <array>
-#include <paths.h>
 #include <sodium.h>
 #include <stdexcept>
 
 namespace vh::protocols::s3 {
 
 namespace {
+constexpr auto kGatewayMasterSlot = crypto::secrets::versioned::Slot::GatewayMaster;
 constexpr std::string_view kAccessAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 constexpr std::string_view kSecretAlphabet =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/+";
@@ -41,10 +38,11 @@ void validateScopeRequest(const CredentialCreateOptions& options) {
 }
 }
 
-CredentialManager::CredentialManager()
-    : tpmKeyProvider_(std::make_unique<crypto::secrets::KeyProvider>(
-          paths::testMode ? "test_s3gw_master" : "s3gw_master")) {
-    tpmKeyProvider_->initGuarded(crypto::secrets::dependents::gatewayMaster());
+CredentialManager::CredentialManager() {
+    // The current S3 gateway master, unsealed (once per process): generated only while no credential exists, else
+    // MasterSecretLost (#326).
+    using namespace crypto::secrets;
+    (void)versioned::provider(kGatewayMasterSlot, versioned::currentVersion(kGatewayMasterSlot));
 }
 
 GatewaySecret CredentialManager::createCredential(const uint32_t userId, const std::string& name) const {
@@ -69,14 +67,17 @@ GatewaySecret CredentialManager::createCredential(const CredentialCreateOptions&
     GatewaySecret out;
     out.secret_access_key = generateSecretKey();
 
-    std::vector<uint8_t> iv;
+    // Held until the row is written, so it is stored under the master that wrapped it.
+    const crypto::secrets::versioned::Writer writer(kGatewayMasterSlot);
+    auto wrapped = writer.wrap(crypto::viewBytes(out.secret_access_key));
     out.credential.user_id = options.principal_user_id;
     out.credential.created_by = options.created_by;
     out.credential.principal_user_id = options.principal_user_id;
     out.credential.name = options.name;
     out.credential.access_key = generateAccessKey();
-    out.credential.encrypted_secret_access_key = encryptSecret(out.secret_access_key, iv);
-    out.credential.iv = std::move(iv);
+    out.credential.encrypted_secret_access_key = std::move(wrapped.ciphertext);
+    out.credential.iv = std::move(wrapped.iv);
+    out.credential.master_version = wrapped.master_version;
     out.credential.enabled = true;
     out.credential.enforce_budget_for_local_requests = options.enforce_budget_for_local_requests;
     out.credential.scope_mode = options.scope_mode;
@@ -129,7 +130,7 @@ std::optional<GatewaySecret> CredentialManager::findEnabledSecret(const std::str
     if (credential->expires_at && *credential->expires_at <= std::time(nullptr)) return std::nullopt;
     return GatewaySecret{
         .credential = *credential,
-        .secret_access_key = decryptSecret(credential->encrypted_secret_access_key, credential->iv)
+        .secret_access_key = decryptSecret(*credential)
     };
 }
 
@@ -145,13 +146,9 @@ std::string CredentialManager::generateSecretKey() {
     return randomFromAlphabet(kSecretAlphabet, 40);
 }
 
-std::vector<uint8_t> CredentialManager::encryptSecret(const std::string& secret, std::vector<uint8_t>& iv) const {
-    return crypto::util::encrypt_aes256_gcm(crypto::viewBytes(secret), tpmKeyProvider_->getMasterKey(), iv);
-}
-
-std::string CredentialManager::decryptSecret(const std::vector<uint8_t>& ciphertext, const std::vector<uint8_t>& iv) const {
-    const crypto::WipedKeyCopy decrypted(
-        crypto::util::decrypt_aes256_gcm(ciphertext, tpmKeyProvider_->getMasterKey(), iv));
+std::string CredentialManager::decryptSecret(const db::query::s3::GatewayCredential& credential) {
+    const crypto::WipedKeyCopy decrypted(crypto::secrets::versioned::unwrap(
+        kGatewayMasterSlot, credential.encrypted_secret_access_key, credential.iv, credential.master_version));
     return {decrypted.bytes.begin(), decrypted.bytes.end()};
 }
 

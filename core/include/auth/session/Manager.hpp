@@ -56,6 +56,11 @@ public:
     std::size_t endSessionsWithRefreshJti(uint32_t userId, const std::string& jti,
                                           const std::shared_ptr<protocols::ws::Session>& caller);
 
+    // A JWT secret rotation (#353): every live session (web, device and share sockets alike) is invalidated and
+    // closed, and every cached refresh-token validation dropped, so nothing signed with the old secret is honored
+    // from memory. The caller revoked the stored refresh tokens first. Returns how many sessions ended.
+    std::size_t endAll();
+
     std::shared_ptr<protocols::ws::Session> get(const std::string& token);
     std::shared_ptr<protocols::ws::Session> getShareByRefreshJti(const std::string& token);
     std::vector<std::shared_ptr<protocols::ws::Session>> getSessions(const std::shared_ptr<identities::User>& user);

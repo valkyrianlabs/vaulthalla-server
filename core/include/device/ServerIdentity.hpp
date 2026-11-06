@@ -53,9 +53,32 @@ private:
 // Where the certificate is kept (next to the sealed secrets in the state directory; public, 0644).
 [[nodiscard]] std::filesystem::path serverCertificatePath();
 
-// The daemon's identity: the key unsealed from KeyProvider("device_tls"), generated and sealed on first use; the
-// certificate read from serverCertificatePath() and (re)written when a new one had to be issued.
+// The identity's key is versioned like the data-wrapping masters (migration 124, master_secret_state slot
+// 'device_tls'): version 1 is the sealed slot "device_tls", version N > 1 "device_tls.vN" ("test_" prefixed in test
+// mode). A rotation seals the new key beside the current one and switches in one transaction, so a crash never leaves
+// a half-written key in the slot the listener loads.
+[[nodiscard]] std::string identitySlotName(unsigned int version);
+[[nodiscard]] unsigned int currentIdentityVersion();
+
+// The daemon's identity: the key unsealed from the current version's slot, generated and sealed on first use; the
+// certificate read from serverCertificatePath() and (re)written when a new one had to be issued. Retired versions a
+// crash left behind are deleted.
 [[nodiscard]] std::shared_ptr<const ServerIdentity> loadOrCreateServerIdentity();
+
+struct IdentityRotation {
+    std::shared_ptr<const ServerIdentity> identity;
+    unsigned int from{}, to{};
+    std::string previous_spki_sha256{};
+    std::size_t devices_revoked{};  // paired devices revoked in the switch transaction
+};
+// Replaces the identity with a fresh key (#353, `vh secret device-identity rotate`): seals it as the next version,
+// reads it back, then in one transaction revokes every paired device and records the new version, writes the new
+// certificate and deletes the old key. Paired devices can never trust the new identity silently: their pairing was
+// bound to the old key, and their rows are revoked with the switch, so each pairs again with a fresh key.
+// Never touches the running listener (the caller swaps it: protocols::device::Service::replaceIdentity).
+[[nodiscard]] IdentityRotation rotateServerIdentity();
+// Tests: called at "identity_sealed" and "identity_switched"; throwing from it simulates a crash there.
+void setIdentityRotationHookForTesting(void (*hook)(std::string_view point));
 
 // The identity the listener presents, which pairing codes and device.server.identity use. Null until the device
 // listener (or a test) sets it.

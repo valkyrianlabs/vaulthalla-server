@@ -84,6 +84,7 @@ APIKey::APIKey(pqxx::row_ref row)
     if (const auto at = try_get<std::string>(row, "admin_validated_at")) admin_validated_at = parsePostgresTimestamp(*at);
     if (const auto token = try_get<std::string>(row, "encrypted_provider_token")) encrypted_provider_token = from_hex_bytea(*token);
     if (const auto tokenIv = try_get<std::string>(row, "provider_token_iv")) provider_token_iv = from_hex_bytea(*tokenIv);
+    master_version = try_get<unsigned int>(row, "master_version").value_or(1);
 }
 
 void vh::vault::model::from_json(const nlohmann::json& j, APIKey& key) {

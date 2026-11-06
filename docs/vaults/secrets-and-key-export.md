@@ -183,7 +183,7 @@ With this setting, Vaulthalla refuses to seal or unseal anything unless a hardwa
 On macOS, Vaulthalla refuses to start its sealing when the Secure Enclave can't be used (an Intel Mac without a T2 chip, or a daemon not running under launchd). Earlier versions silently fell back to plain files instead. A development machine may opt in to the file backend with `secrets.allow_development_file_backend: true`.
 
 :::callout[A lost master secret is never replaced silently]{variant="warning"}
-If the sealed master that protects vault keys, provider API keys or S3 gateway credentials is missing while those records still exist, Vaulthalla refuses to create a new one, because a new one could never decrypt them. The affected vaults don't start, and the log says why. Restore the state directory (with the same TPM or Secure Enclave), or import the vault key backups ([Restore Vault Keys](#restore-vault-keys)) and the internal secrets ([Seed Internal Secrets](#seed-internal-secrets)).
+If the sealed master that protects vault keys, provider API keys or S3 gateway credentials is missing while those records still exist, Vaulthalla refuses to create a new one, because a new one could never decrypt them. Inside a rotation's recovery window, the log names the rollback command that restores the rows from the previous master. The affected vaults don't start, and the log says why. Restore the state directory (with the same TPM or Secure Enclave), or import the vault key backups ([Restore Vault Keys](#restore-vault-keys)) and the internal secrets ([Seed Internal Secrets](#seed-internal-secrets)).
 :::
 
 ## Rotate The Vault Master
@@ -221,6 +221,47 @@ Practice this on a test host before you rely on it in production:
 5. Rotate again and let the window run out, or `vh secret master finalize`. Status shows no rotation in progress.
 
 If the new master is lost inside the window (a TPM reset, a damaged state directory), the vaults don't start and the log names `vh secret master rollback`: the rollback needs only the previous master and puts every key row back. If both masters are lost (a new host, or the whole TPM state), restore the vault keys from their exports onto the new host's master ([Restore Vault Keys](#restore-vault-keys)). The exports and the server's attestation records in the database are enough; the old host and its TPM are not needed.
+
+## Rotate The API Key And S3 Gateway Masters
+
+Two more installation masters work exactly like the vault master, with their own recovery window: the **API key master** (`ak_master`) wraps every provider API key's secret and Cloudflare provider token, and the **S3 gateway master** (`s3gw_master`) wraps every S3 gateway credential's secret. Rotating one replaces only the wrap: the secrets themselves don't change, nothing is sent to the providers, and S3 clients keep their access keys and secrets. Name the master with `--slot`:
+
+```bash
+vh secret master status --slot all                 # every master: version, sealing, rotation or window
+sudo vh secret master rotate --slot api-keys       # asks to confirm; --yes without a terminal
+vh secret master rollback --slot api-keys          # inside the window: return to the previous master
+vh secret master finalize --slot s3-gateway        # end the S3 gateway master's window now
+```
+
+Staging, verification, the switch, the recovery window and its automatic end are the same as for the vault master: an interrupted rotation resumes when run again, every staged wrap is checked against the secret under the current master before anything switches, and a rollback inside the window needs only the previous master. A rotation refuses to start while a row doesn't unwrap: enter that API key's secret again in the console (or remove it with `vh api-key delete`), or revoke that gateway credential and issue a new one. The audit trail records each step as `secrets.master.*` with the `slot` it rotated.
+
+:::callout[Database backups from before a rotation]{variant="warning"}
+Once the window has ended and the previous master is deleted, the API keys in an older database backup have to be entered again, and its gateway credentials reissued. Neither is recoverable from the vault key exports: those only cover vault keys.
+:::
+
+## Rotate The JWT Secret
+
+The JWT secret signs every session token. Rotate it when you suspect it leaked, or to sign everyone out at once:
+
+```bash
+sudo vh secret jwt rotate     # asks to confirm; --yes without a terminal
+```
+
+**Everyone signs in again.** In one database transaction a fresh secret replaces the old one and every stored refresh token is revoked, so no token signed before verifies again. Every open console connection is then closed. Paired devices reconnect by themselves with their device keys, and share-link visitors keep their share sessions (they aren't signed with the JWT secret). There is no rollback: the old secret is discarded. The rotation is recorded as `secrets.jwt.rotate`.
+
+Only the JWT secret changes. The host master that wraps the internal secrets (the JWT secret, the MFA keys, the share-link pepper, email provider credentials) is not replaced, so TOTP factors, recovery codes and share links keep working.
+
+## Rotate The Device Identity
+
+The device listener's identity is the TLS key that every paired Vaulthalla Desktop pins. Rotate it when you suspect the key leaked:
+
+```bash
+sudo vh secret device-identity rotate     # asks to confirm; --yes without a terminal
+```
+
+**Every paired device pairs again.** The new key is sealed beside the old one and read back first. Then one database transaction records it and revokes every paired device: their pairing was bound to the old key, so none of them is ever trusted under the new one. Open pairing windows and requests in flight are dropped, every device connection is closed, the listener presents the new identity right away, and the old key is deleted. Each Desktop then reports that the node's identity changed and pairs again with a fresh key and a new pairing code ([Paired Devices](/admin/devices)). There is no rollback. The rotation is recorded as `secrets.device_identity.rotate` with the old and new key fingerprints.
+
+If the rotation is interrupted before that transaction, nothing changed and the next start deletes the unused new key; after it, the new key is in effect and the next start writes its certificate if it is missing.
 
 ## Storage Rules
 

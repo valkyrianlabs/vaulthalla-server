@@ -136,6 +136,19 @@ std::optional<Device> Devices::revoke(const uint32_t id) {
     });
 }
 
+std::size_t Devices::revokeAll() {
+    return Transactions::exec("Devices::revokeAll", [](pqxx::work& txn) {
+        return static_cast<std::size_t>(
+            txn.exec("UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE revoked_at IS NULL").affected_rows());
+    });
+}
+
+std::size_t Devices::countActive() {
+    return Transactions::read("Devices::countActive", [](pqxx::transaction_base& txn) {
+        return txn.exec("SELECT COUNT(*) FROM devices WHERE revoked_at IS NULL").one_field_ref().as<std::size_t>();
+    });
+}
+
 bool Devices::rotate(const uint32_t id, const std::string& oldSpki, const std::string& newSpki) {
     try {
         return Transactions::exec("Devices::rotate", [&](pqxx::work& txn) {

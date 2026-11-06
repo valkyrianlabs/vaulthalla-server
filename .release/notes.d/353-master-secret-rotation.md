@@ -1,0 +1,7 @@
+## Security
+
+- **The API key and S3 gateway masters can be rotated, and so can the JWT secret and the device identity.**
+  - `vh secret master rotate --slot api-keys` and `--slot s3-gateway` replace the masters that wrap provider API key secrets (and Cloudflare provider tokens) and S3 gateway credential secrets, the same way as the vault master: staged, verified, switched in one step, with a 7-day recovery window (`rollback`, `finalize` and `status` take `--slot` too; `status --slot all` shows every master). The secrets themselves don't change and S3 clients keep their credentials. After the window, a database backup from before the rotation needs its API keys entered again and its gateway credentials reissued.
+  - `vh secret jwt rotate` signs everyone out: a fresh JWT secret replaces the old one and every refresh token is revoked in one step, then every open console connection closes. Everyone signs in again. TOTP factors, recovery codes and share links are not affected.
+  - `vh secret device-identity rotate` replaces the device listener's key. Every paired device is revoked and disconnected and pairs again with a new pairing code; a device is never trusted under the new identity silently.
+  - Each is its own command with its own warning, for super admins from a terminal only (never agents or the console), and every attempt is audited (`secrets.master.*` with the slot, `secrets.jwt.rotate`, `secrets.device_identity.rotate`). None of them has a rollback except the master rewraps, inside their window.

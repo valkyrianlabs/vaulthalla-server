@@ -110,9 +110,9 @@ namespace vh::platform::sealer {
     // One TPM operation at a time in this process. swtpm (and many hardware TPMs) have three transient object slots,
     // and each seal/unseal holds two at once: the storage primary and the sealed object. The swtpm TCTI reconnects for
     // every command and nothing virtualizes handles (no resource manager on the socket), so commands of concurrent
-    // operations interleave on the one TPM and their objects coexist: two unseals at once (the first request of each new
-    // S3 gateway connection unseals s3gw_master, so parallel multipart uploads do it together; DB pool connections;
-    // engines loading vault keys) need four slots and fail in Esys_Load with TPM_RC_OBJECT_MEMORY. Serialized, every
+    // operations interleave on the one TPM and their objects coexist: two unseals at once (DB pool connections; engines
+    // loading vault keys; before #353 also the first request of every new S3 gateway connection, which unsealed
+    // s3gw_master) need four slots and fail in Esys_Load with TPM_RC_OBJECT_MEMORY. Serialized, every
     // operation flushes its two objects before the next one creates any.
     static std::mutex &tpm_mutex() {
         static std::mutex m;
