@@ -164,7 +164,9 @@ jobs:
 
   release-artifacts:
     name: Prepare, build and validate release artifacts
-    runs-on: [self-hosted, Linux, X64, vps-ci]
+    # The one -O3 package build: on the ci-heavy VM runners (more memory and cores per job); the org variable
+    # CI_HEAVY_LABEL=vps-ci fails it over to the VPS pool.
+    runs-on: ${{ fromJSON(format('["self-hosted","Linux","X64","{0}"]', vars.CI_HEAVY_LABEL || 'ci-heavy')) }}
     defaults:
       run:
         shell: bash ./ci/run-ci bash -euo pipefail {0}
@@ -184,8 +186,10 @@ jobs:
       - name: Prepare release history (work tree only)
         run: vlr prepare --record release/meta/prepare.json
 
+      # dh builds with one job per CPU by default, which overruns the job's memory cap at -O3 and thrashes; build with
+      # the job count ci/run-ci sized from the cap (VH_BUILD_JOBS) instead.
       - name: Build Debian package and web tarball
-        run: vlr build-deb
+        run: DEB_BUILD_OPTIONS="parallel=${VH_BUILD_JOBS} ${DEB_BUILD_OPTIONS:-}" vlr build-deb
 
       # The production web build pre_build just made (web/.next) is the one that ships.
       - name: Check web performance budgets

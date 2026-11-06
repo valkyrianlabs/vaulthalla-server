@@ -4,11 +4,11 @@
 # other meson tests. Fails if any shard or test fails; a failing shard's full output is printed. Nothing is skipped
 # or filtered: the shards together run the same cases as one `meson test -C BUILDDIR`. Bash 3.2 compatible.
 #
-#   tools/dev/ci-test.sh [BUILDDIR] [SHARDS]       (defaults: build, $VH_TEST_SHARDS or 4)
+#   tools/dev/ci-test.sh [BUILDDIR] [SHARDS]       (defaults: build, $VH_TEST_SHARDS, else $VH_BUILD_JOBS, else 4)
 set -euo pipefail
 
 dir="${1:-build}"
-shards="${2:-${VH_TEST_SHARDS:-4}}"
+shards="${2:-${VH_TEST_SHARDS:-${VH_BUILD_JOBS:-4}}}"
 logs="$(mktemp -d "${TMPDIR:-/tmp}/ci-test.XXXXXX")"
 trap 'rm -rf "$logs"' EXIT
 
