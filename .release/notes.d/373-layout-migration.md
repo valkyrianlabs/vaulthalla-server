@@ -25,3 +25,14 @@
   A later release will refuse to upgrade while it is.
 - Once a vault has been migrated, downgrading the package below this release is unsupported: earlier releases can't
   read opaque storage.
+
+### Layout migration drill
+
+`vhh drill migrate` passed on 2026-11-06 (fake S3 with versioning, one private instance with its own database and
+swtpm): a path_v0 vault of 300 files (301 path-named keys, 305 versions with an overwrite and a delete marker) was
+migrated in 6 s while a sync pass ran and a writer kept writing through the FUSE mount (47 files written meanwhile);
+it cut over with the manifest verified from the bucket alone, nothing path-named was deleted before the cleanup, every
+file read back identical, the writer's files were all there, the cleanup was refused before the waiting period and,
+after it, left no path-named key, version or delete marker (11/11 checks). On live Cloudflare R2
+(`LiveR2.LayoutMigrationPrimitives`, a `vh-test-*` bucket deleted afterwards) a re-sealed object's ETag was the
+predicted MD5 for a single and a multipart upload, so R2 needs no read-back beyond the sample.

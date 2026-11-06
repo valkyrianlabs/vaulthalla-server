@@ -165,8 +165,11 @@ def run(build: Path, *, files: int = 300, keep: bool = False, out: Path | None =
         node.vh("vault", "sync", str(vid))
         time.sleep(5)
         after = snapshot_tree(node, "migrate")
-        live = {p: e for p, e in after.items() if p.startswith("live/")}
-        rest = {p: e for p, e in after.items() if not p.startswith("live/") and p != "live"}
+        def in_live(p: str) -> bool:
+            return p.lstrip("/") == "live" or p.lstrip("/").startswith("live/")
+
+        live = {p.lstrip("/"): e for p, e in after.items() if in_live(p)}
+        rest = {p: e for p, e in after.items() if not in_live(p)}
         report.check("the tree written before the migration reads the same after it",
                      {p: e.get("sha256") for p, e in rest.items()} == {p: e.get("sha256") for p, e in before.items()},
                      json.dumps(sorted(set(rest) ^ set(before))[:10]))
