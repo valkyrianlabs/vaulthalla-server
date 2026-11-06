@@ -44,6 +44,7 @@ export interface IDependencyHealth {
   mount_detail?: string | null
   // "tpm2", or "file" (macOS development backend).
   secrets_backend?: string
+  secrets_posture?: string
 }
 
 export interface IShellHealth {

@@ -11,6 +11,7 @@
 #include "fs/model/File.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "ops/Error.hpp"
 #include "recovery/Store.hpp"
 #include "runtime/Deps.hpp"
@@ -458,7 +459,7 @@ ItemOutcome restore(const std::shared_ptr<storage::Engine>& engine, const std::s
         out.outcome = "restored";
         out.error.reset();
         log::Registry::audit()->info("[recovery] {} restored {} to {} in vault {}", actor->name(), item.source_id,
-                                     destination.string(), engine->vault->id);
+                                     log::path(destination), engine->vault->id);
     } catch (const fs::ContentConflict& e) {
         out.outcome = "conflict";
         out.error = e.what();

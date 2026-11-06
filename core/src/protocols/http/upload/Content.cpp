@@ -8,7 +8,7 @@
 #include "fuse/WorkingCopies.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
-#include "platform/Durable.hpp"
+#include "log/Redact.hpp"
 #include "protocols/http/Access.hpp"
 #include "protocols/http/handler/Common.hpp"
 #include "protocols/http/upload/CreateClaim.hpp"
@@ -85,10 +85,10 @@ constexpr uint64_t kMaxContentBytes = 8ull * 1024ull * 1024ull * 1024ull;
     return vh::storage::generationOf(*file).etag();
 }
 
-void removeStaging(const std::filesystem::path& staging, const std::filesystem::path& fuseStaging) noexcept {
-    if (staging.empty()) return;
-    std::error_code ec;
-    std::filesystem::remove(staging, ec);
+void removeStaging(std::unique_ptr<staging::Body>& body, const std::filesystem::path& fuseStaging) noexcept {
+    if (!body) return;
+    body->discard();
+    body.reset();
     try {
         const auto& cache = vh::runtime::Deps::get().fsCache;
         if (cache && !fuseStaging.empty() && cache->entryExists(fuseStaging)) cache->evictPath(fuseStaging);
@@ -109,14 +109,12 @@ struct Upload::Impl {
     std::optional<std::string> expectedSourceId;  // Replace: the generation that was authorized and matched If-Match
     uint64_t expected{};
     uint64_t received{};
-    std::filesystem::path staging;      // the staged plaintext
-    std::filesystem::path fuseStaging;  // its FS-cache key, when staging lives in the mount
-    int fd{-1};
+    std::unique_ptr<staging::Body> staged;  // the body (never plaintext on disk: Staging.hpp)
+    std::filesystem::path fuseStaging;      // its FS-cache key, when staging lives in the mount
     bool done{false};
 
     ~Impl() {
-        if (fd >= 0) ::close(fd);
-        if (!done) removeStaging(staging, fuseStaging);
+        if (!done) removeStaging(staged, fuseStaging);
     }
 };
 
@@ -209,14 +207,12 @@ Begun begin(const request& req, const std::optional<uint64_t> contentLength) {
         }
 
         const auto absPath = impl->engine->paths->absPath(impl->vaultPath, vh::fs::model::PathType::VAULT_ROOT);
-        impl->staging = staging::pathFor(absPath, impl->engine->vault->id,
-                                         ".upload-http-content-" + vh::protocols::ws::Session::generateUUIDv4() + ".part");
+        const auto stagingPath = staging::pathFor(absPath, impl->engine->vault->id,
+                                                  ".upload-http-content-" + vh::protocols::ws::Session::generateUUIDv4() + ".part");
         if (staging::insideMount())
-            impl->fuseStaging = impl->engine->paths->absRelToRoot(impl->staging, vh::fs::model::PathType::FUSE_ROOT);
-        std::filesystem::create_directories(impl->staging.parent_path());
-        impl->fd = ::open(impl->staging.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
-        if (impl->fd < 0)
-            throw std::runtime_error(std::string("Unable to open the upload staging file: ") + std::strerror(errno));
+            impl->fuseStaging = impl->engine->paths->absRelToRoot(stagingPath, vh::fs::model::PathType::FUSE_ROOT);
+        std::filesystem::create_directories(stagingPath.parent_path());
+        impl->staged = staging::create(stagingPath);
 
         out.upload.impl_ = std::move(impl);
         return out;
@@ -228,18 +224,10 @@ Begun begin(const request& req, const std::optional<uint64_t> contentLength) {
 }
 
 void Upload::write(const void* data, const std::size_t size) {
-    if (!impl_ || impl_->fd < 0) throw std::runtime_error("Upload is not open");
+    if (!impl_ || !impl_->staged) throw std::runtime_error("Upload is not open");
     if (size == 0) return;
     if (size > impl_->expected - impl_->received) throw std::length_error("The body exceeds its Content-Length");
-    const auto* p = static_cast<const char*>(data);
-    std::size_t left = size;
-    while (left) {
-        const auto n = ::write(impl_->fd, p, left);
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) throw std::runtime_error(std::string("Writing the upload staging file failed: ") + std::strerror(errno));
-        p += n;
-        left -= static_cast<std::size_t>(n);
-    }
+    impl_->staged->append({static_cast<const uint8_t*>(data), size});
     impl_->received += size;
 }
 
@@ -249,13 +237,7 @@ model::preview::Response Upload::commit(const request& req) {
     try {
         if (u.received != u.expected)
             return jsonError(req, status::bad_request, "invalid", "The body is shorter than its Content-Length");
-        if (vh::platform::durable::sync(u.fd) != 0)
-            throw std::runtime_error(std::string("Flushing the upload staging file failed: ") + std::strerror(errno));
-        if (::close(u.fd) != 0) {
-            u.fd = -1;
-            throw std::runtime_error(std::string("Closing the upload staging file failed: ") + std::strerror(errno));
-        }
-        u.fd = -1;
+        u.staged->close();
 
         // Access again, with the caller as they are now: a session ended or a role revoked during the body commits
         // nothing, and a replacement must still find the file it was authorized for.
@@ -280,7 +262,7 @@ model::preview::Response Upload::commit(const request& req) {
             vh::fs::NewFileContext ctx{.path = u.vaultPath, .fuse_path = u.fusePath, .engine = u.engine,
                                    .user = caller.session->user, .overwrite = true,
                                    .expected_source_id = u.mode == Mode::Replace ? u.expectedSourceId : std::string{}};
-            if (u.expected > 0) ctx.source_path = u.staging;
+            if (u.expected > 0) ctx.source = u.staged->source();
             saved = vh::fs::Filesystem::createFile(ctx);
         } catch (const vh::fs::ContentConflict& e) {
             return refuse(req, status::precondition_failed, "conflict", e.what(), currentVersionAt(u.engine, u.vaultPath));
@@ -292,7 +274,7 @@ model::preview::Response Upload::commit(const request& req) {
         if (!saved) throw std::runtime_error("The upload produced no file");
 
         u.done = true;
-        removeStaging(u.staging, u.fuseStaging);
+        removeStaging(u.staged, u.fuseStaging);
 
         access::Target committed;
         committed.engine = u.engine;
@@ -301,9 +283,9 @@ model::preview::Response Upload::commit(const request& req) {
         committed.vaultId = u.engine->vault->id;
         committed.vaultPath = u.vaultPath;
         access::recordHumanAccess(caller, committed, u.mode == Mode::Create ? "content.create" : "content.replace");
-        vh::log::Registry::audit()->info("PUT /upload/content: {} {} vault {} path {} ({} bytes)",
+        vh::log::Registry::audit()->info("PUT /upload/content: {} {} vault {} {} ({} bytes)",
                                      caller.session->user->name(), u.mode == Mode::Create ? "created" : "replaced",
-                                     committed.vaultId, u.vaultPath, saved->size_bytes);
+                                     committed.vaultId, vh::log::file(saved->id, u.vaultPath), saved->size_bytes);
         try {
             if (const auto& sync = vh::runtime::Deps::get().syncController) sync->runNow(committed.vaultId);
         } catch (const std::exception& e) {

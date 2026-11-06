@@ -15,6 +15,7 @@
 #include "fs/Filesystem.hpp"
 #include "runtime/Deps.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "sync/model/Event.hpp"
 #include "sync/model/Throughput.hpp"
 #include "sync/model/ScopedOp.hpp"
@@ -427,13 +428,13 @@ void Local::removeTrashedFiles() {
                 ++failed;
                 log::Registry::sync()->error(
                     "[FSTask] Failed to purge trashed file {}: {}",
-                    file ? file->path.string() : std::string{"<null>"},
+                    file ? log::file(file->id, file->path) : std::string{"<null>"},
                     e.what());
             } catch (...) {
                 ++failed;
                 log::Registry::sync()->error(
                     "[FSTask] Failed to purge trashed file {}: unknown error",
-                    file ? file->path.string() : std::string{"<null>"});
+                    file ? log::file(file->id, file->path) : std::string{"<null>"});
             }
             if (!purgeSucceeded) scoped->stop();
         }
@@ -465,13 +466,13 @@ void Local::removeTrashedFiles() {
                     ++failed;
                     log::Registry::sync()->error(
                         "[FSTask] Failed to mark trashed file {} deleted: {}",
-                        done.file ? done.file->path.string() : std::string{"<null>"},
+                        done.file ? log::file(done.file->id, done.file->path) : std::string{"<null>"},
                         e.what());
                 } catch (...) {
                     ++failed;
                     log::Registry::sync()->error(
                         "[FSTask] Failed to mark trashed file {} deleted: unknown error",
-                        done.file ? done.file->path.string() : std::string{"<null>"});
+                        done.file ? log::file(done.file->id, done.file->path) : std::string{"<null>"});
                 }
             }
             done.scoped->stop();

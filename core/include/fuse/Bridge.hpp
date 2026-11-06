@@ -10,10 +10,10 @@
 namespace vh::fuse {
     struct WorkingCopy;
 
-    // An open file. fd is on the inode's decrypted working copy (see WorkingCopies), never on the backing file.
+    // An open file: the open(2) flags on the inode's working copy (see WorkingCopies), never the backing file.
     struct FileHandle {
         std::filesystem::path path;
-        int fd;
+        int flags;
         size_t size = 0;
         std::shared_ptr<WorkingCopy> copy;
     };

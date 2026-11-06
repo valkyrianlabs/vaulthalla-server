@@ -1,4 +1,5 @@
 #include "ops/Groups.hpp"
+#include "audit/Trail.hpp"
 #include "rbac/PolicyEpoch.hpp"
 
 #include "auth/registration/Validator.hpp"
@@ -13,6 +14,15 @@
 namespace vh::ops::groups {
 
 namespace {
+
+// Group and membership changes go to the audit trail (#323).
+void auditGroup(const Actor& actor, const std::string& action, const std::string& what, const identities::Group& group,
+                nlohmann::json details = nlohmann::json::object()) {
+    details["group_id"] = group.id;
+    details["group"] = group.name();
+    vh::audit::record({.action = action, .actor_id = actor->id, .actor = actor->name(), .details = std::move(details)},
+                  "[rbac] " + actor->name() + " " + what);
+}
 
 rbac::permission::admin::identities::Groups perms(const Actor& actor) {
     requireActor(actor);
@@ -84,7 +94,9 @@ GroupPtr create(const Actor& actor, const Create& req) {
     draft.name = req.name;
     draft.description = req.description;
     draft.linux_gid = req.linux_gid;
-    return identities::manager().createGroup(draft);
+    auto created = identities::manager().createGroup(draft);
+    auditGroup(actor, "rbac.group.create", "created group " + created->name(), *created);
+    return created;
 }
 
 GroupPtr update(const Actor& actor, const Update& req) {
@@ -101,11 +113,13 @@ GroupPtr update(const Actor& actor, const Update& req) {
         requireGidFree(*req.linux_gid, group->id);
     }
 
-    return identities::manager().updateGroup(group->id, [&](identities::GroupState& s) {
+    auto updated = identities::manager().updateGroup(group->id, [&](identities::GroupState& s) {
         if (req.name) s.name = *req.name;
         if (req.description) s.description = *req.description;
         if (req.linux_gid) s.linux_gid = *req.linux_gid;
     });
+    auditGroup(actor, "rbac.group.update", "updated group " + updated->name(), *updated);
+    return updated;
 }
 
 GroupPtr remove(const Actor& actor, const Ref& ref) {
@@ -114,6 +128,7 @@ GroupPtr remove(const Actor& actor, const Ref& ref) {
 
     auto group = requireGroup(ref);
     identities::manager().deleteGroup(group->id);
+    auditGroup(actor, "rbac.group.delete", "deleted group " + group->name(), *group);
     return group;
 }
 
@@ -141,6 +156,8 @@ GroupPtr addMember(const Actor& actor, const Membership& req) {
     const auto group = requireGroup(req.group);
     const auto user = requireUser(req.user);
     identities::manager().addMembers(group->id, {user->id});
+    auditGroup(actor, "rbac.group.member.add", "added " + user->name() + " to group " + group->name(), *group,
+               {{"user_id", user->id}, {"user", user->name()}});
     return group;
 }
 
@@ -151,6 +168,8 @@ GroupPtr removeMember(const Actor& actor, const Membership& req) {
     const auto group = requireGroup(req.group);
     const auto user = requireUser(req.user);
     identities::manager().removeMembers(group->id, {user->id});
+    auditGroup(actor, "rbac.group.member.remove", "removed " + user->name() + " from group " + group->name(), *group,
+               {{"user_id", user->id}, {"user", user->name()}});
     return group;
 }
 

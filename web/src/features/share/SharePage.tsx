@@ -1,8 +1,7 @@
 'use client'
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import NextImage from 'next/image'
-import { useParams, useRouter } from 'next/navigation'
 import { cn } from '@/util/cn'
 import { Button } from '@/components/ui/Button'
 import { Field, Input } from '@/components/ui/Field'
@@ -13,7 +12,6 @@ import { BanIcon, CircleCheckIcon, ClockIcon, EnvelopeIcon, LockIcon, UploadIcon
 import { formatBytes, formatDateTime } from '@/lib/format'
 import { FileBrowser } from '@/features/files/FileBrowser'
 import { shareSource } from '@/features/files/source'
-import { normalizePath } from '@/features/files/entries'
 import { collectDropped, collectPicked } from '@/features/files/drop'
 import { startUpload, useTransfers } from '@/features/files/transfers'
 import { TransfersButton } from '@/features/files/TransfersButton'
@@ -22,22 +20,28 @@ import { confirmEmailChallenge, openShare, shareApi, startEmailChallenge, useSha
 import { shareOperations } from '@/util/shareOperations'
 import Logo from '@/public/vaulthalla-logo.png'
 
-const sharePath = (token: string, path: string) => {
-  const encoded = normalizePath(path).split('/').filter(Boolean).map(encodeURIComponent).join('/')
-  return `/share/${encodeURIComponent(token)}${encoded ? `/${encoded}` : ''}`
-}
+import { parseShareHash, shareHash } from '@/features/share/shareLocation'
 
-// The anonymous recipient experience: shared primitives and the same file browser, without the console shell.
-export function SharePage({ token }: { token: string }) {
-  const router = useRouter()
-  const params = useParams<{ path?: string[] }>()
-  const segments = params.path
-  const path = useMemo(() => normalizePath((segments ?? []).map(s => decodeURIComponent(s)).join('/')), [segments])
+const subscribeHash = (onChange: () => void) => {
+  window.addEventListener('hashchange', onChange)
+  return () => window.removeEventListener('hashchange', onChange)
+}
+const readHash = (): string | null => window.location.hash
+const serverHash = (): string | null => null  // not hydrated yet: the fragment is unknown
+
+// The anonymous recipient experience: shared primitives and the same file browser, without the console shell. The
+// token and folder come from the URL fragment (shareLocation.ts), so they never reach the server's access logs.
+export function SharePage() {
+  const hash = useSyncExternalStore(subscribeHash, readHash, serverHash)
+  const location = useMemo(() => (hash === null ? null : parseShareHash(hash)), [hash])
+  const token = location?.token ?? ''
+  const path = location?.path ?? '/'
   const status = useShareSession(state => state.status)
   const share = useShareSession(state => state.share)
   const error = useShareSession(state => state.error)
 
   useEffect(() => {
+    if (!token) return
     shareApi.connect()
     void openShare(token)
     return () => shareApi.close()
@@ -64,7 +68,9 @@ export function SharePage({ token }: { token: string }) {
       </header>
 
       <main className="mx-auto w-full max-w-[1200px] flex-1 px-4 py-6 sm:px-6">
-        {status === 'idle' || status === 'opening' ? (
+        {hash !== null && !location ? (
+          <EmptyState icon={LockIcon} title="This link can’t be opened" description="It may be mistyped or incomplete. Ask the person who shared it for the full link." />
+        ) : status === 'idle' || status === 'opening' ? (
           <div className="grid min-h-[50vh] place-items-center">
             <div className="flex flex-col items-center gap-3 text-sm text-fg-subtle">
               <Spinner className="size-7" />
@@ -82,7 +88,7 @@ export function SharePage({ token }: { token: string }) {
         ) : uploadOnly ? (
           <Dropbox source={source} />
         ) : (
-          <FileBrowser source={source} path={path} onNavigate={next => router.push(sharePath(token, next))} />
+          <FileBrowser source={source} path={path} onNavigate={next => { window.location.hash = shareHash({ token, path: next }) }} />
         )}
       </main>
     </div>

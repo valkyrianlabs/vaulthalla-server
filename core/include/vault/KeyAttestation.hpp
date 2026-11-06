@@ -63,6 +63,11 @@ struct Attestation {
 [[nodiscard]] std::optional<Attestation> attest(unsigned int vaultId, unsigned int version,
                                                 const std::string& keyCheckHex);
 
+// Other signatures by this node's key, such as signed audit-chain heads (audit/Chain.hpp). `message` must start with
+// its own domain tag, never kDomain, so no other signature can pass for a key attestation. nullopt when signing
+// failed (logged).
+[[nodiscard]] std::optional<Attestation> signNodeMessage(std::span<const uint8_t> message);
+
 enum class Verdict {
     Valid,
     Missing,       // no signature
@@ -75,6 +80,9 @@ enum class Verdict {
 // version and key check.
 [[nodiscard]] Verdict check(const Attestation& attestation, unsigned int vaultId, unsigned int version,
                             const std::string& keyCheckHex);
+
+// Checks a signNodeMessage() signature against this node's public keys (current and retired).
+[[nodiscard]] Verdict checkNodeMessage(const Attestation& attestation, std::span<const uint8_t> message);
 
 // ---- recorded provenance (migration 113)
 

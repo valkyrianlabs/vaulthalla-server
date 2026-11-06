@@ -1,6 +1,7 @@
 // `vh fs ls|get|put` (#229): the transfer protocol's bounds and codec, the client's local plan, and the daemon handlers
 // over a real socketpair against real vaults, users and RBAC: allow/deny parity with the HTTP lanes (no existence
 // oracle), overwrite policy, malformed/cancelled/oversized transfers, revocation mid-stream, and staging hygiene.
+#include "crypto/ScratchFile.hpp"
 #include "db/Transactions.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
@@ -34,6 +35,7 @@
 #include <functional>
 #include <future>
 #include <random>
+#include <thread>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -495,10 +497,58 @@ TEST_F(CliFsDbTest, LsListsWithTheListPermission) {
     EXPECT_EQ(get(reader, "fs ls " + a("/missing"), false).exit, tx::exitcode::kNoInput);
 }
 
+// #328: what a put has received sits on disk only as ciphertext under the process key, never as plaintext.
+TEST_F(CliFsDbTest, PutStagesOnlyCiphertext) {
+    const std::string unit = "CLI-PLAINTEXT-MARKER|";
+    std::vector<uint8_t> bytes;
+    while (bytes.size() < 4 * tx::kChunkBytes) bytes.insert(bytes.end(), unit.begin(), unit.end());
+    bytes.resize(4 * tx::kChunkBytes);
+
+    SocketPair pair;
+    auto handler = std::async(std::launch::async, [&] {
+        CommandResult r;
+        try {
+            r = router->executeLine("fs put " + a("x /staged-ciphertext.bin"), admin, nullptr,
+                                    TransferPeer{.fd = pair.daemon, .putSize = bytes.size()});
+        } catch (const std::exception& e) {
+            r = {-1, "", e.what()};
+        }
+        ::shutdown(pair.daemon, SHUT_RDWR);
+        return r;
+    });
+    const auto ready = SocketIO::recv_json(pair.client, tx::kMaxTransferFrameBytes);
+    ASSERT_EQ(ready.value("type", ""), "transfer-ready");
+    for (uint64_t seq = 0; seq < 2; ++seq)
+        ASSERT_TRUE(SocketIO::send_json(pair.client, {{"type", "data"}, {"seq", seq},
+            {"b64", tx::encode(std::span(bytes.data() + seq * tx::kChunkBytes, tx::kChunkBytes))}}));
+
+    // Wait until most of what was sent is on disk, then look at it as anyone with the disk would.
+    std::string raw;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (std::chrono::steady_clock::now() < deadline) {
+        std::error_code ec;
+        for (const auto& e : std::filesystem::directory_iterator(paths::getBackingPath() / ".cli-staging", ec))
+            if (e.path().extension() == ".part" && std::filesystem::file_size(e.path(), ec) >= 6 * crypto::ScratchFile::kRecordSize) {
+                std::ifstream in(e.path(), std::ios::binary);
+                raw.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+            }
+        if (!raw.empty()) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    ASSERT_FALSE(raw.empty()) << "the staged bytes never reached the disk";
+    EXPECT_EQ(raw.find("PLAINTEXT-MARKER"), std::string::npos) << "staging holds ciphertext only";
+
+    ASSERT_TRUE(SocketIO::send_json(pair.client, {{"type", "transfer-abort"}}));
+    const auto r = handler.get();
+    EXPECT_NE(r.exit_code, 0);
+    EXPECT_FALSE(stored(vaultA, "/staged-ciphertext.bin").has_value());
+    EXPECT_EQ(stagingLeftovers(), 0u);
+}
+
 TEST_F(CliFsDbTest, StartupSweepsLeftoverStagingFiles) {
     const auto dir = paths::getBackingPath() / ".cli-staging";
     std::filesystem::create_directories(dir);
-    std::ofstream(dir / "put-leftover.part") << "plaintext from a crashed upload";
+    std::ofstream(dir / "put-leftover.part") << "ciphertext from a crashed upload";
     std::ofstream(dir / "unrelated.txt") << "not ours";
     commands::sweepFsStaging();
     EXPECT_FALSE(std::filesystem::exists(dir / "put-leftover.part"));

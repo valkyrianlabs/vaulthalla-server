@@ -32,7 +32,7 @@ export default function PdfRenderer({ source, entry }: RendererProps) {
     setError(null)
     void (async () => {
       try {
-        const response = await fetch(source.previewUrl(entry.path, size, page), { credentials: 'same-origin', signal: controller.signal })
+        const response = await fetch(source.previewUrl({ id: entry.id, path: entry.path }, size, page), { credentials: 'same-origin', signal: controller.signal })
         if (!response.ok) throw new Error(describeStatus(response.status, 'this document'))
         const pages = Number(response.headers.get('x-vaulthalla-page-count') ?? '')
         if (Number.isInteger(pages) && pages > 0) setCount(pages)
@@ -49,7 +49,7 @@ export default function PdfRenderer({ source, entry }: RendererProps) {
       }
     })()
     return () => controller.abort()
-  }, [source, entry.path, page, size])
+  }, [source, entry.id, entry.path, page, size])
 
   useEffect(
     () => () => {

@@ -1,4 +1,5 @@
 #include "protocols/s3/CredentialManager.hpp"
+#include "crypto/secrets/Dependents.hpp"
 
 #include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/util/encrypt.hpp"
@@ -42,7 +43,7 @@ void validateScopeRequest(const CredentialCreateOptions& options) {
 CredentialManager::CredentialManager()
     : tpmKeyProvider_(std::make_unique<crypto::secrets::KeyProvider>(
           paths::testMode ? "test_s3gw_master" : "s3gw_master")) {
-    tpmKeyProvider_->init();
+    tpmKeyProvider_->initGuarded(crypto::secrets::dependents::gatewayMaster());
 }
 
 GatewaySecret CredentialManager::createCredential(const uint32_t userId, const std::string& name) const {

@@ -31,7 +31,6 @@
 #include <cerrno>
 #include <cctype>
 #include <cstring>
-#include <fstream>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -51,6 +50,7 @@ struct UploadFileState {
     uint32_t vault_id{};
     std::filesystem::path vault_path;
     std::filesystem::path tmp_path;
+    std::shared_ptr<vh::protocols::http::upload::staging::Body> body;  // the staged bytes, once a PUT began
     std::filesystem::path fuse_from;
     std::filesystem::path fuse_to;
     uint64_t expected_size{};
@@ -345,15 +345,17 @@ void ensureNoExistingShareTarget(
     throw std::runtime_error("Share upload duplicate policy is not supported in this pass");
 }
 
-void createEmptyTempFile(const std::filesystem::path& path) {
-    std::filesystem::create_directories(path.parent_path());
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out.is_open()) throw std::runtime_error("Unable to create upload temp file");
+// A fresh staging body for the file (a retried PUT starts over).
+void stageFile(UploadFileState& file) {
+    if (file.body) file.body->discard();
+    file.body.reset();
+    std::filesystem::create_directories(file.tmp_path.parent_path());
+    file.body = vh::protocols::http::upload::staging::create(file.tmp_path);
 }
 
-void cleanupFile(const UploadFileState& file) noexcept {
-    std::error_code ec;
-    std::filesystem::remove(file.tmp_path, ec);
+void cleanupFile(UploadFileState& file) noexcept {
+    if (file.body) file.body->discard();
+    file.body.reset();
     try {
         const auto& cache = vh::runtime::Deps::get().fsCache;
         if (cache && !file.fuse_from.empty() && cache->entryExists(file.fuse_from)) cache->evictPath(file.fuse_from);
@@ -500,10 +502,9 @@ void reserveUploadSpace(
 }
 
 void checkCompletedUploadFile(const UploadFileState& file) {
-    if (!std::filesystem::exists(file.tmp_path))
-        throw std::runtime_error("Uploaded temp file is missing: " + file.tmp_path.string());
+    if (!file.body) throw std::runtime_error("Uploaded temp file is missing: " + file.tmp_path.string());
 
-    const auto actualSize = std::filesystem::file_size(file.tmp_path);
+    const auto actualSize = file.body->size();
     if (actualSize != file.expected_size)
         throw std::runtime_error("Uploaded temp file size mismatch");
 }
@@ -523,18 +524,9 @@ std::shared_ptr<vh::fs::model::File> commitCompletedUploadFile(
         .engine = file.engine,
         .user = user
     };
-    if (file.expected_size > 0) ctx.source_path = file.tmp_path;
+    if (file.expected_size > 0) ctx.source = file.body->source();
     auto created = vh::fs::Filesystem::createFile(ctx);
-
-    std::error_code ec;
-    std::filesystem::remove(file.tmp_path, ec);
-    if (ec) {
-        vh::log::Registry::fs()->warn(
-            "[HttpUpload] Failed to remove completed upload temp file {}: {}",
-            file.tmp_path.string(),
-            ec.message());
-    }
-
+    file.body->discard();
     return created;
 }
 
@@ -550,7 +542,7 @@ using detail::UploadSessionState;
 struct Coordinator::FileStream::Impl {
     std::shared_ptr<UploadSessionState> session;
     std::string file_id;
-    std::ofstream out;
+    std::shared_ptr<staging::Body> body;
     std::shared_ptr<vh::share::Manager> manager;
     std::shared_ptr<vh::share::Principal> principal;
     bool finished{false};
@@ -596,8 +588,7 @@ void Coordinator::FileStream::write(const void* data, const std::size_t size) {
         if (file.received_size > file.expected_size || size > file.expected_size - file.received_size)
             throw std::runtime_error("Upload exceeds expected size");
 
-        impl_->out.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
-        if (!impl_->out.good()) throw std::runtime_error("Unable to write upload body");
+        impl_->body->append({static_cast<const uint8_t*>(data), size});
         file.received_size += size;
         shareUploadId = file.share_upload_id;
     }
@@ -612,7 +603,7 @@ nlohmann::json Coordinator::FileStream::finish() {
     if (impl_->finished) return {};
     if (impl_->failed) throw std::runtime_error("Upload stream failed");
 
-    impl_->out.close();
+    impl_->body->close();
     nlohmann::json response;
     {
         std::scoped_lock lock(impl_->session->mutex);
@@ -633,7 +624,7 @@ void Coordinator::FileStream::fail(std::string reason) noexcept {
     if (!impl_ || impl_->failed || impl_->finished) return;
     impl_->failed = true;
     try {
-        if (impl_->out.is_open()) impl_->out.close();
+        if (impl_->body) impl_->body->close();
     } catch (...) {
     }
 
@@ -764,6 +755,7 @@ nlohmann::json Coordinator::createSession(const request& req, const nlohmann::js
                     .vault_id = parent.vault_id,
                     .vault_path = vaultPath,
                     .tmp_path = tmpPath,
+                    .body = nullptr,
                     .fuse_from = fuseFrom,
                     .fuse_to = fuseTo,
                     .expected_size = size,
@@ -781,7 +773,8 @@ nlohmann::json Coordinator::createSession(const request& req, const nlohmann::js
                 auto [stored, inserted] = upload->files.emplace(fileId, std::move(file));
                 if (!inserted) throw std::runtime_error("Duplicate upload file id");
                 if (size == 0) {
-                    createEmptyTempFile(tmpPath);
+                    stageFile(stored->second);
+                    stored->second.body->close();
                     stored->second.status = FileStatus::Complete;
                 }
                 responseFiles.push_back(fileResponseJson(stored->second));
@@ -842,6 +835,7 @@ nlohmann::json Coordinator::createSession(const request& req, const nlohmann::js
                     .vault_id = vaultId,
                     .vault_path = vaultPath,
                     .tmp_path = tmpPath,
+                    .body = nullptr,
                     .fuse_from = fuseFrom,
                     .fuse_to = fuseTo,
                     .expected_size = size,
@@ -859,7 +853,8 @@ nlohmann::json Coordinator::createSession(const request& req, const nlohmann::js
                 auto [stored, inserted] = upload->files.emplace(fileId, std::move(file));
                 if (!inserted) throw std::runtime_error("Duplicate upload file id");
                 if (size == 0) {
-                    createEmptyTempFile(tmpPath);
+                    stageFile(stored->second);
+                    stored->second.body->close();
                     stored->second.status = FileStatus::Complete;
                 }
                 responseFiles.push_back(fileResponseJson(stored->second));
@@ -910,9 +905,8 @@ Coordinator::FileStream Coordinator::beginFile(const request& req, const std::op
             throw std::runtime_error("Upload file has failed");
         if (contentLength && *contentLength != file.expected_size) throw std::runtime_error("Upload size mismatch");
 
-        std::filesystem::create_directories(file.tmp_path.parent_path());
-        impl->out.open(file.tmp_path, std::ios::binary | std::ios::trunc);
-        if (!impl->out.is_open()) throw std::runtime_error("Unable to open upload temp file");
+        stageFile(file);
+        impl->body = file.body;
         file.received_size = 0;
         file.status = FileStatus::Receiving;
     }
@@ -1035,7 +1029,7 @@ nlohmann::json Coordinator::cancelSession(const request& req, const std::string_
 
     if (upload->mode == UploadMode::Share) {
         std::scoped_lock lock(upload->mutex);
-        for (const auto& [_, file] : upload->files) {
+        for (auto& [_, file] : upload->files) {
             cleanupFile(file);
             cancelShareUploadIfNeeded(file);
         }

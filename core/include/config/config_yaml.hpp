@@ -295,12 +295,14 @@ struct convert<LoggingConfig> {
     static Node encode(const LoggingConfig& rhs) {
         Node node;
         node["log_levels"] = rhs.levels;
+        node["file_paths"] = logFilePathsToString(rhs.file_paths);
         return node;
     }
 
     static bool decode(const Node& node, LoggingConfig& rhs) {
         if (!node.IsMap()) return false;
-        rhs.levels = node["log_levels"].as<LogLevelsConfig>();
+        if (node["log_levels"]) rhs.levels = node["log_levels"].as<LogLevelsConfig>();
+        if (node["file_paths"]) rhs.file_paths = logFilePathsFromString(node["file_paths"].as<std::string>());
         return true;
     }
 };
@@ -943,10 +945,34 @@ struct convert<FilesTrashedConfig> {
 };
 
 template<>
+struct convert<AuditTrailConfig> {
+    static Node encode(const AuditTrailConfig& rhs) {
+        Node node;
+        node["retention_days"] = rhs.retention_days.count();
+        node["head_interval_minutes"] = rhs.head_interval_minutes;
+        node["syslog"] = rhs.syslog;
+        node["syslog_facility"] = rhs.syslog_facility;
+        return node;
+    }
+
+    static bool decode(const Node& node, AuditTrailConfig& rhs) {
+        if (!node.IsMap()) return false;
+        const AuditTrailConfig defaults;
+        rhs.retention_days = std::chrono::days(node["retention_days"].as<unsigned int>(
+            static_cast<unsigned int>(defaults.retention_days.count())));
+        rhs.head_interval_minutes = node["head_interval_minutes"].as<unsigned int>(defaults.head_interval_minutes);
+        rhs.syslog = node["syslog"].as<bool>(defaults.syslog);
+        rhs.syslog_facility = node["syslog_facility"].as<std::string>(defaults.syslog_facility);
+        return true;
+    }
+};
+
+template<>
 struct convert<AuditConfig> {
     static Node encode(const AuditConfig& rhs) {
         Node node;
         node["audit_log"] = rhs.audit_log;
+        node["trail"] = rhs.trail;
         node["encryption_waivers"] = rhs.encryption_waivers;
         node["files_trashed"] = rhs.files_trashed;
         return node;
@@ -955,6 +981,7 @@ struct convert<AuditConfig> {
     static bool decode(const Node& node, AuditConfig& rhs) {
         if (!node.IsMap()) return false;
         rhs.audit_log = node["audit_log"].as<AuditLogConfig>();
+        if (node["trail"]) YAML::convert<AuditTrailConfig>::decode(node["trail"], rhs.trail);
         rhs.encryption_waivers = node["encryption_waivers"].as<EncryptionWaiverConfig>();
         rhs.files_trashed = node["files_trashed"].as<FilesTrashedConfig>();
         return true;

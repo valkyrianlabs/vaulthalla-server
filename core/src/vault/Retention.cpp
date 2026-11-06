@@ -1,4 +1,5 @@
 #include "vault/Retention.hpp"
+#include "crypto/secrets/Dependents.hpp"
 
 #include "db/query/upstream/Bucket.hpp"
 #include "db/query/vault/APIKey.hpp"
@@ -296,7 +297,7 @@ RetainedKey retainedKey(const unsigned int vaultId) {
     const auto keys = DeletionQuery::retainedKeys(vaultId);
     if (keys.empty()) throw std::runtime_error("no key is retained for deleted vault " + std::to_string(vaultId));
     crypto::secrets::KeyProvider tpm(paths::testMode ? "test_vault_master" : "vault_master");
-    tpm.init();
+    tpm.initGuarded(crypto::secrets::dependents::vaultMaster());
     RetainedKey out{.key = crypto::util::decrypt_aes256_gcm(keys.front()->encrypted_key, tpm.getMasterKey(), keys.front()->iv),
                     .record = keys.front()};
     if (out.key.size() != 32) {

@@ -8,6 +8,7 @@
 #include "db/query/sync/RemoteObjectIndex.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "recovery/Store.hpp"
 #include "recovery/local/Versions.hpp"
 #include "recovery/provider/State.hpp"
@@ -137,7 +138,7 @@ void recordReplayed(const storage::CloudEngine& engine, const rq::GenerationRow&
                                                             etag.empty() ? std::nullopt : std::make_optional(etag)));
     } catch (const std::exception& e) {
         log::Registry::storage()->warn("[LocalVersions] Vault {}: the replay of version {} of {} was not recorded in "
-                                       "the sync state: {}", engine.vault->id, g.version_number, g.path, e.what());
+                                       "the sync state: {}", engine.vault->id, g.version_number, log::path(g.path), e.what());
     }
 }
 

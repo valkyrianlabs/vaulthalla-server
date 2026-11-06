@@ -74,6 +74,10 @@ public:
         const ResolvedTarget& target
     ) const;
 
+    // The vault path of entry `entryId` when it lives in `vaultId`, else nullopt. Callers addressing a file by id
+    // (#327) resolve() this path with TargetPathMode::VaultRelative, so the share's scope check still applies.
+    [[nodiscard]] std::optional<std::string> vaultPathOfEntry(uint32_t entryId, uint32_t vaultId) const;
+
     [[nodiscard]] static std::string normalizeRequestedPath(std::string_view path);
     [[nodiscard]] static std::string toVaultPath(
         const Principal& principal,

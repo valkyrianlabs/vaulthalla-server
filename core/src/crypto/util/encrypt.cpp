@@ -207,7 +207,7 @@ std::vector<uint8_t> decrypt_aes256_gcm(
 
 void decrypt_aes256_gcm_file(
     const std::filesystem::path& ciphertextPath,
-    const std::filesystem::path& plaintextPath,
+    const std::function<void(std::span<const uint8_t>)>& sink,
     const std::vector<uint8_t>& key,
     const std::vector<uint8_t>& iv) {
     if (key.size() != AES_KEY_SIZE) throw std::invalid_argument("Invalid AES-256 key size");
@@ -225,20 +225,17 @@ void decrypt_aes256_gcm_file(
     if (!in) throw std::runtime_error("Failed to read AES-GCM tag: " + ciphertextPath.string());
     in.seekg(0);
 
-    std::ofstream out(plaintextPath, std::ios::binary | std::ios::trunc);
-    if (!out) throw std::runtime_error("Failed to open plaintext file for decryption: " + plaintextPath.string());
-
     EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
     if (!ctx) throw std::runtime_error("Failed to allocate AES-GCM context");
 
+    std::array<unsigned char, 64 * 1024> input{};
+    std::array<unsigned char, input.size() + AES_TAG_SIZE> output{};
     try {
         if (EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1 ||
             EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(iv.size()), nullptr) != 1 ||
             EVP_DecryptInit_ex(ctx, nullptr, nullptr, key.data(), iv.data()) != 1)
             throw std::runtime_error("AES-GCM initialization failed");
 
-        std::array<unsigned char, 64 * 1024> input{};
-        std::array<unsigned char, input.size() + AES_TAG_SIZE> output{};
         uintmax_t remaining = bodySize;
         while (remaining > 0) {
             const auto chunk = static_cast<std::streamsize>(std::min<uintmax_t>(remaining, input.size()));
@@ -249,8 +246,7 @@ void decrypt_aes256_gcm_file(
             int outLen = 0;
             if (EVP_DecryptUpdate(ctx, output.data(), &outLen, input.data(), static_cast<int>(chunk)) != 1)
                 throw std::runtime_error("AES-GCM file decryption failed");
-            if (outLen > 0) out.write(reinterpret_cast<const char*>(output.data()), outLen);
-            if (!out) throw std::runtime_error("Failed writing plaintext file: " + plaintextPath.string());
+            if (outLen > 0) sink({output.data(), static_cast<std::size_t>(outLen)});
         }
 
         if (EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, static_cast<int>(tag.size()), tag.data()) != 1)
@@ -258,17 +254,14 @@ void decrypt_aes256_gcm_file(
         int finalLen = 0;
         if (EVP_DecryptFinal_ex(ctx, output.data(), &finalLen) != 1)
             throw std::runtime_error("AES-GCM authentication failed: " + ciphertextPath.string());
-        if (finalLen > 0) out.write(reinterpret_cast<const char*>(output.data()), finalLen);
-        out.close();
-        if (!out) throw std::runtime_error("Failed writing plaintext file: " + plaintextPath.string());
+        if (finalLen > 0) sink({output.data(), static_cast<std::size_t>(finalLen)});
         EVP_CIPHER_CTX_free(ctx);
     } catch (...) {
         EVP_CIPHER_CTX_free(ctx);
-        out.close();
-        std::error_code ec;
-        std::filesystem::remove(plaintextPath, ec);
+        sodium_memzero(output.data(), output.size());
         throw;
     }
+    sodium_memzero(output.data(), output.size());
 }
 
 std::vector<uint8_t> read_file(const std::filesystem::path& path) {

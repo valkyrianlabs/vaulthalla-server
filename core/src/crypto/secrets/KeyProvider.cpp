@@ -1,5 +1,6 @@
 #include "crypto/secrets/KeyProvider.hpp"
 #include "platform/Sealer.hpp"
+#include "config/Registry.hpp"
 
 #include <paths.h>
 #include <sodium.h>
@@ -20,11 +21,30 @@ KeyProvider::KeyProvider(const std::string& name)
 }
 
 void KeyProvider::init(const std::optional<std::string>& initSecret) {
+    requirePosture();
     if (platform::sealer::present(sealedDir_, name_)) {
         masterKey_ = platform::sealer::unseal(sealedDir_, name_);
         return;
     }
     if (initSecret) masterKey_ = std::vector<uint8_t>(initSecret->begin(), initSecret->end());
+    generateAndSeal();
+}
+
+void KeyProvider::initGuarded(const DependentsCheck& dependents) {
+    requirePosture();
+    if (platform::sealer::present(sealedDir_, name_)) {
+        masterKey_ = platform::sealer::unseal(sealedDir_, name_);
+        return;
+    }
+    if (dependents) {
+        if (const auto what = dependents())
+            throw MasterSecretLost(
+                "The sealed master secret '" + name_ + "' is missing (" + sealedDir_.string() + "), but " + *what +
+                " in the database are encrypted with it. Refusing to create a new one: that would make them "
+                "permanently undecryptable. Restore the state directory from backup (with the same TPM or Secure "
+                "Enclave), or restore the vault keys from their backups (`vh vault keys import`) and the internal "
+                "secrets with `vh secret` (docs: vaults/secrets-and-key-export).");
+    }
     generateAndSeal();
 }
 
@@ -40,6 +60,17 @@ bool KeyProvider::sealedExists() const {
 }
 
 std::string_view KeyProvider::backend() noexcept { return platform::sealer::backend(); }
+
+std::string_view KeyProvider::posture() noexcept { return platform::sealer::posture(); }
+
+void KeyProvider::requirePosture() {
+    if (!config::Registry::get().secrets.require_hardware) return;
+    if (const auto p = posture(); p != "hardware")
+        throw std::runtime_error("secrets.require_hardware is set, but sealed secrets on this host are protected by '" +
+                                 std::string(p) + "' sealing (" + std::string(backend()) +
+                                 "), not hardware. Use a host with a hardware TPM (Linux) or the Secure Enclave "
+                                 "(macOS), or turn the setting off.");
+}
 
 std::vector<uint8_t> KeyProvider::generateMasterSecret(const std::size_t bytes) {
     if (bytes == 0) throw std::invalid_argument("master secret size must be > 0");

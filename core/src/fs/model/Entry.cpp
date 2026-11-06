@@ -5,6 +5,7 @@
 #include "fs/model/Symlink.hpp"
 #include "fs/model/Path.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "config/Registry.hpp"
 #include "db/encoding/u8.hpp"
 #include "sync/model/RemoteManifest.hpp"
@@ -277,7 +278,7 @@ std::unordered_map<std::u8string, std::shared_ptr<Entry>> vh::fs::model::groupEn
 
     for (const auto& entry : entries) {
         if (grouped.contains(entry->path.u8string())) {
-            log::Registry::types()->warn("[Entry] [groupEntriesByPath] Duplicate entry found for path: {}", entry->path.string());
+            log::Registry::types()->warn("[Entry] [groupEntriesByPath] Duplicate entry found for path: {}", log::file(entry->id, entry->path));
             continue;
         }
         grouped[entry->path.u8string()] = entry;
@@ -306,10 +307,10 @@ void Entry::print() const {
                                 "  Inode: {}\n"
                                 "  Mode: {}",
                                 id,
-                                name,
+                                log::path(name),
                                 size_bytes,
-                                path.string(),
-                                fuse_path.string(),
+                                log::path(path),
+                                log::path(fuse_path),
                                 is_hidden ? "Yes" : "No",
                                 is_system ? "Yes" : "No",
                                 timestampToString(created_at),

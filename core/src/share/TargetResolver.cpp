@@ -217,6 +217,12 @@ ResolvedTarget TargetResolver::resolve(const Principal& principal, TargetResolve
                          request.operation, request.expected_target_type, std::move(rootEntry), std::move(entry));
 }
 
+std::optional<std::string> TargetResolver::vaultPathOfEntry(const uint32_t entryId, const uint32_t vaultId) const {
+    const auto entry = provider_->getEntryById(entryId);
+    if (!entry || !entryHasVault(*entry, vaultId)) return std::nullopt;
+    return entryPath(*entry);
+}
+
 ResolvedTarget TargetResolver::resolveListedChild(const Principal& principal, const ResolvedTarget& parent,
                                                   std::shared_ptr<fs::model::Entry> child,
                                                   const Operation operation) const {

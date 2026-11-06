@@ -84,6 +84,7 @@ std::vector<WsCommandUsage> dashboardCommands();
 std::vector<WsCommandUsage> s3GatewayCommands();
 std::vector<WsCommandUsage> pricingCommands();
 std::vector<WsCommandUsage> settingsCommands();
+std::vector<WsCommandUsage> auditCommands();
 std::vector<WsCommandUsage> emailCommands();
 std::vector<WsCommandUsage> deviceCommands();
 std::vector<WsCommandUsage> vaultKeyCommands();

@@ -517,6 +517,11 @@ export interface WebSocketCommandMap {
 
   'permissions.list': { payload: null; response: { permissions: Permission[] } }
 
+  // The tamper-evident audit trail (#323): admin.audits.view.
+  'audit.list': WsContract['audit.list']
+  'audit.verify': WsContract['audit.verify']
+  'audit.export': WsContract['audit.export']
+
   // Settings
   'settings.get': { payload: null; response: { settings: Settings } }
 

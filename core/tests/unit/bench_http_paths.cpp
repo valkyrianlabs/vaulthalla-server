@@ -184,7 +184,7 @@ protected:
             }
         }
         (void)fs::Filesystem::createFile({.path = "/big.bin", .fuse_path = engine->vaultPathToFusePath("/big.bin"),
-                                          .source_path = source, .engine = engine, .user = admin, .overwrite = true});
+                                          .source = vh::fs::sourceOf(source), .engine = engine, .user = admin, .overwrite = true});
         std::filesystem::remove(source);
         // A folder under the old archive caps (4 × 48 MiB), so both trees can zip it.
         (void)fs::Filesystem::mkdir({.path = engine->vaultPathToFusePath("/folder"), .engine = engine, .user = admin});
@@ -199,7 +199,7 @@ protected:
             }
             const auto path = "/folder/part" + std::to_string(f) + ".bin";
             (void)fs::Filesystem::createFile({.path = path, .fuse_path = engine->vaultPathToFusePath(path),
-                                              .source_path = source, .engine = engine, .user = admin, .overwrite = true});
+                                              .source = vh::fs::sourceOf(source), .engine = engine, .user = admin, .overwrite = true});
             std::filesystem::remove(source);
         }
         (void)fs::Filesystem::createFile({.path = "/photo.jpg", .fuse_path = engine->vaultPathToFusePath("/photo.jpg"),

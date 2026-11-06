@@ -4,6 +4,7 @@
 #include "fs/model/File.hpp"
 #include "fs/ops/file.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "storage/s3/Controller.hpp"
 
 #include <fmt/format.h>
@@ -59,7 +60,7 @@ void notifyCommitted(const Deps& deps, const FileSP& file) {
         deps.catalog.committed(file);
     } catch (const std::exception& e) {
         log::Registry::sync()->warn("[KeyRotation] {} rotated, but refreshing cached metadata failed: {}",
-                                    file->path.string(), e.what());
+                                    log::file(file->id, file->path), e.what());
     }
 }
 
@@ -282,7 +283,7 @@ Resolution resolveSidecar(const std::filesystem::path& backing,
         try {
             return crypto.fileAuthenticates(path, *state);
         } catch (const std::exception& e) {
-            log::Registry::sync()->warn("[KeyRotation] Could not verify {}: {}", path.string(), e.what());
+            log::Registry::sync()->warn("[KeyRotation] Could not verify {}: {}", log::path(path), e.what());
             return false;
         }
     };
@@ -373,12 +374,12 @@ BatchResult rotateRange(const std::vector<FileSP>& files, const std::size_t begi
                 case Outcome::Deferred:
                     ++result.deferred;
                     log::Registry::sync()->info("[KeyRotation] {} is open for writing; rotating it next pass",
-                                                file->path.string());
+                                                log::file(file->id, file->path));
                     break;
                 case Outcome::Conflict:
                     ++result.conflicts;
                     log::Registry::sync()->info("[KeyRotation] {} changed while it was being rotated; re-reading it "
-                                                "next pass", file->path.string());
+                                                "next pass", log::file(file->id, file->path));
                     break;
             }
         } catch (const SimulatedCrash&) {
@@ -386,15 +387,15 @@ BatchResult rotateRange(const std::vector<FileSP>& files, const std::size_t begi
         } catch (const storage::s3::RequestBudgetExceeded& e) {
             result.failures.push_back({file->path, e.what()});
             result.aborted = true;
-            log::Registry::sync()->warn("[KeyRotation] S3 request budget exhausted at {}: {}", file->path.string(),
+            log::Registry::sync()->warn("[KeyRotation] S3 request budget exhausted at {}: {}", log::file(file->id, file->path),
                                         e.what());
             break;
         } catch (const std::exception& e) {
             result.failures.push_back({file->path, e.what()});
-            log::Registry::sync()->error("[KeyRotation] Failed to rotate {}: {}", file->path.string(), e.what());
+            log::Registry::sync()->error("[KeyRotation] Failed to rotate {}: {}", log::file(file->id, file->path), e.what());
         } catch (...) {
             result.failures.push_back({file->path, "unknown error"});
-            log::Registry::sync()->error("[KeyRotation] Failed to rotate {}: unknown error", file->path.string());
+            log::Registry::sync()->error("[KeyRotation] Failed to rotate {}: unknown error", log::file(file->id, file->path));
         }
     }
     return result;

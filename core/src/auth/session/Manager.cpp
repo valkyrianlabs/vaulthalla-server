@@ -9,6 +9,7 @@
 #include "crypto/util/hash.hpp"
 #include "db/query/auth/RefreshToken.hpp"
 #include "log/Registry.hpp"
+#include "audit/Trail.hpp"
 #include "protocols/ws/ConnectionLimit.hpp"
 #include "protocols/ws/Session.hpp"
 #include "identities/Manager.hpp"
@@ -589,6 +590,12 @@ bool Manager::expireIfIdle(const std::shared_ptr<Session>& session) {
     }
     log::Registry::auth()->info("[session::Manager] Signed out {} after {} min without activity",
                                 session->user ? session->user->name() : std::string{"?"}, idle::timeout().count());
+    audit::record({.action = "auth.session.idle_timeout", .outcome = audit::Outcome::Info,
+                   .actor_id = session->user ? std::optional<uint32_t>(session->user->id) : std::nullopt,
+                   .actor = session->user ? session->user->name() : std::string{},
+                   .details = {{"idle_minutes", idle::timeout().count()}}},
+                  "[auth] signed out " + (session->user ? session->user->name() : std::string{"?"}) + " after " +
+                      std::to_string(idle::timeout().count()) + " min without activity");
     token->hardInvalidate();  // revokes the stored row: no silent sign-in from the cookie afterwards
     invalidate(session);
     return true;

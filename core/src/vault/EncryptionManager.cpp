@@ -1,4 +1,5 @@
 #include "vault/EncryptionManager.hpp"
+#include "crypto/secrets/Dependents.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/reseal.hpp"
@@ -7,6 +8,7 @@
 #include "vault/model/Key.hpp"
 #include "vault/KeyAttestation.hpp"
 #include "fs/model/File.hpp"
+#include "fs/PlaintextSource.hpp"
 
 #include <sodium.h>
 #include <openssl/evp.h>
@@ -75,7 +77,7 @@ std::vector<uint8_t> unsealKeyRowOrThrow(const unsigned int vaultId, const vh::v
 EncryptionManager::EncryptionManager(const unsigned int vault_id)
     : vault_id_(vault_id) {
     tpmKeyProvider_ = std::make_unique<secrets::KeyProvider>(paths::testMode ? "test_vault_master" : "vault_master");
-    tpmKeyProvider_->init();
+    tpmKeyProvider_->initGuarded(secrets::dependents::vaultMaster());
     load_key();
 }
 
@@ -239,7 +241,7 @@ void EncryptionManager::prepare_key_rotation() {
 unsigned int EncryptionManager::mintSalvageKey(const unsigned int vaultId, const unsigned int expectedVersion,
                                                const bool outgoingHeld) {
     secrets::KeyProvider provider(paths::testMode ? "test_vault_master" : "vault_master");
-    provider.init();
+    provider.initGuarded(secrets::dependents::vaultMaster());
     const auto next = SecretKey::random();
     const WipedKeyCopy raw(next);
     std::vector<uint8_t> iv;
@@ -342,15 +344,12 @@ std::vector<uint8_t> EncryptionManager::encrypt(const std::vector<uint8_t>& plai
     return ciphertext;
 }
 
-void EncryptionManager::encryptFileToFile(
-    const std::filesystem::path& plaintextPath,
+void EncryptionManager::encryptToFile(
+    const vh::fs::PlaintextSource& source,
     const std::filesystem::path& ciphertextPath,
     const std::shared_ptr<File>& f) const {
     if (!f) throw std::invalid_argument("Cannot encrypt file without file metadata");
     const auto [key, version] = currentKey();
-
-    std::ifstream in(plaintextPath, std::ios::binary);
-    if (!in) throw std::runtime_error("Failed to open plaintext file for encryption: " + plaintextPath.string());
 
     std::filesystem::create_directories(ciphertextPath.parent_path());
     std::ofstream out(ciphertextPath, std::ios::binary | std::ios::trunc);
@@ -360,27 +359,27 @@ void EncryptionManager::encryptFileToFile(
     randombytes_buf(iv.data(), iv.size());
 
     GcmStreamEncryptor encryptor(key->bytes(), iv);
-    std::array<unsigned char, 64 * 1024> input{};
-    std::array<unsigned char, input.size()> output{};
-    while (in) {
-        in.read(reinterpret_cast<char*>(input.data()), static_cast<std::streamsize>(input.size()));
-        const auto read = in.gcount();
-        if (read <= 0) break;
-        const auto n = static_cast<std::size_t>(read);
-        encryptor.update({input.data(), n}, {output.data(), n});
-        out.write(reinterpret_cast<const char*>(output.data()), read);
+    std::array<unsigned char, 64 * 1024> output{};
+    vh::fs::forEachChunk(source, [&](const std::span<const uint8_t> chunk) {
+        encryptor.update(chunk, {output.data(), chunk.size()});
+        out.write(reinterpret_cast<const char*>(output.data()), static_cast<std::streamsize>(chunk.size()));
         if (!out) throw std::runtime_error("Failed writing ciphertext file: " + ciphertextPath.string());
-    }
-    if (in.bad()) throw std::runtime_error("Failed reading plaintext file: " + plaintextPath.string());
+    });
 
     const auto tag = encryptor.finish();
     out.write(reinterpret_cast<const char*>(tag.data()), static_cast<std::streamsize>(tag.size()));
     out.close();
     if (!out) throw std::runtime_error("Failed writing AES-GCM tag: " + ciphertextPath.string());
-    sodium_memzero(input.data(), input.size());
 
     f->encryption_iv = b64_encode(std::vector<uint8_t>(iv.begin(), iv.end()));
     f->encrypted_with_key_version = version;
+}
+
+void EncryptionManager::encryptFileToFile(
+    const std::filesystem::path& plaintextPath,
+    const std::filesystem::path& ciphertextPath,
+    const std::shared_ptr<File>& f) const {
+    encryptToFile(vh::fs::sourceOf(plaintextPath), ciphertextPath, f);
 }
 
 SecretKeyPtr EncryptionManager::keySnapshot(const unsigned int keyVersion) const {
@@ -575,13 +574,13 @@ std::vector<uint8_t> EncryptionManager::decrypt(const std::vector<uint8_t>& ciph
     return decrypt_aes256_gcm(ciphertext, raw.bytes, b64_decode(b64_iv));
 }
 
-void EncryptionManager::decryptFileToFile(
+void EncryptionManager::decryptFileTo(
     const std::filesystem::path& ciphertextPath,
-    const std::filesystem::path& plaintextPath,
+    const std::function<void(std::span<const uint8_t>)>& sink,
     const std::string& b64_iv,
     const unsigned int keyVersion) const {
     const WipedKeyCopy raw(keySnapshot(keyVersion));
-    decrypt_aes256_gcm_file(ciphertextPath, plaintextPath, raw.bytes, b64_decode(b64_iv));
+    decrypt_aes256_gcm_file(ciphertextPath, sink, raw.bytes, b64_decode(b64_iv));
 }
 
 std::vector<uint8_t> EncryptionManager::get_key(const std::string& callingFunctionName) const {

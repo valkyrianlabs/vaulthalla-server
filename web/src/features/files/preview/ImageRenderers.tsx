@@ -9,11 +9,11 @@ import type { RendererProps } from '@/features/files/preview/types'
 // Small enough to ship with the sheet itself: no nested chunk for the common case.
 
 // `image`: the server's lossy JPEG render (Preview capability).
-export const ImageRenderer = ({ source, entry }: RendererProps) => <Img src={source.previewUrl(entry.path, 1024)} alt={entry.name} />
+export const ImageRenderer = ({ source, entry }: RendererProps) => <Img src={source.previewUrl(entry, 1024)} alt={entry.name} />
 
 // `svg` / `image-native`: the original bytes (Download capability). SVG inside <img> never runs scripts, and the
 // server adds a sandbox CSP to inline SVG responses as well.
-export const NativeImageRenderer = ({ source, entry }: RendererProps) => <Img src={source.contentUrl(entry.path, 'inline')} alt={entry.name} />
+export const NativeImageRenderer = ({ source, entry }: RendererProps) => <Img src={source.contentUrl(entry, 'inline')} alt={entry.name} />
 
 const Img = ({ src, alt }: { src: string; alt: string }) => {
   const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')

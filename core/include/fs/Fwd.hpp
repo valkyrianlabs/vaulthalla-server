@@ -12,3 +12,7 @@ namespace vh::fs::model {
 namespace vh::fs::model::file {
     struct Trashed;
 }
+
+namespace vh::fs {
+    struct PlaintextSource;
+}

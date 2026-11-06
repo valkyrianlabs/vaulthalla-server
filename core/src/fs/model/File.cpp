@@ -1,6 +1,7 @@
 #include "fs/model/File.hpp"
 #include "preview/Plan.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "db/query/fs/Entry.hpp"
 #include "sync/model/RemoteManifest.hpp"
 
@@ -148,7 +149,7 @@ std::unordered_map<std::u8string, std::shared_ptr<File>> vh::fs::model::groupEnt
 
     for (const auto& file : entries) {
         if (grouped.contains(file->path.u8string())) {
-            log::Registry::types()->warn("[File] [groupEntriesByPath] Duplicate entry found for path: {}", file->path.string());
+            log::Registry::types()->warn("[File] [groupEntriesByPath] Duplicate entry found for path: {}", log::file(file->id, file->path));
             continue;
         }
         grouped[file->path.u8string()] = file;

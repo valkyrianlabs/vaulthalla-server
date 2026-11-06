@@ -1,6 +1,7 @@
 #include "platform/Sealer.hpp"
 #include "platform/darwin/SealerBackends.hpp"
 #include "log/Registry.hpp"
+#include "config/Registry.hpp"
 
 #include <filesystem>
 #include <mutex>
@@ -20,8 +21,19 @@ namespace vh::platform::sealer {
 
 namespace {
 
-enum class DarwinSealer { SecureEnclave, File };
+enum class DarwinSealer { SecureEnclave, File, Unavailable };
 
+DarwinSealer chooseDarwinSealer();
+
+DarwinSealer activeDarwinSealer() {
+    static const DarwinSealer chosen = chooseDarwinSealer();
+    return chosen;
+}
+
+// Fails closed (#326): without a usable Secure Enclave the daemon refuses to seal or unseal, unless the plain-file
+// development backend was chosen explicitly, by the build (-Ddarwin_sealer=file) or by config.yaml
+// (secrets.allow_development_file_backend). It used to fall back to files silently, presenting an unprotected
+// install as a sealed one.
 DarwinSealer chooseDarwinSealer() {
     if (std::string_view(VH_DARWIN_SEALER) == "file") {
         log::Registry::crypto()->warn("[Sealer] Using the development 'file' secret backend (-Ddarwin_sealer=file): "
@@ -29,16 +41,28 @@ DarwinSealer chooseDarwinSealer() {
         return DarwinSealer::File;
     }
     if (secure_enclave::available()) return DarwinSealer::SecureEnclave;
-    log::Registry::crypto()->error("[Sealer] The Secure Enclave can't be used here ({}): sealing with the development "
-                                   "'file' backend instead, plain 0600 files with no hardware binding. Health "
-                                   "reports the secrets backend as 'file'", secure_enclave::unavailableReason());
-    return DarwinSealer::File;
+    if (config::Registry::get().secrets.allow_development_file_backend) {
+        log::Registry::crypto()->error("[Sealer] The Secure Enclave can't be used here ({}); secrets."
+                                       "allow_development_file_backend is set, so secrets are sealed as plain 0600 "
+                                       "files with no hardware binding (development only)",
+                                       secure_enclave::unavailableReason());
+        return DarwinSealer::File;
+    }
+    log::Registry::crypto()->critical("[Sealer] The Secure Enclave can't be used here ({}). Refusing to keep secrets "
+                                      "in plain files. Run the daemon under launchd on a Mac with a Secure Enclave "
+                                      "(Apple silicon or T2), or, for development only, set "
+                                      "secrets.allow_development_file_backend: true in config.yaml",
+                                      secure_enclave::unavailableReason());
+    return DarwinSealer::Unavailable;
 }
 
-DarwinSealer activeDarwinSealer() {
-    static const DarwinSealer chosen = chooseDarwinSealer();
-    return chosen;
+void requireUsable() {
+    if (activeDarwinSealer() == DarwinSealer::Unavailable)
+        throw std::runtime_error("no secure secret backend: the Secure Enclave can't be used here (" +
+                                 secure_enclave::unavailableReason() +
+                                 "); see secrets.allow_development_file_backend for development hosts");
 }
+
 
 bool underSecureEnclave() { return activeDarwinSealer() == DarwinSealer::SecureEnclave; }
 
@@ -61,19 +85,35 @@ void sealLocked(const std::filesystem::path& dir, const std::string& name, const
 
 std::string_view backend() noexcept {
     try {
-        return underSecureEnclave() ? "secure-enclave" : "file";
-    } catch (...) {
-        return "file";
-    }
+        switch (activeDarwinSealer()) {
+            case DarwinSealer::SecureEnclave: return "secure-enclave";
+            case DarwinSealer::File: return "file";
+            case DarwinSealer::Unavailable: return "unavailable";
+        }
+    } catch (...) {}
+    return "unavailable";
+}
+
+std::string_view posture() noexcept {
+    try {
+        switch (activeDarwinSealer()) {
+            case DarwinSealer::SecureEnclave: return "hardware";
+            case DarwinSealer::File: return "development";
+            case DarwinSealer::Unavailable: return "unknown";
+        }
+    } catch (...) {}
+    return "unknown";
 }
 
 void seal(const std::filesystem::path& dir, const std::string& name, const std::vector<uint8_t>& secret) {
     const std::scoped_lock lock(darwinSealerMutex());
+    requireUsable();
     sealLocked(dir, name, secret);
 }
 
 std::vector<uint8_t> unseal(const std::filesystem::path& dir, const std::string& name) {
     const std::scoped_lock lock(darwinSealerMutex());
+    requireUsable();
     const auto sePath = secure_enclave::path(dir, name);
     const auto filePath = file::path(dir, name);
     const bool hasSe = std::filesystem::exists(sePath);

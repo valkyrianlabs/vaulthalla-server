@@ -1,4 +1,5 @@
 #include "protocols/ws/handler/Auth.hpp"
+#include "audit/Trail.hpp"
 #include "ops/Error.hpp"
 #include "runtime/Deps.hpp"
 #include "auth/Bootstrap.hpp"
@@ -143,6 +144,10 @@ json Auth::activity(const std::shared_ptr<Session> &session) {
 }
 
 json Auth::logout(const std::shared_ptr<Session> &session) {
+    if (session && session->user)
+        audit::record({.action = "auth.logout", .actor_id = session->user->id, .actor = session->user->name(),
+                       .details = {{"ip", session->ipAddress}}},
+                      "[auth] " + session->user->name() + " signed out");
     runtime::Deps::get().sessionManager->invalidate(session);
     return {};
 }

@@ -148,8 +148,9 @@ per frame during a transfer (the server's general request limit is 1 MiB), 64 Mi
 Transfers are never interactive (they keep the 10s read timeout), at most 4 gets and 2 puts run daemon-wide, 6h max.
 Authorization is `http::access::resolveUserPath`/`requireUser` (the HTTP lanes' evaluator, taking the peer-mapped
 `User` instead of a session), re-evaluated with the user reloaded every 32 chunks of a get and before a put commits.
-A put is staged in `<backing>/.cli-staging/put-*.part` (0600 in 0700, swept at CLI-server start since it is plaintext)
-and committed by `fs::Filesystem::createFile` with `source_path` (streaming seal; overwrite is CAS on the authorized
+A put is staged in `<backing>/.cli-staging/put-*.part` (a `crypto::ScratchFile`, see "Plaintext in use" below; 0600 in
+0700, swept at CLI-server start) and committed by `fs::Filesystem::createFile` with `source` (an `fs::PlaintextSource`;
+streaming seal; overwrite is CAS on the authorized
 generation). The client reads/writes local files itself (get `-o` = temp sibling + rename only on an ok result with
 every byte; stdout via write(2), refused to a TTY without `-o -`); `planLocal` mirrors the daemon's tokenizer so both
 agree which positional is the local file. Tests: `test_cli_fs.cpp` (DB, socketpair), `core/tests/cli/test_fs_client.py`
@@ -479,8 +480,8 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   made as for an upload; something there: 412 with its ETag for a file, 409 otherwise). Neither (or both, or `*` in
   If-Match): 428; no Content-Length: 411; > 8 GiB or more than `freeSpace()`: 413. All of that is answered before a
   body byte is read (the connection then closes). `Session::handle_streaming_content` streams the body in 64 KiB reads
-  into the staging seam (`.upload-http-content-<uuid>.part`, same private/mount choice as uploads), flushed with
-  `platform::durable::sync`; the commit authenticates and authorizes again, then `Filesystem::createFile{source_path,
+  into the staging seam (`.upload-http-content-<uuid>.part`, a `staging::Body`, same private/mount choice as
+  uploads); the commit authenticates and authorizes again, then `Filesystem::createFile{source,
   overwrite, expected_source_id}` (the matched sourceId, or "" for create-only), so concurrent writers and an open
   working copy are a ContentConflict → 412. Lane creates of one path are claimed one at a time. 201/200 answers
   `{created, entry}` (the file's entry JSON with both versions) and the new ETag. The `/upload/session` commit seals
@@ -583,26 +584,45 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   groups and the vault owner come from `identities::Manager` in memory (see Identities below). If the DB pool wedges,
   writes, opens of uncached entries and anything else that queries still hang. See P0 in `production-hardening.md`.
 - HTTP uploads (Linux, `mount` staging) stage `.upload-http-<id>-<file>.part` next to the target *through FUSE*, then
-  seal it into the target with `Filesystem::createFile{source_path}` (`http/upload/Coordinator.cpp`, and
-  `.upload-http-content-*.part` for `PUT /upload/content`). This is intentional. Don't move staging out of
+  seal it into the target with `Filesystem::createFile{source}` (`http/upload/Coordinator.cpp`, and
+  `.upload-http-content-*.part` for `PUT /upload/content`; both through `staging::Body`, `http/upload/Staging.hpp`).
+  This is intentional. Don't move staging out of
   FUSE to reduce sync churn; fix duplicate sync triggers or backing-path resolution instead.
 - **Resumable uploads deliberately do not stage through FUSE** (`<backing>/.upload-spool/<upload id>/`, 0700,
   ciphertext only, outside the mount and every vault tree; nothing in FUSE, snapshots, versions, archives, copy or
-  sync walks it). The rule above is about the plaintext `.upload-http-*` lanes. A resumable file receives many parts
+  sync walks it). The rule above is about the `.upload-http-*` lanes. A resumable file receives many parts
   that must each be durable before they are acknowledged; through FUSE every `fsync` re-seals the whole working
   copy (`fuse/Bridge.cpp` fsync → `WorkingCopies::persist`), so per-part durability would cost O(n²) bytes of
-  encryption and I/O for an n-part file, and the staged bytes would be plaintext at rest while in flight.
+  encryption and I/O for an n-part file, and a part acknowledged as durable must survive a restart, which a working
+  copy (process-key ciphertext) does not.
 - **Vault bytes are always ciphertext at rest; the mount is the decrypting view (#173).** Every backing file (local
   vaults and cloud vaults' local copies) is AES-256-GCM body‖16-byte tag, IV and key version in `files`, and
   `files.size_bytes` is the *plaintext* size. Derived preview artifacts are encrypted too (`VHDERIV1`, see
   "Byte-serving spine"); the legacy plaintext `<cacheRoot>/thumbnails` and `<cacheRoot>/files` trees are deleted by
   `preview::cache::Store::sweep` at startup. The HTTP lanes never write plaintext. FUSE `open` decrypts into a
   per-inode working copy
-  (`fuse/WorkingCopies`, 0600 under `<backing>/.fuse-plaintext`, shared by every handle on the inode); reads and
-  writes go to it; `flush` (so `close(2)` returns with the change on disk), `fsync` and the last `release` seal it
-  back (new IV, fsynced temp + rename). `setattr` size works on the copy. Copies that fail to seal move to
-  `.fuse-plaintext/unsaved/`; stale copies are deleted at mount. A same-vault rename only moves the bytes (no
-  re-encryption).
+  (`fuse/WorkingCopies`, a `crypto::ScratchFile` under `<backing>/.fuse-working`, shared by every handle on the
+  inode); reads and writes go to it; `flush` (so `close(2)` returns with the change on disk), `fsync` and the last
+  `release` seal it back (new IV, fsynced temp + rename). `setattr` size works on the copy. A copy whose last seal
+  fails stays registered as *unsaved* (moved to `.fuse-working/unsaved/`): `isOpen` stays true, reopening shows it,
+  and the seal is retried every 60 s (`WorkingCopies::startRetrying`, run by the FUSE service), on the next
+  flush/fsync/release and at FUSE stop (`shutdown()`, which logs and deletes what is still unsaved); a file deleted
+  meanwhile is restored as a new file where it was (`hooks.recover`). Everything under `.fuse-working` is deleted at
+  mount (`clearStale`, logging how many unsaved changes a crash lost); the pre-#328 `.fuse-plaintext/unsaved/`
+  plaintext is kept for the operator with a warning, the rest of that directory is deleted. A same-vault rename only
+  moves the bytes (no re-encryption).
+- **Plaintext in use is never on disk (#328).** FUSE working copies, private HTTP upload staging
+  (`<backing>/.upload-staging`) and `vh fs put` staging (`.cli-staging`) are `crypto::ScratchFile`s: 64 KiB blocks,
+  each `nonce(24, fresh per write) ‖ XChaCha20-Poly1305 ciphertext ‖ tag(16)` at `i * (64 KiB + 40)`, AAD = a random
+  per-file id ‖ BE64(i). The key (`ScratchFile::processKey()`, a `SecretKey`, mlocked) is random per process and never
+  persisted; the file id, logical size and each block's latest nonce live only in the object, so a flipped byte,
+  moved/foreign/replayed block or cut-off file fails closed (`ScratchFile::Tampered` → EIO). Holes are written as
+  encrypted zeros. One write block and one read block are cached in locked memory. The file is unlinked with its
+  object. A crash leaves only ciphertext no later process can read; each owner sweeps it at startup. Mount staging
+  (`.upload-http-*.part` through FUSE) lands in a working copy, then in a sealed vault file: never plaintext either.
+  Not covered: S3 gateway request bodies (`<backing>/s3-request-body/*.body`) and multipart parts
+  (`<backing>/.8f3a9c1d6e2b4f70/`, `VH_S3_GATEWAY_MULTIPART_PARTS_DIRNAME`), which are still plaintext (#345; parts must survive restarts, so they need the
+  vault key, not the process key).
 - **Rename over an existing entry replaces it (editor saves; `FsRenameDbTest`, Tier A CRUD + "Rename Over Needs
   Delete").** `Filesystem::rename(..., RenameMode)`: `NoReplace` (default: ws rename/move, uploads,
   RENAME_NOREPLACE) answers -EEXIST; `Replace` (FUSE rename without flags, only after the Bridge resolved Delete on
@@ -905,6 +925,15 @@ subject's assignment; both `vh vault role override ...` and ws `role.vault.overr
 `ops::roles::*VaultRoleOverride*` (parity in `test_ops_parity_roles.cpp`).
 
 ## Subsystem invariants (enforced in code, keep them)
+
+- **Audit trail (#323, migration 117).** Everything written to `log::Registry::audit()` also enters the hash-chained
+  `audit_event` table through `audit::makeChainSink()` → `audit::Trail` (an `AsyncService`, first to start and last to
+  stop). Writers never touch the DB: the sink only queues (bounded; overflow becomes one `audit.gap` event). Use
+  `audit::record(Event, message)` (or `audit::OnSuccess` for multi-return ops) for new events: a dotted `action`, the
+  actor, `vault_id`/`entry_id` by id, never a file name or path. Inside `vh::ops`, spell it `vh::audit::` (`ops::audit` is
+  the reader). The chain layout is pinned in `audit/Chain.hpp` and mirrored by `tools/audit/verify_export.py` (shared
+  vector). Heads are signed with the node attestation key under the `vh-audit-head-v1` domain
+  (`vault::attestation::signNodeMessage`); the tables are append-only except `vh_audit_purge_before`.
 
 **Filesystem RBAC paths, FS cache and account deletion** (#178–#180, `VaultLifecycleRegressionTest`)
 - `rbac::resolver::vault::Context::path` (and `fs::policy::Request::path`) is a **FUSE** path. Callers holding a vault

@@ -1,6 +1,7 @@
 #include "storage/RemoteFetch.hpp"
 
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/pricing/PriceBudget.hpp"
@@ -122,7 +123,7 @@ std::unique_ptr<RemoteFetchReservation> priceBudgetRemoteFetchGate(const CloudEn
     service.recordPreflightNotifications(budgetRequest, decision);
     for (const auto& warning : decision.warnings)
         log::Registry::cloud()->warn("[RemoteFetch] S3 price budget warning for vault {} ({} {}): {}",
-                                     engine.vault->id, request.operation, request.path.string(), warning);
+                                     engine.vault->id, request.operation, log::path(request.path), warning);
     if (!decision.allowed)
         throw ContentUnavailable(fmt::format("S3 price budget refused {} of {}: {}", request.operation,
                                              request.path.string(),

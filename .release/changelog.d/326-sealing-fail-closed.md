@@ -1,0 +1,3 @@
+- KeyProvider::initGuarded: vault_master, ak_master and s3gw_master are never regenerated while records wrapped by them exist (MasterSecretLost) (#326).
+- macOS sealer fails closed without a Secure Enclave unless secrets.allow_development_file_backend or -Ddarwin_sealer=file; backend "unavailable".
+- Health deps.secrets_posture (hardware|software|development|unknown); secrets.require_hardware refuses non-hardware sealing.
