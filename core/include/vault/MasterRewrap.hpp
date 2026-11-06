@@ -12,7 +12,7 @@
 #include <string_view>
 #include <vector>
 
-// Versioned vault_master rewrap (#352, design/sealing/master-secrets.md §6, migration 120). Replaces the vault master
+// Versioned vault_master rewrap (#352, design/sealing/master-secrets.md §6, migration 121). Replaces the vault master
 // that wraps every vault key version without touching a single file body: only the wraps change.
 //
 //   rotate     stage: seal vault_master.v<N+1> beside the current master, then write the new wrap of every row of

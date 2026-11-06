@@ -1,0 +1,5 @@
+- Migration 120 (mfa_factors): user_mfa, webauthn_credentials, totp_factors, recovery_code_batches, recovery_codes; additive and idempotent (#356).
+- auth::mfa factor storage: RFC 6238 TOTP (SHA-1, 6 digits, 30 s, window +-1) with seeds AES-256-GCM sealed under mfa_seal (AAD binds user and factor) and a conditional-UPDATE replay guard; unconfirmed enrollments expire after 10 minutes (Janitor purge).
+- Recovery codes: 10 x 50-bit Crockford codes, keyed BLAKE2b-256 under mfa_pepper, batch inactive until acknowledged and superseding the previous one, single use by conditional UPDATE.
+- crypto::secrets::Manager::sealedKey: seal-and-read-back internal keys that fail closed and are never regenerated while dependents exist (secrets::dependents::mfaSeal/mfaPepper).
+- vh secrets export accepts mfa-seal and mfa-pepper (base64); ws log redaction covers MFA codes, otpauth URIs and WebAuthn material.

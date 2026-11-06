@@ -422,6 +422,29 @@ connection that comes up already signed in (another tab won) answers `already_si
 `auth.refresh`. Tests: `SessionAssurance*`,
 `WsAuthRouting.AuthLoginOnASignedInSocketIsAlreadySignedIn`, `SqlDeployerHistoryDb.RefreshTokenAssurance*`.
 
+**MFA factor storage (#356, migration 120; MFA design note §4.2, §4.3, §9).** `auth::mfa` (`core/{include,src}/auth/mfa/`)
+is the storage and model layer, keyed by user id (a pending sign-in has no `session->user`); no ws command or sign-in
+flow uses it yet (#357). Tables: `user_mfa` (random 32-byte `webauthn_user_handle`, `required`, cooldown),
+`webauthn_credentials`, `totp_factors`, `recovery_code_batches`, `recovery_codes`. Two internal secrets in
+`crypto::secrets::Manager` via `Manager::sealedKey` (seal-and-read-back; an unreadable row throws and is never
+replaced; a missing row while dependents exist is `MasterSecretLost`, `secrets::dependents::mfaSeal/mfaPepper`):
+`mfa_seal` (AES-256-GCM over each 20-byte TOTP seed, AAD `"vh/mfa/totp/v1" ‖ BE32(user_id) ‖ factor_uuid`) and
+`mfa_pepper` (keyed BLAKE2b-256 per recovery code, domain `"vh/mfa/recovery/v1" ‖ BE32(user_id)`). `auth::mfa::keys`
+caches them in locked memory and throws `keys::Unavailable` (only TOTP / recovery codes are refused; passkeys don't
+need either). TOTP (`Totp.hpp`): RFC 6238 SHA-1, 6 digits, 30 s, window ±1; a step is claimed by
+`UPDATE … WHERE last_step < step`, so replay and concurrent double use fail; enrollment stays unconfirmed (unusable)
+until the first correct code within 10 minutes, one in flight per account, the Janitor purges expired ones. Recovery
+codes (`RecoveryCodes.hpp`): 10 × `XXXXX-XXXXX` Crockford (50 bits); a batch is inactive until acknowledged,
+acknowledging supersedes the active one (partial unique index), a newer generate drops an unacknowledged batch; a code
+is spent by one conditional UPDATE joined to an acknowledged, unsuperseded batch. Passkeys: storage only
+(`addWebAuthnCredential`, lookup by credential id, compare-and-set `recordWebAuthnUse`, suspend) plus the adapters for
+the `auth/webauthn` verifier (#355): `fromVerified(webauthn::NewCredential, …)`, `CredentialStore` (its
+`CredentialLookup`, joined with `user_mfa`'s handle) and `recordAssertion(VerifiedAssertion, expectedSignCount)`. Factors are removed by `disabled_at` (kept for audit). Audit actions
+`auth.mfa.factor.enroll|rename|remove|suspend`, `auth.mfa.recovery.generate|acknowledge|use` with ids only;
+`ws::LogRedaction` redacts codes, seeds, `otpauth:` URIs (by value) and WebAuthn material. `vh secrets export
+mfa-seal|mfa-pepper` (base64). Tests: `MfaTotp*`, `MfaRecoveryCodes*`, `MfaSeal*`, `MfaLogRedaction*`,
+`MfaFactorsDb*`, `SqlDeployerHistoryDb.MfaFactors*`.
+
 **Identities (`identities::Manager`, `core/{include,src}/identities/`).** One canonical `User`/`Group` object per id,
 handed out as the same `shared_ptr` everywhere (sessions, engines, FUSE, HTTP, S3). Each holds an immutable
 `UserState`/`GroupState` in an `std::atomic<std::shared_ptr<const ...>>`; the Manager never replaces the object, it

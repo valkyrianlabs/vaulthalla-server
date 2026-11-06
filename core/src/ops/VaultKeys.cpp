@@ -134,7 +134,7 @@ public:
     }
 
     // Seals key bytes under this host's current vault master with a fresh IV. The write declares the version; if a
-    // master switch commits before it, the database refuses the stale row (migration 120) and nothing is written.
+    // master switch commits before it, the database refuses the stale row (migration 121) and nothing is written.
     vault::master::Wrapped seal(const crypto::SecretKey& key) {
         // allowCreate: importing per-vault key backups under a new installation master is how vault contents are
         // recovered after the old master is lost (#326). Rows still wrapped by the lost master stay unreadable until

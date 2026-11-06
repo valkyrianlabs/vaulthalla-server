@@ -1,4 +1,4 @@
-// Versioned vault_master rewrap (#352, design/sealing/master-secrets.md §6, migration 120). The acceptance matrix:
+// Versioned vault_master rewrap (#352, design/sealing/master-secrets.md §6, migration 121). The acceptance matrix:
 // interrupted staging at every batch boundary and at every other crash point (between verify and switch included),
 // writes during staging and during the window, an old/new master mismatch and a tampered staged wrap, TPM loss mid
 // staging and mid window, live/retired/deleted vault keys, explicit rollback (staging and window), finalize (by hand

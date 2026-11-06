@@ -78,7 +78,7 @@ the same lock-and-wipe behavior (`crypto/SecretBytes.hpp`, which also holds `Wip
 
 ## 6. Part 4: versioned master-key rewrap (`vault_master` first)
 
-Status: part 4a implemented (#352): migration 120, `vault/Master.hpp` (the master by version), `vault/MasterRewrap.hpp`
+Status: part 4a implemented (#352): migration 121, `vault/Master.hpp` (the master by version), `vault/MasterRewrap.hpp`
 (the engine), `ops::vault_master` and `vh secret master status|rotate|finalize|rollback`. As built:
 - The state is the singleton `vault_master_state` (`version`, `staging_version`, `previous_version`, `window_until`,
   `highest_version` so numbers are never reused, `discard_versions` for slot deletions a crash interrupted). Every key

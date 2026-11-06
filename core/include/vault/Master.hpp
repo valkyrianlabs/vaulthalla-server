@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-// The installation's vault master, by version (#352, design/sealing/master-secrets.md §6; migration 120). It wraps
+// The installation's vault master, by version (#352, design/sealing/master-secrets.md §6; migration 121). It wraps
 // every vault key version (vault_keys, vault_keys_trashed, vault_deletion_key); each row records the version that
 // wraps it (master_version), and vault_master_state.version is the one every row is wrapped under outside a rewrap.
 //

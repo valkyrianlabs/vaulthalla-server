@@ -21,7 +21,7 @@ struct Key {
     // attestation_key_id; nullopt when none is recorded.
     std::optional<unsigned int> attestation_key_id{};
     std::vector<uint8_t> attestation{};
-    // The vault master version that wraps encrypted_key (migration 120; vault/Master.hpp).
+    // The vault master version that wraps encrypted_key (migration 121; vault/Master.hpp).
     unsigned int master_version{1};
 
     Key() = default;

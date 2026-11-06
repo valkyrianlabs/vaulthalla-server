@@ -49,7 +49,7 @@ std::shared_ptr<const crypto::secrets::KeyProvider> openSlot(const unsigned int 
             try {
                 p->initGuarded(crypto::secrets::dependents::vaultMaster());
             } catch (const crypto::secrets::MasterSecretLost& e) {
-                // Inside a recovery window the previous master may still hold every row (migration 120, *_prev).
+                // Inside a recovery window the previous master may still hold every row (migration 121, *_prev).
                 if (const auto prev = previousVersion())
                     throw crypto::secrets::MasterSecretLost(
                         std::string(e.what()) + " A vault master rotation's recovery window is open: if version " +

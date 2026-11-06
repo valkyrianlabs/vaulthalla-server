@@ -5,6 +5,9 @@
 #include "identities/User.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/secrets/Manager.hpp"
+#include "auth/mfa/Keys.hpp"
+#include "crypto/SecretBytes.hpp"
+#include "crypto/util/encrypt.hpp"
 #include "fs/ops/file.hpp"
 #include <nlohmann/json.hpp>
 #include <span>
@@ -143,6 +146,22 @@ static nlohmann::json getJWTSecret() {
     return generateSecretOutput("jwt-secret", runtime::Deps::get().secretsManager->jwtSecret());
 }
 
+// The MFA keys (#356) are raw bytes, exported base64. nullopt when the key was never created (no TOTP factor or
+// recovery code batch yet). A stored key the master can't open throws: the export fails, nothing is replaced.
+static std::optional<nlohmann::json> getMfaKey(const std::string& name, const char* key) {
+    const auto& secrets = runtime::Deps::get().secretsManager;
+    if (!secrets->hasSecret(key)) return std::nullopt;
+    auto value = secrets->getSecret(key);
+    if (!value) return std::nullopt;
+    std::vector<uint8_t> bytes(value->begin(), value->end());
+    vh::crypto::wipeSecret(*value);
+    auto encoded = vh::crypto::util::b64_encode(bytes);
+    vh::crypto::wipeSecret(bytes);
+    nlohmann::json out{{"name", name}, {"encoding", "base64"}, {"secret", encoded}};
+    vh::crypto::wipeSecret(encoded);
+    return out;
+}
+
 static CommandResult handle_secrets_export(const CommandCall& call) {
     const auto usage = resolveUsage({"secrets", "export"});
     validatePositionals(call, usage);
@@ -153,8 +172,16 @@ static CommandResult handle_secrets_export(const CommandCall& call) {
 
     if (secretArg == "db-password" || secretArg == "all") out.push_back(getDBPassword());
     if (secretArg == "jwt-secret" || secretArg == "all") out.push_back(getJWTSecret());
+    for (const auto& [name, key] : {std::pair{"mfa-seal", vh::auth::mfa::keys::kSealName},
+                                    std::pair{"mfa-pepper", vh::auth::mfa::keys::kPepperName}}) {
+        if (secretArg != name && secretArg != "all") continue;
+        if (auto mfaKey = getMfaKey(name, key)) out.push_back(std::move(*mfaKey));
+        else if (secretArg == name)
+            return invalid("secrets export: " + std::string(name) + " does not exist yet (it is created with the "
+                           "first TOTP factor or recovery code batch)");
+    }
 
-    if (out.empty()) return invalid("secrets export: unknown secret '" + std::string(secretArg) + "'. Valid secrets are: db-password, jwt-secret, all");
+    if (out.empty()) return invalid("secrets export: unknown secret '" + std::string(secretArg) + "'. Valid secrets are: db-password, jwt-secret, mfa-seal, mfa-pepper, all");
     return handle_secret_encrypt_and_response(call, out, usage);
 }
 

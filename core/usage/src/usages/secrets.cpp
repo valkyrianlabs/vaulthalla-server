@@ -11,6 +11,9 @@ static std::shared_ptr<CommandUsage> buildBaseUsage(const std::weak_ptr<CommandU
 }
 
 static const auto secretPos = Positional::WithAliases("secret", "Name of the secret (jwt-secret, db-password)", {"db-password", "jwt-secret"});
+static const auto exportSecretPos = Positional::WithAliases(
+    "secret", "Name of the secret (jwt-secret, db-password, mfa-seal, mfa-pepper, all)",
+    {"db-password", "jwt-secret", "mfa-seal", "mfa-pepper", "all"});
 static const auto filePos = Positional::Alias("file", "Absolute path to a file containing the secret value (read by the daemon)", "path");
 
 static std::shared_ptr<CommandUsage> set(const std::weak_ptr<CommandUsage>& parent) {
@@ -30,8 +33,10 @@ static std::shared_ptr<CommandUsage> secret_export(const std::weak_ptr<CommandUs
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"export", "get", "download"};
     cmd->effect = CommandEffect::Read;
-    cmd->description = "Export an internal secret (to stdout, or to an --output file the daemon writes: absolute path, mode 0600)";
-    cmd->positionals = { secretPos };
+    cmd->description = "Export an internal secret (to stdout, or to an --output file the daemon writes: absolute path, mode 0600). "
+                       "mfa-seal (the key that seals TOTP seeds) and mfa-pepper (the key that hashes recovery codes) "
+                       "are exported base64 once they exist; all exports every secret that exists";
+    cmd->positionals = { exportSecretPos };
     cmd->optional = { gpgRecipient, outputFile };
     cmd->examples = {
         {"vh secret export db-password --output /var/lib/vaulthalla/db_password.gpg --recipient ABCDEF1234567890",
