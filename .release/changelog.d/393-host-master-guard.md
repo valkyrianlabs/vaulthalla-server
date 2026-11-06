@@ -1,1 +1,0 @@
-- The host master slot ('master') opens with KeyProvider::initGuarded (#393): new dependents::internalSecrets() counts the internal_secrets rows it wraps (all but jwt_secret and the plaintext pre-#322 pepper); a missing sealed blob with such rows throws MasterSecretLost (the daemon doesn't start) with the restore and give-up steps, and nothing is sealed in its place.

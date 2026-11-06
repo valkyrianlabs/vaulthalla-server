@@ -1,2 +1,0 @@
-- Versioned vault_master rewrap (#352): vh secret master status|rotate|finalize|rollback; staged, verified, atomic switch with a bounded recovery window (default 7 days); file bodies are never re-encrypted.
-- Migration 121: vault_master_state, master_version / staged (*_next) / retained (*_prev) wrap columns on vault_keys, vault_keys_trashed and vault_deletion_key, and trigger vh_vault_master_guard (a write must declare the current master).

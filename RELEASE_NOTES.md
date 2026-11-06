@@ -1,5 +1,499 @@
 # Vaulthalla release notes
 
+<!-- vl-release:entry version=1.22.1 -->
+## 1.22.1 — MFA for administrators, step-up confirmation, opaque S3 storage and customer-held recovery
+
+_Released 2026-11-06_
+
+- **HTTPS by default on Linux.** A new install (and an upgraded host still on the unmodified packaged site) serves
+  the web console over HTTPS with a certificate generated for the host, and `http://` redirects to `https://`.
+  Browsers ask you to accept that certificate once; `sudo vh setup nginx` prints its SHA-256 fingerprint to compare.
+  The package renews it on upgrades, and `sudo vh setup local-tls` does so on demand. For a certificate browsers
+  trust right away, use `vh setup nginx --certbot` (now with HSTS) or `--certbot-dns-cloudflare`. A host behind
+  another TLS terminator keeps plain HTTP with `vh setup nginx --plain-http`. A site you edited, or one
+  `vh setup nginx` generated without a certificate, isn't changed on upgrade; the upgrade prints a reminder.
+- The console and its file lanes now send `X-Content-Type-Options`, `Referrer-Policy: no-referrer` (share links
+  carry their token in the address), `X-Frame-Options: DENY` and `frame-ancestors 'none'`.
+- The web socket refuses connections opened by pages on other sites. If you serve the console from a different host
+  than the daemon, list it under `websocket_server.allowed_origins`.
+- **The S3 gateway now listens on loopback by default** (`127.0.0.1:39000`), and a config without a `host` setting
+  never binds every interface. Remote S3 clients use the HTTPS S3 hostname (`vh setup nginx --s3-domain` or Caddy).
+  Existing `config.yaml` files keep their settings.
+
+- **Files in use are no longer stored as plaintext.** While a file is open through the mounted filesystem, and while
+  an upload or `vh fs put` is in flight, its working copy on disk is now encrypted with a key that exists only in the
+  daemon's memory and changes every time the daemon starts. Nothing a crash or power loss leaves behind can be read,
+  and the next start deletes it.
+- **If a change can't be saved back to its vault**, the daemon now keeps it (encrypted) and retries every minute, on
+  the next save or close of the file, and once more when it shuts down; reopening the file shows the change, and a
+  file deleted in the meantime comes back as a new file where it was. The log says when that happens and when it
+  succeeds. **The trade-off:** such a change lives only as long as the daemon process. If the daemon stops before a
+  retry succeeds, or crashes, the change is lost, and the log names how many files were affected at shutdown or at
+  the next start. Earlier versions kept these changes in plaintext in `/var/lib/vaulthalla/.fuse-plaintext/unsaved/`
+  across restarts; if you see a log warning that plaintext files are still there, recover what you need from them
+  and delete them (the upgrade never deletes them).
+
+- **Clearer wording about upstream encryption.** The console, the docs and the README now say exactly what an S3/R2
+  vault with upstream encryption protects: file contents are encrypted before upload, while file and folder names are
+  visible to your storage provider. The Encryption page adds a table of who can read what for local and S3/R2 vaults
+  and states that a vault can't be restored from its bucket alone.
+
+- **Groundwork for provider-blind storage.** Every vault and every file now gets a permanent random identifier, and
+  each S3/R2 vault records its storage layout. `vh vault info` shows both, and the vault details the API returns
+  include the layout: encrypting vaults report `path (v0)` (encrypted objects under their file paths, as before) and
+  the others `transparent`. The layout follows the vault's upstream encryption setting; there is nothing to choose.
+  Nothing changes in your buckets: object names, contents and sync behave exactly as before. The upgrade assigns the
+  identifiers to existing vaults and files once, in the same database transaction as the schema change.
+
+- **New file content is stored in an authenticated, chunked format (VHF1).** Every file written from this release
+  on (saves through the mount, web and device uploads, resumable uploads, the S3 gateway, restores, sync downloads and
+  key rotation) is sealed in VHF1: a 120-byte authenticated header that names the vault and the file's generation,
+  then 64 KiB AES-256-GCM chunks, each authenticated with its position and with whether it is the last one. Truncated,
+  reordered, spliced or swapped content is refused instead of served, and partial reads (video seeking, previews,
+  downloads with a range, `preview.media.remote: ranged`) now authenticate every byte they return. Uploaded objects
+  of encrypting S3/R2 vaults are the same bytes: still one object per file version (multipart is only transport, never
+  one object per chunk), about 0.025 % larger for big files and 120 bytes larger for small ones; an empty file is a
+  136-byte object.
+- **Existing content keeps reading normally.** Files, local versions and snapshots written by earlier releases are
+  converted to VHF1 in the background after the upgrade (see "Existing files and recovery points are converted to
+  VHF1"); bucket objects of existing encrypted S3/R2 vaults keep their format until the layout migration of a later
+  release. A later release retires the old format (#376). A resumable upload that was in progress during the upgrade
+  finishes in the format it started in.
+- The upgrade adds a generated `content_format` column to the file and recovery tables (one table rewrite); it changes
+  no data.
+
+- **Very large uploads to S3 and R2 no longer stop at about 48.8 GiB.** Multipart uploads now grow their part size
+  with the object (5 MiB parts up to 48.8 GiB, larger parts above), so a single file can use the provider's full
+  object size within the 10,000-part limit. Smaller uploads are unchanged.
+
+- **Existing files and recovery points are converted to VHF1 in the background.** After the upgrade, the daemon
+  re-seals every file, snapshot, local version and upstream backlog entry still stored in the legacy encryption format
+  as VHF1, under the key version it already had: no key is rotated, and generations kept under a retired key stay
+  under it. Each item is verified before its old form is removed (the old authentication tag over the whole file,
+  then the new file read back in full with a matching plaintext digest), no plaintext is written to disk, and a crash
+  at any point leaves everything readable and the conversion resumes. A snapshot that shares a file's bytes is
+  converted once, with the file. The conversion pauses during a key rotation or salvage, is rate-limited
+  (`vaults.format_conversion`: 32 MiB/s and 25 % of one CPU core by default), and `vh vault format status all` shows
+  what is left per vault in items and bytes. S3/R2 vaults with upstream encryption convert their live files together
+  with the bucket's layout migration in a later release; their recovery points convert now. Nothing needs to be done:
+  converted files read exactly as before. The legacy format is retired in a later release (#376), which will refuse
+  to install while anything legacy is left.
+
+### Before you upgrade
+
+- **Administrators must use a second factor.** Under the default `admins` policy, the super admin and every account
+  whose role can change accounts, roles, settings or encryption keys must sign in with a passkey or an authenticator
+  app. Their password-only sessions end at the first request after the upgrade, and the next sign-in walks them
+  through setting one up. Passkeys need the console on a host name, not an IP address; an authenticator app works
+  anywhere. Keep the recovery codes it shows you.
+- **Sensitive actions ask you to confirm again.** Key export and import, account and role changes, secrets,
+  settings and destructive actions need a fresh passkey or password-and-code confirmation in the console. `vh` on the
+  server itself is unaffected.
+- **Vaulthalla Desktop:** already-paired Macs keep syncing and backing up keys without prompts. Key import and vault
+  removal started from Desktop are refused until Desktop supports device approvals; do them in the console or with
+  `vh`.
+- **Health may show `recovery_material_missing`.** An encrypted S3/R2 vault without a recovery recipient or a
+  current key export now marks the node degraded until you add one (`vh vault keys recipient add`) or export its
+  keys (`vh vault keys export`).
+- **New encrypting S3/R2 vaults use the opaque layout** (no file names, paths or metadata visible to the provider).
+  Existing vaults keep their layout until you move them with `vh vault migrate-layout <vault>`, which converts and
+  verifies everything before cutover and removes the old objects only after a waiting period.
+- **Local content converts in the background** to the authenticated VHF1 format after the upgrade, rate-limited;
+  `vh vault format status all` shows progress.
+- **Back up before upgrading,** as always: this release adds database migrations 117 to 131. To restore onto a new
+  host later, keep the state directory or the exports from `vh secret export` (including `mfa-seal` and
+  `mfa-pepper`).
+
+### Also in this release
+
+- Uploading a file of 5 MiB or more to an S3 or R2 vault could fail partway (a timeout, a SlowDown, a dropped
+  connection) and still be treated as uploaded. Vaulthalla cancelled the incomplete upload at the provider but then
+  carried on as if the file had arrived, so the bucket could be missing a file that the vault showed as synced. A
+  failed part now fails the upload, and the file stays pending for the next sync pass.
+- The installation guide now opens with an optional "Don't Trust Vaulthalla. Verify It." step. It shows how to
+  clone the source and have your own AI coding agent audit it before you install, using the read-only prompt in
+  `SECURITY_AUDIT_PROMPT.md`. The audit runs entirely on your side: nothing in Vaulthalla starts it or sends
+  anything to Valkyrian Labs.
+- Vaulthalla now starts its web console and HTTP listeners on hosts without outbound internet access. Until now
+  the daemon downloaded password lists from GitHub every time it started, and on an offline, firewalled or
+  air-gapped host that download failed and the web console and Desktop's HTTP lanes never came up. The lists now
+  ship in the package (`/usr/share/vaulthalla/password-lists`) and change only with a release.
+- Setting a password no longer fails when the server can't reach the Have I Been Pwned breach check. The check
+  gives up after a few seconds, the bundled lists and the password rules decide, and the server log notes it. A
+  password the service reports as breached is still refused.
+- The access-token lifetime set in `config.yaml` (`auth.access_token_expiry_minutes`) now takes effect. The
+  daemon was reading a different key, so a changed value was ignored and tokens always lasted 60 minutes.
+  Configs that use the older `token_expiry_minutes` keep working, and the daemon logs a note to rename it.
+- The sign-in cookie now lasts as long as `auth.refresh_token_expiry_days`. It was fixed at 7 days.
+- Contributor docs: a security-first compatibility policy (`docs/contributors/compatibility-policy.md`). Security
+  and recoverability of customer data take precedence over backward compatibility. Breaking changes are allowed
+  where they remove a real risk, but never at the cost of data, keys or recovery material.
+- The web console now signs you out after 30 minutes without use. Only keyboard, pointer and scroll input counts,
+  so a tab left open in the background doesn't keep the session alive. After an idle sign-out, reloading the
+  page shows the sign-in screen instead of signing you back in from the saved session. Change or turn off
+  (`0`) the timeout with `services.connection_lifecycle_manager.idle_timeout_minutes` or under Settings →
+  Services → Connections. Vaulthalla Desktop and share links aren't affected.
+- Share links are now verified with a key that is sealed under the server's master key, like vault keys,
+  instead of being stored in the database in readable form. The first start converts the existing key, so every
+  existing link keeps working. **Downgrading to an earlier release after this one makes existing share links stop
+  working** (they need to be created again). Share links also need the master key to be restored with a backup;
+  see "Backup and recovery".
+- Email-verified share links now work. Vaulthalla emails the 6-digit code to the address the visitor enters, if
+  that address is on the link's list, through the email provider set up under `vh email` (Resend or SES). Until
+  now no code was ever sent, so these links couldn't be opened. Every address gets the same reply, and the email
+  contains only the code, with no file or folder names. Without email set up, Vaulthalla refuses to create
+  email-verified links instead of making links nobody can open.
+- A failed sign-in now always shows "Invalid username or password". The console used to say whether the account
+  existed, was deactivated, or had a different password, which let anyone check which usernames exist. The exact
+  reason is still in the server log.
+
+### S3 gateway
+
+- MinIO `mc` and the AWS Java SDK can now upload to the gateway over plain HTTP, for example to the direct listener
+  at `http://127.0.0.1:39000`. Over HTTP these clients sign every chunk of the upload. The gateway checks each chunk
+  against the one before it as the data arrives. It stores nothing until the whole upload has verified, so a chunk
+  that is altered, missing or out of order fails the upload with `SignatureDoesNotMatch` and leaves any existing
+  object untouched. Signed trailing checksums are verified too. `docs/s3-gateway/clients.md` lists the signing modes
+  each client uses.
+- An upload whose `aws-chunked` body is cut short or malformed now gets an S3 error: `IncompleteBody`, or
+  `InvalidRequest` for bad framing or a chunk over 16 MiB. The gateway used to close the connection without answering.
+- The S3 gateway checks request signatures with vl-sigv4, Valkyrian Labs' shared AWS Signature Version 4 library.
+  AWS CLI, boto3, rclone and MinIO mc requests, presigned URLs included, are accepted exactly as before.
+- Refused requests now carry the error code AWS S3 would send, so clients report the real cause instead of a
+  signature mismatch: `RequestTimeTooSkewed` when the client's clock is off by more than 15 minutes (SDKs that correct
+  their clock react to it), `InvalidAccessKeyId` for an unknown, disabled or expired gateway key,
+  `AuthorizationHeaderMalformed` or `AuthorizationQueryParametersError` (HTTP 400) for a malformed signature,
+  `XAmzContentSHA256Mismatch` when the body doesn't match its declared hash, and `AccessDenied` for an unsigned request
+  or an expired presigned URL. A wrong secret is still `SignatureDoesNotMatch`.
+- Requests that break SigV4 rules AWS S3 enforces are now refused too: an unsigned `Host` header, a credential date
+  that differs from the request date, a presigned URL with `X-Amz-Expires=0` (it used to never expire), and a
+  presigned URL that also carries an `Authorization` header. No client that works with AWS sends these.
+- Requests whose credentials don't check out no longer cause a credential lookup: a request with a bad date, a stale
+  timestamp or a mismatched body is refused before the gateway reads or decrypts any key.
+
+### Under the hood
+
+- Requests to S3, R2, SQS and STS for bucket administration, event notifications, full bucket listings and
+  file-version recovery are now signed by vl-sigv4, Valkyrian Labs' shared AWS Signature Version 4 library, instead
+  of a copy inside Vaulthalla. The signed requests are byte-for-byte the same, so nothing changes for providers or
+  keys.
+- Operator email sent through Amazon SES is signed by vl-sigv4 too. The requests are the same as before, so SES
+  credentials and settings need no change.
+  An SES endpoint configured with a path (an SES proxy such as `https://proxy.example.com/aws`) now works: sends
+  through it used to fail with a signature mismatch because the path was left out of the signature.
+- The everyday traffic of S3 and R2 vaults (uploads, downloads, listings, deletes, multipart uploads) is signed by
+  vl-sigv4 as well, so all of Vaulthalla's AWS request signing now goes through that one library. The requests are
+  the same as before. One rare failure is gone: a request signed at the very moment UTC midnight passed could carry
+  two different dates and be refused by the provider; both dates now come from the same instant.
+
+### Security
+
+- **Tamper-evident audit trail.**
+  - Every audit event is stored in the database as a link in a SHA-256 hash chain.
+  - The server signs the end of the chain every 15 minutes and at shutdown, with its Ed25519 attestation key, and writes each signed head to `audit.log` (and syslog), so changed, inserted, reordered or removed events are detectable.
+  - Review the trail in the console under **System › Audit trail**, or with `vh audit list|verify|export`. All of these need the **view audits** permission and are themselves recorded.
+  - An export verifies offline with `tools/audit/verify_export.py`.
+- **More events are recorded.**
+  - Sign-ins (successful and refused, with the reason and address), sign-outs and idle sign-outs.
+  - Password changes, role, assignment, override and group changes, and S3 gateway credential changes.
+  - Deletes, renames, moves, copies and new folders from the web console. Files are named by entry id, never by name.
+- **Retention and forwarding.**
+  - Audit events are kept six years by default (`auditing.trail.retention_days`, minimum 30), the HIPAA documentation retention period.
+  - `auditing.trail.syslog: true` also sends them to the local syslog for forwarding to a SIEM.
+  - The unused `audit_log` table from early releases is removed. It was never written; any rows it held are kept as `audit_log_legacy`.
+
+- **A lost master secret is never replaced silently.**
+  - If the sealed secret that protects vault keys, provider API keys or S3 gateway credentials is missing while those records exist, Vaulthalla now refuses to generate a new one and says how to recover.
+  - Before, it generated a new secret, which left every existing key undecryptable.
+- **macOS: no silent fallback to unprotected files.**
+  - Without a usable Secure Enclave, sealing refuses and health reports the backend as `unavailable`.
+  - Breaking: a Mac that was running on the file fallback (an Intel Mac without T2, or a daemon outside launchd) must either move to a Mac with a Secure Enclave or set `secrets.allow_development_file_backend: true` in config.yaml. That setting is for development only. Existing secrets are kept as they are.
+- **The sealing posture is visible.** `vh status`, health and the console show whether secrets are protected by `hardware` (a TPM or the Secure Enclave), `software` (swtpm) or `development` (files). The new `secrets.require_hardware: true` setting refuses anything but hardware sealing.
+
+- **File names stay out of logs and URLs.**
+  - `vaulthalla.log` and `audit.log` now name a file by its entry id (`entry 42`). A path with no entry yet appears as an opaque tag that is stable only while the daemon runs.
+  - The new `logging.file_paths: full` setting adds vault paths back, for hosts that hold nothing sensitive.
+  - The console addresses downloads and previews by entry id, so file names no longer reach web server access logs, proxies or browser history.
+  - Breaking: scripts that read paths from `audit.log` must look them up by entry id (`vh fs`) or set `file_paths: full`.
+- **Share links keep their token after `#`** (`https://host/share#vhs_…`). Browsers never send that part to the server or to other sites, so the token stays out of access logs and `Referer`. Links issued earlier keep working: they redirect once to the new form.
+- **nginx access logs are redacted.** The Vaulthalla site (packaged, and generated by `vh setup nginx`) logs old `/share/<token>` paths as `/share/[redacted]`, replaces every query string with `?[redacted]`, and no longer logs `Referer`. Run `sudo vh setup nginx` to regenerate a site that `vh setup nginx` wrote before.
+
+- **The S3 gateway no longer writes object data to disk as plaintext.**
+  - Request bodies of streamed PUT and UploadPart requests are staged encrypted under a key that exists only in the daemon's memory, and deleted once the request is answered. Nothing a crash leaves behind can be read.
+  - Multipart upload parts are stored encrypted under the vault's key, each bound to its vault, upload and part number, so an upload in progress can still be resumed after a restart or a vault key rotation. CompleteMultipartUpload streams the parts into the object without writing a plaintext copy.
+  - A stored part that fails its integrity check makes CompleteMultipartUpload answer `InvalidPart`. Nothing is written, the upload stays open, and the client can upload that part again.
+  - Part ETags, part sizes and object ETags are unchanged.
+- **Upgrading converts what older versions left behind.**
+  - On the first start, the daemon encrypts every part of in-progress multipart uploads that an older version stored as plaintext, after checking it against its recorded checksum, and then deletes the plaintext. Uploads in progress keep working.
+  - A plaintext part that no longer matches its checksum is left as it is and logged. CompleteMultipartUpload refuses it, and it is deleted when the upload is aborted or expires.
+  - Leftover plaintext request bodies (`<state dir>/s3-request-body/`) and the plaintext temporary file of an interrupted completion are deleted.
+  - No operator action is needed. Downgrading after the conversion isn't supported: older versions can't read the encrypted parts, so complete or abort in-progress multipart uploads first.
+
+- **Master secrets stay in locked memory and are wiped when released.**
+  - The daemon's sealed master secrets (vault master, API key and S3 gateway masters, the JWT master, the DB password, the key attestation seed and the device identity), the share-token pepper and unwrapped vault keys are now held in memory that is kept out of swap where the OS allows it and zeroed before it is freed.
+  - Code that uses them borrows them in place instead of copying them into ordinary buffers. The short-lived copies other libraries insist on are wiped on every path, including when an operation fails partway.
+  - The DB password is no longer kept as plain text in the connection settings between connects.
+  - Nothing changes in how secrets are sealed or stored, and no operator action is needed.
+
+- **Optional: bind sealed secrets to Secure Boot (Linux, TPM PCR 7).**
+  - Off by default. With `secrets.tpm_pcr_policy: pcr7` in config.yaml, secrets sealed from then on open only while the TPM's PCR 7 (the secure-boot state) is unchanged. The setting alone never rebinds existing secrets.
+  - `sudo vh secret reseal --pcr7` binds the existing ones. It refuses unless a hardware TPM seals the secrets, every vault's keys have a confirmed backup and a `vh secret export all` is under 24 hours old. Each secret is sealed again beside the old one, opened and compared before it replaces it; no secret changes and nothing is re-encrypted.
+  - After a firmware or Secure Boot change the bound secrets do not open. Vaulthalla refuses to start with an error naming PCR 7 and the recovery paths (the exports, or a recovery boot and `vh secret reseal --none`), and never creates replacements. The docs describe the update drill.
+  - `vh secret policy`, `vh status` and health show the policy, and warn when secrets are PCR-bound and no export is newer than 30 days. macOS is unaffected: the Secure Enclave has no PCRs.
+
+- **The vault master can be rotated.** `vh secret master rotate` replaces the installation secret that wraps every vault key, without re-encrypting any file.
+  - The new wraps are staged and verified against each key's recorded key check before anything switches, and every key row switches in one step. An interrupted rotation resumes where it stopped.
+  - The previous master is kept for a 7-day recovery window: `vh secret master rollback` returns to it, `vh secret master finalize` ends the window sooner. When the window ends, every key is verified again before the previous master is deleted.
+  - Super admins only, from a terminal (never agents or the console), and every step is audited. `vh secret master status` shows the version and any rotation in progress.
+  - A database backup taken before a rotation needs the previous master: after the window ends, restore it through the vault key exports.
+
+- **The API key and S3 gateway masters can be rotated, and so can the JWT secret and the device identity.**
+  - `vh secret master rotate --slot api-keys` and `--slot s3-gateway` replace the masters that wrap provider API key secrets (and Cloudflare provider tokens) and S3 gateway credential secrets, the same way as the vault master: staged, verified, switched in one step, with a 7-day recovery window (`rollback`, `finalize` and `status` take `--slot` too; `status --slot all` shows every master). The secrets themselves don't change and S3 clients keep their credentials. After the window, a database backup from before the rotation needs its API keys entered again and its gateway credentials reissued.
+  - `vh secret jwt rotate` signs everyone out: a fresh JWT secret replaces the old one and every refresh token is revoked in one step, then every open console connection closes. Everyone signs in again. TOTP factors, recovery codes and share links are not affected.
+  - `vh secret device-identity rotate` replaces the device listener's key. Every paired device is revoked and disconnected and pairs again with a new pairing code; a device is never trusted under the new identity silently.
+  - Each is its own command with its own warning, for super admins from a terminal only (never agents or the console), and every attempt is audited (`secrets.master.*` with the slot, `secrets.jwt.rotate`, `secrets.device_identity.rotate`). None of them has a rollback except the master rewraps, inside their window.
+
+- **See and sign out your sessions.**
+  - **Account › Security › Sessions** lists every browser signed in to your account: where it signed in from, when, how, and when it was last used.
+  - Sign out any one of them, or every other one at once. A signed-out browser loses access immediately, including previews, downloads and uploads already open in it.
+- **Session fixation is closed.**
+  - A connection now signs in once. Signing in again on a connection that is already signed in is refused (`already_signed_in`), and a session cookie is only ever adopted from its stored record, never from another open connection.
+  - A sign-in cookie planted in someone's browser can no longer turn into their session when they sign in.
+- **Groundwork for multi-factor sign-in.** Each session now records how its sign-in was proven (a password today), and every use of the session is checked against the account's sign-in policy. Nothing is required yet: this prepares the coming passkey and authenticator-code sign-in.
+
+- **Groundwork for passkeys and security keys (not MFA yet).** The server now contains a WebAuthn verifier for
+  registering passkeys and checking sign-in assertions (ES256, Ed25519 and RS256 keys of 2048 bits or more). Nothing
+  uses it yet: passkey sign-in and enrollment arrive in a later release, and until then Vaulthalla has no multi-factor
+  authentication.
+- **New settings: `auth.webauthn.rp_id`, `rp_name` and `origins`** (**Settings › Security › Passkeys / security
+  keys**, or `config.yaml`). Passkeys are tied to the host name people open the console at, so it is set explicitly
+  and never taken from request headers. Leave `rp_id` empty (the default) until passkeys ship. `rp_id` must be a
+  host name, never an IP address, and each origin must be exactly `https://host[:port]` under it
+  (`http://localhost:<port>` for development). The daemon refuses to start, and the settings page refuses to save,
+  when the values break these rules. Changing `rp_id` later makes passkeys registered for the old one unusable; the
+  settings page warns before you save such a change.
+
+- **Groundwork for multi-factor sign-in: factor storage.** The server can now store authenticator-app (TOTP) factors and one-time recovery codes, and keep passkeys on record. Nothing asks for a second factor yet: sign-in with passkeys and authenticator codes comes in a later release.
+  - Authenticator seeds are sealed under a new internal key, `mfa_seal`, protected by this host's master key and bound to the account and factor they belong to. Recovery codes are stored only as keyed hashes under `mfa_pepper`, and each works once.
+  - Neither key is ever regenerated while anything depends on it. If one can't be unsealed (for example a database restored without this host's sealed master), only that kind of factor stops working; passkeys and the local CLI recovery are unaffected.
+  - Back them up with the other internal secrets: `vh secret export mfa-seal` and `vh secret export mfa-pepper` (both are included in `vh secret export all` once they exist).
+
+- **Administrators now sign in with a second factor: a passkey or an authenticator app.**
+  - Who must use one: the super admin and every account whose admin role can change accounts or admins, roles, settings, or export or rotate encryption keys (the `admins` policy, on new and upgraded installs). Other accounts may add one in **Account › Security**; once an account has a factor, it is always asked for.
+  - **Breaking: existing administrator sessions end.** A session that signed in with a password alone is not carried over for an account that must use a second factor: its next request is refused, and the next sign-in leads through a guided setup. Desktop devices paired with the server are not affected and never ask for a second factor.
+  - **First sign-in:** after the password, choose **Create passkey** (recommended: works with 1Password, your device's passkey manager, and security keys) or **Use an authenticator app** (the QR code is drawn in your browser). Then save the ten recovery codes shown once; confirming you saved them finishes the sign-in. Adding a second passkey (another device or 1Password) is suggested.
+  - **Every later sign-in:** password, then the passkey, an authenticator code, or one of the recovery codes.
+  - Until the second step succeeds, nothing is signed in: the half-finished sign-in can't be refreshed, reopened in another tab or used for downloads, and it ends after 5 minutes (10 while setting up), after 5 wrong attempts, or when the page closes. Repeated wrong codes on an account delay its next attempt (see the MFA policy notes).
+  - **A recovery code** works once, signs out every other browser of the account (paired devices are left alone), and asks you to set up a new factor and new codes in **Account › Security**.
+  - **Passkeys need the server's address configured** (Settings › Security, `auth.webauthn.rp_id` and `origins`). Without it, authenticator apps still work.
+  - Keep the recovery codes somewhere other than your passkey manager. Without them, another administrator (or `vh user mfa reset` on the server) resets a lost second factor. The local `vh` CLI keeps working as before.
+
+- **Sign in with a passkey alone.** The sign-in page has a **Sign in with passkey** button, and browsers that support it offer your passkeys right in the username field. Pick the passkey, unlock it (Touch ID, Windows Hello, your security key's PIN, or 1Password), and you're in: no username or password. It works with any passkey already added to your account (1Password, your device's passkey manager, or a security key), and counts as a full second-factor sign-in.
+  - The passkey must be unlocked with a PIN or biometric (user verification). A passkey made for another server address is never accepted, and a failed attempt says only that the passkey couldn't sign you in.
+  - Passkeys synced across devices (1Password, iCloud Keychain, Google Password Manager) work from every device that holds them.
+  - Needs the server's address configured for passkeys (Settings › Security, `auth.webauthn.rp_id` and `origins`); without it passkey sign-in is unavailable and the password sign-in works as before. Paired Desktop devices are not affected.
+
+- **Sensitive changes in the web console now ask you to confirm it's you (step-up).** Right before the change runs, a
+  dialog asks for your passkey, or your password together with a code from your authenticator app. What asks:
+  - changing accounts, roles, groups and their members, and creating or deleting accounts;
+  - changing passwords, adding a second passkey or authenticator app, removing one (new: **Account › Security ›
+    Remove**), and replacing recovery codes;
+  - API keys, the email provider's credentials, S3 gateway credentials and turning on provider administration;
+  - any **Settings** change (including the passkey settings `auth.webauthn`);
+  - approving a new device and turning on remote device connections;
+  - deleting a vault or a recovery point, suspending provider versioning, cleaning up, unprotecting or setting a
+    destructive lifecycle rule on a bucket;
+  - exporting or importing vault keys outside a paired device's automatic backup.
+- Confirming covers similar changes in that browser tab for 5 minutes (`auth.mfa.step_up_ttl_seconds`, 60 to 900; reloading the page asks again). Device approvals, key
+  operations and data removal confirm exactly one change each time. Signing in with a passkey or an authenticator code
+  counts as a confirmation for the next 5 minutes.
+- An account that doesn't need MFA and has no second factor confirms with its password, but never for vault keys,
+  device approvals or removing data: add a passkey or an authenticator app for those.
+- Recovery codes, a remembered session, and Vaulthalla Desktop's connection never count as a confirmation. Five failed
+  confirmations within 15 minutes sign that browser out.
+- **Not affected:** the local `vh` CLI (it is trusted as the server's own account) and Vaulthalla Desktop's sync and
+  automatic 1Password key backup. Actions above that Desktop starts itself (removing a vault, importing keys) are
+  refused until device approvals arrive in a later release; do them in the web console or with `vh`. Agent tools
+  (`/mcp`, `vh mcp`) can't confirm and are refused these actions.
+
+- **Multi-factor sign-in policy is now a setting** (**Settings › Security › Multi-factor sign-in**, `auth.mfa.policy`):
+  `admins` (the default, unchanged), `all` (every account) or `optional` (nobody, except accounts you require). Raising it
+  signs affected password-only sessions out at their next request; they set up a factor at their next sign-in.
+  Weakening it is recorded in the audit trail and emailed to the security recipients
+  (`operator_emails.recipients.security`).
+  - New: hold administrators to **passkeys only** (`admin_webauthn_only`), or to **device-bound passkeys only**
+    (`admin_device_bound_only`: security keys, not synced passkeys). Both need passkeys configured. An administrator
+    whose only factor is no longer allowed is signed out and sets up a passkey at the next sign-in.
+  - **Require MFA for one account** whatever the policy: on the account's page in **Users**, or `vh user mfa require
+    <user>`.
+- **Resetting a lost second factor.** An administrator who may reset an account's password can now reset its MFA
+  (**Users › a user › Sign-in factors › Reset MFA**, with a reason; a super admin's only another super admin). On the
+  server, `vh user mfa reset <user>` does the same, run as the Linux user bound to your own account or to one allowed
+  to reset the target's password, never with `sudo`: it is the way back in for a sole super admin who lost every factor.
+  A reset disables the account's passkeys and authenticator apps, voids its recovery codes, signs every session out
+  and revokes its paired devices' key-backup grants (the devices stay paired and keep syncing). The account sets up a
+  new factor at its next sign-in. A password reset never touches factors.
+- **Signing in with a recovery code** now also revokes the key-backup grants of your paired devices, and lists them
+  in **Account › Security** so you can revoke any you lost (nothing is revoked for you). Every other browser is still
+  signed out.
+- **Recovery cooldown:** for 24 hours after a recovery-code sign-in or an MFA reset (`auth.mfa.recovery_cooldown_hours`,
+  1 to 168), key export, device approval, account and role administration, API keys and other secrets, and settings
+  changes are refused for that account. A passkey or authenticator app set up during the recovery doesn't count as a
+  confirmation for those until it ends. The local `vh` CLI is not held back.
+- **Repeated wrong codes:** after 5 failed second factors in a row an account waits 1 minute before the next attempt,
+  then 2, 4, 8 and at most 15 minutes. It is never locked. The 10th failure emails the account and the security
+  recipients.
+- **Emails:** the account (when it has an email address) and the security recipients are told about recovery-code
+  sign-ins, MFA resets, repeated failures and suspended passkeys; the account alone about factors added, renamed or
+  removed and new recovery codes. Operator email must be configured.
+- Every recovery can be followed in the audit trail alone (`vh audit list --action auth.mfa.`), and `vh audit verify`
+  checks it. See **Audit trail › Reconstruct an MFA recovery**.
+
+- **Vaulthalla Desktop can get your approval for sensitive actions (device approvals, server side).** A paired Mac's
+  connection still never counts as you being there. What counts:
+  - **Touch ID on the Mac**, through a second key Desktop keeps in the Secure Enclave (its *approval key*), for
+    vault-key operations and approving devices only. Each approval is signed for one action and one target, and expires
+    after two minutes.
+  - **Your passkey in the web console**, for anything else Desktop asks for: the request shows up for every console tab
+    you're signed in to, and only a passkey can approve it (an authenticator code or a password can't).
+- **Approve a new Mac from a Mac you already paired**, with Touch ID, instead of from the web console. Pairing from the
+  console and with `vh device pair` (including `--json`) works as before.
+- Desktop's sync, file access and automatic 1Password key backup still never ask for anything.
+- Every approval, refusal and decision is recorded in the audit trail (`vh audit list --action device.approval.` and
+  `--action auth.approval.`).
+- The Desktop side (Touch ID prompts, registering the approval key, the console's Pending approvals list) ships in
+  Vaulthalla Desktop and a later console update. Until then, do these actions in the web console or with `vh`.
+
+- **Automatic 1Password key backup is now a key-backup grant you can see, confirm and turn off.** A grant lets one
+  paired Mac back up the keys of the vaults it names with no prompt, on every reconnect and after every key rotation.
+  Any other key export from the Mac (another vault, a manual export) needs your approval each time: Touch ID on the
+  Mac or your passkey in the web console.
+- **Nothing stops when you upgrade.** Every Mac already paired keeps backing up: it gets a *migrated* grant over
+  exactly the vaults its account could export at upgrade time, never more. **Devices › My devices** shows a Key backup
+  column: confirm the grant or turn it off. A Mac you pair from now on asks once, when you turn backup on.
+- **A new vault is added deliberately.** A grant never widens on its own; Desktop asks once to add a vault.
+- **A Mac sweeping keys is stopped.** More than 60 vault key exports in an hour pauses the grant and notifies you;
+  confirm it to resume.
+- **Grants end automatically** when the Mac is unpaired, the account is deactivated, deleted or loses the export
+  permission, its MFA is reset, someone signs in with a recovery code, or the Mac hasn't connected for 90 days. After
+  a recovery-code sign-in, the same Mac can turn its backup back on with Touch ID during the cooldown, for the same
+  vaults only.
+- Every grant change and every backup under a grant is in the audit trail (`vh audit list --action keys.backup.`).
+- The Desktop side (turning backup on per vault, the confirm prompt) ships in Vaulthalla Desktop.
+
+- **Recovery kits and recovery recipients for S3 vaults.** Create a recovery kit on your own computer with the new
+  offline tool `vh-recovery kit create`, then enroll its public key on a vault with
+  `vh vault keys recipient add <vault> --public-key <key>`. Vaulthalla wraps every key version of the vault to that key,
+  now and at every future rotation, and stores the wrapped keys in the vault's own bucket (`.vaulthalla/key/`), so a
+  rotation no longer leaves the newest key on the host alone until you export again. A rotation writes the new
+  version's wrapped key before the new key encrypts anything; if the bucket can't be reached, the rotation doesn't
+  start.
+- **Recovery stays under your control.** The server only receives the public key; the kit's seed never leaves your
+  device, wrapped keys go to the vault's bucket and nowhere else, and Valkyrian Labs receives no recovery keys or
+  decryption authority. No account, payment, subscription or upgrade enrolls a recipient. `vh vault keys recipient
+  list|revoke` show and revoke recipients; revoking stops new wrapped keys, and status tells you when a key rotation is
+  needed to cut a revoked recipient off from new data. Enrolling and revoking work from the local `vh` CLI (and from a
+  paired device once device approvals arrive), never from the web console or an agent.
+- **`vh vault keys import <vault> --recovery-kit <kit>`** restores a vault's keys from its bucket after this host's
+  vault master was lost. Only key versions this server's own records and signatures prove the vault had are restored;
+  anything else in the bucket is ignored.
+- **New health warning: `recovery_material_missing`.** A self-hosted S3 vault that encrypts its bucket and has neither
+  a recovery recipient nor an export of its current key version now shows as degraded in `vh status`, the console's
+  health and `vh vault keys status`. After upgrading, existing vaults without a current export show this until you
+  enroll a recipient or export the keys (`vh vault keys export`). A key rotation makes an export stale.
+- Key exports now include each signing key's public key (`attestation.public_key`). Older exports still import on the
+  server that made them.
+
+- **Restore a vault from its bucket and your recovery kit: `vh vault recover`.** When the server that ran an S3 vault is
+  gone (its database, its TPM, everything), a new Vaulthalla server you run rebuilds the vault from the vault's bucket
+  and your recovery kit (or a key export): files, folders, names, the trash, provider versions, snapshot records and
+  every key version. No account or payment is needed, and nothing goes anywhere but your server and your bucket.
+  `--dry-run` shows what a restore would do and writes nothing; the restored vault downloads a file only when it is
+  read. See *Restore A Vault From Its Bucket* in the key export docs.
+- **Only keys your material proves come back.** A key version is restored only when the original server's signature
+  of it verifies against a signing key your kit (or export) pins; the new server's own keys never count, and a key
+  someone planted in the bucket is ignored. Anything that can't be proven stops the restore, and `--salvage`
+  re-encrypts what the supplied keys decrypt under a new key, without storing them. The kit's checkpoint protects
+  against a bucket that presents an older state of the vault (`--accept-rollback` to restore it anyway).
+- **New encrypting S3/R2 vaults use opaque storage.** Your storage provider only ever sees encrypted, opaquely named
+  objects. It can't see your file names, folders or contents. It can see how many objects you store, their sizes and
+  when they change. Vaults created before this release keep their current layout (names visible to the provider) until
+  you migrate them with `vh vault migrate-layout` (below); nothing changes for them on upgrade.
+- Pin each vault in your kit (`vh vault keys status <vault> --json`, then `vh-recovery kit add-vault`) and refresh it
+  after a restore: the restored server signs the key versions it creates with its own key.
+
+#### Restore drill (release gate for opaque storage)
+
+The catastrophic restore drill of design spec 03 §7 passed on 2026-11-06 (`vhh drill recover`, fake S3 with
+versioning): node A wrote 2,000 files (2,123 entries: nested folders, 0-byte, small and multipart-sized files, a
+symlink, renamed files and folders, a purged file, overwrites, 5,920 provider versions, a snapshot, two key rotations,
+a recovery recipient enrolled after the first, an export before the second, a checkpoint, an abandoned multipart
+upload); node A's daemon, database, swtpm state and backing store were destroyed; node B, with its own database and
+swtpm, restored the vault from the bucket and the kit in 4.2 s with 19 requests and 0 content bytes (2.8 MB of
+manifest, 450 bytes of envelopes): every file's path, kind, size, mode, mtime, symlink target and bytes equal node A's,
+key versions 1-3 verified against the kit's pinned key and shown with their origin, freshness verified against the
+checkpoint; the restored vault rotated to version 4 and synced; a second restore on node C proved node A's versions
+with the original kit and all four with a kit refreshed from node B. 30/30 checks, including the negative drills:
+deleted root (versioned → the newest retained root; unversioned → blind rebuild under /Recovered), corrupt segments,
+rollback refused against the checkpoint and accepted explicitly, wrong seed, a kit for another vault, an export alone
+after a rotation (the later version reported missing, never invented), and kits with no, another node's or the
+restoring node's own attestation keys (salvage only).
+
+The same drill ran live on Cloudflare R2 the same day (`tools/harness/drill_recover_r2.sh`, 300 files, nodes A, B and C
+as independent private instances on one host, bucket `vh-test-recover-drill` deleted afterwards): 16/16 checks; the
+restore took 5.8 s and read 0 content bytes (469 kB of manifest) before the first file read, key versions 1-3 verified,
+freshness verified.
+
+- **Move older S3/R2 vaults to opaque storage: `vh vault migrate-layout`.** Encrypting vaults created before this
+  release name each object after the file's path, so your storage provider sees file and folder names. Migrating one
+  re-seals every object, every version your provider keeps and every pending upload under random ids in the newer
+  encrypted format, under the same keys (not a key rotation). Afterwards the provider sees what it sees for new vaults:
+  encrypted, opaquely named objects, their count, sizes and change times. Nothing migrates on upgrade: you start each
+  vault yourself (`vh vault migrate-layout <vault>`), it runs in the background, and the vault's files stay readable and
+  writable meanwhile (its sync waits until the migration is done). See *Migrating A Vault To Opaque Storage* in the
+  encryption docs.
+- **Every byte stays recoverable.** Each new object is authenticated before it is uploaded, the provider has to prove
+  it holds exactly those bytes (or it is read back and decrypted), and a sample is always read back. If anything fails
+  before the switch, the vault stays as it was and nothing is deleted: run the command again to resume. The cost is
+  estimated and checked against your price budget before anything is written (`--accept-unpriced` when it can't be
+  priced). The migration needs recovery material that doesn't depend on the server: a recovery recipient or a current
+  key export.
+- **The old objects go only when you say so.** They stay untouched in the bucket for 7 days after the switch
+  (`vaults.layout_migration.cleanup_wait_days`). Then `--cleanup` lists what would be deleted and
+  `--cleanup --confirm <vault name>` deletes exactly those versions, one by one. A bucket with a protection lock is
+  never cleaned, and a version under Object Lock retention or a legal hold stays until its date. Versions that can't be
+  migrated (an archive storage class, a key this server doesn't hold, another application's object) are kept and
+  listed with the reason; the migration says `complete` only when no path-named object, version or delete marker is
+  left.
+- The server's health now reports `legacy_content`: whether any content in the earlier format is left on this server.
+  A later release will refuse to upgrade while it is.
+- Once a vault has been migrated, downgrading the package below this release is unsupported: earlier releases can't
+  read opaque storage.
+
+#### Layout migration drill
+
+`vhh drill migrate` passed on 2026-11-06 (fake S3 with versioning, one private instance with its own database and
+swtpm): a path_v0 vault of 300 files (301 path-named keys, 305 versions with an overwrite and a delete marker) was
+migrated in 6 s while a sync pass ran and a writer kept writing through the FUSE mount (47 files written meanwhile);
+it cut over with the manifest verified from the bucket alone, nothing path-named was deleted before the cleanup, every
+file read back identical, the writer's files were all there, the cleanup was refused before the waiting period and,
+after it, left no path-named key, version or delete marker (11/11 checks). On live Cloudflare R2
+(`LiveR2.LayoutMigrationPrimitives`, a `vh-test-*` bucket deleted afterwards) a re-sealed object's ETag was the
+predicted MD5 for a single and a multipart upload, so R2 needs no read-back beyond the sample.
+
+- **A lost host master is no longer replaced silently.** The host master wraps the internal secrets: the MFA keys that seal TOTP seeds and hash recovery codes, the share-link pepper, email provider credentials and the JWT secret. When its sealed blob was missing, earlier versions created a new one without a word, which left the MFA keys and the share pepper unreadable for good (TOTP, recovery codes and share links then failed). Now Vaulthalla refuses to start while such secrets are on record, and the log names them and the way back: restore the state directory with its sealed blob, or give those secrets up explicitly ([A Lost Host Master](/vaults/secrets-and-key-export#a-lost-host-master)). A fresh install still creates the host master, and a database that holds only the JWT secret still starts (everyone signs in again).
+  - **Restoring a database onto a new host** now includes that explicit step before the first start, after which users enroll TOTP and recovery codes again, share links are reissued and email credentials entered again. Vault keys are restored from their exports as before.
+
+- **Restoring a database onto a new host no longer means enrolling everyone in two-factor sign-in again.** `vh secret set mfa-seal <file>` and `vh secret set mfa-pepper <file>` import the keys that `vh secret export` wrote, after checking them against what the database stores: the TOTP key must open a stored authenticator seed, and the recovery code key must reproduce the stored hash of one of your own recovery codes (`--code`). Only super admins can import, after a confirmation, and every attempt is recorded in the audit trail. A key that does not match is refused and changes nothing, a working key on the host is never replaced, and no key is ever printed. See [A Lost Host Master](/vaults/secrets-and-key-export#a-lost-host-master).
+
+- **Thumbnail URLs no longer carry file names.** `POST /preview/batch` now answers with `entry=<id>` URLs instead of `path=` URLs, for vaults and share links, so file names stop leaving through thumbnail requests in proxy access logs, browser history and Referer headers. The ids resolve through the same permission checks as paths, and a share link still only reaches entries inside its scope.
+
+### Reliability
+
+- **Clean exits.** The server can no longer crash while exiting after a stop or restart when web or device sessions were still connected (seen as a segmentation fault on Linux and an abort on macOS).
+- **Share-link uploads.** A share-link upload could rarely be refused with "Malformed share token prefix" while another request on the same link was being handled. Fixed.
+- **Upstream event sync.** Stopping the server in the middle of applying bucket events no longer counts the interrupted object as a failed attempt; it is applied on the next start.
+
 <!-- vl-release:entry version=1.21.1 -->
 ## 1.21.1 — macOS package and Homebrew casks for 1.21
 

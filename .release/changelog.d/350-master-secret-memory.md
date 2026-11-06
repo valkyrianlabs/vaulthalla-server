@@ -1,3 +1,0 @@
-- KeyProvider holds its secret in crypto::SecretBytes (mlocked, zeroed on release); getMasterKey() returns std::span; init()/updateMasterKey() take spans (#350).
-- AES-GCM helpers take key (and encrypt plaintext) as spans; vault-key, retained-key, pepper and attestation-seed paths keep no plain vector copies; transient copies use crypto::WipedKeyCopy.
-- TPM sealer zeroes its command and response buffers and refuses secrets larger than the TPM's sealed-data limit; the DB password is built per connect and wiped.

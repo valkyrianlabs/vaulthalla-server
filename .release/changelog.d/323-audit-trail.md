@@ -1,3 +1,0 @@
-- Hash-chained, append-only audit trail in the database (migration 117: audit_event, audit_head, audit_checkpoint), fed by the audit logger; signed chain heads; retention purge with checkpoints (#323).
-- New ws commands audit.list, audit.verify, audit.export and CLI vh audit list|verify|export (admin.audits.view); console page /audit.
-- Sign-in, sign-out, password, role, group, override, S3 credential and console file mutation events; auditing.trail.{retention_days,head_interval_minutes,syslog,syslog_facility}.

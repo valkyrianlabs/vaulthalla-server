@@ -1,3 +1,996 @@
+vaulthalla (1.22.1-1) unstable; urgency=high
+
+  * S3: `Controller::uploadLargeObject` (file and buffer overloads) throws
+    after aborting a multipart upload whose part failed. It used to return
+    normally, so `CloudEngine` uploads, backlog replays and recovery restores
+    of objects >= 5 MiB treated the aborted upload as stored. Regression test
+    `S3VersionedFake.AFailedMultipartPartAbortsAndThrowsForBuffersAndFiles`
+    runs the real driver against the versioned fake.
+  * S3/SQS/STS: the upstream control plane (bucket administration, event
+    notifications, `provider::admin::detail::send`) and the object requests
+    built by `Controller::signObjectRequest` (the full bucket LIST of
+    `listObjects`, ListObjectVersions, HEAD/GET/COPY with `versionId`) sign
+    with `vl::sigv4::sign` from vl-sigv4 (Valkyrian Labs, MIT) instead of the
+    in-tree `storage::s3::sigv4::sign`. Same bytes on the wire:
+    `SigV4Goldens.VlSigv4MatchesUpstreamGoldens` and
+    `VlSigv4SendsWhatTheUpstreamSignerSent` hold it to every upstream golden
+    record. The in-tree signer stays as the reference until a release is
+    verified.
+  * SES: `SesProvider::send` (SES v2 SendEmail) signs with `vl::sigv4::sign`
+    (service `ses`) instead of `email::providers::detail::signAwsV4`. Same
+    request on the wire: `SigV4Goldens.VlSigv4MatchesSesGoldens`,
+    `VlSigv4SendsWhatTheSesSignerSent` and `SesProviderSendSignsLikeTheGoldens`
+    (URL, header lines, Authorization). The old signer, kept as the goldens'
+    reference until a release is verified, deviated from SigV4 for inputs
+    SendEmail never has (unsorted query, bare flag parameters, untrimmed header
+    values, single-encoded non-S3 paths); `VlSigv4FixesTheSesSignersDeviations`
+    holds vl-sigv4 to the spec there.
+  * S3 data path: object PUT (buffer, file, conditional), GET (buffer, file,
+    streamed), HEAD, copy-in-place metadata updates, DELETE,
+    `listObjectKeysPage`, multipart initiate/part/complete/abort, the
+    credential probe and `isBucketEmpty` sign with `curl::signDataPathRequest`
+    (behind `curl::buildAuthorizationHeader`), built on vl-sigv4's primitives,
+    instead of the in-tree legacy signer. Callers still build the URL, the
+    header lines and the payload hash (`UNSIGNED-PAYLOAD` or the body's
+    SHA-256, per operation, unchanged), so the request is the same:
+    `SigV4Goldens.VlSigv4MatchesLegacyGoldens` and
+    `VlSigv4SendsWhatTheLegacySignerSent` hold it to 23 of the 24 legacy
+    records, and `S3DataPathWire.*` sends every request shape through real curl
+    to a capture server and checks that vl-sigv4's verifier accepts it and that
+    the old signer computes the same Authorization for it.
+    - One time source: `buildHeaderMap` no longer sets `x-amz-date`; the signer
+      sets it from the instant it signs at and takes the credential-scope date
+      from the same instant. The old signer read the scope date from a second
+      clock read (`getDate()`), so a request stamped just before UTC midnight
+      and signed just after carried two dates and was refused
+      (`VlSigv4DataPathDatesComeFromOneInstant`).
+    - Header values are signed trimmed with inner whitespace collapsed, as
+      SigV4 says; the old signer signed them verbatim, which fails at S3 for
+      values with extra whitespace. No data-path header carries any (every
+      value is generated or an ETag read back trimmed), so no request changes;
+      `VlSigv4FixesTheLegacySignersDeviations`.
+    - `curl::buildAuthorizationTrace` (the old signer) has no production
+      callers and stays as the goldens' reference until a release is verified.
+  * SES: an `email.ses.endpoint` with a path prefix (an SES proxy at
+    `https://host/aws`) is signed for the path it is sent to.
+    `SesProvider::send` used to send to `<endpoint>/v2/email/outbound-emails`
+    while signing `/v2/email/outbound-emails`, so every send through such an
+    endpoint failed with SignatureDoesNotMatch. The endpoint is split into
+    origin, Host and prefix, the prefix is signed with the SES path, and the
+    URL is built from what was signed. Endpoints without a path are unchanged.
+    Regression test `SesProviderTest.EndpointPathPrefixIsSentAndSigned`
+    verifies the sent request with vl-sigv4's verifier.
+  * Build: new dependency vl-sigv4 (0.2.1), a static library built from the
+    release tarball pinned in `subprojects/vl-sigv4.wrap` (sha256 checked by
+    meson) and committed in `subprojects/packagecache/`, so the package build
+    stays offline (`--wrap-mode=nodownload`). Needs only libcrypto >= 3.0,
+    already a build dependency; installs nothing into the package.
+  * S3 gateway: SigV4 verification moves to vl-sigv4 (`vl::sigv4::verify` with
+    a `SecretLookup`): `protocols::s3::verifySignedRequest` parses, runs every
+    secret-free check (date, skew or presign window, signed headers, payload
+    hash), then looks the credential up, then compares the signature in
+    constant time. `Router::route` builds the input with
+    `protocols::s3::verificationInput` (Beast adapter). The in-tree
+    `protocols/s3/SigV4` has no production callers and stays as the goldens'
+    reference until a release is verified.
+    - Same acceptance for real clients: 126 requests captured from aws-cli
+      2.38, boto3 1.34, rclone 1.69 and mc 2025-08 over HTTP and HTTPS
+      (`core/test-assets/sigv4/client-requests.jsonl`,
+      `tools/dev/sigv4-capture/`) verify as before, and
+      `SigV4Goldens.VlSigv4VerifierMatchesGatewayGoldens` rebuilds every S3
+      gateway record.
+    - Error codes follow AWS (`vl::sigv4::awsErrorCode`; statuses in
+      `sigv4Error`): RequestTimeTooSkewed (403), InvalidAccessKeyId (403, was
+      AccessDenied), AuthorizationHeaderMalformed /
+      AuthorizationQueryParametersError (400), XAmzContentSHA256Mismatch (400),
+      AccessDenied (403) for a missing Authorization, missing or invalid date
+      or an expired presigned URL, NotImplemented (501) for signed-chunk
+      payloads, InvalidArgument (400) for header plus presigned query.
+      Everything else was SignatureDoesNotMatch (403); a wrong signature and a
+      missing signed header still are, and session tokens are still
+      InvalidToken (400).
+    - Newly refused (AWS refuses them too): host not signed, credential scope
+      date != x-amz-date date, X-Amz-Expires=0, Authorization header plus
+      presigned query, malformed x-amz-date, credential scope or SignedHeaders,
+      Authorization parts without '='. Newly accepted (spec-valid, refused
+      before): repeated signed headers combined with ',', an X-Amz-Signature
+      query parameter on a header-signed request, upper-case hex in
+      x-amz-content-sha256.
+    - The credential lookup (a DB query and the secret's decryption) now runs
+      after the date and payload checks, not before them.
+  * S3 gateway: signed streaming uploads (`STREAMING-AWS4-HMAC-SHA256-PAYLOAD`
+    and `-TRAILER`: mc and the AWS Java SDK over plain HTTP) are accepted. They
+    were `NotImplemented` (501) before.
+    - `Session` spools a streamed PUT as before. It now hands aws-chunked
+      bodies to `Router::route` still encoded
+      (`BodyPayload::aws_chunked_decode_to`) when Content-Encoding says
+      `aws-chunked` or `x-amz-content-sha256` is any `STREAMING-*` mode. mc
+      sends signed chunks without Content-Encoding.
+    - `Router::route` decodes the body with `decodeAwsChunkedBody`
+      (`protocols/s3/RequestBody.cpp`, vl-sigv4's `AwsChunkedDecoder`).
+      Unsigned framing is decoded before authentication, as before. Signed
+      chunks are decoded after it, through the `vl::sigv4::ChunkVerifier` that
+      `Authenticator::authenticate(input, &chain)` /
+      `verifySignedRequest(..., &chain)` returns once the seed signature
+      verified.
+    - `routeAuthenticated` runs only after the final chunk (and the trailer
+      signature) verified. A tampered, reordered, dropped or missing chunk
+      stores nothing and leaves an existing object unchanged.
+    - The Session's own aws-chunked decoder (`decodeAwsChunkedBody` in
+      `Session.cpp`) is gone. Moving to the library parser changes some
+      answers:
+    - Framing errors were a `std::runtime_error` that closed the connection
+      without a response. They are now S3 errors: `IncompleteBody` (400) for a
+      truncated body, a missing final chunk or an
+      `x-amz-decoded-content-length` mismatch; `InvalidRequest` (400) for
+      malformed framing, a chunk over 16 MiB or trailers that differ from
+      `x-amz-trailer`; `SignatureDoesNotMatch` (403) for a chunk or trailer
+      signature; `InvalidArgument` for a non-numeric
+      `x-amz-decoded-content-length`.
+    - Stricter, as AWS and MinIO are: chunk sizes are 1 to 16 hex digits (no
+      sign, whitespace or `0x`), chunk headers end in CRLF, header and trailer
+      lines are at most 4 KiB, trailer lines need a `name:` token, and no bytes
+      may follow the end of the body. The trailer layouts of the AWS SDKs and
+      of MinIO's Go client are both accepted.
+    - Signed chunks outside a streamed PUT, and SigV4a streaming, still answer
+      `NotImplemented`. New `sigv4StatusFor` rows: `ChunkSignatureMismatch`
+      403; `MalformedChunkedEncoding`, `ChunkTooLarge`, `IncompleteBody`,
+      `DecodedLengthMismatch` 400.
+    - Tests:
+    - `S3GatewayStreaming.*` covers mc- and SDK-shaped uploads, trailers and
+      every failure class.
+    - `S3GatewayClientCaptures` replays mc's real uploads over plain HTTP (one
+      chunk, three chunks, and `mc cp --checksum` unsigned trailers), each
+      verified and decoded at its signing time. Captures come from the new
+      `tools/dev/sigv4-capture/capture_mc_streaming.sh`, and a flipped byte in
+      a signed body fails.
+    - `S3GatewayDbTest.SignedStreamingUploadsStoreOnlyFullyVerifiedBodies` runs
+      end to end over a socket. Tampered, reordered, dropped and unfinished
+      bodies store nothing, and a tampered overwrite keeps the old object.
+    - `S3GatewayDbTest.RealMcUploadsOverPlainHttpWhenMcIsInstalled` runs a real
+      mc against the running gateway and skips where mc is not installed.
+  * Tests: SigV4 characterization goldens
+    (`core/tests/unit/test_sigv4_goldens.cpp`, `core/test-assets/sigv4/`) pin
+    the canonical requests and signatures of the upstream, legacy data-path,
+    SES and gateway signers ahead of their consolidation. Two test seams, no
+    behaviour change: `curl::buildAuthorizationTrace` (the legacy signer with
+    the scope date given) and `email::providers::detail::signAwsV4`
+    (SesProvider's signer, now in `SesSigning.hpp`).
+  * Release CI: the macOS `.pkg` and its `.sha256` publish to Apthalla's raw
+    repository `valkyrian-raw` (VPS loopback port 8090; `pkg.vaulthalla.sh`
+    serves it) instead of Nexus. `tools/macos/pkg/publish-nexus.sh` is now
+    `publish-pkg.sh` (`PKG_REPO_URL`, uploads carry `X-Checksum-SHA256`;
+    immutable, read back as before) and the release job is `macos-publish-pkg`.
+    README.Debian's needrestart example names a placeholder `example.service`
+    instead of `nexus.service`.
+  * Offline startup (#316): `ProtocolService` no longer downloads password
+    lists before starting the ws/http listeners (a failed download threw out of
+    `runLoop` and the listeners never started without internet). The lists ship
+    as `/usr/share/vaulthalla/password-lists/{dictionary,common-passwords}.txt`
+    (SecLists NCSC top 100k, MIT; SCOWL size 50 dictionary, SCOWL licence;
+    provenance in `deploy/password-lists/README.md`) and load once per process
+    from local files, never throwing. The unlicensed `dolph/dictionary` list is
+    gone.
+    - `Strength::checkPwnedPassword` returns `NotFound`/`Found`/`Unavailable`,
+      with a 3 s connect and 5 s total timeout, a 4 MiB response cap and no
+      redirects; `Unavailable` no longer blocks a password change.
+    - Lists swap in under a mutex (readers take snapshots). Tests:
+      `OfflineStartup.*` (listeners up with no list files and zero outbound
+      requests; refused, blackholed, unresolvable and HTTP-error breach
+      lookups).
+  * Protocols: `ProtocolService` and the device listener keep their io_context
+    for the life of the process while any `ws::Session` object is alive (new
+    `ws::Session::liveCount()`, a `SessionLifetimes` token released after the
+    socket). ws sessions stay cached in the session manager across a listener
+    restart; freeing the context made their later destruction a use-after-free
+    (intermittent SIGSEGV, found by `OfflineStartup.ListenersStart…` under
+    `MALLOC_PERTURB_`: 11/40 runs before, 0/80 after).
+  * Crypto (#318): `KeyProvider` generates new master secrets with libsodium's
+    `randombytes_buf` (`KeyProvider::generateMasterSecret`); they came from
+    `std::random_device`, one call per byte. Already-sealed secrets are
+    untouched (no reseal, no rotation). `fs::ops::generate_random_suffix` (the
+    names of plaintext working copies, staging and seal temporaries) uses
+    `randombytes_uniform` instead of a `std::mt19937`. Contract
+    `tools/contracts/test_crypto_rng_contract.py` keeps `<random>` engines out
+    of `core/`; tests `MasterSecretRng.*`.
+  * Auth config (#320): `convert<AuthConfig>` reads
+    `access_token_expiry_minutes`, the shipped and documented key; it read only
+    `token_expiry_minutes`. The old key stays a reported alias
+    (`Registry::deprecations`), and the shipped key wins when both are set.
+    Encode writes the shipped key. The refresh cookie's `Max-Age` follows
+    `refresh_token_expiry_days` (`protocols/ws/RefreshCookie.hpp`); it was
+    hard-coded to 604800. Tests:
+    `ConfigSettingsTest.AccessTokenLifetimeHonoursTheShippedKey`,
+    `ConfigSettingsSerialization.AuthWritesTheShippedKey`,
+    `RefreshCookie.MaxAgeFollowsTheConfiguredLifetime`.
+  * Auth (#319): idle sign-out for web-console sessions. Migration 116 adds
+    `refresh_tokens.last_activity_at` (server `NOW()` at sign-in and on the new
+    ws command `auth.activity`, written at most every 30 s; background traffic
+    never touches it). `auth/session/Idle.hpp` holds the policy: human web
+    sessions only (not device-listener or share sessions),
+    `idle_timeout_minutes` (default 30, `0` = off, the 5-minute minimum is
+    gone). Enforced in `session::Manager::validate`, `renewAccessToken`
+    (`auth.refresh`), `validateRawRefreshToken` (HTTP lanes),
+    `Validator::rehydrateFromStoredRefreshToken` and the lifecycle sweep
+    (`SweepVerdict::IdleTimeout`, frame `session_idle_timeout`). Expiry revokes
+    the refresh token (`hardInvalidate`), so the cookie can't sign back in. The
+    decision re-reads the stored row first, so a stale copy in one tab never
+    signs out an active sign-in. Console: `lib/activity.ts` reports pointer,
+    keyboard, wheel, scroll and touch input at most once a minute; the session
+    gate re-checks the session on reconnect. Tests: `IdleLogoff.*`,
+    `UserParityTest.{IdleSessionsAreSignedOutAndCannotSignBackInSilently,APageLoadRefreshDoesNotRescueAnIdleSession,AnotherTabsActivityKeepsTheSharedSignInAlive,IdleSignOutCanBeTurnedOff}`,
+    `web/src/lib/activity.test.ts`, `web/tests/e2e/idle-logoff.spec.ts`
+    (offline scripted, plus a live variant).
+  * Sharing (#322): the share-token pepper is sealed under the host master key
+    (`crypto::secrets::Manager`, key `share.token.pepper.sealed.v1`). The
+    plaintext `share.token.pepper.v1` row from earlier releases is converted on
+    first use: the same value is sealed, read back and compared, then the
+    plaintext row is deleted (resumes after an interruption; idempotent). Fails
+    closed, never regenerates, when the sealed copy can't be unsealed or
+    disagrees with a leftover plaintext copy. New
+    `db::query::crypto::Secret::deleteSecret` (`delete_internal_secret`).
+    Downgrade below this release invalidates share links. Tests:
+    `SharePepperSealing.*` (DB-backed).
+  * Sharing (#317): email-challenge codes are delivered.
+    `share::Manager::startEmailChallenge` sends the code through
+    `ChallengeCodeSender` (`share/CodeDelivery.{hpp,cpp}`; default: the
+    configured `email::Provider`, idempotency key `share-challenge-<id>`), only
+    when the address is a listed recipient; other addresses get the same reply
+    and no email (audit `share_email_recipient_not_listed`). Send failures are
+    logged and audited (`share_email_delivery_failed`), never reported. Without
+    email delivery, `createLink`, an `updateLink` into `email_validated`, and
+    `startEmailChallenge` throw `ops::Refused{"share_email_unavailable"}`. The
+    email names no file, link or sharer. Tests:
+    `ShareManagerTest.EmailChallengeSendsTheCodeToTheListedRecipientOnly`,
+    `EmailValidatedLinksNeedEmailDelivery`, `AFailedSendIsAuditedNotReported`,
+    `ShareCodeEmail.*`, and the ws challenge test now asserts delivery.
+  * Auth (#321): `auth::Manager::loginUser` refuses every failed sign-in with
+    the same message (`Manager::kLoginFailed`) and logs the reason (unknown
+    account, wrong password, deactivated, system-only) at warn. Unknown names
+    are verified against a once-built Argon2id hash of a random secret, and the
+    password is verified before the account state is checked, so each refusal
+    costs one Argon2id verify. Test:
+    `UserParityTest.RefusedSignInsLookTheSame`.
+  * Hash-chained, append-only audit trail in the database (migration 117:
+    audit_event, audit_head, audit_checkpoint), fed by the audit logger; signed
+    chain heads; retention purge with checkpoints (#323).
+  * New ws commands audit.list, audit.verify, audit.export and CLI vh audit
+    list|verify|export (admin.audits.view); console page /audit.
+  * Sign-in, sign-out, password, role, group, override, S3 credential and
+    console file mutation events;
+    auditing.trail.{retention_days,head_interval_minutes,syslog,syslog_facility}.
+  * TLS by default (#324): `vh setup nginx` without a certificate mode renders
+    HTTPS with a local self-signed certificate
+    (`/etc/vaulthalla/tls/local.{crt,key}`; ECDSA P-256, 825 days; SAN: host
+    names, `localhost`, loopback and the host's addresses) and a 308 redirect;
+    new `vh setup local-tls [--force]` creates or renews it (postinst runs it
+    on install and upgrade). `--plain-http` keeps HTTP. `--certbot` passes
+    `--hsts`; the Cloudflare DNS-01 site sends HSTS. The packaged site
+    (`deploy/nginx/vaulthalla.conf`) is HTTPS; postinst replaces an installed
+    site byte-identical to any earlier packaged plain-HTTP template and warns
+    about other plain-HTTP sites. Its verification probe follows the redirect
+    to `https://127.0.0.1/`.
+  * Security headers from nginx (all managed sites) and from the console itself
+    (`next.config.ts` `headers()`): nosniff, `Referrer-Policy: no-referrer`,
+    `X-Frame-Options: DENY`, `frame-ancestors 'none'`, a restrictive
+    `Permissions-Policy`.
+  * ws handshake refuses a browser `Origin` whose host differs from
+    `Host`/`X-Forwarded-Host` and isn't in the new
+    `websocket_server.allowed_origins` (403 before hydration;
+    `ws/OriginPolicy.hpp`).
+  * Listener host defaults are `127.0.0.1` (ws, HTTP, S3 gateway: compiled,
+    YAML and JSON decoders, lifecycle projection); the shipped
+    `s3_gateway.host` is `127.0.0.1`.
+  * Tests: `WsOrigin.*`, `ListenerDefaults.*`, lifecycle
+    `HttpsByDefaultTests`/`LocalCertificateTests` (real openssl),
+    `PostinstNginxTlsUpgradeTests`.
+  * KeyProvider::initGuarded: vault_master, ak_master and s3gw_master are never
+    regenerated while records wrapped by them exist (MasterSecretLost) (#326).
+  * macOS sealer fails closed without a Secure Enclave unless
+    secrets.allow_development_file_backend or -Ddarwin_sealer=file; backend
+    "unavailable".
+  * Health deps.secrets_posture (hardware|software|development|unknown);
+    secrets.require_hardware refuses non-hardware sealing.
+  * Log lines name files by entry id or an opaque per-run tag;
+    logging.file_paths (ids|full, default ids) controls it (#327).
+  * Console HTTP lanes address files by entry=<id>; ids follow the same RBAC,
+    share scope and no-existence-oracle rules as paths.
+  * Share links put the token in the URL fragment (/share#<token>);
+    /share/<token> links redirect.
+  * nginx sites log through a redacting log_format (share tokens, query
+    strings, no Referer).
+  * FUSE working copies (now `<backing>/.fuse-working`), private HTTP upload
+    staging (`.upload-staging`) and `vh fs put` staging (`.cli-staging`) are
+    block-encrypted at rest (XChaCha20-Poly1305 per 64 KiB block, fresh nonce
+    per write, AAD bound to the file and block) under a random per-process key
+    held only in locked memory (#328).
+  * A working copy whose seal fails stays registered as unsaved and is retried
+    every 60 s, on the next flush/fsync/release and at FUSE stop; a file
+    deleted meanwhile is restored as a new file. Unsaved copies still failing
+    at shutdown, or left by a crash, are deleted with an error naming how many
+    were lost.
+  * The startup sweep deletes everything under `.fuse-working`; plaintext an
+    older version left in `.fuse-plaintext/unsaved/` is kept with a warning and
+    the rest of `.fuse-plaintext` is removed.
+  * `fs::NewFileContext::source_path` is replaced by `source`
+    (`fs::PlaintextSource`); `EncryptionManager` gains `encryptToFile` and
+    `decryptFileTo` (sink), and `decryptFileToFile` is gone, so nothing
+    decrypts to a plaintext file.
+  * S3 gateway request bodies are staged as `crypto::ScratchFile` ciphertext
+    (process key) in `<backing>/.s3-request-body/` instead of plaintext in
+    `<backing>/s3-request-body/`; both are cleared at startup (#345).
+  * S3 multipart parts are sealed under the vault key (AES-256-GCM, fresh IV
+    per write, AAD bound to vault, upload id, part number and size;
+    `protocols/s3/PartCipher`). Migration 118 adds
+    `s3_gateway_multipart_part.encryption_iv` and `key_version`.
+    CompleteMultipartUpload authenticates every part, then streams them into
+    the vault object (no `.complete-object` concatenation file); a failed part
+    answers `InvalidPart` and keeps the upload.
+  * Startup seals pre-#345 plaintext parts after an MD5 and size check, deletes
+    the plaintext, and removes files and directories no open upload references.
+  * `ObjectStore::putObjectFromFile` and `MultipartStore::uploadPartFromFile`
+    are replaced by `putObjectFromSource` and `uploadPartFromSource`
+    (`fs::PlaintextSource`).
+  * KeyProvider holds its secret in crypto::SecretBytes (mlocked, zeroed on
+    release); getMasterKey() returns std::span; init()/updateMasterKey() take
+    spans (#350).
+  * AES-GCM helpers take key (and encrypt plaintext) as spans; vault-key,
+    retained-key, pepper and attestation-seed paths keep no plain vector
+    copies; transient copies use crypto::WipedKeyCopy.
+  * TPM sealer zeroes its command and response buffers and refuses secrets
+    larger than the TPM's sealed-data limit; the DB password is built per
+    connect and wiped.
+  * platform::sealer: Policy {None, Pcr7}; TPM seal with PolicyPCR over PCR 7
+    (no USERWITHAUTH), unseal through a policy session, typed PolicyUnsatisfied
+    on TPM_RC_POLICY_FAIL; staged, verified reseal() (<name>.staged.*,
+    <name>.prev.*) with recover() run by KeyProvider::init/initGuarded; macOS
+    ignores the policy (#351).
+  * secrets.tpm_pcr_policy none|pcr7 (default none) binds newly sealed secrets
+    only; crypto/secrets/Reseal (inventory, run) never calls init/initGuarded.
+  * `vh secret reseal [--pcr7|--none]` (gate: hardware posture, vault key
+    backups, `vh secret export all` < 24 h; audited secrets.reseal,
+    confirmation sealing_policy_reseal, stepup Secrets, excluded from MCP) and
+    `vh secret policy`; migration 132 secret_exports records exports; health
+    deps.secrets_policy, secrets_pcr_bound, secrets_warning (degraded when
+    PCR-bound and no export in 30 days).
+  * Key attestation key and the DB password are never regenerated on
+    PolicyUnsatisfied.
+  * Versioned vault_master rewrap (#352): vh secret master
+    status|rotate|finalize|rollback; staged, verified, atomic switch with a
+    bounded recovery window (default 7 days); file bodies are never
+    re-encrypted.
+  * Migration 121: vault_master_state, master_version / staged (*_next) /
+    retained (*_prev) wrap columns on vault_keys, vault_keys_trashed and
+    vault_deletion_key, and trigger vh_vault_master_guard (a write must declare
+    the current master).
+  * Versioned rewrap for ak_master and s3gw_master (#353): the #352 engine
+    generalized to every data-wrapping master (crypto/secrets/Rewrap.hpp,
+    crypto/secrets/Versioned.hpp); vh secret master
+    status|rotate|finalize|rollback --slot vault|api-keys|s3-gateway (status
+    also --slot all); every recovery window ends from the vault retention loop.
+  * vh secret jwt rotate: a fresh JWT secret and the revocation of every
+    refresh token in one transaction, then every live session ends. vh secret
+    device-identity rotate: a new device_tls version sealed and read back, then
+    one transaction revokes every paired device and switches; pairing state is
+    dropped and the listener swaps its TLS context live.
+  * Migration 124: master_secret_state (one row per slot; vault_master_state
+    moved into it and dropped), master_version / staged (*_next) / retained
+    (*_prev) wrap columns on api_keys (secret and provider token) and
+    s3_gateway_credentials, guard triggers vh_api_keys_master_guard and
+    vh_s3_gateway_master_guard; the rewrap exemption is now vh.master_rewrap =
+    '<slot>'.
+  * Refresh token rows record session assurance: aal, amr, auth_time (migration
+    119; existing rows read as aal 1, {pwd}, auth_time = issued_at). Rows are
+    written once per jti; promotion never adopts an existing row (#354).
+  * A websocket rehydrates only from its cookie's stored row, never from
+    another live socket's token; auth.login on a signed-in socket answers
+    data.code already_signed_in.
+  * MFA policy hook (auth::session::assurance) checked against the row on
+    rehydration, validate, auth.refresh and the HTTP lanes; refused rows are
+    revoked. Policy and factor changes bump rbac::policyEpoch().
+  * New ws commands auth.sessions.list (opaque ids) and auth.sessions.revoke
+    {id} | {all_others}; audit event auth.session.revoke; console Sessions
+    panel under Account › Security.
+  * Console sign-in reconnects its websocket first, so the signing-in socket
+    owns the browser's current refresh cookie; already_signed_in falls back to
+    auth.refresh.
+  * WebAuthn relying-party verifier (#355, design docs/dev/mfa-design.md
+    section 4.1, decision D5) in `core/{include,src}/auth/webauthn/`, built as
+    its own static library (`vh_webauthn`) over libcbor, OpenSSL 3 and
+    libsodium only: registration (`none`, `packed` self and `packed` x5c, other
+    formats recorded as none) and assertions for ES256, EdDSA (Ed25519) and
+    RS256 (2048..4096 bits); all 14 checks of the design table, including the
+    session/purpose/user/scope-bound single-use challenge store, exact
+    configured origins, crossOrigin/topOrigin, UP and UV, credential owner and
+    userHandle, BE immutability and the backup-aware signCount table. Strict
+    CBOR (definite lengths, no trailing bytes, no duplicate keys, bounded
+    nesting and sizes), strict clientDataJSON and response JSON. Not wired into
+    sign-in yet (#357).
+  * New config `auth.webauthn.{rp_id,rp_name,origins}` (config.yaml,
+    settings.get/update, ws contract model `WebAuthnConfig`, console Settings ›
+    Security), validated on load and on settings.update.
+  * Packaging: Build-Depends `libcbor-dev (>= 0.10)`; the runtime `libcbor0.10`
+    comes through `${shlibs:Depends}`. macOS: Homebrew `libcbor` (bundled into
+    the pkg by `bundle_dylibs.py`). The CI image adds `libcbor-dev`, `clang-18`
+    and `libclang-rt-18-dev`.
+  * Tests: W3C WebAuthn L3 section 16 vectors (`core/test-assets/webauthn/`),
+    `WebAuthnCeremony`/`WebAuthnChecks` negatives per check, parser suites,
+    `WebAuthnFuzzCorpus`; libFuzzer targets (`-Dfuzz=true`,
+    `tools/dev/fuzz-webauthn.sh`) run 60 s each in PR CI;
+    `tools/contracts/test_webauthn_contract.py`.
+  * Migration 120 (mfa_factors): user_mfa, webauthn_credentials, totp_factors,
+    recovery_code_batches, recovery_codes; additive and idempotent (#356).
+  * auth::mfa factor storage: RFC 6238 TOTP (SHA-1, 6 digits, 30 s, window +-1)
+    with seeds AES-256-GCM sealed under mfa_seal (AAD binds user and factor)
+    and a conditional-UPDATE replay guard; unconfirmed enrollments expire after
+    10 minutes (Janitor purge).
+  * Recovery codes: 10 x 50-bit Crockford codes, keyed BLAKE2b-256 under
+    mfa_pepper, batch inactive until acknowledged and superseding the previous
+    one, single use by conditional UPDATE.
+  * crypto::secrets::Manager::sealedKey: seal-and-read-back internal keys that
+    fail closed and are never regenerated while dependents exist
+    (secrets::dependents::mfaSeal/mfaPepper).
+  * vh secrets export accepts mfa-seal and mfa-pepper (base64); ws log
+    redaction covers MFA codes, otpauth URIs and WebAuthn material.
+  * Pending-MFA sign-in (#357): a correct password for an account with a usable
+    factor, or one the MFA policy requires one of, leaves the socket pending
+    (no session user, access token or refresh row) instead of signing in;
+    auth.login answers mfa_required / mfa_enrollment_required with
+    data.pending.
+  * Router pending mode with an exact allowlist (auth.mfa.verify,
+    auth.mfa.cancel, auth.logout, plus the enrollment commands while
+    enrolling); it ends after 5 min (10 enrolling), 5 failed factors, cancel,
+    logout or the socket closing. Account-wide cap: 5 factor failures in 15 min
+    answer rate_limited.
+  * auth::mfa::policy at level admins (D2): an aal 1 refresh row of an account
+    that must have MFA is revoked and refused at next use; installed at startup
+    through the session assurance hook.
+  * New ws commands auth.mfa.verify, auth.mfa.cancel, auth.mfa.status,
+    auth.mfa.webauthn.register.options|finish,
+    auth.mfa.totp.enroll.start|confirm, auth.mfa.factor.rename,
+    auth.mfa.recovery.generate|acknowledge (additive under protocol 1); model
+    MfaFactor; contract auth levels pending and enrollment.
+  * Completion writes one refresh row at aal 2 (amr pwd plus hwk, swk, otp or
+    rec). A recovery-code sign-in starts the recovery cooldown
+    (user_mfa.recovery_cooldown_until) and revokes the account's other web
+    sessions; paired devices are untouched.
+  * Console: second sign-in step (passkey, authenticator code, recovery code),
+    first-run enrollment wizard, Account › Security sign-in factors; WebAuthn
+    JSON conversion and an in-browser QR encoder; Playwright spec with the CDP
+    virtual authenticator.
+  * Audit: auth.mfa.challenge, auth.mfa.verify, auth.mfa.recovery.signin,
+    auth.mfa.webauthn.counter_regression; auth.login.success records method,
+    aal and amr.
+  * Discoverable passkey sign-in (#358): new ws commands auth.passkey.options
+    (anonymous, empty allowCredentials, UV required, the same answer for every
+    caller) and auth.passkey.login (userHandle required and equal to the
+    credential owner's; completes through signin::complete at aal 2, amr hwk or
+    swk; one uniform refusal). Additive under protocol 1; both are
+    session-lifecycle commands, refused on signed-in (already_signed_in) and
+    pending sockets, never reachable from the device listener.
+  * Discoverable sign-in challenges have their own store (at most 10,000 open,
+    rate_limited when full); auth.passkey.options and auth.passkey.login are
+    rate limited to 30 a minute per client address.
+  * Audit: auth.passkey.login (success {factor_id, amr}, failure).
+  * Console: Sign in with passkey on /login and conditional mediation
+    (autofill) on the username field, loaded on demand; Playwright specs for
+    discoverable sign-in, autofill and a synced passkey's non-growing counter
+    (CDP setCredentialProperties).
+  * Step-up framework (#359): auth::stepup::require(family, target) in the ops
+    layer, after validation and confirmations, right before the mutation;
+    families keys, device.trust, data.destroy (target-bound, single use) and
+    account.credentials, identity.admin, secrets, settings (5 min family
+    grants, auth.mfa.step_up_ttl_seconds 60..900).
+  * Request scope per entry point: ws router (web/device), CLI unix socket
+    (host, exempt), vh mcp agent calls and /mcp (agent, always refused); device
+    sessions refused (approval keys are #361), a paired device's
+    vault.keys.export stays inside its key-backup grant (D1 until #362).
+  * Grants in memory on the ws session, bound to user and refresh jti; dropped
+    on logout, idle sign-out, revocation and close. A fresh aal 2 sign-in (not
+    a recovery code) stands in for family grants. Five failed ceremonies in 15
+    min revoke the session.
+  * New ws commands auth.stepup.begin, auth.stepup.finish,
+    auth.mfa.factor.remove; refusal step_up_required {family, target, methods,
+    max_age_seconds}; codes step_up_unavailable, step_up_failed,
+    mfa_last_factor; contract annotation step_up on 50 commands; capability
+    auth.step_up; auth.mfa.status step_up; settings model MfaConfig (additive
+    under protocol 1).
+  * D3 enforced on the server: password-only step-up only for an account that
+    need not have MFA and has no factor, never for keys, device.trust or
+    data.destroy.
+  * Console Step-up dialog (lazy) that resends the refused request; Account ›
+    Security factor removal. Audit auth.stepup.grant|fail|required.
+  * MFA policy (#360): auth.mfa.policy optional|admins|all (default admins,
+    D2), admin_webauthn_only, admin_device_bound_only (need
+    auth.webauthn.rp_id; config.yaml and settings.update refuse otherwise),
+    recovery_cooldown_hours (1..168, 24); auth::mfa::policy::factorRule filters
+    sign-in, enrollment, step-up and rowSatisfies for privileged accounts.
+  * Policy changes bump the policy epoch and are audited
+    (auth.mfa.policy.change); weakening (lower level, admin flag off, rp_id
+    changed) is mailed to operator_emails.recipients.security.
+  * Account factor backoff: the 5th failure of a streak delays 1 min, doubling
+    to 15 (never a lock), audited auth.mfa.lockout; the 10th notifies the user
+    and the security recipients.
+  * Recovery (D4): a recovery-code sign-in revokes other web sessions and the
+    key-backup grants of the account's devices (migration 129:
+    devices.key_backup_revoked_at/_reason; keyBackupGrantCovers honours it),
+    lists devices without revoking them, starts the cooldown from config;
+    audited auth.mfa.recovery.signin and keys.backup.grant.revoke.
+  * Recovery cooldown: keys, device.trust, identity.admin, secrets and settings
+    refuse with recovery_cooldown {family, cooldown_until} on web and device
+    sessions (host exempt); factors created_during_recovery never answer those
+    families during it.
+  * Admin and host reset: ws auth.mfa.admin.status|require|reset (ops/Mfa.hpp;
+    reset is account.credentials step-up, require identity.admin) and vh user
+    mfa status|reset|require (bound UID or users-manage; root refused); factors
+    disabled, codes voided, sessions and grants revoked, user_mfa.required set,
+    cooldown; audited auth.mfa.admin.reset / .require with channel and reason,
+    denials too.
+  * Account-security notices (notifications/AccountSecurity) through the
+    operator email queue: recovery sign-in, reset, failures, suspension, policy
+    weakening; factor changes to the account.
+  * ws contract (additive, protocol 1): new commands auth.mfa.admin.*; refusal
+    code recovery_cooldown on cooldown-family commands; auth.mfa.verify
+    recovery.{grants_revoked, devices}; auth.mfa.status policy.{totp_allowed,
+    synced_passkeys_allowed}; MfaFactor.allowed; Device.key_backup_revoked_at;
+    MfaConfig policy fields.
+  * Console: Settings › Security › Multi-factor sign-in; Users › user › Sign-in
+    factors (status, require, reset); Account › Security recovery notice with
+    paired devices and cooldown.
+  * vh audit list/verify --json now print JSON (the flag was checked by its
+    label, never matched).
+  * Device approval keys (#361, MFA design note 6.2/6.3/6.5, D6): migration 128
+    `device_approval_keys` (one P-256 SPKI per device, registered_via pairing
+    or console_approval, revoked with the device).
+  * `device.pair.request` takes an optional `approval_key` (base64 SPKI,
+    91-byte DER), shown as `approval_key_present` in `device.pairing.pending`
+    and registered with the device on approval; `device.pairing.pending` is
+    answered on paired device sessions (approving a new device from a paired
+    one).
+  * New device-session commands `device.approval.challenge|submit` (ECDSA
+    P-256/SHA-256 over "vh-device-approval-v1" ‖ node_id ‖ server SPKI hash ‖
+    device SPKI hash ‖ challenge ‖ family ‖ target ‖ expiry; single use, 120 s,
+    bound to session, family and target; keys and device.trust only),
+    `device.approval.request|status` (console approvals, any family, 5 min, at
+    most 3 open and 10/hour per device) and `device.approval.key.register`
+    (device.trust, approved in the console).
+  * New console commands `auth.approval.list|approve|deny` (a UV passkey
+    assertion only; TOTP and passwords refused) and the push
+    `auth.approval.pending`; refused on device sessions.
+  * Step-up on device sessions: grants made by the approval key (keys,
+    device.trust) or a console approval (any family) satisfy
+    `auth::stepup::require`; the refusal's `methods` lists `device_approval` /
+    `console_approval`. `email.config.update` is annotated `settings` (it
+    already asked for it through `settings.update`'s save).
+  * New refusal codes `console_approval_required`, `approval_key_unavailable`,
+    `passkey_required`, `approval_failed` (additive under protocol 1). Audit
+    `device.approval.submit`, `device.approval.key.register`,
+    `auth.approval.request|approve|deny`.
+  * Shared payload vector `core/test-assets/device/approval-vectors.json`
+    (`tools/dev/device_approval_vectors.py --check`), for vaulthalla-desktop
+    #47/#48; protocol doc `docs/reference/device-approvals.md`.
+  * Key-backup grants (#362, MFA design note 6.4, D1, D4): migration 130
+    `key_backup_grants` (one live per device; origin approved|migrated;
+    approved_via; suspended_at; revoked_at/revoked_reason),
+    `key_backup_grant_vaults` and the D1 snapshot `key_backup_grant_migration`;
+    migration 129's interim `devices.key_backup_revoked_at/_reason` are carried
+    into the snapshot and dropped (`Device` JSON loses
+    `key_backup_revoked_at`).
+  * D1: at the first start after migration 130 every live device whose user
+    holds encryption-key Export (or is a super admin) gets an origin `migrated`
+    grant over exactly the vaults that user may export then
+    (`keys.backup.grant.migrate` each); a device whose authority #360 had
+    revoked gets it recorded revoked; nothing for anyone else.
+  * `vault.keys.export` (and `exportAll` under a device scope) needs no step-up
+    only inside the device's live, unsuspended grant; otherwise the `keys`
+    step-up bound to `vault.keys.export:<id>|all`. The interim
+    `auth::stepup::keyBackupGrantCovers` is gone. Newly paired devices need
+    `device.backup.grant.create` once.
+  * New commands `device.backup.grant.list|create|extend|confirm|revoke`
+    (console and device sessions); create/extend/confirm annotated
+    `device.trust` (targets `device.backup.grant.create:<row>:<ids>`,
+    `.extend:<grant>:<ids>`, `.confirm:<grant>`), revoke none. New model
+    `KeyBackupGrant`; refusal `recovery_cooldown` on create.
+  * Cap of 60 vault exports per grant per hour (in memory): then
+    `keys.backup.grant.suspend` and an account notice
+    (`keys.backup_grant_suspended`); confirm lifts it.
+  * Automatic revocation: with the device (`Devices::revoke|revokeAll`), the
+    identities publication hook (deactivated, deleted, lost Export),
+    recovery-code sign-in and MFA reset
+    (`auth::mfa::recovery::revokeKeyBackupGrants`), devices idle 90 days
+    (handshake, DB sweep, startup). Audit `keys.backup.grant.revoke {reason}`
+    and `keys.backup.export {grant_id, device, versions}`.
+  * D4: during the recovery cooldown only the device's approval key registered
+    before the recovery may approve re-creating the grant the recovery revoked,
+    for a subset of its vaults (`auth::approval` lets exactly that device.trust
+    target through the cooldown).
+  * Console: Devices › My devices "Key backup" column (confirm, turn off).
+  * Encryption claims per design/encryption/05 §6 (#364): `path_v0` wording
+    ("File contents are encrypted before upload. File and folder names are
+    visible to your storage provider.") in docs/vaults/encryption.md, README,
+    docs index and stack.toml, and the console's upstream-encryption hints
+    (`features/vaults/encryptionCopy.ts`: new vault, vault settings, S3 gateway
+    remote bucket); the vault list no longer says "encrypted storage".
+  * New contract `tools/contracts/encryption_claims.py` (+
+    `test_encryption_claims_contract.py`): fails on disallowed claims in docs/,
+    README.md and web/src ("zero-knowledge" or "end-to-end encrypted" outside
+    sealed vaults, provider/operator-blind, "military-grade", "HIPAA
+    compliant", bucket-only recovery, Vaulthalla Cloud Assisted/Custodial
+    Recovery as available, custody tied to an account or payment) unless the
+    claim carries an approved qualifier. Runs in CI through
+    `tools/dev/verify.sh packaging`.
+  * Provider-blind storage schema (#366, WS1-a; design/encryption/01 §4.1,
+    §4.6): migration 122 adds `vault.uid` and `files.object_uid` (UUID columns
+    of 16 raw libsodium bytes, unique, immutable once set by trigger),
+    `s3.storage_layout` (`transparent` / `path_v0` / `opaque_v1`) with
+    `s3_storage_layout_check` tying it to `encrypt_upstream`, and makes
+    `s3.encrypt_upstream` NOT NULL (NULL rows, always read as true, become
+    TRUE). Existing rows get `path_v0` or `transparent`; a deployer data step
+    (`SqlDeployer` `kMigrationDataSteps`) assigns uids to existing vaults and
+    files in the deploy transaction, and migration 123 makes them NOT NULL.
+  * `Vault::upsertVault` draws a vault's uid and resolves its layout from
+    `encrypt_upstream` (a request never sets it); `opaque_v1` is refused
+    outside test mode until the restore drill (#371), and turning encryption
+    off on an `opaque_v1` vault is refused. `File::upsertFile` keeps a
+    rewritten file's uid and draws one for a new row; copies get a new one.
+    Data plane unchanged (#369).
+  * `vh vault info` prints the vault uid (Crockford base32) and an S3 vault's
+    storage layout; the ws `Vault` model adds the optional, read-only
+    `storage_layout`. New `crypto::id::ObjectUid` (CSPRNG uid, UUID and strict
+    base32 forms, checked against `vectors.json` `object_ids`).
+  * Removed the unused `upsert_file_by_entry_id` and `insert_s3_vault` prepared
+    statements.
+  * Tests: `ObjectUid.*`, `StorageLayout.*`, `ObjectUidDbTest.*`,
+    `SqlDeployerHistoryDb.StorageLayoutMigration*`,
+    `SqlDeployerHistoryDb.LayoutCheckConstraint*`.
+  * VHF1 at rest for new writes (#367, WS2-b; design/encryption/02 §3.7, §3.8,
+    §4): every new content generation is VHF1 (`EncryptionManager`
+    encrypt/encryptToFile/reseal/rotation, FUSE seals, `createFile`,
+    hydrate-and-seal of plaintext objects, provider restores, key salvage, the
+    resumable sealing cursor). The generation id (`files.encryption_iv`,
+    `recovery_blob.encryption_iv`, upload rows, `x-amz-meta-vh-iv`, the remote
+    index) is the header salt; its length tells the formats apart
+    (`vault::content::formatOf`: 12-byte IV = legacy GCM, 32-byte salt = VHF1).
+    Legacy GCM stays readable everywhere and is not rewritten.
+  * Reads: `storage::Vhf1FileReader` (per-chunk authentication, catalog size as
+    the authenticated object size, sticky failures) behind
+    `Engine::openPlaintextReader`; `RemoteRangedReader` authenticates VHF1
+    windows (header GET at open); hydrate verifies VHF1 with a full chunk walk.
+    No VHF1 path calls `gcmCtrDecryptAt`
+    (`crypto::util::gcmCtrDecryptAtCallsForTesting`,
+    `Vhf1AtRestTest.IntegrityContract*`).
+  * Resumable uploads: `vault::content::PrefixSealer` seals whole chunks as the
+    prefix grows, resumes by authenticating the recorded prefix, and continues
+    under a fresh salt (`<ord>.sealed.resalt`, `Resumable::setSealing`) when
+    bytes past the record or divergent stored bytes would otherwise reseal an
+    index under one salt. Uploads created before this release keep the legacy
+    cursor.
+  * Size math is format-aware everywhere it was `plaintext + 16`
+    (repairAtRest's size correction, hydrate/ranged expectations, provider
+    version sizes and own-write detection, rotation's re-seal check, conflict
+    preview caps, restore and snapshot estimates). `crypto::util::b64_decode`
+    decodes any length (it was capped at 12 bytes).
+  * Migration 126: generated `files.content_format` and
+    `recovery_blob.content_format` (`plain`/`gcm0`/`vhf1`) with partial indexes
+    on legacy rows, for the conversion (#372) and the retirement gate (#376).
+  * `crypto::vhf1::Expectation::objectUid` is optional (the generation then
+    binds the object), `IntegrityRegistry::peek`.
+  * Tests: `Vhf1AtRestTest.*` (writes, streaming, local range reader,
+    IntegrityContract, sidecars), `Vhf1ResumableTest.*`, `Vhf1UploadTest.*`
+    (fake S3: 0-byte/small/multipart one object each, part failure aborts, lost
+    Complete response, identical retries, versioned),
+    `CloudRemoteReadTest.Vhf1*`.
+  * Encrypted metadata manifest v2 for `opaque_v1` vaults (#368, WS3-a;
+    design/encryption/03 §3-§4): a copy-on-write root (VHF1 kind 3,
+    epoch-chained, pinning segments by SHA-256 and size) and uid-partitioned
+    segments (VHF1 kind 2) carrying the tree, trash, tombstones, provider
+    versions, prior names, snapshot records and the key history with
+    attestations; segments are written with `If-None-Match: *`, the root with
+    `If-Match`, a 412 is merged, never overwritten; garbage collection keeps
+    the last three roots' segments. Readers apply the rollback/fork/gap chain
+    rules with provider-version and older-root fallbacks and a blind
+    header-only rebuild floor. `opaque_v1` stays test mode only (#371);
+    `path_v0` and `transparent` vaults keep `index-v1.json` unchanged.
+  * Migration 125: `remote_manifest_state` gains `epoch`, `root_sha256`, the
+    refused root (`refused_reason`, `refused_epoch`, `refused_root_sha256`,
+    `refused_at`) and `gc_at`; new `remote_manifest_root` (sids of the last
+    three roots); `directories.uid` and `symlinks.uid` (libsodium uids assigned
+    by the manifest collector, immutable); `files_trashed.object_uid` (set when
+    a file is trashed). Additive and idempotent.
+  * A refused manifest root raises one `manifest_rollback` / `manifest_fork`
+    security notification per root and stalls the vault's sync pass until the
+    bucket's root is acceptable again.
+  * `vectors.json` gains `root_epoch_3` and the chain cases `gap_1_to_3` and
+    `rollback_3_to_2` (72 vectors; existing ones byte-identical). Tests:
+    `ManifestVectors`, `ManifestDocument`, `ManifestPartition`,
+    `ManifestPublish*`, `ManifestChain*`, `ManifestContent*`,
+    `ManifestReplay*`, `ManifestDbTest.*`,
+    `SqlDeployerHistoryDb.ManifestV2MigrationIsAdditiveAndIdempotent`.
+  * `opaque_v1` data plane (#369, WS1-b; design/encryption/01 §4, §5, §7):
+    content objects are `o/<file uid>` (one object per file; provider versions
+    are content versions) beside the `.vaulthalla/` manifest objects; key
+    construction and parsing live in `storage/ObjectKeys.hpp`. Every request of
+    an `opaque_v1` vault is held to spec 01 §4.3 in one place,
+    `s3::Controller::enforceRequestPolicy` (set by `CloudEngine` for the
+    vault's layout), before it is sent or metered: keys only `o/<uid>` and
+    `.vaulthalla/{layout.json,root,seg/<sid>,key/<kid>}`, listings only with
+    the prefixes "", `o/`, `.vaulthalla/…` or one allowlisted key, no
+    `x-amz-meta-*`, `Content-Type: application/octet-stream` only (multipart
+    initiates send it too), no content headers or tags, no metadata rewrites,
+    CopyObject onto its own key only (provider-version restore). Checksums stay
+    the SigV4 payload hash of the bytes on the wire (ciphertext). Refusals
+    throw `s3::OpaqueRequestRefused`.
+  * Sync is keyed by file uid under `opaque_v1`: both sides of a pass are keyed
+    `/o/<uid>`, a remote row is bound to the file with that uid (so a rename or
+    move is no difference and sends no object request; the encrypted manifest
+    takes it at the next publish), the planner treats a row naming the file's
+    generation as in sync, and remote objects no file names are left alone
+    (trashed files' objects wait for the purge; orphans are counted and logged,
+    never downloaded or deleted). A full listing has no prefix and sorts
+    content, metadata and foreign keys; foreign objects are ignored and
+    reported (`foreign_objects = ignore`, the default) or imported once as
+    `/Imported/<key>` (`import`, `CloudEngine::importForeignObject`, the only
+    request that names a foreign key, inside `s3::ScopedForeignObjectRead`).
+    Events: foreign keys are never HEADed or indexed; an `o/<uid>` object no
+    file of the vault has is an orphan.
+  * The remote index, provider versions (`upstream_object_version`,
+    `file_versions.upstream_key`), write intents, the usage ledger and the
+    backlog replay use `o/<uid>` keys. Uploads record the PUT's ETag and
+    version id on the index row (and the upload baseline), which the manifest
+    collector turns into the entry's object reference (sealed size, ETag,
+    version id) and generation (`format: 1`, hex salt). Trash purges remove the
+    index row by object key.
+  * Reads of `opaque_v1` objects are bound to the vault and the file's uid,
+    mandatory (sync downloads, hydrate, ranged reads, conflict previews,
+    provider restores, key salvage, local VHF1 reads): a row without a recorded
+    generation learns it from the authenticated header. Hydrate is one GET (no
+    metadata HEAD); `CloudEngine::requireOpaqueHeader` refuses to upload bytes
+    whose header doesn't name the file. Copies re-seal under the copy's own uid
+    and a new generation. Provider restores of `opaque_v1` versions take the
+    generation from Vaulthalla's own write (or the header) and re-seal a
+    transfer into the destination's uid; directory points and point-in-time
+    plans place objects by the paths the database gives their uids.
+  * Manifest v2: a pass that changed nothing costs one HEAD of the root
+    (`ObjectStore::headEtag`, `Service::verifyRemote`) and publishes nothing
+    (`Service::publishIfChanged`); explicit publishes are unchanged.
+  * Multipart part size `max(5 MiB, ceil(size / 10,000))` rounded up to a whole
+    MiB for every layout (`object_keys::partSizeFor`): objects up to 48.8 GiB
+    keep 5 MiB parts, larger ones stay within 10,000 parts.
+  * `opaque_v1` creation stays refused outside test mode (#371 lifts it);
+    `path_v0` and `transparent` vaults behave as before.
+  * Tests: `OpaqueObjectKeys.*`, `OpaqueRequestPolicy.*`,
+    `OpaqueMultipart.ASixtyGiBObjectUploadsInAtMost10000Parts` (a sparse 60 GiB
+    object), `OpaqueLayoutTest.*` (`OpaqueRequestAudit`, `OpaqueObjectCount`,
+    `OpaqueRenameCostsNothing`, `OpaqueRequestCountsMatchSpec01Section5`,
+    `OpaqueCopyReseals`, `OpaqueReadsRequireTheFilesObjectUid`,
+    `OpaqueForeignObjectsAndOrphans`,
+    `OpaqueManifestNamesTheObjectsItsFilesAreStoredIn`,
+    `OpaqueCreationIsRefusedOutsideTestMode`) and
+    `LiveR2.OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says`. The versioned
+    fake bucket records every request (`VersionedBucket::requests()`) and runs
+    the request policy like the network paths; the audit enrolls a recovery
+    recipient, so its KEV1 envelopes (`.vaulthalla/key/<kid>`, #370) go through
+    the same rules, whose controller `vault::envelopes` now sets to the vault's
+    layout too.
+  * Recovery recipients and KEV1 key envelopes (#370, WS3-b;
+    design/encryption/03 §5): customer-held X25519 recipients per S3 vault;
+    every held and future key version is wrapped (KEV1 suite 1, purpose 1,
+    recipient class 0) to every usable grant and PUT to the vault's bucket as
+    `.vaulthalla/key/<kid>` (`If-None-Match: *`). Rotations, the salvage key
+    and a vault's first key write their envelopes before the version is
+    committed (a failed PUT fails the rotation); enrollment wraps every held
+    version; each sync pass writes what is missing. The manifest v2 root lists
+    the grants (`recovery_policy`, revoked ones with `revoked_at`) and
+    `keys[].envelopes`. The KEV1 reader rejects reserved purposes and recipient
+    classes, which a restore skips.
+  * `vh vault keys recipient list|add|revoke` and ws
+    `vault.keys.recipients.list|add|revoke` (add and revoke: CLI or a paired
+    device only, `recipient_requires_device` elsewhere, agents denied and
+    excluded from MCP; keys step-up bound to the vault, #359; encryption-key
+    Export permission). Audit events `vault.recovery.recipient.add|revoke`.
+  * `vh vault keys import --recovery-kit <file|->` (read client-side): unwraps
+    the vault's envelopes with the kit's seed and restores only versions the
+    vault's records reference whose recorded (or manifest-root) attestation by
+    this node verifies; planted keys that don't match the recorded key check
+    are ignored; recover mode only. Audit event
+    `vault.keys.import.recovery_kit`.
+  * New offline tool `vh-recovery` (`/usr/bin/vh-recovery`):
+    `kit create|public-key|add-vault|show`. Kit format `vh.recovery-kit` v1.
+  * D2 (spec 03 §5.5): `vault.keys.status` gains `recovery`
+    (`not_required|recipient|export|recovery_material_missing`, uncovered
+    versions, `rotation_needed`), `vault_uid`, `node_id`,
+    `attestation_public_keys` and `checkpoint`; health gains
+    `vaults_recovery_material_missing` (degraded). Exports' attestations carry
+    `public_key`; an import checks it against this node's key of that id.
+  * Migration 127: `vault_recovery_grant` (class constrained to `customer`,
+    suite 1) and `vault_key_envelope`. Additive and idempotent.
+  * Tests: `Kev1Vectors`, `Kev1ReservedFields`, `RecoverySeedVectors`,
+    `RecoveryKit`, `RecoveryRecipient.*`, `RecoveryRequirement.*`,
+    `RecoveryNoSilentCustody.*`, `KeysImportFromKit.*`,
+    `VaultKeyExportProvenance.*`, `recovery_tool`.
+  * `vh vault recover` and ws `vault.recover` (#371, WS3-c;
+    design/encryption/03 §6.4): rebuild an `opaque_v1` vault on any instance
+    from its bucket plus a recovery kit and/or a key export. D1 trust anchor: a
+    key version is canonical only when its original node's attestation verifies
+    against an attestation key pinned in the customer's material (never the
+    restoring node's own); otherwise `salvage_required`, and `--salvage` (typed
+    confirmation `vault_recover_salvage`) re-encrypts under a fresh key above
+    every version the bucket names without storing the supplied keys.
+    `--dry-run` writes nothing. Restored vaults start in the cache strategy:
+    only manifest objects, envelopes and 120-byte headers are read until a file
+    is. Paired devices need the keys step-up; browser sessions get
+    `recover_requires_device`; excluded from MCP. Audit event `vault.recover`.
+  * Migration 131 `vault_key_origin`: where a recovered key version was minted
+    and the original attestation; reported by `vault.keys.status`
+    (`needed_versions[].origin`) and carried in the manifest root
+    (`keys[].origin`). Root grants carry their public key
+    (`recovery_policy.grants[].public_key`), so a restore re-enrolls them.
+  * New encrypting S3 vaults are created `opaque_v1` (the internal staging is
+    lifted: the restore drill passes). Existing `path_v0` vaults are unchanged
+    until the layout migration (WS1-c).
+  * Key exports carry `node_id` and `vault_uid`. Key rotation and salvage
+    record the object they PUT in the remote index, so the `opaque_v1` manifest
+    names the object the bucket holds after a rotation.
+  * Harness: `vhh drill recover` (spec 03 §7: three private instances with
+    their own databases and swtpm, a fake S3 with versioning and a request log,
+    negative drills) and `tools/harness/drill_recover_r2.sh` (live R2, fixed
+    test bucket `vh-test-recover-drill`, deleted afterwards).
+  * Local format conversion to VHF1 (#372, WS2-c; design/encryption/02 §6.1,
+    §6.2): `vault::conversion` (`vault/FormatConversion.hpp`) re-seals legacy
+    (gcm0) live backing files and `.vh-recovery` blobs as VHF1 under the same
+    key version, verified per item (legacy tag over the whole input, plaintext
+    BLAKE2b while streaming, full VHF1 chunk walk bound to vault/salt/key
+    version/object, matching digest and recorded size) before anything is
+    replaced. Live files use the rotation sidecar protocol under the content
+    lock (sidecar → one transaction: files CAS + the shared blob's row → rename
+    → unlink the old blob); a blob of a live file's generation is linked to the
+    converted sidecar and converts once. Other blobs: new store name → CAS of
+    the `recovery_blob` row → unlink. Crash recovery is the existing startup
+    sidecar recovery and store sweep. `content_hash` columns are kept, as
+    rotation keeps them.
+  * `vault::FormatConversionService` (runtime service, after
+    VaultRetentionService): passes every
+    `vaults.format_conversion.pass_interval` over vaults with legacy rows,
+    paced by `max_mib_per_second` and `max_cpu_percent` (pauses between items),
+    blocked while the vault rotates its key or a salvage runs. Live files of
+    encrypt-upstream cloud vaults are left to the layout migration (spec 01
+    §6); rows of plaintext-upstream vaults without local bytes get their stale
+    legacy id cleared, as rotation does.
+  * `vh vault format status <vault|all> [--json]` (`ops::vault_format`,
+    encryption-key View permission): remaining live files and blobs (items,
+    bytes), state, last pass. `db::query::vault::FormatConversion` uses
+    migration 126's `content_format` columns.
+  * Tests: `FormatMigrationTest.*` (DB-free: digests, crash at every step +
+    restart, hard links once, no plaintext on disk, refusals, rotation/salvage,
+    pacing), `FormatMigrationDbTest.*` (db-only: snapshots, local versions and
+    retired-key generations restore after conversion; status; blocked during
+    rotation).
+  * Bucket layout migration `path_v0` → `opaque_v1` (#373, WS1-c;
+    design/encryption/01 §6 as simplified on the issue, 2026-11-06: no
+    soak/rollback, no `encrypt_upstream` toggling): `vault::layout`
+    (`vault/LayoutMigration.hpp`), `vault::LayoutMigrationService` (runtime
+    service after FormatConversionService),
+    `db::query::vault::LayoutMigration`, migration 133 `vault_layout_migration`
+    + `vault_layout_migration_item`. Operator-started only:
+    `vh vault migrate-layout <vault> [--status|--cleanup [--confirm <name>]] [--accept-unpriced]`,
+    ws `vault.layout.status` / `.migrate` (keys step-up) / `.cleanup`
+    (data.destroy step-up with confirm); encryption-key View / Rotate
+    permission. Audit events `vault.layout.migrate`, `vault.layout.cutover`,
+    `vault.layout.failed`, `vault.layout.cleanup`, `vault.layout.cleanup.run`.
+  * The run holds the vault's sync pass lease from the inventory to the
+    cutover: complete ListObjectVersions (R2: ListObjectsV2) inventory, one
+    HEAD per legacy version, `LayoutMigrationCost` estimate + price preflight
+    (`layout_migration`), then per object oldest first: legacy versions (GET
+    `?versionId` If-Match), pending backlog generations and the current content
+    re-sealed as VHF1 bound to the file uid under the same key version (gcm0
+    local copies through the #372 live-file protocol first), PUT `o/<uid>`
+    without metadata, delete markers carried as DELETE of `o/<uid>`; proof of
+    storage by MD5/multipart-MD5 ETag or read-back; random sample read-back
+    (max(1 %, 100)); a second complete listing; one cutover transaction
+    (layout, index-only rows' generations by compare-and-set, no live gcm0 row
+    or pending gcm0 backlog blob allowed, remote index and baselines on
+    `o/<uid>`, backlog and sent local versions remapped, re-sealed versions
+    keep their original `last_modified`); then manifest v2 publish and a
+    bucket-only load check. A bucket changed since the last sync refuses
+    (`diverged`). Failures before the cutover leave `path_v0` (state `failed`,
+    resumable).
+  * Cleanup after `cleanup_after` (default 7 days) with the manifest verified,
+    never on a protected bucket: dry run, then explicit version-id deletes
+    (`s3::Controller::deleteObjectVersion`; unversioned: DELETE after a HEAD
+    matched the inventoried ETag) of exactly the inventoried,
+    verified/superseded legacy versions; Object Lock retention and legal holds
+    read by `HEAD ?versionId`
+    (`ObjectVersionHead::{object_lock_mode,retain_until,legal_hold}`) and
+    respected; refused deletes (`s3::DeleteRefused`) stay `cleanup_blocked`
+    with their reason, retried daily; `complete` only after a complete listing
+    shows no legacy key, version or marker.
+  * `s3::ScopedLegacyLayoutCleanup` lets the cleanup HEAD/DELETE inventoried
+    legacy keys of an opaque_v1 controller (never PUT/COPY).
+    `ObjectKeyPage::objects` (ETag, size, last modified). path_v0 listings and
+    the event applier ignore `o/<uid>` objects (the migration's, before the
+    cutover). `ObjectIdentity::pathOfUid` falls back to the migrated legacy key
+    for history whose file is gone. `encrypt_upstream` can't change while a
+    migration copies.
+  * Health `legacy_content` {remaining, path_v0_vaults,
+    layout_migrations_unfinished, legacy_files, legacy_blobs,
+    legacy_upload_files} (#376 readiness; informational, never degrades).
+    Removed with no callers left: `crypto/util/reseal.{hpp,cpp}` (the gcm0→gcm0
+    re-sealer), `crypto/util/verify.{hpp,cpp}`
+    (`aes256_gcm_file_authenticates`), `crypto::util::read_file`. Legacy
+    content is only read now.
+  * Config `vaults.layout_migration.cleanup_wait_days` (1..365, default 7).
+    Test-instance env `VH_TEST_NEW_ENCRYPTING_LAYOUT=path_v0` (test mode only).
+    Harness `vhh drill migrate`; unit suites `LayoutMigration*`, live
+    `LiveR2.LayoutMigrationPrimitives`.
+  * The host master slot ('master') opens with KeyProvider::initGuarded (#393):
+    new dependents::internalSecrets() counts the internal_secrets rows it wraps
+    (all but jwt_secret and the plaintext pre-#322 pepper); a missing sealed
+    blob with such rows throws MasterSecretLost (the daemon doesn't start) with
+    the restore and give-up steps, and nothing is sealed in its place.
+  * Test tooling: the Tier B harness and the lab ws clients (`vhws.py`,
+    `parity_smoke.py`, `ws_churn.py`, the pentest fixture) sign admins in with
+    a TOTP authenticator and answer step-up refusals with the password and a
+    code, the same flow the console runs. Nothing in the daemon changed, and no
+    test bypass was added (#395).
+  * The daemon drops its cached ws sessions before main returns
+    (`runtime::Deps::releaseSessions()`), and an io_context kept for sessions
+    that outlived their listener is never freed: a session destroyed during
+    static destruction could crash the process at exit (SIGSEGV in the
+    websocket stream on Linux, "mutex lock failed" abort on macOS) (#397,
+    #385).
+  * A share session's identity (principal, session id, token) is read and
+    replaced under a lock; concurrent HTTP and resumable-upload threads could
+    read a torn token ("Malformed share token prefix") (#389).
+  * Device `/transfer/source` releases its calibration slot as the last byte is
+    produced, so a client never sees its finished request still counted against
+    the two-at-once limit (#389).
+  * The upstream event applier no longer records a HEAD cancelled by shutdown
+    as a failure: the row stays pending with no attempt burned, no backoff and
+    no database write while stopping (#412).
+  * Unit tests: a suite that leaves sessions in the process-wide session
+    manager fails at its own end; device suites shut down their resumable
+    upload workers and io_contexts; the fake event queue long-polls like SQS
+    (#385, #389, #397, #412).
+  * Build: the preview helpers (`vaulthalla-preview-cad`,
+    `vaulthalla-preview-media`, `vh_helper_common`) are never sanitized, even
+    in a `-Db_sanitize` build: a sanitized helper can't start under its own
+    `RLIMIT_AS` cap. `bin/tests/run_unit.sh` builds the helpers the suites
+    spawn (`core/vh_unit_test_helpers`), and `itest_ensure_build` re-configures
+    when a meson.build changes.
+  * `vh secret set mfa-seal|mfa-pepper <file>` (#398) imports the export of the
+    MFA keys on a new host, so a restored database keeps TOTP and recovery
+    codes working with no re-enrollment. Super admins only, confirmed, audited
+    as `secrets.mfa_key.import` (`ops::mfa_keys`); the key is checked before it
+    is adopted (a stored TOTP seed must open, or the hash of one of the actor's
+    own recovery codes, `--code`, must recompute), a mismatched key or a host
+    that already has a working key is refused with nothing changed, and the key
+    is never printed.
+  * Test tooling: the Tier B harness's console lane replaces an existing file
+    with `PUT /upload/content` and `If-Match`, as a client should, instead of
+    sending it to the create-only upload session; a 412 is a concurrent-write
+    conflict. Nothing in the daemon changed (#404).
+  * Test tooling: the macOS install acceptance and storage smoke and the web
+    e2e suite sign admins in with the real second factor (TOTP, first
+    enrollment) and answer step-up refusals; the e2e account's authenticator is
+    enrolled at provisioning (#405). No daemon change.
+  * Test tooling: the web e2e suite matches the console again (#414). The
+    recovery spec expects point-in-time restore for S3 folders only, as the
+    console and daemon do, and covers both sides. The PDF paging spec follows
+    the entry-id preview URLs from #327. The passkey sign-in spec runs as its
+    own Playwright project after the others, so parallel workers no longer use
+    up its per-address passkey rate limit. `provision_e2e_user.sh` no longer
+    reports a local-DB seed it skipped when
+    `VAULTHALLA_E2E_ALLOW_LOCAL_DEV_DB_SEED=1` names no database. No product
+    change.
+  * `/preview/batch` returns `entry=<id>` preview URLs (vault and `share=1`)
+    instead of `path=` URLs (#417); they resolve through the #327 Access rules
+    and the share scope check.
+    `HttpAccessDbTest.PreviewBatchAnswersFromTheIndexAndDecodesOncePerSource`
+    pins that no batch URL carries `path=` or a file name. The console already
+    uses the returned URLs as is, so no web change.
+
+ -- Cooper Larson <cooper@valkyrianlabs.com>  Fri, 06 Nov 2026 22:56:45 +0000
+
 vaulthalla (1.21.1-1) unstable; urgency=high
 
   * macOS meta cask: the `.desktop-opened` marker that makes the cask open
