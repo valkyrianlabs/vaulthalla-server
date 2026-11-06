@@ -1019,6 +1019,13 @@ export interface WebSocketCommandMap {
   'device.approval.request': WsContract['device.approval.request']
   'device.approval.status': WsContract['device.approval.status']
   'device.approval.key.register': WsContract['device.approval.key.register']
+  // Key-backup grants (#362): a device's no-prompt key backup for the vaults it names. create, extend and confirm need a
+  // device.trust step-up (the Step-up dialog); revoke needs none. A console session names the device by device_id.
+  'device.backup.grant.list': WsContract['device.backup.grant.list']
+  'device.backup.grant.create': WsContract['device.backup.grant.create']
+  'device.backup.grant.extend': WsContract['device.backup.grant.extend']
+  'device.backup.grant.confirm': WsContract['device.backup.grant.confirm']
+  'device.backup.grant.revoke': WsContract['device.backup.grant.revoke']
 
   // Vault key backup (Vaulthalla Desktop). Status is key_checks only, never key bytes. Export, its confirmation and
   // import answer only a paired device's session (data.code export_requires_device / import_requires_device anywhere

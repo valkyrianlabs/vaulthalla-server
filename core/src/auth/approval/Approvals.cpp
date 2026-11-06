@@ -1,6 +1,7 @@
 // Device approvals (#361): the approval key's challenges and console-mediated approvals (auth/approval/Approvals.hpp).
 
 #include "auth/approval/Approvals.hpp"
+#include "ops/BackupGrants.hpp"
 
 #include "audit/Trail.hpp"
 #include "auth/mfa/Passkeys.hpp"
@@ -246,8 +247,10 @@ bool hasLiveApprovalKey(const std::shared_ptr<protocols::ws::Session>& session) 
 Challenge challenge(const std::shared_ptr<protocols::ws::Session>& session, const stepup::Family family,
                     const std::string& target) {
     const auto caller = approvalDeviceCaller(session);
-    // #360: during the account's recovery cooldown its families can't be approved at all (D4).
-    stepup::requireNoCooldown(caller.user->id, family);
+    // #360: during the account's recovery cooldown its families can't be approved at all (D4), with one exception
+    // (#362): this device's approval key re-creating the key-backup grant the recovery revoked.
+    if (!(family == stepup::Family::DeviceTrust && ops::backup_grants::recoveryRecreateTarget(caller.row_id, target)))
+        stepup::requireNoCooldown(caller.user->id, family);
     if (!stepup::deviceApprovalMaySatisfy(family))
         throw ops::Refused("console_approval_required",
                            "A device's approval key can approve only keys and device.trust; ask for a console "
@@ -325,8 +328,10 @@ Submitted submit(const std::shared_ptr<protocols::ws::Session>& session, const s
         throw ops::Invalid("The approval signature does not verify under this device's approval key");
     }
 
-    // #360: a cooldown that started after the challenge holds the grant back too.
-    stepup::requireNoCooldown(caller.user->id, taken->family);
+    // #360: a cooldown that started after the challenge holds the grant back too (the same #362 exception).
+    if (!(taken->family == stepup::Family::DeviceTrust &&
+          ops::backup_grants::recoveryRecreateTarget(caller.row_id, taken->target)))
+        stepup::requireNoCooldown(caller.user->id, taken->family);
     const auto expires = ApprovalClock::now() + stepup::ttl();
     std::optional<std::string> target;
     if (stepup::targetBound(taken->family)) target = taken->target;

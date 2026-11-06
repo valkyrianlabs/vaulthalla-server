@@ -335,7 +335,9 @@ std::vector<WsCommandUsage> authCommands() {
                              objectArray("devices", "",
                                          {uinteger("id"), str("name"), str("platform"),
                                           integer("last_seen_at").nullable().desc("Unix seconds."),
-                                          boolean("key_backup_revoked")})
+                                          boolean("key_backup_revoked")
+                                              .desc("The device holds no live key-backup grant now (#362): its key "
+                                                    "exports need a person's approval until it re-creates one.")})
                                  .opt()
                                  .desc("The account's paired devices: none was revoked; offer device.revoke for each.")})
                          .opt()

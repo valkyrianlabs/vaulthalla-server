@@ -521,7 +521,8 @@ no scope = the daemon's own callers and tests (exempt, like `ops::Actor`'s inter
 (`methods: []`). Device refuses (`methods: [device_approval?, console_approval]`) unless a grant on that device session
 covers it: method `device_approval` (its approval key, keys/device.trust only, D6) or `console_approval` (a person's
 passkey in the console, any family); any other grant method never counts on a device (#361, below). A device's
-`vault.keys.export` is inside its key-backup grant (`keyBackupGrantCovers`: every paired device whose `devices.key_backup_revoked_at` is unset, until #362, D1). Web: a grant on
+`vault.keys.export` needs no step-up for a vault its live, unsuspended key-backup grant names (`ops::backup_grants::covering`,
+#362, below); anything else is the keys step-up. Web: a grant on
 `ws::Session::stepUp()` bound to user + refresh jti + family (+ target), `auth.mfa.step_up_ttl_seconds` (default 300,
 60..900); or, family-wide only, an aal 2 sign-in (not `rec`) within the TTL. Refusal `ops::StepUpRequired` → ERROR
 `step_up_required {family, target, methods, max_age_seconds}`. `auth.stepup.begin {family, target?}` → `{stepup_id,
@@ -560,7 +561,34 @@ contract), `test_device_approvals_db.cpp` (8.4 pairing, console/CLI pairing, eve
 approvals, rate limits, key registration, and the table-driven "a device never prompts for a routine command" probe
 through the daemon's router; `Session::setSendSinkForTesting` captures the answers).
 
-**MFA policy, lockout, reset and auditable recovery (#360, migration 130; MFA design note §7.1, §7.3-§7.5, D2, D4).**
+
+**Key-backup grants (#362; design 6.4, D1, D4; `docs/reference/device-approvals.md` "Key-backup grants").**
+`ops::backup_grants` (`ops/BackupGrants.{hpp,cpp}`), `db::query::device::BackupGrants`, ws `handler::Devices::backupGrant*`.
+Migration 130: `key_backup_grants` (one live per device: `uq_key_backup_grant_live`; origin approved|migrated;
+`approved_via` webauthn|password_totp|device_approval|console_approval; `suspended_at`; `revoked_at` + `revoked_reason`
+manual|device_revoked|user_inactive|export_permission|recovery_code|admin_reset|cli_reset|device_idle),
+`key_backup_grant_vaults` (no FK to vault), `key_backup_grant_migration` (D1 snapshot of live devices, taken once when
+the table is created, carrying 129's interim revocation; then `devices.key_backup_revoked_*` are dropped).
+`migratePending()` runs in `main.cpp initDeps` after the identity preload, before any listener: per snapshot row, a
+user that `mayHold` (authorizing and super admin or encryption-key Export) gets an origin `migrated` grant over
+`ops::vault_keys::exportableVaults` (live vaults + retained deleted ones it may see), revoked when the snapshot says so;
+`keys.backup.grant.migrate` each. Export: `vault_keys::exportVault|exportAll` call `covering(vaultIds)` (Device scope,
+the device's live, active grant naming every vault, triggers re-checked, 60 exports per grant per sliding hour in
+memory; over it: `suspend` + `keys.backup.grant.suspend` + `notifications::account::send`) and `recordUse`
+(`last_used_at`, `keys.backup.export {grant_id, device, versions}`); otherwise `stepup::require(keys,
+vault.keys.export:<id>|all)`. Commands `device.backup.grant.list|create|extend|confirm|revoke` (human and device
+sessions; a device sees and manages its own grant, a console names `device_id`); create/extend/confirm require
+device.trust targets `device.backup.grant.create:<row>:<ids>`, `.extend:<grant>:<ids>`, `.confirm:<grant>`
+(ids ascending, `sha256:` digest past 256 chars); confirm lifts a suspension and makes a migrated grant approved.
+Triggers: `Devices::revoke|revokeAll` revoke in their transaction (audited by `ops::devices::revoke` / the identity
+rotation); `identities::Manager::setPublishedHook` → `reconcile(userIds)` (inactive, deleted, lost Export); `ops::users::remove`
+revokes before deleting; `auth::mfa::recovery::revokeKeyBackupGrants` (recovery code, admin and CLI reset);
+`device::authorize` calls `revokeIfIdle` (90 days since `last_seen_at`, or pairing) before touching the row; the DB
+sweep and startup `reconcile()`. D4: during the cooldown, create runs only on the device itself for vaults ⊆ its last
+grant revoked `recovery_code`, approved by its approval key registered before that revocation (`device_approval`
+grant only; `recoveryRecreateTarget` lets `auth::approval` challenge/submit that one target through the cooldown).
+Console: Devices › My devices "Key backup" column (`KeyBackupCell`: confirm, turn off).
+**MFA policy, lockout, reset and auditable recovery (#360, migration 129; MFA design note §7.1, §7.3-§7.5, D2, D4).**
 Config `auth.mfa.{policy, admin_webauthn_only, admin_device_bound_only, recovery_cooldown_hours (1..168, 24),
 step_up_ttl_seconds}` (`config::validateAuth`: the admin flags need `auth.webauthn.rp_id`). `policy::level()` reads it
 (`setLevel` writes the running config, tests); `policy::factorRule(user)` holds privileged accounts to passkeys (no
@@ -574,7 +602,7 @@ to the security recipients. **Lockout:** `signin::AccountBackoff` (DB-free arith
 streak delays the account 1 min, doubling to 15 (never a lock); a streak ends 15 quiet minutes after its last
 failure or delay; audit `auth.mfa.lockout`; the 10th notifies user + security. **Recovery** (`auth/mfa/Recovery.hpp`):
 `afterRecoveryCodeSignIn` (cooldown from config, `ops::sessions::revoke(all_others)`, `revokeKeyBackupGrants` →
-`devices.key_backup_revoked_at/_reason` + `keys.backup.grant.revoke` per device, the live devices listed in the
+`ops::backup_grants::revokeForUser` (`keys.backup.grant.revoke` per grant, #362), the live devices listed in the
 answer, never revoked, audit `auth.mfa.recovery.signin`, notice); `reset(target, Resetter{id, name, AdminReset |
 CliReset}, reason)`: disables every passkey/TOTP (`auth.mfa.factor.remove` per factor, kept), supersedes every
 recovery batch, `user_mfa.required = true`, `reset_at/by`, cooldown, `auth::Manager::revokeSessions`, grants revoked,
@@ -583,12 +611,14 @@ device.trust, identity.admin, secrets, settings); `require` checks `requireNoCoo
 grant (device_approval and console_approval included) or fresh sign-in → `ops::RecoveryCooldown` → ERROR `recovery_cooldown {family, cooldown_until}` (audited
 `auth.stepup.required` denied, reason `recovery_cooldown`; Host exempt); `begin`/`finish`, `device.approval.challenge|submit|request` and `auth.approval.approve` refuse it too (approve offers and accepts only passkeys the policy allows, never a recovery-enrolled one for a cooldown family), and factors
 `created_during_recovery` (enrolled by a `rec` session or while the cooldown runs) are never offered or accepted for a
-cooldown family until it ends. **Admin/CLI:** `ops::mfa` (`ops/Mfa.hpp`) `status | require | reset`, Channel Web
+cooldown family until it ends; the one exception (#362, D4) is `ops::backup_grants::recoveryRecreateTarget`: the device's
+approval key, registered before the recovery, may approve `device.backup.grant.create:<device>:…` for the device whose
+latest grant the recovery revoked, and create re-checks the same-vault rule. **Admin/CLI:** `ops::mfa` (`ops/Mfa.hpp`) `status | require | reset`, Channel Web
 (never self; users-manage = `ops::users::requireMfaManager`: reset-password over the account, a super admin only by
 a super admin; reset `account.credentials`, require `identity.admin`) or Cli (`vh user mfa status|reset|require`: the
 bound UID itself (reset/status) or a users-manager; root/UID 0 and unbound actors refused; Host exempt from step-up,
 Agent refused). ws `auth.mfa.admin.status|require|reset`; `auth.mfa.status` gains `policy.totp_allowed`,
-`synced_passkeys_allowed`, factor `allowed`; `Device.key_backup_revoked_at`. Notices: `notifications/AccountSecurity`
+`synced_passkeys_allowed`, factor `allowed`. Notices: `notifications/AccountSecurity`
 (security recipients + the account's email; factor changes to the account only; test sink). Console: Settings ›
 Security › Multi-factor sign-in, Users › user › Sign-in factors (`MfaAdminPanel`, lazy), Account › Security
 recovery notice with paired devices and revoke. Tests: `test_mfa_policy.cpp` (DB-free: backoff, config, weakening,
@@ -840,7 +870,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 - **`vh vault recover`** (#371, spec 03 §6.4): `vault::recover` (plan: envelopes, export, `loadForRestore` with the
   kit's checkpoint or blind, D1 `prove` against the customer's pinned attestation keys, reconciliation, `MeteredStore`
   download budget), `db::query::vault::Recover` (one transaction: vault, tree with inodes, trash, index, provider
-  versions, snapshot records, keys re-sealed and re-attested with `vault_key_origin`, migration 130, grants, envelope
+  versions, snapshot records, keys re-sealed and re-attested with `vault_key_origin`, migration 131, grants, envelope
   rows, chain position), `ops::vault_recover` (permission/channel/step-up, `salvage_required` /
   `vault_recover_salvage`, salvage via `ops::vault_keys::salvageRecoveredVault`, reinstate, publish epoch + 1), CLI
   `vh vault recover` (kit and export read by `vh`, sent as one `client_input` bundle), ws `vault.recover` (paired

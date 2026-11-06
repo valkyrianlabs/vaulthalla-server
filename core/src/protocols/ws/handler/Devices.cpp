@@ -2,6 +2,7 @@
 
 #include "device/Crypto.hpp"
 #include "device/Peer.hpp"
+#include "ops/BackupGrants.hpp"
 #include "ops/Devices.hpp"
 #include "ops/Error.hpp"
 #include "protocols/device/Endpoints.hpp"
@@ -42,6 +43,30 @@ std::vector<uint8_t> requiredBase64(const json& payload, const char* key) {
     const auto decoded = vh::device::crypto::fromBase64(requiredString(payload, key));
     if (!decoded || decoded->empty()) throw ops::Invalid(std::string(key) + " must be standard base64 (with padding)");
     return *decoded;
+}
+
+// The calling device's connection on its own session; null on a console session.
+const vh::device::Peer* selfOf(const std::shared_ptr<Session>& session) {
+    return session && session->isDeviceSession() && session->devicePeer() ? session->devicePeer().get() : nullptr;
+}
+
+uint32_t requiredGrantId(const json& payload) {
+    if (!payload.is_object() || !payload.contains("grant_id") || !payload.at("grant_id").is_number_integer() ||
+        payload.at("grant_id").get<int64_t>() < 1 || payload.at("grant_id").get<int64_t>() > 0x7fffffffLL)
+        throw ops::Invalid("grant_id is required (a positive integer)");
+    return payload.at("grant_id").get<uint32_t>();
+}
+
+std::vector<uint32_t> requiredVaultIds(const json& payload) {
+    if (!payload.is_object() || !payload.contains("vault_ids") || !payload.at("vault_ids").is_array())
+        throw ops::Invalid("vault_ids is required (an array of vault IDs)");
+    std::vector<uint32_t> out;
+    for (const auto& v : payload.at("vault_ids")) {
+        if (!v.is_number_integer() || v.get<int64_t>() < 1 || v.get<int64_t>() > 0x7fffffffLL)
+            throw ops::Invalid("vault_ids must hold positive integer vault IDs");
+        out.push_back(v.get<uint32_t>());
+    }
+    return out;
 }
 
 json windowJson(const vh::device::PairingWindow& w) {
@@ -203,6 +228,38 @@ json Devices::revoke(const json& payload, const std::shared_ptr<Session>& sessio
     // "Unpair this Mac": its own session ends too, once this reply has gone out.
     if (self && self->deviceRowId == device.id) session->closeAfterReply();
     return {{"device", device}};
+}
+
+// ---- key-backup grants
+
+json Devices::backupGrantList(const std::shared_ptr<Session>& session) {
+    json grants = json::array();
+    for (const auto& g : ops::backup_grants::list(actorOf(session), selfOf(session)))
+        grants.push_back(ops::backup_grants::toJson(g));
+    return {{"grants", std::move(grants)}};
+}
+
+json Devices::backupGrantCreate(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto device = payload.is_object() && payload.contains("device_id") && !payload.at("device_id").is_null()
+                            ? std::optional(requiredString(payload, "device_id"))
+                            : std::nullopt;
+    return {{"grant", ops::backup_grants::toJson(ops::backup_grants::create(
+                          actorOf(session), selfOf(session), device, requiredVaultIds(payload)))}};
+}
+
+json Devices::backupGrantExtend(const json& payload, const std::shared_ptr<Session>& session) {
+    return {{"grant", ops::backup_grants::toJson(ops::backup_grants::extend(
+                          actorOf(session), selfOf(session), requiredGrantId(payload), requiredVaultIds(payload)))}};
+}
+
+json Devices::backupGrantConfirm(const json& payload, const std::shared_ptr<Session>& session) {
+    return {{"grant", ops::backup_grants::toJson(
+                          ops::backup_grants::confirm(actorOf(session), selfOf(session), requiredGrantId(payload)))}};
+}
+
+json Devices::backupGrantRevoke(const json& payload, const std::shared_ptr<Session>& session) {
+    return {{"grant", ops::backup_grants::toJson(
+                          ops::backup_grants::revoke(actorOf(session), selfOf(session), requiredGrantId(payload)))}};
 }
 
 json Devices::remoteStatus(const std::shared_ptr<Session>& session) {

@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'a84d7b7ade3f3718827c112169fb30db5ba8bb3b5dc33778dd03270eae570299'
+export const WS_CONTRACT_HASH = 'fca3c5501a21dbdd267531f3aac6d27c35202a88cfa59757f61bb84e42eed1fe'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '341d2a620adbed8657e0fe3ae19ac3aaedf1067bd9fc9b03dda052931a00652f'
+export const WS_MODELS_HASH = 'c8b13d36df1fd170345a1a299de881c9cb59ed806326e26ab04d4929229393fd'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -404,7 +404,6 @@ export interface WsModels {
     last_ip: string | null
     revoked_at: number | null
     revoked: boolean
-    key_backup_revoked_at?: number | null
   }
   /**
    * device_server.advertise.* (Config.cpp to_json(DeviceAdvertiseConfig); docs/reference/transfer-protocol.md
@@ -604,6 +603,25 @@ export interface WsModels {
    * http_preview_server.* (Config.cpp to_json(HttpPreviewConfig)).
    */
   'HttpPreviewServerConfig': { enabled: boolean; host: string; port: number; max_connections: number; max_preview_size_bytes: number }
+  /**
+   * A paired device's key-backup grant (#362, migration 130; MFA design note section 6.4):
+   * ops::backup_grants::toJson, core/src/ops/BackupGrants.cpp.
+   */
+  'KeyBackupGrant': {
+    id: number
+    device_id: string | null
+    device_name: string | null
+    origin: 'approved' | 'migrated'
+    approved_via: 'webauthn' | 'password_totp' | 'device_approval' | 'console_approval' | null
+    vault_ids: number[]
+    created_at: number
+    confirmed_at: number | null
+    last_used_at: number | null
+    suspended_at: number | null
+    revoked_at: number | null
+    revoked_reason: 'manual' | 'device_revoked' | 'user_inactive' | 'export_permission' | 'recovery_code' | 'admin_reset' | 'cli_reset' | 'device_idle' | null
+    active: boolean
+  }
   /**
    * logging.levels.* (Config.cpp to_json(LogLevelsConfig)).
    */
@@ -2493,8 +2511,6 @@ export interface WsModels {
   'VaultKeyExport': {
     vault_id: number
     vault_name: string
-    node_id: string
-    vault_uid: string | null
     key: string
     key_check: string
     attestation?: WsModels['VaultKeyAttestation'] | null
@@ -2585,7 +2601,6 @@ export interface WsModels {
     key_check: string | null
     reason: 'current' | 'rotation' | 'recovery'
     attestation: WsModels['VaultKeyAttestation'] | null
-    origin?: { node_id: string; vault_id: number; key_id: number; anchor: 'kit' | 'export'; recovered_at: number } | null
   }
   /**
    * One file a key salvage could not re-encrypt.
@@ -2641,91 +2656,6 @@ export interface WsModels {
     attestation_public_keys?: WsModels['VaultKeyAttestationKey'][]
     checkpoint?: WsModels['VaultKeyCheckpoint'] | null
     recovery?: WsModels['VaultRecoveryMaterial']
-  }
-  /**
-   * What `vh vault recover` / vault.recover read and did (#371, spec 03 §6): ops::vault_recover::toJson
-   * (core/src/ops/VaultRecover.cpp) over vault::recover::toJson(Plan). Public data only: key checks,
-   * attestation verdicts and counts, never key material.
-   */
-  'VaultRecoverResult': {
-    vault_uid: string
-    origin: { node_id: string | null; vault_id: number | null }
-    manifest_vault_name: string | null
-    blind: boolean
-    epoch: number | null
-    root_sha256: string | null
-    freshness: 'unverified' | 'verified' | 'rollback_accepted'
-    freshness_report: string
-    issues: string[]
-    counts: {
-      files: number
-      folders: number
-      symlinks: number
-      trashed: number
-      tombstones: number
-      provider_versions: number
-      bytes: number
-      snapshots: number
-      snapshot_members: number
-      snapshot_members_restorable: number
-    }
-    key_versions: {
-      version: number
-      verdict: 'verified' | 'no_anchor' | 'empty_anchor' | 'unattested' | 'unverified' | 'wrong_node' | 'wrong_vault' | 'self_attested' | 'key_check_mismatch'
-      detail: string
-      held: boolean
-      key_source?: string
-      current: boolean
-      needed: boolean
-      state: 'canonical' | 'salvage_only' | 'refused' | 'missing'
-      anchor?: { key_id: number; source: 'kit' | 'export' }
-      origin?: { node_id: string; vault_id: number; source: 'root' | 'origin' | 'export' }
-    }[]
-    current_version: number
-    highest_version_seen: number
-    canonical_versions: number[]
-    blocking_versions: number[]
-    salvageable_versions: number[]
-    orphans: string[]
-    missing_objects: string[]
-    rejected_objects: string[]
-    envelopes: { listed: number; unwrapped: number; skipped: number; rejected: number }
-    anchors: { supplied: boolean; keys: number }
-    downloads: {
-      manifest_bytes: number
-      envelope_bytes: number
-      header_bytes: number
-      content_bytes: number
-      other_bytes: number
-      gets: number
-      ranged_gets: number
-      lists: number
-      version_lists: number
-    }
-    mode: 'canonical' | 'salvage'
-    unrecoverable_files: number
-    restored?: {
-      vault_id: number
-      files: number
-      folders: number
-      symlinks: number
-      trashed: number
-      index_rows: number
-      provider_versions: number
-      snapshots: number
-      snapshot_members: number
-      left_out: number
-      notes: string[]
-      fresh_version?: number
-    }
-    dry_run: boolean
-    written: boolean
-    vault_id: number | null
-    vault_name: string
-    key_available: boolean
-    published_epoch: number | null
-    salvage: WsModels['VaultKeySalvageReport'] | null
-    note: string | null
   }
   /**
    * D2 (spec 03 §5.5): whether the vault has recovery material independent of this host.
@@ -3732,6 +3662,54 @@ export interface WsContract {
   'device.approval.submit': {
     payload: { challenge_id: string; signature_b64: string }
     response: { family: 'keys' | 'device.trust'; target: string; expires_at: number }
+  }
+  /**
+   * Confirm a live grant: a migrated one becomes approved, a suspended one exports again. device.trust
+   * approval for target device.backup.grant.confirm:<grant>.
+   */
+  'device.backup.grant.confirm': {
+    payload: { grant_id: number }
+    response: { grant: WsModels['KeyBackupGrant'] }
+  }
+  /**
+   * Turn on key backup for vaults on one of the caller's devices: on its own session the device itself, on a
+   * console session device_id. Needs the export encryption keys permission (or super admin) and a
+   * device.trust approval for target device.backup.grant.create:<device row>:<vault ids> (step_up_required
+   * names it). conflict: the device already has a grant (extend it). During a recovery cooldown only the
+   * device re-creates the grant the recovery revoked, with its approval key registered before the recovery,
+   * for vaults that grant named (recovery_cooldown otherwise).
+   */
+  'device.backup.grant.create': {
+    payload: { vault_ids: number[]; device_id?: string | null }
+    response: { grant: WsModels['KeyBackupGrant'] }
+  }
+  /**
+   * Add vaults to a live grant of the caller's (a new vault, one deliberate approval). device.trust approval
+   * for target device.backup.grant.extend:<grant>:<vault ids>. conflict: it names them all already, or it was
+   * revoked.
+   */
+  'device.backup.grant.extend': {
+    payload: { grant_id: number; vault_ids: number[] }
+    response: { grant: WsModels['KeyBackupGrant'] }
+  }
+  /**
+   * Key-backup grants: on a console session the caller's (every device, live first, revoked ones after); on a
+   * paired device's session that device's only. A grant lets its device export the keys of the vaults it
+   * names with no prompt (Desktop's background 1Password backup). A grant whose revocation trigger holds
+   * (device revoked or idle 90 days, account deactivated or without the Export permission) is revoked before
+   * it is listed.
+   */
+  'device.backup.grant.list': {
+    payload: null
+    response: { grants: WsModels['KeyBackupGrant'][] }
+  }
+  /**
+   * Turn key backup off for a device: revokes the grant (its owner, the device itself, or a super admin).
+   * Needs no approval. Final: a new grant is a new create.
+   */
+  'device.backup.grant.revoke': {
+    payload: { grant_id: number }
+    response: { grant: WsModels['KeyBackupGrant'] }
   }
   /**
    * Where this node's device listener can be reached (docs/reference/transfer-protocol.md §1.1): interface
@@ -6252,8 +6230,6 @@ export interface WsContract {
     response: {
       vault_id: number
       vault_name: string
-      node_id: string
-      vault_uid: string | null
       key: string
       key_check: string
       attestation?: WsModels['VaultKeyAttestation'] | null
@@ -6393,112 +6369,6 @@ export interface WsContract {
     response: { vaults: WsModels['VaultKeyStatus'][] }
   }
   /**
-   * Rebuild a vault on this instance from its bucket and the customer's recovery material (#371, spec 03 §6):
-   * a recovery kit (its seed unwraps the vault's KEV1 envelopes) and/or a key export. A key version is
-   * restored only when its original node's attestation verifies against an attestation key the material pins
-   * (D1); otherwise the answer is salvage_required with the per-version verdicts, and salvage (confirmed with
-   * confirm_name) re-encrypts what the supplied keys decrypt under a fresh key, never storing them. dry_run
-   * reads and reports, writing nothing. The vault starts in the cache strategy: nothing beyond headers, the
-   * manifest and envelopes is downloaded until a file is read. Paired devices only (recover_requires_device
-   * otherwise), with a keys step-up bound to the bucket; the encryption-key Export permission and vault
-   * Create.
-   */
-  'vault.recover': {
-    payload: {
-      api_key_id: number
-      bucket: string
-      kit?: object | null
-      export?: WsModels['VaultKeyImportDocument'] | WsModels['VaultKeyImportDocument'][] | null
-      into?: string | null
-      vault_uid?: string | null
-      owner_id?: number | null
-      accept_rollback?: boolean
-      dry_run?: boolean
-      salvage?: boolean
-      confirm_name?: string | null
-    }
-    response: {
-      vault_uid: string
-      origin: { node_id: string | null; vault_id: number | null }
-      manifest_vault_name: string | null
-      blind: boolean
-      epoch: number | null
-      root_sha256: string | null
-      freshness: 'unverified' | 'verified' | 'rollback_accepted'
-      freshness_report: string
-      issues: string[]
-      counts: {
-        files: number
-        folders: number
-        symlinks: number
-        trashed: number
-        tombstones: number
-        provider_versions: number
-        bytes: number
-        snapshots: number
-        snapshot_members: number
-        snapshot_members_restorable: number
-      }
-      key_versions: {
-        version: number
-        verdict: 'verified' | 'no_anchor' | 'empty_anchor' | 'unattested' | 'unverified' | 'wrong_node' | 'wrong_vault' | 'self_attested' | 'key_check_mismatch'
-        detail: string
-        held: boolean
-        key_source?: string
-        current: boolean
-        needed: boolean
-        state: 'canonical' | 'salvage_only' | 'refused' | 'missing'
-        anchor?: { key_id: number; source: 'kit' | 'export' }
-        origin?: { node_id: string; vault_id: number; source: 'root' | 'origin' | 'export' }
-      }[]
-      current_version: number
-      highest_version_seen: number
-      canonical_versions: number[]
-      blocking_versions: number[]
-      salvageable_versions: number[]
-      orphans: string[]
-      missing_objects: string[]
-      rejected_objects: string[]
-      envelopes: { listed: number; unwrapped: number; skipped: number; rejected: number }
-      anchors: { supplied: boolean; keys: number }
-      downloads: {
-        manifest_bytes: number
-        envelope_bytes: number
-        header_bytes: number
-        content_bytes: number
-        other_bytes: number
-        gets: number
-        ranged_gets: number
-        lists: number
-        version_lists: number
-      }
-      mode: 'canonical' | 'salvage'
-      unrecoverable_files: number
-      restored?: {
-        vault_id: number
-        files: number
-        folders: number
-        symlinks: number
-        trashed: number
-        index_rows: number
-        provider_versions: number
-        snapshots: number
-        snapshot_members: number
-        left_out: number
-        notes: string[]
-        fresh_version?: number
-      }
-      dry_run: boolean
-      written: boolean
-      vault_id: number | null
-      vault_name: string
-      key_available: boolean
-      published_epoch: number | null
-      salvage: WsModels['VaultKeySalvageReport'] | null
-      note: string | null
-    }
-  }
-  /**
    * The cost disclosure a person must see before provider versioning is enabled, with the token
    * vault.recovery.update needs (10 minutes). Read-only: at most one admin inspect, no object requests.
    */
@@ -6603,6 +6473,11 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'device.approval.request',
   'device.approval.status',
   'device.approval.submit',
+  'device.backup.grant.confirm',
+  'device.backup.grant.create',
+  'device.backup.grant.extend',
+  'device.backup.grant.list',
+  'device.backup.grant.revoke',
   'device.endpoints',
   'device.identity.rotate',
   'device.list',
@@ -6815,7 +6690,6 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'vault.keys.recipients.list',
   'vault.keys.recipients.revoke',
   'vault.keys.status',
-  'vault.recover',
   'vault.recovery.disclosure',
   'vault.recovery.status',
   'vault.recovery.suspend',
@@ -6855,7 +6729,6 @@ export const WS_CONTRACT_CONFIRMATIONS: Readonly<
     { code: 'vault_key_import', accept_field: 'confirm_name' },
     { code: 'vault_key_salvage', accept_field: 'confirm_name' },
   ],
-  'vault.recover': [{ code: 'vault_recover_salvage', accept_field: 'confirm_name' }],
   'vault.recovery.suspend': [{ code: 'recovery_versioning_suspend', accept_field: 'confirm' }],
   'vault.recovery.update': [
     { code: 'recovery_versioning_disclosure', accept_field: 'disclosure_token' },
@@ -6881,6 +6754,9 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'auth.user.delete': 'identity.admin',
   'auth.user.update': 'identity.admin',
   'device.approval.key.register': 'device.trust',
+  'device.backup.grant.confirm': 'device.trust',
+  'device.backup.grant.create': 'device.trust',
+  'device.backup.grant.extend': 'device.trust',
   'device.pairing.approve': 'device.trust',
   'device.remote.enable': 'device.trust',
   'email.config.update': 'settings',
@@ -6923,7 +6799,6 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'vault.keys.import': 'keys',
   'vault.keys.recipients.add': 'keys',
   'vault.keys.recipients.revoke': 'keys',
-  'vault.recover': 'keys',
   'vault.recovery.suspend': 'data.destroy',
 }
 
@@ -6976,6 +6851,11 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'device.approval.request': 15000,
   'device.approval.status': 15000,
   'device.approval.submit': 15000,
+  'device.backup.grant.confirm': 15000,
+  'device.backup.grant.create': 15000,
+  'device.backup.grant.extend': 15000,
+  'device.backup.grant.list': 15000,
+  'device.backup.grant.revoke': 15000,
   'device.endpoints': 15000,
   'device.identity.rotate': 15000,
   'device.list': 15000,
@@ -7188,7 +7068,6 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'vault.keys.recipients.list': 15000,
   'vault.keys.recipients.revoke': 15000,
   'vault.keys.status': 15000,
-  'vault.recover': 600000,
   'vault.recovery.disclosure': 60000,
   'vault.recovery.status': 60000,
   'vault.recovery.suspend': 60000,

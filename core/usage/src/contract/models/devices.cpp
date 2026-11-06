@@ -35,10 +35,30 @@ std::vector<WsModel> deviceModels() {
          deviceTime("last_seen_at").nullable(),
          str("last_ip").nullable().desc("The address of the device's last connection."),
          deviceTime("revoked_at").nullable(),
-         boolean("revoked").desc("Revoked devices stay listed; their key never pairs again."),
-         deviceTime("key_backup_revoked_at").nullable().opt().desc(
-             "When the device's key-backup grant was revoked (a recovery-code sign-in or an MFA reset of its user): "
-             "it stays paired and syncs, but its key exports need a person's approval again.")}));
+         boolean("revoked").desc("Revoked devices stay listed; their key never pairs again.")}));
+
+    out.push_back(model("KeyBackupGrant",
+        "A paired device's key-backup grant (#362, migration 130; MFA design note section 6.4): "
+        "ops::backup_grants::toJson, core/src/ops/BackupGrants.cpp.",
+        {uinteger("id"),
+         deviceSpki("device_id").nullable().desc("The device the grant is bound to (null once the device row is gone)."),
+         str("device_name").nullable(),
+         str("origin").oneOf({"approved", "migrated"})
+             .desc("approved: made or confirmed by a person's approval; migrated: carried over from before grants "
+                   "existed (D1), with exactly the authority the device had then. Confirm or revoke it."),
+         str("approved_via").oneOf({"webauthn", "password_totp", "device_approval", "console_approval"}).nullable()
+             .desc("How the latest approval was given; null for a migrated grant never confirmed."),
+         intArray("vault_ids").desc("The vaults whose keys the device may export without a prompt, ascending."),
+         deviceTime("created_at"),
+         deviceTime("confirmed_at").nullable(),
+         deviceTime("last_used_at").nullable().desc("The latest export under the grant."),
+         deviceTime("suspended_at").nullable()
+             .desc("Set when more than 60 vault keys were exported in an hour; exports then need a person's approval "
+                   "until the grant is confirmed again."),
+         deviceTime("revoked_at").nullable(),
+         str("revoked_reason").oneOf({"manual", "device_revoked", "user_inactive", "export_permission", "recovery_code",
+                                      "admin_reset", "cli_reset", "device_idle"}).nullable(),
+         boolean("active").desc("Live and not suspended: exports of its vaults need no prompt.")}));
 
     return out;
 }

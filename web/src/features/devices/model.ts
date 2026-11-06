@@ -7,9 +7,12 @@ import type { Device } from '@/models/device'
 export type PairingWindow = Response<'device.pairing.open'>['window']
 export type PendingRequest = Response<'device.pairing.pending'>['requests'][number]
 export type ListenerStatus = Response<'device.remote.status'>['status']
+// A device's key-backup grant (#362): no-prompt 1Password backup of the vault keys it names.
+export type KeyBackupGrant = Response<'device.backup.grant.list'>['grants'][number]
 
 // Every read a device change can affect.
-export const DEVICE_READS = ['device.list'] as const
+export const DEVICE_READS = ['device.list', 'device.backup.grant.list'] as const
+export const GRANT_READS = ['device.backup.grant.list'] as const
 
 // "482913" → "482 913", the way Desktop shows it (spec §3). Anything that isn't six digits is shown as sent.
 export const formatCode = (code: string) => (/^\d{6}$/.test(code) ? `${code.slice(0, 3)} ${code.slice(3)}` : code)

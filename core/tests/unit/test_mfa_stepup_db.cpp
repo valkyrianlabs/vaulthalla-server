@@ -33,6 +33,7 @@
 #include "identities/Group.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
+#include "ops/BackupGrants.hpp"
 #include "ops/Error.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
@@ -333,7 +334,7 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
     // The rest of the table is exercised elsewhere or needs what this environment lacks (a provider, a sealed key,
     // a vault engine, a factor); each says where and why, so a new annotation can't go unexamined.
     const std::map<std::string, std::string> elsewhere{
-        {"vault.keys.export", "console: export_requires_device first; device: inside the backup grant (below)"},
+        {"vault.keys.export", "console: export_requires_device first; device: test_key_backup_grants_db.cpp"},
         {"vault.keys.import", "console: import_requires_device first; needs a sealed vault key (test_vault_keys)"},
         {"vault.keys.recipients.add", "console: recipient_requires_device first; device refusal and host exemption in "
                                       "RecoveryRecipient.EnrollmentIsForTheCliAndPairedDevicesWithTheExportPermission"},
@@ -341,6 +342,9 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
                                          "its bucket: test_recovery_recipients)"},
         {"device.remote.enable", "writes the daemon's config file: refusal in AStolenBrowserSessionCantApprove..."},
         {"device.approval.key.register", "a paired device's own session: test_device_approvals_db.cpp"},
+        {"device.backup.grant.create", "needs a paired device and an exportable vault: test_key_backup_grants_db.cpp"},
+        {"device.backup.grant.extend", "needs a live grant: test_key_backup_grants_db.cpp"},
+        {"device.backup.grant.confirm", "needs a live grant: test_key_backup_grants_db.cpp"},
         {"settings.update", "writes the daemon's config file: refusal in AStolenBrowserSessionCantApprove..."},
         {"email.config.update", "settings.update's email sections (ops::config::saveSettings): writes the config file"},
         {"auth.mfa.factor.remove", "covered by APasskeyStepUpIsBoundToItsSessionFamilyAndTarget"},
@@ -627,7 +631,7 @@ TEST_F(StepUpDb, RecoveryCodesRefreshTokensAndDevicesNeverSatisfyIt) {
     }
 
     // A paired device: refused (its connection is never a person's approval; it can ask for one in the console, #361),
-    // can't begin a web step-up, and its key export is inside the backup grant.
+    // can't begin a web step-up, and without a key-backup grant (#362) its key export isn't covered either.
     auto peer = std::make_shared<vh::device::Peer>();
     peer->spki.fill(0x42);
     peer->spkiHex = vh::device::crypto::toHex(peer->spki);
@@ -647,7 +651,8 @@ TEST_F(StepUpDb, RecoveryCodesRefreshTokensAndDevicesNeverSatisfyIt) {
         } catch (const ops::StepUpRequired& e) {
             EXPECT_EQ(e.methods, std::vector<std::string>{"console_approval"});
         }
-        EXPECT_TRUE(keyBackupGrantCovers(7)) << "Desktop's background backup never prompts (D1 until #362)";
+        EXPECT_FALSE(ops::backup_grants::covering({7}))
+            << "a device without a key-backup grant (#362): its key export needs the keys step-up";
     }
     EXPECT_EQ(run(device, [&] { return h::StepUp::begin(json{{"family", "settings"}}, device); }).code, "denied");
     device->close();

@@ -35,7 +35,7 @@
 namespace vh::auth::mfa::recovery {
 
 enum class Reason : uint8_t { RecoveryCode, AdminReset, CliReset };
-// "recovery_code", "admin_reset", "cli_reset" (devices.key_backup_revoked_reason, audit details).
+// "recovery_code", "admin_reset", "cli_reset" (key_backup_grants.revoked_reason, audit details).
 [[nodiscard]] std::string_view to_string(Reason reason) noexcept;
 
 // auth.mfa.recovery_cooldown_hours.
@@ -67,7 +67,7 @@ void to_json(nlohmann::json& j, const DeviceSummary& d);
 // The account's live paired devices.
 [[nodiscard]] std::vector<DeviceSummary> devices(uint32_t userId);
 
-// Revokes the key-backup grants of the account's live devices (db::query::device::Devices::revokeKeyBackup), each
+// Revokes the key-backup grants of the account's live devices (ops::backup_grants::revokeForUser, #362), each
 // recorded as keys.backup.grant.revoke. Returns how many. `actor`: who caused it (the account itself for a recovery
 // code).
 std::size_t revokeKeyBackupGrants(uint32_t userId, Reason reason, std::optional<uint32_t> actorId);

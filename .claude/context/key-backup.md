@@ -49,6 +49,12 @@ constant time (`keyCheckEquals`).
 | confirm | (the CLI marks on export, as before) | `vault.keys.export.confirm {vault_id, version, key_check}` | encryption-key Export | paired device |
 | import | `vh vault keys import <vault> --file <path\|-> [--confirm-name] [--json]` | `vault.keys.import {vault_id, keys, confirm_name?}` | encryption-key Export | CLI or a paired device (`import_requires_device` elsewhere) |
 
+- **Key-backup grants (#362, migration 130, `ops/BackupGrants.hpp`):** a device's export is no-prompt only for a vault
+  its live, unsuspended grant names (`device.backup.grant.create|extend|confirm` with a device.trust approval, `revoke`
+  with none; 60 exports per grant an hour, then suspended). Anything else on a device is the keys step-up bound to
+  `vault.keys.export:<id>` (or `:all`). Devices paired before 130 got D1 `migrated` grants over exactly what their user
+  could export then. Desktop must create a grant once after pairing (one Touch ID or console approval) to keep
+  background backup prompt-free. Every covered export is audited `keys.backup.export {grant_id, device, versions}`.
 - Channels: `Cli`, `Device` (`ws::Session::isDeviceSession()` with a peer), `Console` (any other ws session: refused
   with `ops::Refused{"export_requires_device"}`, so data.code `export_requires_device`), `Agent` (refused, Denied).
   The ws router lets browser sessions reach the handler on purpose (book auth `human`), so the refusal is typed.
@@ -303,7 +309,7 @@ Spec 03 §6.4. A fresh node rebuilds an `opaque_v1` vault from its bucket plus a
 canonical only when its original node's attestation (the root's record, its recorded `origin`, or the export's)
 verifies under an attestation key the customer pinned (kit entry, or the export's `attestation.public_key`), over that
 node id and vault id, with the key check recomputed from the bytes; the restoring node's own keys never count. The new
-rows carry this node's key check (new vault id) and attestation; `vault_key_origin` (migration 130) keeps the original
+rows carry this node's key check (new vault id) and attestation; `vault_key_origin` (migration 131) keeps the original
 proof, status reports it as `needed_versions[].origin`, and the manifest root as `keys[].origin`, so the customer's
 original kit still anchors those versions after later restores. Anything unproven stops the restore
 (`salvage_required`); `--salvage` mints a fresh key above every version the bucket names and runs the import's salvage

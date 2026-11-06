@@ -1,4 +1,6 @@
 #include "auth/mfa/Recovery.hpp"
+#include "db/query/device/BackupGrant.hpp"
+#include "ops/BackupGrants.hpp"
 
 #include "audit/Trail.hpp"
 #include "auth/Manager.hpp"
@@ -112,21 +114,17 @@ std::vector<DeviceSummary> devices(const uint32_t userId) {
                        .name = d.name,
                        .platform = d.platform,
                        .last_seen_at = d.last_seen_at ? std::optional<int64_t>(*d.last_seen_at) : std::nullopt,
-                       .key_backup_revoked = d.key_backup_revoked_at.has_value()});
+                       .key_backup_revoked = !db::query::device::BackupGrants::liveForDevice(d.id).has_value()});
     }
     return out;
 }
 
 std::size_t revokeKeyBackupGrants(const uint32_t userId, const Reason reason, const std::optional<uint32_t> actorId) {
-    const auto ids = db::query::device::Devices::revokeKeyBackup(userId, std::string(to_string(reason)));
-    for (const auto id : ids)
-        vh::audit::record({.action = "keys.backup.grant.revoke",
-                           .actor_id = actorId,
-                           .details = {{"device", id}, {"user_id", userId}, {"reason", std::string(to_string(reason))}}},
-                          "[auth::mfa] the key-backup grant of device " + std::to_string(id) + " (user " +
-                              std::to_string(userId) + ") was revoked: " + std::string(to_string(reason)),
-                          spdlog::level::warn);
-    return ids.size();
+    // #362: the grants themselves (ops/BackupGrants.hpp), each audited as keys.backup.grant.revoke with the reason.
+    const auto why = reason == Reason::RecoveryCode ? ops::backup_grants::Revocation::RecoveryCode
+                     : reason == Reason::AdminReset ? ops::backup_grants::Revocation::AdminReset
+                                                    : ops::backup_grants::Revocation::CliReset;
+    return ops::backup_grants::revokeForUser(userId, why, actorId).size();
 }
 
 SignInEffects afterRecoveryCodeSignIn(const std::shared_ptr<protocols::ws::Session>& session,

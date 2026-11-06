@@ -16,7 +16,7 @@ tags:
 A paired device's mutual-TLS key proves **which device** is connecting. It never proves that a person is there. A
 routine connection, a device reporting that the operating system checked a fingerprint, or any flag a client sets
 never counts as a person's approval. Routine traffic (sync, the file provider, transfers, reads, key backup inside the
-device's backup grant) never asks for one.
+device's [key-backup grant](#key-backup-grants)) never asks for one.
 
 A few actions need a fresh approval by a person: the step-up families (their contract entries carry `step_up`,
 see [WebSocket Protocol](/reference/ws-protocol)). On a paired device's session such a command answers
@@ -124,6 +124,42 @@ digest>`. On an already-paired Desktop: open the window (`device.pairing.open`),
 `step_up_required` with the target), approve it with the approval key, and send `device.pairing.approve` again. From
 the web console the same approval is a passkey or password plus TOTP step-up, and `vh device pair` on the node needs
 none.
+
+## Key-backup grants
+
+Vaulthalla Desktop backs up the keys of your vaults to 1Password in the background. A **key-backup grant** is what lets
+one paired device do that without asking you each time: it is bound to that device and your account, and it names its
+vaults one by one. A key export from the device for a vault its grant names needs no approval, on every reconnect and
+after every key rotation. Any other export (another vault, an export of all vaults, a suspended grant) needs your
+approval for that one export: `step_up_required` with family `keys` and target `vault.keys.export:<vault id>`.
+
+| Command | What it does | Approval |
+| --- | --- | --- |
+| `device.backup.grant.list` | Your grants (on a device's own session, that device's only) | none |
+| `device.backup.grant.create {vault_ids, device_id?}` | Turns backup on for a device (on a console session, name it with `device_id`) | `device.trust`, target `device.backup.grant.create:<device row>:<vault ids>` |
+| `device.backup.grant.extend {grant_id, vault_ids}` | Adds vaults (a new vault) | `device.trust`, target `device.backup.grant.extend:<grant>:<vault ids>` |
+| `device.backup.grant.confirm {grant_id}` | Confirms a migrated grant, or resumes a suspended one | `device.trust`, target `device.backup.grant.confirm:<grant>` |
+| `device.backup.grant.revoke {grant_id}` | Turns backup off for the device | none |
+
+Vault ids in a target are ascending and comma-separated; a list longer than the target limit is named by
+`sha256:` and the first 32 hex digits of that list's SHA-256. You need the export encryption keys permission (or super
+admin), and every vault must be one you may export. One live grant per device: extend it rather than creating another.
+
+- **The cap.** More than 60 vault key exports in an hour under one grant suspends it, and you get a notice. Exports
+  then need your approval until you confirm the grant again. A Mac exporting every key in a burst is what a thief does.
+- **Automatic revocation.** A grant ends when its device is revoked, your account is deactivated or deleted or loses
+  the export permission, your MFA is reset, you sign in with a recovery code, or the device hasn't connected for 90
+  days. You can turn it off any time in **Devices › My devices** (the Key backup column) or from Desktop.
+- **After a recovery-code sign-in**, while the recovery cooldown runs, the same device may re-create its grant with its
+  approval key, only if that key was registered before the recovery, and only for vaults the revoked grant named. A
+  passkey added during the recovery, a console approval or another device can't.
+- **Upgrading.** Devices paired before key-backup grants existed keep backing up: each got a `migrated` grant over
+  exactly the vaults its user could export at that moment. The console asks you to confirm or turn it off; nothing is
+  interrupted meanwhile, and a vault created later is added only by `extend`.
+
+Every grant change is in the audit trail (`keys.backup.grant.create`, `.extend`, `.confirm`, `.migrate`, `.suspend`,
+`.revoke` with its reason), and so is every export under a grant (`keys.backup.export`, with the grant and the key
+versions).
 
 ## Audit
 

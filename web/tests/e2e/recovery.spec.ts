@@ -208,10 +208,17 @@ const status = (mode = 'off') => ({
 })
 
 // Scripts recovery answers on the console socket and records what the console sent. `storage.vault.get` answers are
-// patched to an S3 vault so the provider-versioning controls render whatever the test vault is.
-const scriptRecovery = async (page: Page, answer: (frame: Frame) => Answer | undefined) => {
+// patched to an S3 vault so the provider-versioning controls render whatever the test vault is. `vaultType` patches the
+// `storage.vault.list` answers Files reads, so the history sheet sees that kind of vault whatever the test vault is:
+// point-in-time restore is offered for S3 folders only (the daemon refuses it for local vaults, ops/RecoveryPoints.cpp).
+const scriptRecovery = async (
+  page: Page,
+  answer: (frame: Frame) => Answer | undefined,
+  { vaultType }: { vaultType?: 'local' | 's3' } = {},
+) => {
   const sent: Frame[] = []
   const vaultReads = new Set<string>()
+  const vaultLists = new Set<string>()
   await page.routeWebSocket(
     url => url.pathname === '/ws',
     ws => {
@@ -225,6 +232,7 @@ const scriptRecovery = async (page: Page, answer: (frame: Frame) => Answer | und
             frame = null
           }
           if (frame?.command === 'storage.vault.get') vaultReads.add(frame.requestId)
+          if (vaultType && frame?.command === 'storage.vault.list') vaultLists.add(frame.requestId)
           if (frame && /^(recovery\.|vault\.recovery\.)/.test(frame.command)) {
             sent.push(frame)
             const a = answer(frame) ?? { error: 'not scripted', code: 'invalid' }
@@ -247,13 +255,17 @@ const scriptRecovery = async (page: Page, answer: (frame: Frame) => Answer | und
         server.send(message)
       })
       server.onMessage(message => {
-        if (typeof message === 'string' && vaultReads.size) {
+        if (typeof message === 'string' && (vaultReads.size || vaultLists.size)) {
           try {
             const frame = JSON.parse(message)
             if (vaultReads.has(frame.requestId) && frame.data?.vault) {
               vaultReads.delete(frame.requestId)
               frame.data.vault.type = 's3'
               frame.data.vault.bucket = frame.data.vault.bucket || 'e2e-bucket'
+              message = JSON.stringify(frame)
+            } else if (vaultLists.has(frame.requestId) && Array.isArray(frame.data?.vaults)) {
+              vaultLists.delete(frame.requestId)
+              for (const vault of frame.data.vaults) vault.type = vaultType
               message = JSON.stringify(frame)
             }
           } catch {
@@ -319,7 +331,7 @@ test.describe.serial('recovery', () => {
         }
       if (frame.command === 'vault.recovery.status') return { data: { status: status('local_snapshots') } }
       return undefined
-    })
+    }, { vaultType: 'local' })
     await gotoFiles(page)
     const folder = `${RUN} history`
     await withFolder(page, folder)
@@ -327,8 +339,49 @@ test.describe.serial('recovery', () => {
     await expect(sheet.getByTestId('recovery-group-local_snapshot')).toContainText('before cleanup')
     await expect(sheet.getByTestId('recovery-group-local_version').getByTestId('recovery-point')).toHaveCount(2)
     await expect(sheet.getByText('Pending upload')).toBeVisible()
-    await expect(sheet.getByTestId('recovery-point-in-time')).toBeVisible()
+    // Point in time reconstructs from provider versions: a local vault's folder never offers it.
+    await expect(sheet.getByTestId('recovery-point-in-time')).toHaveCount(0)
     expect(sent.some(f => f.command === 'recovery.list' && f.payload.path === `/${folder}`)).toBe(true)
+    await removeFolder(page, folder)
+  })
+
+  test('a folder of an S3 vault offers point-in-time restore and plans it', async ({ page }) => {
+    const sent = await scriptRecovery(page, frame => {
+      if (frame.command === 'recovery.list')
+        return {
+          data: {
+            points: [
+              point({
+                id: 'pv-1',
+                backend: 'provider_version',
+                upstream_state: 'uploaded',
+                retention: { policy: 'provider', expires_at: null, note: null },
+              }),
+            ],
+          },
+        }
+      if (frame.command === 'vault.recovery.status') return { data: { status: status('provider_versioning') } }
+      if (frame.command === 'recovery.plan')
+        return { data: { plan: plan({ source_label: 'Point in time', point_in_time: true, at: HOUR_AGO }) } }
+      return undefined
+    }, { vaultType: 's3' })
+    await gotoFiles(page)
+    const folder = `${RUN} pit`
+    await withFolder(page, folder)
+    const sheet = await openHistory(page, folder)
+    const form = sheet.getByTestId('recovery-point-in-time')
+    await expect(form).toBeVisible()
+    // datetime-local takes the browser's local time; the browser runs in this process's time zone.
+    const at = new Date(Date.now() - 3600_000)
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const local = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}T${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`
+    await form.getByLabel('As of').fill(local)
+    await form.getByRole('button', { name: 'Preview restore' }).click()
+    await expect(page.getByTestId('restore-preview')).toBeVisible()
+    const planned = sent.find(f => f.command === 'recovery.plan')
+    expect(planned?.payload).toMatchObject({ path: `/${folder}`, at: Math.floor(at.getTime() / 1000), prune: false })
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('restore-preview')).toHaveCount(0)
     await removeFolder(page, folder)
   })
 

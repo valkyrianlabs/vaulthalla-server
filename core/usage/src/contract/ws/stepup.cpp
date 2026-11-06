@@ -14,8 +14,8 @@ std::vector<WsStepUp> stepUpTable() {
     std::vector<WsStepUp> out{
         // keys: target-bound (the vault, or all), single use
         {"vault.keys.export", "keys", kTarget,
-         "outside the paired device's key-backup grant (until the grant table, #362, a paired device's export is "
-         "inside it; the console is refused export_requires_device first)"},
+         "outside the paired device's key-backup grant (device.backup.grant.*: a vault it names, while it is active, "
+         "never prompts; the console is refused export_requires_device first)"},
         {"vault.keys.import", "keys", kTarget, "when it writes or salvages"},
         {"vault.keys.recipients.add", "keys", kTarget, "(the console is refused recipient_requires_device first)"},
         {"vault.keys.recipients.revoke", "keys", kTarget, "(the console is refused recipient_requires_device first)"},
@@ -25,6 +25,10 @@ std::vector<WsStepUp> stepUpTable() {
         {"device.remote.enable", "device.trust", kTarget, "when remote device connections are off"},
         {"device.approval.key.register", "device.trust", kTarget,
          "always: a person approves it in the web console (device.approval.request)"},
+        {"device.backup.grant.create", "device.trust", kTarget,
+         "always (during a recovery cooldown: only the device's approval key, D4)"},
+        {"device.backup.grant.extend", "device.trust", kTarget, ""},
+        {"device.backup.grant.confirm", "device.trust", kTarget, ""},
         // account.credentials: family-wide, the grant window
         {"auth.user.change_password", "account.credentials", false, ""},
         {"auth.mfa.factor.remove", "account.credentials", false, ""},

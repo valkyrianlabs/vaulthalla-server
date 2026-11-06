@@ -174,6 +174,7 @@ the target's corpus with the fix; `--merge` folds new coverage into the committe
 |---|---|---|
 | `DeviceApprovalVectors`, `DeviceApprovalKeys`, `DeviceApprovalRouting`, `DeviceApprovalGrants`, `DeviceApprovalContract` (`test_device_approvals.cpp`) | the payload vector shared with vaulthalla-desktop (`core/test-assets/device/approval-vectors.json`; regenerate or check with `tools/dev/device_approval_vectors.py --write|--check`, which needs Python `cryptography`), the one SPKI encoding, router placement, which grant methods count on a device | nothing |
 | `DeviceApprovalsDb` (`test_device_approvals_db.cpp`, db-only) | pairing from a paired device / the console / the CLI, every signature mismatch, console approvals (passkey only), rate limits, key registration, and `ADeviceSessionNeverPromptsForARoutineCommand`: every device-allowed unannotated contract command routed through the daemon's router on a device session must not answer `step_up_required` (a skip list names the few that need a running engine or end the session) | DB |
+| `KeyBackupGrantsDb` (`test_key_backup_grants_db.cpp`, db-only) | #362: D1 migration equivalence (every seeded device's no-prompt export set identical before and after, a rotation in the same window exported through the grant, never twice), 129's interim revocation carried over as a revoked grant, grant-scoped vs target-bound exports, create/extend/confirm device.trust targets, revoke without one, the 60/h cap (suspend + notice), every revocation trigger, D4 re-creation (pre-recovery approval key, same vaults only), audit events | DB |
 
 On macOS, run DB suites on a private cluster when another checkout may be testing: `VH_TEST_PG_DIR=$TMPDIR/<name>
 VH_TEST_PG_PORT=<port> tools/macos/test-db.sh up` (two runs on one cluster drop each other's schema; agents sharing a
@@ -357,6 +358,24 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   deletion is its own `data.destroy` step-up) answer the Step-up dialog (#359) with the password and a code. No
   daemon bypass. Run it the documented way (production build behind the reverse proxy): under `next dev` there is no
   `/upload` route and the ws budget doubles.
+- Playwright projects (#414): `chromium` runs every spec but `mfa.spec.ts`; `passkeys` runs `mfa.spec.ts` alone after
+  it (`dependencies`, so it is skipped when a `chromium` test fails). Every `/login` load in Chromium spends one of the
+  daemon's 30 `auth.passkey.options`/`login` per client address per minute (the passkey autofill), and all workers
+  share 127.0.0.1, so the passkey tests must not overlap other specs. The limit is never raised for tests. Run mfa
+  alone with `--project=passkeys --no-deps`.
+- Full suite on the dev box (how #413/#414 ran it; 49 tests, 9 skip by design: lab-first-run and the live idle
+  timeout): a private `VH_TEST_MODE=1` daemon (as `~/work/vh-instance.sh` does: own DB named `*test*`, own run dir,
+  stopped by exact pid, DB dropped after) whose config sets `auth.webauthn: {rp_id: localhost, origins:
+  ["http://localhost:<proxy>"]}` and `auth.mfa.step_up_ttl_seconds: 60`, MFA policy left at the default; `pnpm build`
+  with no `NEXT_PUBLIC_VAULTHALLA_WS_ORIGIN` and `next start`; a scratch Caddy on `http://localhost:<proxy>` routing
+  `/ws` and `/preview* /download* /upload*` to the daemon and the rest to Next (WebAuthn refuses IP origins).
+  `web/public/icons` is not in git: copy it from a checkout that has it. Env: `VAULTHALLA_E2E_BASE_URL=http://localhost:<proxy>`,
+  `VAULTHALLA_E2E_NO_WEB_SERVER=1`, `VH_BIN` and `VAULTHALLA_E2E_MFA_VH` = a `vh` wrapper for the daemon's super admin,
+  `VAULTHALLA_E2E_PYTHON` (with `websockets`), `VAULTHALLA_E2E_WS_URL=ws://localhost:<proxy>/ws`. console.spec needs
+  the e2e account to be a super admin, which `vh user create` cannot make: `VH_BUILD_MODE=test` plus
+  `VH_PATH_TO_CONFIG` = a file whose `database:` names the private DB (`host: localhost`, a `*test*` name and user)
+  makes `provision_e2e_user.sh` seed it there with `sudo -u postgres psql` (`VAULTHALLA_E2E_ALLOW_LOCAL_DEV_DB_SEED=1`
+  skips the name checks but still needs that name; before #414 it seeded nothing and reported success).
 - `tools/macos/{install_acceptance,storage_smoke}.py` sign the admin in through `tools/macos/session.py` (password, TOTP,
   first enrollment, step-up with one resend). install_acceptance keeps the authenticator in `admin-totp.json` next to
   `--state` (`--totp-file`), storage_smoke in memory. Offline tests: `tools/macos/tests` (a scripted daemon behind the

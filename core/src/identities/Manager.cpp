@@ -346,12 +346,47 @@ void Manager::apply(IdentitySnapshot&& snap, const bool loadedAll) {
     publications_.fetch_add(1, std::memory_order_relaxed);
 }
 
+namespace {
+std::mutex& identitiesPublishedHookMutex() {
+    static std::mutex m;
+    return m;
+}
+Manager::PublishedHook& identitiesPublishedHook() {
+    static Manager::PublishedHook hook;
+    return hook;
+}
+
+void identitiesRunPublishedHook(const std::vector<uint32_t>& userIds, const bool everyone) noexcept {
+    Manager::PublishedHook hook;
+    {
+        std::scoped_lock lock(identitiesPublishedHookMutex());
+        hook = identitiesPublishedHook();
+    }
+    if (!hook) return;
+    try {
+        hook(userIds, everyone);
+    } catch (const std::exception& e) {
+        log::Registry::auth()->error("[identities::Manager] The publication hook failed: {}", e.what());
+    } catch (...) {
+        log::Registry::auth()->error("[identities::Manager] The publication hook failed");
+    }
+}
+}
+
+void Manager::setPublishedHook(PublishedHook hook) {
+    std::scoped_lock lock(identitiesPublishedHookMutex());
+    identitiesPublishedHook() = std::move(hook);
+}
+
 void Manager::refresh(const Touched& touched) {
     if (touched.empty()) return;
     if (touched.everyone) {
-        std::scoped_lock load(loadMutex_);
-        auto snap = Loader::load({.all = true});
-        apply(std::move(snap), true);
+        {
+            std::scoped_lock load(loadMutex_);
+            auto snap = Loader::load({.all = true});
+            apply(std::move(snap), true);
+        }
+        identitiesRunPublishedHook({}, true);
         return;
     }
     IdentitySelection sel;
@@ -362,8 +397,12 @@ void Manager::refresh(const Touched& touched) {
     std::erase(sel.userIds, 0u);
     std::erase(sel.groupIds, 0u);
     if (sel.userIds.empty() && sel.groupIds.empty()) return;
-    std::scoped_lock load(loadMutex_);
-    apply(Loader::load(sel), false);
+    {
+        std::scoped_lock load(loadMutex_);
+        apply(Loader::load(sel), false);
+    }
+    // A group change reaches its members' permissions: everyone it may concern is checked.
+    identitiesRunPublishedHook(sel.userIds, !sel.groupIds.empty());
 }
 
 void Manager::refreshNoThrow(const Touched& touched) noexcept {

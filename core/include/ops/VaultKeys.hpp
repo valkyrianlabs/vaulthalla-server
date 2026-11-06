@@ -170,7 +170,14 @@ struct VaultExport {
     std::optional<std::string> vault_uid{};
 };
 
-// One vault's needed keys (live, or deleted within key retention). Refused on Console/Agent channels.
+// The vaults `actor` may export now: every live vault, and every deleted vault whose key is retained and that the actor
+// may see (ops::vaults::listDeleted), when the actor holds the export permission (super admins, encryption-key
+// Export); none otherwise. Ascending. What a key-backup grant may name (#362; D1 migrates exactly this set).
+[[nodiscard]] std::vector<unsigned int> exportableVaults(const Actor& actor);
+
+// One vault's needed keys (live, or deleted within key retention). Refused on Console/Agent channels. On a paired
+// device's session it needs no step-up for a vault the device's key-backup grant names (#362, ops/BackupGrants.hpp);
+// any other export needs the keys step-up, bound to the vault.
 [[nodiscard]] VaultExport exportVault(const Actor& actor, unsigned int vaultId, Channel channel);
 // Every live vault whose key this host can read; `skipped` names the ones it can't.
 struct ExportAll {

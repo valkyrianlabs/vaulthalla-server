@@ -1,4 +1,5 @@
 #include "ops/Users.hpp"
+#include "ops/BackupGrants.hpp"
 #include "auth/stepup/StepUp.hpp"
 
 #include "ops/Roles.hpp"
@@ -363,6 +364,8 @@ UserPtr remove(const Actor& actor, const Remove& req) {
     }
 
     runtime::Deps::get().authManager->revokeSessions(target->id);
+    // #362: the account's key-backup grants end (audited) before its devices and grants go with it.
+    (void)backup_grants::revokeForUser(target->id, backup_grants::Revocation::UserInactive, actor->id);
     vh::identities::manager().deleteUser(target->id);
     // Every outstanding reference to the account now holds a non-authorizing tombstone.
     if (!target->deleted() || vh::identities::manager().user(target->id))

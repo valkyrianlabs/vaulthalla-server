@@ -370,6 +370,76 @@ std::vector<WsCommandUsage> deviceCommands() {
         .client_timeout = kDefaultTimeout,
     });
 
+    // ---- key-backup grants (#362)
+
+    const auto grantId = [] {
+        return uinteger("grant_id").gen(gen::intRange(1, 100000)).desc("From device.backup.grant.list.");
+    };
+    const auto grantVaults = [] {
+        return intArray("vault_ids").gen(gen::ref("vault", {"id"})).desc("Vault ids (each one the caller may export).");
+    };
+
+    out.push_back({
+        .command = "device.backup.grant.list",
+        .description = "Key-backup grants: on a console session the caller's (every device, live first, revoked ones "
+                       "after); on a paired device's session that device's only. A grant lets its device export the "
+                       "keys of the vaults it names with no prompt (Desktop's background 1Password backup). A grant "
+                       "whose revocation trigger holds (device revoked or idle 90 days, account deactivated or "
+                       "without the Export permission) is revoked before it is listed.",
+        .input = "none",
+        .response = {objectArray("grants", "KeyBackupGrant")},
+        .refusal_codes = {"unauthorized", "denied"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "device.backup.grant.create",
+        .description = "Turn on key backup for vaults on one of the caller's devices: on its own session the device "
+                       "itself, on a console session device_id. Needs the export encryption keys permission (or super "
+                       "admin) and a device.trust approval for target device.backup.grant.create:<device row>:"
+                       "<vault ids> (step_up_required names it). conflict: the device already has a grant (extend "
+                       "it). During a recovery cooldown only the device re-creates the grant the recovery revoked, "
+                       "with its approval key registered before the recovery, for vaults that grant named "
+                       "(recovery_cooldown otherwise).",
+        .payload = {grantVaults(),
+                    deviceIdField().opt().nullable().desc("The device (console sessions); a device names itself.")},
+        .response = {object("grant", "KeyBackupGrant")},
+        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "device_unknown",
+                          "recovery_cooldown"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "device.backup.grant.extend",
+        .description = "Add vaults to a live grant of the caller's (a new vault, one deliberate approval). device.trust "
+                       "approval for target device.backup.grant.extend:<grant>:<vault ids>. conflict: it names them "
+                       "all already, or it was revoked.",
+        .payload = {grantId(), grantVaults()},
+        .response = {object("grant", "KeyBackupGrant")},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "device.backup.grant.confirm",
+        .description = "Confirm a live grant: a migrated one becomes approved, a suspended one exports again. "
+                       "device.trust approval for target device.backup.grant.confirm:<grant>.",
+        .payload = {grantId()},
+        .response = {object("grant", "KeyBackupGrant")},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "device.backup.grant.revoke",
+        .description = "Turn key backup off for a device: revokes the grant (its owner, the device itself, or a super "
+                       "admin). Needs no approval. Final: a new grant is a new create.",
+        .payload = {grantId()},
+        .response = {object("grant", "KeyBackupGrant")},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
     // ---- the listener's exposure (super admins)
 
     out.push_back({

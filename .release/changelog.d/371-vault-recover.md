@@ -6,7 +6,7 @@
   writes nothing. Restored vaults start in the cache strategy: only manifest objects, envelopes and 120-byte headers
   are read until a file is. Paired devices need the keys step-up; browser sessions get `recover_requires_device`;
   excluded from MCP. Audit event `vault.recover`.
-- Migration 130 `vault_key_origin`: where a recovered key version was minted and the original attestation; reported by
+- Migration 131 `vault_key_origin`: where a recovered key version was minted and the original attestation; reported by
   `vault.keys.status` (`needed_versions[].origin`) and carried in the manifest root (`keys[].origin`). Root grants carry
   their public key (`recovery_policy.grants[].public_key`), so a restore re-enrolls them.
 - New encrypting S3 vaults are created `opaque_v1` (the internal staging is lifted: the restore drill passes). Existing
