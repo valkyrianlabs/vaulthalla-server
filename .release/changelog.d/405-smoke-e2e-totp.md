@@ -1,0 +1,1 @@
+- Test tooling: the macOS install acceptance and storage smoke and the web e2e suite sign admins in with the real second factor (TOTP, first enrollment) and answer step-up refusals; the e2e account's authenticator is enrolled at provisioning (#405). No daemon change.

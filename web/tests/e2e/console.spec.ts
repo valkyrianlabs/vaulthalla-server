@@ -2,7 +2,7 @@ import { expect, test, type Page, type CDPSession } from '@playwright/test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { authStatePath, authenticateAndSaveState, explicitSkipRequested } from './helpers/auth'
+import { armStepUp, authenticateAndSaveState, authStatePath, explicitSkipRequested } from './helpers/auth'
 
 // Console dogfood suite: drives the real console against a running daemon (local dev install or a lab host through
 // nginx). Uses the provisioned E2E super admin (globalSetup). Creates its own folders/files/links and removes them.
@@ -11,6 +11,8 @@ import { authStatePath, authenticateAndSaveState, explicitSkipRequested } from '
 
 test.skip(explicitSkipRequested(), 'VAULTHALLA_E2E_SKIP set')
 test.use({ storageState: authStatePath, ignoreHTTPSErrors: true })
+// Step-up dialogs (#359) are answered with the e2e account's password and TOTP code.
+test.beforeEach(({ page }) => armStepUp(page))
 
 test.beforeAll(async ({ browser }) => {
   await authenticateAndSaveState(browser)

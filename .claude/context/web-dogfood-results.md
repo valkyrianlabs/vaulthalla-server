@@ -96,7 +96,9 @@ ciphertext for web-uploaded/renamed files (P0, decision on the local at-rest mod
 
 On a packaged install use `VH_BUILD_MODE=dev bash tools/e2e/provision_e2e_user.sh --force` and
 `VAULTHALLA_E2E_BASE_URL=http://localhost` (the package's nginx site is HTTP). Each run's `globalSetup` provisions a
-fresh e2e user (`--fresh-user`), so users accumulate across runs.
+fresh e2e user (`--fresh-user`), so users accumulate across runs. The e2e user is an admin, so provisioning also
+enrolls its TOTP factor over the daemon's ws (#405; needs Python with `websockets`: `VAULTHALLA_E2E_PYTHON`, and
+`VAULTHALLA_E2E_WS_URL` when the daemon's ws isn't where the console settings say).
 
 ```bash
 bash tools/e2e/provision_e2e_user.sh                                  # local dev DB only
