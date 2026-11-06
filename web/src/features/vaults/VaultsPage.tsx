@@ -98,7 +98,7 @@ export const VaultsPage = () => {
     <>
       <PageHeader
         title="Vaults"
-        description="Encrypted storage spaces on local disk or an S3 bucket. Open one for its health, access, sharing and sync settings."
+        description="Where files live: a directory on this server, encrypted at rest, or an S3 bucket. Open one for its health, access, sharing and sync settings."
         actions={
           canCreate ? (
             <Button asChild variant="primary">
