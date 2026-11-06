@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import os
 import pwd
-import re
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -59,7 +58,10 @@ class MfaResetParity(unittest.IsolatedAsyncioTestCase):
         return NetTarget("127.0.0.1", ws_port=self.target.ws_port)
 
     async def cli(self, account: str | None) -> CliSockDriver:
-        driver = CliSockDriver(self.target.cli_socket, account, redactor=self.redactor)
+        # A generated password is printed once and handed to on_secret, never left in the result.
+        self.secrets: list[str] = getattr(self, "secrets", [])
+        driver = CliSockDriver(self.target.cli_socket, account, redactor=self.redactor,
+                               on_secret=lambda _label, value: self.secrets.append(value))
         await driver.open()
         self.addAsyncCleanup(driver.close)
         return driver
@@ -70,13 +72,16 @@ class MfaResetParity(unittest.IsolatedAsyncioTestCase):
         return result.data["stdout"]
 
     async def enrolled_account(self, root: CliSockDriver, operator: CliSockDriver, name: str) -> str:
-        created = await self.must_cli(root, ["user", "create", name, "--role", "unprivileged"])
-        password = re.search(r"^Password: (.+)$", created, re.MULTILINE).group(1)
+        before = len(self.secrets)
+        await self.must_cli(root, ["user", "create", name, "--role", "unprivileged"])
+        self.assertEqual(len(self.secrets), before + 1, "vh user create printed no password")
+        password = self.secrets[-1]
         self.redactor.register_secret(password)
         await self.must_cli(operator, ["user", "mfa", "require", name])
         async with Ws(self.net(), user_agent="vhh-live/1") as ws:
             done = await ws.sign_in(name, password, enroll=True)
-            self.assertTrue(ok(done), f"{name}: TOTP enrollment did not complete the sign-in")
+            self.assertTrue(ok(done), f"{name}: TOTP enrollment did not complete the sign-in: "
+                            + self.redactor.redact_text(f"{done.get('data', {}).get('code')} {done.get('error')}")[:200])
             self.redactor.register_secret(ws.totp.secret_base32)
         return password
 

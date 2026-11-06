@@ -569,8 +569,8 @@ recovery notice with paired devices and revoke. Tests: `test_mfa_policy.cpp` (DB
 contract), `test_mfa_policy_db.cpp` (`MfaPolicyDb.*`: policy raise, D2 upgrade refusal, weakening, webauthn-only,
 recovery-code effects and audit sequence, cooldown vs. recovery-enrolled factor, admin reset effects and rules, CLI
 reset permissions and ws/CLI parity, password reset, last factor, 10th-failure notice; `vh audit verify` after each
-recovery path), `SqlDeployerHistoryDb.MfaRecoveryGrants*`. Tier B ws/CLI parity for reset waits on the harness's
-TOTP/step-up sign-in (#395).
+recovery path), `SqlDeployerHistoryDb.MfaRecoveryGrants*`; Tier B ws/CLI parity: `tools/harness/tests/test_mfa_reset_live.py` (opt-in,
+`VHH_WS_LIVE_BUILD`; on #395's TOTP/step-up lab clients).
 
 **Identities (`identities::Manager`, `core/{include,src}/identities/`).** One canonical `User`/`Group` object per id,
 handed out as the same `shared_ptr` everywhere (sessions, engines, FUSE, HTTP, S3). Each holds an immutable

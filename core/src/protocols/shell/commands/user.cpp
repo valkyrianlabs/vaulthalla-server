@@ -140,10 +140,11 @@ std::string mfaStatusText(const std::string& name, const ops::mfa::Status& st) {
 }
 
 CommandResult mfaStatus(const CommandCall& call) {
-    validatePositionals(call, resolveUsage({"user", "mfa", "status"}));
+    const auto usage = resolveUsage({"user", "mfa", "status"});
+    validatePositionals(call, usage);
     const auto id = userIdFromPositional(call.positionals[0]);
     if (!id) return userNotFound("user mfa status", call.positionals[0]);
-    const bool json = hasFlag(call, std::vector<std::string>{"json", "json_output"});
+    const bool json = hasFlag(call, usage->resolveFlag("json_output")->aliases);
     const auto name = call.positionals[0];
     return runOp("user mfa status", [&] { return ops::mfa::status(call.user, *id, ops::mfa::Channel::Cli); },
                  [&](const ops::mfa::Status& st) {

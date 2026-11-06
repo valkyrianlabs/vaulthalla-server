@@ -7,3 +7,4 @@
 - Account-security notices (notifications/AccountSecurity) through the operator email queue: recovery sign-in, reset, failures, suspension, policy weakening; factor changes to the account.
 - ws contract (additive, protocol 1): new commands auth.mfa.admin.*; refusal code recovery_cooldown on cooldown-family commands; auth.mfa.verify recovery.{grants_revoked, devices}; auth.mfa.status policy.{totp_allowed, synced_passkeys_allowed}; MfaFactor.allowed; Device.key_backup_revoked_at; MfaConfig policy fields.
 - Console: Settings › Security › Multi-factor sign-in; Users › user › Sign-in factors (status, require, reset); Account › Security recovery notice with paired devices and cooldown.
+- vh audit list/verify --json now print JSON (the flag was checked by its label, never matched).

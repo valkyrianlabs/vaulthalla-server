@@ -75,7 +75,11 @@ macOS with a pointer to `make test`: Tier A needs a kernel FUSE mount, /proc and
 compatible (`/bin/bash -n`); `itest_abspath` in `bin/tests/lib/itest.sh` replaces GNU `realpath -m`.
 
 MFA (#354-#360): `--gtest_filter='MfaSignInDb*:StepUpDb*:MfaPolicyDb*'` (DB-backed; TOTP/recovery tests inject test MFA
-keys with `auth::mfa::keys::setForTesting` where sealing can't round-trip); DB-free `Mfa*:StepUp*:MfaBackoff*`.
+keys with `auth::mfa::keys::setForTesting` where sealing can't round-trip); DB-free `Mfa*:StepUp*:MfaBackoff*`. Tier B
+reset parity (ws vs `vh`, private daemon, root): `VHH_WS_LIVE_BUILD=<build> python -m unittest
+tools.harness.tests.test_mfa_reset_live` with `VH_TEST_DB_*` from the harness db.env, run from a checkout the
+`vhh-actor-NN` accounts can traverse (the CLI connector runs the venv's python as them; a checkout under a 0750 home
+fails with EACCES). Browser: `web/tests/e2e/mfa.spec.ts` (needs `VAULTHALLA_E2E_MFA_VH`, see its header).
 
 CLI ↔ ws parity for families migrated to `core/ops/`:
 `--gtest_filter='*Parity*:OpsGroups*:AuthPasswordChange*'` (groups, roles, API keys, vaults and the accessible-vaults list, users, S3 gateway,
