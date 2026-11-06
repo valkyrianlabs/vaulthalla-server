@@ -119,6 +119,9 @@ const SystemHealthBody = ({ stats }: { stats: Raw }) => {
               ...(typeof deps.secrets_backend === 'string' && deps.secrets_backend
                 ? [['Secrets backend', `${deps.secrets_backend}${typeof deps.secrets_posture === 'string' && deps.secrets_posture !== 'hardware' ? ` (${POSTURE_NOTE[deps.secrets_posture] ?? deps.secrets_posture})` : ''}`] as [string, string]]
                 : []),
+              ...(typeof deps.secrets_policy === 'string' && deps.secrets_policy !== 'none'
+                ? [['Secrets policy', `TPM PCR 7 (${String(deps.secrets_pcr_bound ?? 0)} bound)${typeof deps.secrets_warning === 'string' && deps.secrets_warning ? `: ${deps.secrets_warning}` : ''}`] as [string, string]]
+                : []),
             ]}
           />
         </div>

@@ -74,6 +74,10 @@ by hand is never reused or torn down. `make itest` (and `run_proof*.sh`) refuses
 macOS with a pointer to `make test`: Tier A needs a kernel FUSE mount, /proc and sudo. The test scripts stay bash 3.2
 compatible (`/bin/bash -n`); `itest_abspath` in `bin/tests/lib/itest.sh` replaces GNU `realpath -m`.
 
+PCR 7 policy (#351): `TpmPcr7Test*:PcrDrillTest*` in `test_tpm_sealer.cpp` run on a private swtpm (PCR 7 extended through
+`PrivateSwtpm::extendPcr7`, a recovery boot is `reboot()`); they skip without swtpm or where `sealingUnusable()` (the CI
+container's TPM can't unseal what it seals), so run them on the dev box. DB-free gate/health tests: `SealingPolicy*`.
+
 MFA (#354-#360): `--gtest_filter='MfaSignInDb*:StepUpDb*:MfaPolicyDb*'` (DB-backed; TOTP/recovery tests inject test MFA
 keys with `auth::mfa::keys::setForTesting` where sealing can't round-trip); DB-free `Mfa*:StepUp*:MfaBackoff*`; key import (#398, db-only, simulated host via `Manager::createForTesting`) `MfaKeyImportDb*`. Tier B
 reset parity (ws vs `vh`, private daemon, root): `VHH_WS_LIVE_BUILD=<build> python -m unittest

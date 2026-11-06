@@ -372,7 +372,12 @@ std::vector<WsModel> statsSystemModels() {
                  statsNullable(str("mount_detail")),
                  str("secrets_backend").desc("\"tpm2\" (Linux), \"secure-enclave\" (macOS), \"file\" (macOS development backend, no hardware binding) or \"unavailable\" (macOS without a usable Secure Enclave: sealing refuses)."),
                  str("secrets_posture").oneOf({"hardware", "software", "development", "unknown"}).opt()
-                     .desc("What protects the sealed secrets: hardware (TPM, Secure Enclave), software (swtpm), development (files).")}),
+                     .desc("What protects the sealed secrets: hardware (TPM, Secure Enclave), software (swtpm), development (files)."),
+                 str("secrets_policy").oneOf({"none", "pcr7"}).opt()
+                     .desc("secrets.tpm_pcr_policy: bind newly sealed secrets to TPM PCR 7 (Linux TPM only)."),
+                 statsUint("secrets_pcr_bound").opt().desc("Sealed secrets that carry a PCR 7 binding."),
+                 statsNullable(str("secrets_warning")).opt()
+                     .desc("PCR-bound with no `vh secret export all` newer than 30 days, or blobs that don't match the configured policy.")}),
          object("shell", "", {statsNullable(boolean("admin_uid_bound"))}),
          object("database", "",
                 {statsUint("pool_size"), statsUint("idle"), statsUint("in_use"), statsUint("broken_idle"),

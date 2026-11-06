@@ -117,6 +117,10 @@ CommandResult handleStatus(const CommandCall& call) {
         << (health.deps.secretsPosture == "hardware" ? "" : health.deps.secretsPosture == "software"
                 ? ": swtpm, no hardware binding" : health.deps.secretsPosture == "development"
                 ? ": plain files, no hardware binding" : "") << ")\n";
+    out << "  secrets policy: " << health.deps.secretsPolicy << " (" << health.deps.secretsPcrBound
+        << " sealed secret(s) bound to TPM PCR 7)\n";
+    if (!health.deps.secretsWarning.empty())
+        out << "  WARNING: " << health.deps.secretsWarning << "\n";
     if (health.shell.adminUidBound) {
         out << "  shell admin uid bound: " << yesNo(*health.shell.adminUidBound);
         if (!*health.shell.adminUidBound) out << " (setup advisory)";

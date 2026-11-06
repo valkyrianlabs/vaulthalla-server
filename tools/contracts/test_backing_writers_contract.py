@@ -73,6 +73,7 @@ ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
     ("core/src/platform/darwin/FileSealer.cpp", "write_open"): (1, "same open as above"),
     ("core/src/platform/linux/Mount.cpp", "ofstream"): (1, "fusectl abort file"),
     ("core/src/platform/linux/TpmSealer.cpp", "ofstream"): (1, "sealed TPM blobs under the state directory"),
+    ("core/src/platform/linux/TpmSealer.cpp", "copy_overwrite"): (2, "reseal keeps a copy of the sealed TPM blob pair (<name>.prev.priv/.pub) under the state directory (#351); never a vault backing file"),
     ("core/src/protocols/http/upload/Resumable.cpp", "write_open"): (3, "the sealed spool file (<backing>/.upload-spool, outside every vault), reopened only while its link count is 1, i.e. before the commit links it into place, by the legacy and the VHF1 cursor; and the VHF1 cursor's <ord>.sealed.resalt temp next to it (#367)"),
     ("core/src/protocols/http/upload/Resumable.cpp", "o_trunc"): (1, "the <ord>.sealed.resalt temp in the upload spool (#367), renamed over the spool file, never a backing file"),
     ("core/src/protocols/http/upload/Resumable.cpp", "pwrite"): (1, "writeAll: spool part attempts (created O_EXCL) and the sealed spool file, never a backing file"),

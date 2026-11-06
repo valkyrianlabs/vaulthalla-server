@@ -322,6 +322,8 @@ void checkSystemStats(vh::test::contract_models::Checker& c) {
     health.deps.mountDetail = "/mnt/vaulthalla";
     health.deps.secretsBackend = "tpm2";
     health.deps.secretsPosture = "hardware";
+    health.deps.secretsPolicy = "pcr7";
+    health.deps.secretsPcrBound = 6;
     health.shell.adminUidBound = true;
     health.database = sm::DatabaseHealth{.poolSize = 4, .reachable = true, .probeLatencyMs = 1, .probeError = "slow"};
     c.check(json(health), "SystemHealth", "healthy system");
@@ -337,6 +339,8 @@ void checkSystemStats(vh::test::contract_models::Checker& c) {
                                                    .layoutMigrationsUnfinished = {15}, .legacyFiles = 3,
                                                    .legacyBlobs = 2, .legacyUploadFiles = 0};
     c.check(json(health), "SystemHealth", "legacy content remains (#373/#376)");
+    health.deps.secretsWarning = "6 sealed secret(s) are bound to TPM PCR 7 and no `vh secret export all` was ever taken";
+    c.check(json(health), "SystemHealth", "PCR-bound secrets with no recent export");
     c.check(json(sm::SystemHealth{}), "SystemHealth", "system before the pool exists");
 }
 

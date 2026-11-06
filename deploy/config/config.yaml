@@ -276,6 +276,7 @@ caching:
 # Master secrets are sealed to this machine: a TPM on Linux, the Secure Enclave on macOS (docs: vaults/secrets-and-key-export).
 secrets:
   require_hardware: false                 # true: refuse to start unless a hardware TPM / the Secure Enclave seals them (no swtpm, no files)
+  tpm_pcr_policy: none                    # none | pcr7: bind newly sealed secrets to TPM PCR 7 (secure-boot state); Linux TPM only, the Secure Enclave is unaffected. Existing secrets change only with `vh secret reseal` (docs: vaults/secrets-and-key-export)
   allow_development_file_backend: false   # macOS without a usable Secure Enclave: allow plain 0600 key files (development only)
 
 
