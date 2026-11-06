@@ -1,5 +1,6 @@
 #include "vault/KeyAttestation.hpp"
 
+#include "crypto/SecretBytes.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/vault/Key.hpp"
@@ -30,15 +31,17 @@ std::vector<uint8_t> keyCheckBytes(const std::string& hex) {
     return out;
 }
 
-// This node's signing seed, unsealed once per state directory (tests switch it) and kept in guarded memory.
+// This node's signing seed, unsealed once per state directory (tests switch it) and kept in locked memory that is
+// wiped when the last signer releases it (#350).
+using Seed = std::shared_ptr<const crypto::SecretBytes>;
+
 struct SigningSeed {
     std::mutex mutex;
     std::string sealedFor;  // the backing path the seed was unsealed from
-    std::vector<uint8_t> seed;
+    Seed seed;
 
     void clear() {
-        if (!seed.empty()) sodium_memzero(seed.data(), seed.size());
-        seed.clear();
+        seed.reset();
         sealedFor.clear();
     }
 };
@@ -52,31 +55,31 @@ std::string providerName() { return paths::testMode ? "test_key_attest" : "key_a
 
 // Unseals this node's seed, or generates (and seals) a new one when there is none or it no longer unseals: a TPM reset
 // makes the old key unusable, but its public key stays in key_attestation_keys, so its attestations still verify.
-std::vector<uint8_t> loadSeedLocked(SigningSeed& s) {
+Seed loadSeedLocked(SigningSeed& s) {
     const auto here = paths::getBackingPath().string();
-    if (!s.seed.empty() && s.sealedFor == here) return s.seed;
+    if (s.seed && s.sealedFor == here) return s.seed;
     s.clear();
 
     crypto::secrets::KeyProvider provider(providerName());
-    std::vector<uint8_t> seed;
+    Seed seed;
     try {
         provider.init();  // generates and seals a 32-byte seed when none exists
-        seed = provider.getMasterKey();
+        if (provider.getMasterKey().size() == kSeedSize)
+            seed = std::make_shared<const crypto::SecretBytes>(provider.getMasterKey());
     } catch (const std::exception& e) {
         log::Registry::crypto()->warn("[KeyAttestation] The key attestation signing key does not unseal on this host "
                                       "({}); generating a new one. Attestations by the old key still verify.",
                                       e.what());
     }
-    if (seed.size() != kSeedSize) {
-        if (!seed.empty()) sodium_memzero(seed.data(), seed.size());
-        seed.assign(kSeedSize, 0);
-        randombytes_buf(seed.data(), seed.size());
-        provider.updateMasterKey(seed);  // re-seals over the unusable blob
+    if (!seed) {
+        auto fresh = std::make_shared<const crypto::SecretBytes>(crypto::SecretBytes::random(kSeedSize));
+        provider.updateMasterKey(fresh->bytes());  // re-seals over the unusable blob
         log::Registry::audit()->info("[KeyAttestation] Created a new key attestation signing key on this host");
+        seed = std::move(fresh);
     }
-    s.seed = std::move(seed);
+    s.seed = seed;
     s.sealedFor = here;
-    return s.seed;
+    return seed;
 }
 
 }
@@ -125,11 +128,10 @@ std::optional<Attestation> attest(const unsigned int vaultId, const unsigned int
         const auto msg = message(db::query::device::Devices::nodeId(), vaultId, version, keyCheckHex);
         auto& s = signingSeed();
         std::scoped_lock lock(s.mutex);
-        auto seed = loadSeedLocked(s);
-        const auto pk = publicKeyFromSeed(seed);
-        Attestation out{.key_id = db::query::vault::Key::attestationKeyId(pk), .signature = signWithSeed(seed, msg)};
-        sodium_memzero(seed.data(), seed.size());
-        return out;
+        const auto seed = loadSeedLocked(s);
+        const auto pk = publicKeyFromSeed(seed->bytes());
+        return Attestation{.key_id = db::query::vault::Key::attestationKeyId(pk),
+                           .signature = signWithSeed(seed->bytes(), msg)};
     } catch (const std::exception& e) {
         log::Registry::crypto()->error("[KeyAttestation] Could not attest key version {} of vault {}: {}", version,
                                        vaultId, e.what());
@@ -153,11 +155,10 @@ std::optional<Attestation> signNodeMessage(const std::span<const uint8_t> msg) {
     try {
         auto& s = signingSeed();
         std::scoped_lock lock(s.mutex);
-        auto seed = loadSeedLocked(s);
-        const auto pk = publicKeyFromSeed(seed);
-        Attestation out{.key_id = db::query::vault::Key::attestationKeyId(pk), .signature = signWithSeed(seed, msg)};
-        sodium_memzero(seed.data(), seed.size());
-        return out;
+        const auto seed = loadSeedLocked(s);
+        const auto pk = publicKeyFromSeed(seed->bytes());
+        return Attestation{.key_id = db::query::vault::Key::attestationKeyId(pk),
+                           .signature = signWithSeed(seed->bytes(), msg)};
     } catch (const std::exception& e) {
         log::Registry::crypto()->error("[KeyAttestation] Could not sign with this node's key: {}", e.what());
         return std::nullopt;

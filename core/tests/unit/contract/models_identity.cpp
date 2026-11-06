@@ -6,6 +6,7 @@
 
 #include "identities/Group.hpp"
 #include "identities/User.hpp"
+#include "ops/Sessions.hpp"
 #include "protocols/ws/handler/Auth.hpp"
 #include "rbac/permission/Override.hpp"
 #include "rbac/permission/Permission.hpp"
@@ -112,6 +113,15 @@ void checkIdentityModels(Checker& c) {
     noAdmin.roles.admin.reset();
     const auto carol = identities::User::detached(9, std::move(noAdmin));
     for (const auto& row : identities::to_list_json({alice, bob, carol})) c.check(row, "UserSummary", "user list row");
+
+    // AuthSession (auth.sessions.list): a password sign-in, and a two-factor one that is not the current session.
+    c.check(json(ops::sessions::Info{.id = std::string(32, 'a'), .current = true, .aal = 1, .amr = {"pwd"},
+                                     .auth_time = kT0, .last_activity_at = kT0 + 90, .ip_address = "203.0.113.7",
+                                     .user_agent = "Mozilla/5.0"}),
+            "AuthSession", "current password session");
+    c.check(json(ops::sessions::Info{.id = std::string(32, 'b'), .aal = 2, .amr = {"pwd", "otp"}, .auth_time = kT0,
+                                     .last_activity_at = kT0, .ip_address = "", .user_agent = ""}),
+            "AuthSession", "other two-factor session");
 
     // Group with a member (gid and updated_at set), a bare group, and a member whose account no longer resolves.
     identities::GroupState gs;

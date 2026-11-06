@@ -6,6 +6,7 @@
 // shared-bucket guard, and the path guard that keeps a purge inside the backing root.
 
 #include "../helpers/identities.hpp"
+#include "crypto/SecretKey.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/Entry.hpp"
 #include "db/query/identities/User.hpp"
@@ -40,6 +41,7 @@
 #include <gtest/gtest.h>
 #include <paths.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -293,7 +295,8 @@ TEST_F(VaultRetentionTest, PurgeAfterTheWindowRemovesDataAndKeepsTheKeyUntilItsW
 
     // The retained key is the vault's key, still exportable.
     const auto retained = vault::retention::retainedKey(v->id);
-    EXPECT_EQ(retained.key, key);
+    ASSERT_TRUE(retained.key);
+    EXPECT_TRUE(std::ranges::equal(retained.key->bytes(), key));
     EXPECT_EQ(retained.record->version, tomb->key_version.value_or(0));
 
     // The name is free again once the vault is purged.

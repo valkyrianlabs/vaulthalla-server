@@ -6,15 +6,25 @@
 #include "log/Registry.hpp"
 
 #include <chrono>
+#include <stdexcept>
 
 namespace vh::db::query::auth {
-    void RefreshToken::set(const std::shared_ptr<vh::auth::model::RefreshToken>& token) {
+    bool RefreshToken::insertOnce(const std::shared_ptr<vh::auth::model::RefreshToken>& token) {
         if (!token) {
-            log::Registry::db()->error("[RefreshToken] Attempted to set a null refresh token");
-            return;
+            log::Registry::db()->error("[RefreshToken] Attempted to insert a null refresh token");
+            return false;
         }
 
-        Transactions::exec("RefreshToken::setRefreshToken", [&](pqxx::work& txn) {
+        std::string amr;
+        for (const auto& method : token->amr) {
+            if (method.empty() || method.find(',') != std::string::npos)
+                throw std::invalid_argument("Invalid authentication method for a refresh token");
+            if (!amr.empty()) amr += ',';
+            amr += method;
+        }
+        if (amr.empty()) throw std::invalid_argument("A refresh token needs at least one authentication method");
+
+        return Transactions::exec("RefreshToken::insertOnce", [&](pqxx::work& txn) {
             const pqxx::params p{
                 token->jti,
                 token->userId,
@@ -23,9 +33,11 @@ namespace vh::db::query::auth {
                 token->userAgent,
                 encoding::timestampToString(std::chrono::system_clock::to_time_t(token->issuedAt)),
                 encoding::timestampToString(std::chrono::system_clock::to_time_t(token->expiresAt)),
+                static_cast<int>(token->aal),
+                amr,
             };
 
-            txn.exec(pqxx::prepped{"insert_refresh_token"}, p);
+            return !txn.exec(pqxx::prepped{"insert_refresh_token"}, p).empty();
         });
     }
 
@@ -93,6 +105,12 @@ namespace vh::db::query::auth {
     void RefreshToken::revokeAll(const unsigned int userId) {
         Transactions::exec("RefreshToken::revokeAllRefreshTokens", [&](pqxx::work& txn) {
             txn.exec(pqxx::prepped{"revoke_all_refresh_tokens_for_user"}, pqxx::params{userId});
+        });
+    }
+
+    bool RefreshToken::revokeOfUser(const std::string& jti, const unsigned int userId) {
+        return Transactions::exec("RefreshToken::revokeOfUser", [&](pqxx::work& txn) {
+            return txn.exec(pqxx::prepped{"revoke_refresh_token_of_user"}, pqxx::params{jti, userId}).affected_rows() > 0;
         });
     }
 

@@ -22,13 +22,14 @@ import { accountRules } from '@/features/access/rbac'
 import { Notice, roleHref, roleLabel } from '@/features/access/shared'
 import { passwordPair } from '@/features/access/users/schemas'
 import { GroupsPanel, ProfilePanel, VaultAccessPanel } from '@/features/access/users/UserSections'
+import { SessionsPanel } from '@/features/account/SessionsPanel'
 
 export function AccountPage() {
   const id = useSession(state => state.user?.id)
   const query = useWs('auth.user.get', { id: id ?? 0 }, { enabled: id !== undefined })
   return (
     <>
-      <PageHeader title="Your account" description="Your profile, password and what you have access to." />
+      <PageHeader title="Your account" description="Your profile, password, sessions and what you have access to." />
       <QueryState query={query}>{data => <Account user={data.user} />}</QueryState>
     </>
   )
@@ -49,7 +50,13 @@ const Account = ({ user }: { user: UserRecord }) => {
           </Notice>
         ) : null}
         <ProfilePanel user={user} rules={rules} quiet={user.is_protected} />
-        <PasswordPanel user={user} />
+        <section aria-labelledby="security-title" className="space-y-5">
+          <h2 id="security-title" className="text-xs font-semibold tracking-wide text-fg-subtle uppercase">
+            Security
+          </h2>
+          <PasswordPanel user={user} />
+          <SessionsPanel />
+        </section>
         <GroupsPanel user={user} self readOnly />
         <VaultAccessPanel user={user} />
       </div>

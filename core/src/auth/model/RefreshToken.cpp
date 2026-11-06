@@ -12,6 +12,22 @@ using namespace vh::db::encoding;
 
 namespace vh::auth::model {
 
+namespace {
+// amr as the queries select it: array_to_string(amr, ',') AS amr_list. Method names are short lower-case tokens.
+std::vector<std::string> splitAmr(const std::string& list) {
+    std::vector<std::string> out;
+    std::size_t start = 0;
+    while (start <= list.size()) {
+        const auto end = list.find(',', start);
+        auto item = list.substr(start, end == std::string::npos ? std::string::npos : end - start);
+        if (!item.empty()) out.push_back(std::move(item));
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return out;
+}
+}
+
 RefreshToken::RefreshToken(pqxx::row_ref row)
     : Token(row),
       hashedToken(row["token_hash"].as<std::string>()),
@@ -19,7 +35,10 @@ RefreshToken::RefreshToken(pqxx::row_ref row)
       ipAddress(row["ip_address"].as<std::string>()),
       lastUsed(std::chrono::system_clock::from_time_t(parsePostgresTimestamp(row["last_used"].as<std::string>()))),
       lastActivity(std::chrono::system_clock::from_time_t(
-          parsePostgresTimestamp(row["last_activity_at"].as<std::string>()))) {}
+          parsePostgresTimestamp(row["last_activity_at"].as<std::string>()))),
+      aal(static_cast<uint8_t>(row["aal"].as<int>())),
+      amr(splitAmr(row["amr_list"].as<std::string>())),
+      authTime(std::chrono::system_clock::from_time_t(parsePostgresTimestamp(row["auth_time"].as<std::string>()))) {}
 
 RefreshToken::RefreshToken(std::string rawToken) : Token(std::move(rawToken)) {}
 

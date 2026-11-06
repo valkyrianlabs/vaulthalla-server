@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -25,7 +26,8 @@ namespace vh::platform::sealer {
 // "hardware", "software", "development" or "unknown" (crypto::secrets::KeyProvider::posture()).
 [[nodiscard]] std::string_view posture() noexcept;
 
-void seal(const std::filesystem::path& dir, const std::string& name, const std::vector<uint8_t>& secret);
+void seal(const std::filesystem::path& dir, const std::string& name, std::span<const uint8_t> secret);
+// The caller owns the returned secret and wipes it (KeyProvider keeps only a locked copy).
 [[nodiscard]] std::vector<uint8_t> unseal(const std::filesystem::path& dir, const std::string& name);
 
 // A sealed secret exists to unseal (what init() checks).

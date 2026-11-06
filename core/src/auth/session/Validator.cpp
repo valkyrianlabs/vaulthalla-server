@@ -1,4 +1,5 @@
 #include "auth/session/Validator.hpp"
+#include "auth/session/Assurance.hpp"
 #include "auth/session/Idle.hpp"
 #include "auth/session/Manager.hpp"
 #include "auth/model/RefreshToken.hpp"
@@ -62,58 +63,10 @@ void Validator::validateRefreshToken(const std::shared_ptr<Session>& session) {
 
     validateRefreshClaims(session, claims);
 
-    if (tryRehydrateFromPriorSession(session, rawToken, claims)) return;
-
+    // Always from the stored row, never from another live socket holding the same cookie (#354): a cookie with no row
+    // (minted at some other handshake, perhaps planted) must never ride along into whoever signs in next, and the row
+    // is what revocation, the owner and the MFA policy are checked against.
     rehydrateFromStoredRefreshToken(session, rawToken, claims);
-}
-
-bool Validator::tryRehydrateFromPriorSession(const std::shared_ptr<Session>& session, const std::string& rawToken, const std::optional<TokenClaims>& claims) {
-    if (!claims) return false;
-
-    const auto priorSession = runtime::Deps::get().sessionManager->get(claims->jti);
-    if (!priorSession || priorSession.get() == session.get()) return false;
-    if (!priorSession->tokens || !priorSession->tokens->refreshToken) return false;
-    if (priorSession->isShareSession()) return false;
-
-    const auto& priorToken = priorSession->tokens->refreshToken;
-
-    if (priorToken->rawToken != rawToken) return false;
-    if (!claims->tokenKind.empty() && claims->tokenKind != std::string(Issuer::refreshTokenKind())) return false;
-
-    try {
-        validateClaims(priorToken, claims);
-
-        if (claims->subject != Issuer::buildRefreshTokenSubject(session)) {
-            log::Registry::ws()->debug(
-                "[session::Validator] Refresh token subject mismatch: expected {}, got {}",
-                Issuer::buildRefreshTokenSubject(session),
-                claims->subject
-            );
-            return false;
-        }
-
-        session->tokens->refreshToken = std::make_shared<auth::model::RefreshToken>(*priorToken);
-        session->tokens->refreshToken->rawToken = rawToken;
-        if (priorSession->user) {
-            if (priorSession->user->systemOnly())
-                throw std::runtime_error("System-only users cannot rehydrate human sessions");
-            session->setAuthenticatedUser(priorSession->user);
-        }
-
-        log::Registry::auth()->debug(
-            "[session::Validator] Rehydrated refresh token from prior session for JTI: {}",
-            claims->jti
-        );
-
-        return true;
-    } catch (const std::exception& ex) {
-        log::Registry::ws()->debug(
-            "[session::Validator] Prior session refresh rehydration failed for JTI {}: {}",
-            claims->jti,
-            ex.what()
-        );
-        return false;
-    }
 }
 
 void Validator::rehydrateFromStoredRefreshToken(const std::shared_ptr<Session>& session, const std::string& rawToken, const std::optional<TokenClaims>& claims) {
@@ -167,6 +120,14 @@ void Validator::rehydrateFromStoredRefreshToken(const std::shared_ptr<Session>& 
     if (!user->authorizing()) {
         runtime::Deps::get().sessionManager->invalidate(session);
         throw std::runtime_error("Deactivated users cannot use refresh tokens");
+    }
+
+    // The MFA policy against the row (#354): a row below it is revoked here, and the session refused.
+    try {
+        assurance::enforce(*user, *storedToken);
+    } catch (...) {
+        runtime::Deps::get().sessionManager->invalidate(session);
+        throw;
     }
 
     storedToken->rawToken = rawToken;

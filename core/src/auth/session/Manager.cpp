@@ -1,4 +1,5 @@
 #include "auth/session/Manager.hpp"
+#include "auth/session/Assurance.hpp"
 #include "auth/session/Idle.hpp"
 #include "rbac/PolicyEpoch.hpp"
 
@@ -74,6 +75,7 @@ namespace {
     if (!user) throw std::runtime_error("No user found for refresh token");
     if (user->systemOnly()) throw std::runtime_error("System-only users cannot rehydrate human sessions");
     if (!user->authorizing()) throw std::runtime_error("Deactivated users cannot rehydrate sessions");
+    assurance::enforce(*user, *storedToken);  // the MFA policy against the row (#354)
 
     storedToken->rawToken = rawToken;
 
@@ -160,7 +162,7 @@ void markSignIn(const std::shared_ptr<Session>& session) {
 }
 }
 
-void Manager::promote(const std::shared_ptr<Session>& session) {
+void Manager::promote(const std::shared_ptr<Session>& session, const assurance::Proof& proof) {
     if (!session || !session->user || !session->tokens) {
         log::Registry::ws()->debug("[session::Manager] Promotion failed due to missing session, user, or token state");
         throw std::invalid_argument("Invalid session data for promotion");
@@ -168,6 +170,7 @@ void Manager::promote(const std::shared_ptr<Session>& session) {
 
     if (session->user->systemOnly())
         throw std::runtime_error("System-only users cannot be promoted to human sessions");
+    if (proof.aal != 1 && proof.aal != 2) throw std::invalid_argument("Invalid assurance level for promotion");
 
     if (!session->tokens->refreshToken || !session->tokens->refreshToken->isValid()) {
         log::Registry::ws()->debug(
@@ -184,34 +187,53 @@ void Manager::promote(const std::shared_ptr<Session>& session) {
         throw std::invalid_argument("Invalid session data for promotion");
     }
 
-    session->tokens->refreshToken->userId = session->user->id;
+    auto& token = session->tokens->refreshToken;
+    token->userId = session->user->id;
+    token->aal = proof.aal;
+    token->amr = proof.amr;
 
-    if (const auto dbToken = db::query::auth::RefreshToken::get(session->tokens->refreshToken->jti)) {
-        session->tokens->refreshToken = dbToken;
-        cache(session);
-        markSignIn(session);
-        log::Registry::ws()->debug("[session::Manager] Promoted session for user: {} (existing refresh token found)", session->user->name());
-        return;
+    // Write-once (#354): the socket's refresh token was minted at its own handshake and has no row yet. A jti that
+    // already has one (someone signed in with it, or it was promoted before) is never adopted or promoted again.
+    if (!db::query::auth::RefreshToken::insertOnce(token)) {
+        log::Registry::auth()->warn("[session::Manager] Refused to promote a refresh token that already has a row "
+                                    "(session UUID {})", session->uuid);
+        session->tokens->accessToken.reset();
+        throw std::runtime_error("This session's refresh token was already signed in");
     }
 
-    db::query::auth::RefreshToken::set(session->tokens->refreshToken);
-
-    session->tokens->refreshToken = db::query::auth::RefreshToken::get(session->tokens->refreshToken->jti);
-    if (!session->tokens->refreshToken) {
+    const auto stored = db::query::auth::RefreshToken::get(token->jti);
+    if (!stored) {
         log::Registry::ws()->debug(
             "[session::Manager] Promotion failed: Unable to retrieve updated refresh token for session UUID: {}",
             session->uuid
         );
         throw std::runtime_error("Failed to retrieve updated refresh token during promotion");
     }
+    stored->rawToken = token->rawToken;
+    token = stored;
 
     cache(session);
     markSignIn(session);
 
     log::Registry::ws()->debug(
-        "[session::Manager] Promoted session for user: {}",
-        session->user->name()
+        "[session::Manager] Promoted session for user: {} (aal {})",
+        session->user->name(),
+        static_cast<int>(proof.aal)
     );
+}
+
+bool Manager::endIfBelowPolicy(const std::shared_ptr<Session>& session) {
+    if (!session || !session->user || session->onDeviceListener() || session->isShareSession()) return false;
+    if (!session->tokens || !session->tokens->refreshToken) return false;
+    auto& row = *session->tokens->refreshToken;
+    if (assurance::satisfied(*session->user, row)) return false;
+    try {
+        assurance::enforce(*session->user, row);
+    } catch (const std::exception&) {
+        // enforce() revoked the row and recorded it; what is left is ending this session.
+    }
+    invalidate(session);
+    return true;
 }
 
 void Manager::renewAccessToken(const std::shared_ptr<Session>& session, const std::string& existingToken) {
@@ -247,6 +269,7 @@ void Manager::renewAccessToken(const std::shared_ptr<Session>& session, const st
 
     // #319: auth.refresh must not bring an idle session back (the console calls it on every page load).
     if (expireIfIdle(session)) throw std::invalid_argument("Session ended after inactivity");
+    if (endIfBelowPolicy(session)) throw std::invalid_argument("Session ended by the MFA policy");  // #354
 
     Issuer::accessToken(session);
     cache(session);
@@ -444,6 +467,7 @@ bool Manager::validate(const std::shared_ptr<Session>& session, const std::strin
         }
 
         if (expireIfIdle(session)) return false;  // #319: idle too long, whatever the access token says
+        if (endIfBelowPolicy(session)) return false;  // #354: the row no longer meets the MFA policy
 
         if (Validator::validateAccessToken(session, accessToken)) {
             if (session->tokens->accessToken->timeRemaining() < std::chrono::minutes(5)) Issuer::accessToken(session);
@@ -501,6 +525,7 @@ std::shared_ptr<Session> Manager::validateRawRefreshToken(const std::string& ref
     if (session->user->systemOnly())
         throw std::invalid_argument("System-only users cannot use human refresh tokens");
     if (expireIfIdle(session)) throw std::invalid_argument("Session ended after inactivity");  // #319: HTTP lanes
+    if (endIfBelowPolicy(session)) throw std::invalid_argument("Session ended by the MFA policy");  // #354
 
     return session;
 }
@@ -599,6 +624,27 @@ bool Manager::expireIfIdle(const std::shared_ptr<Session>& session) {
     token->hardInvalidate();  // revokes the stored row: no silent sign-in from the cookie afterwards
     invalidate(session);
     return true;
+}
+
+std::size_t Manager::endSessionsWithRefreshJti(const uint32_t userId, const std::string& jti,
+                                               const std::shared_ptr<Session>& caller) {
+    if (jti.empty()) return 0;
+    std::vector<std::shared_ptr<Session>> targets;
+    for (const auto& session : getSessionsByUserId(userId)) {
+        if (std::ranges::find(targets, session) != targets.end()) continue;
+        if (humanRefreshJti(session) == jti) targets.push_back(session);
+    }
+    if (const auto indexed = get(jti); indexed && std::ranges::find(targets, indexed) == targets.end() &&
+                                       indexed->user && indexed->user->id == userId)
+        targets.push_back(indexed);
+
+    for (const auto& session : targets) {
+        invalidate(session);
+        // The socket ends now; the caller's own (revoking its own session) after its reply has gone out.
+        if (session == caller) session->closeAfterReply();
+        else session->close();
+    }
+    return targets.size();
 }
 
 void Manager::invalidate(const std::string& token) {

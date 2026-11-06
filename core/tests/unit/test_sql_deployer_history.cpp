@@ -797,6 +797,59 @@ TEST_F(SqlDeployerHistoryDb, KeyProvenanceMigrationIsAdditiveAndIdempotent) {
     });
 }
 
+// 119 (#354, session assurance): on a 118-era database refresh_tokens has no aal / amr / auth_time. Existing rows
+// were password sign-ins and read as aal 1, amr {pwd}, auth_time = issued_at; the level is checked; re-running the
+// file changes nothing.
+TEST_F(SqlDeployerHistoryDb, RefreshTokenAssuranceMigrationIsAdditiveAndOldRowsReadAsAal1) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("DROP INDEX IF EXISTS idx_refresh_tokens_user_live");
+        txn.exec("ALTER TABLE refresh_tokens DROP COLUMN IF EXISTS aal, DROP COLUMN IF EXISTS amr, "
+                 "DROP COLUMN IF EXISTS auth_time");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '119_refresh_token_assurance.sql'");
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_119_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        txn.exec("INSERT INTO refresh_tokens (jti, user_id, token_hash, issued_at, expires_at) VALUES "
+                 "('00000000-0000-4000-8000-000000000119', $1, 'sha256:x', '2026-01-02 03:04:05', "
+                 "'2026-01-09 03:04:05')", pqxx::params{owner});
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "119_refresh_token_assurance.sql"));
+        EXPECT_EQ(recordedHash(txn, "119_refresh_token_assurance.sql"), currentHash("119_refresh_token_assurance.sql"));
+
+        const auto old = txn.exec("SELECT aal, array_to_string(amr, ','), auth_time = issued_at FROM refresh_tokens "
+                                  "WHERE jti = '00000000-0000-4000-8000-000000000119'").one_row();
+        EXPECT_EQ(old[0].as<int>(), 1) << "a row written before assurance was a password sign-in";
+        EXPECT_EQ(old[1].as<std::string>(), "pwd");
+        EXPECT_TRUE(old[2].as<bool>()) << "auth_time is backfilled from issued_at";
+
+        // New rows default the same way, and the level is 1 or 2 only.
+        txn.exec("INSERT INTO refresh_tokens (jti, user_id, token_hash) VALUES "
+                 "('00000000-0000-4000-8000-000000000120', $1, 'sha256:y')", pqxx::params{owner});
+        EXPECT_FALSE(txn.exec("SELECT auth_time IS NULL FROM refresh_tokens WHERE jti = "
+                              "'00000000-0000-4000-8000-000000000120'").one_field_ref().as<bool>());
+        {
+            pqxx::subtransaction bad(txn, "bad_aal");
+            EXPECT_THROW(bad.exec("INSERT INTO refresh_tokens (jti, user_id, token_hash, aal) VALUES "
+                                  "('00000000-0000-4000-8000-000000000121', $1, 'sha256:z', 3)", pqxx::params{owner}),
+                         pqxx::check_violation);
+        }
+        {
+            pqxx::subtransaction bad(txn, "null_auth_time");
+            EXPECT_THROW(bad.exec("UPDATE refresh_tokens SET auth_time = NULL WHERE jti = "
+                                  "'00000000-0000-4000-8000-000000000119'"),
+                         pqxx::not_null_violation);
+        }
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "119_refresh_token_assurance.sql")));
+        EXPECT_EQ(txn.exec("SELECT aal FROM refresh_tokens WHERE jti = '00000000-0000-4000-8000-000000000119'")
+                      .one_field_ref().as<int>(), 1);
+    });
+}
+
 // 120 + 121 (#366, provider-blind storage schema) on a 117-era database: every existing vault and file gets a uid from
 // the deployer's data step (distinct, never PostgreSQL's v4 UUIDs), encrypting vaults get path_v0 and the others
 // transparent (a NULL encrypt_upstream counts as encrypting, as the daemon always read it), the uids become NOT NULL,

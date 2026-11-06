@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <paths.h>
+#include <sodium/utils.h>
 
 // macOS: the Secure Enclave by default (-Ddarwin_sealer=secure-enclave), the development "file" backend when the
 // build asks for it or no Secure Enclave key can be used here. One backend per process, reported by
@@ -71,7 +72,7 @@ std::mutex& darwinSealerMutex() {
     return m;
 }
 
-void sealLocked(const std::filesystem::path& dir, const std::string& name, const std::vector<uint8_t>& secret) {
+void sealLocked(const std::filesystem::path& dir, const std::string& name, const std::span<const uint8_t> secret) {
     if (underSecureEnclave()) {
         secure_enclave::seal(dir, name, secret);
         removeDurably(file::path(dir, name));
@@ -105,7 +106,7 @@ std::string_view posture() noexcept {
     return "unknown";
 }
 
-void seal(const std::filesystem::path& dir, const std::string& name, const std::vector<uint8_t>& secret) {
+void seal(const std::filesystem::path& dir, const std::string& name, const std::span<const uint8_t> secret) {
     const std::scoped_lock lock(darwinSealerMutex());
     requireUsable();
     sealLocked(dir, name, secret);
@@ -121,7 +122,12 @@ std::vector<uint8_t> unseal(const std::filesystem::path& dir, const std::string&
 
     if (hasSe && (underSecureEnclave() || !hasFile)) {
         auto secret = secure_enclave::unseal(dir, name);
-        if (hasFile && underSecureEnclave()) removeDurably(filePath);
+        try {
+            if (hasFile && underSecureEnclave()) removeDurably(filePath);
+        } catch (...) {
+            sodium_memzero(secret.data(), secret.size());
+            throw;
+        }
         return secret;
     }
     if (!hasFile) throw std::runtime_error("no sealed secret '" + name + "' under " + dir.string());
@@ -129,7 +135,12 @@ std::vector<uint8_t> unseal(const std::filesystem::path& dir, const std::string&
     auto secret = file::unseal(dir, name);
     if (underSecureEnclave()) {
         // seal() reads the new blob back before writing it and removes the plaintext file only after.
-        sealLocked(dir, name, secret);
+        try {
+            sealLocked(dir, name, secret);
+        } catch (...) {
+            sodium_memzero(secret.data(), secret.size());
+            throw;
+        }
         log::Registry::crypto()->info("[Sealer] Moved sealed secret '{}' from the file backend to the Secure Enclave",
                                       name);
     }

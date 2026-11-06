@@ -1,5 +1,8 @@
 #pragma once
 
+#include "crypto/SecretBytes.hpp"
+
+#include <span>
 #include <vector>
 #include <string>
 #include <string_view>
@@ -30,13 +33,19 @@ class KeyProvider {
 public:
     explicit KeyProvider(const std::string& name = "master");
 
-    void init(const std::optional<std::string>& initSecret = std::nullopt);  // check or generate
+    // Unseals the sealed secret, or seals `initial` (a generated one when it is empty) when there is none yet.
+    void init(std::span<const uint8_t> initial = {});
     // init() for a secret that wraps stored records: when there is no sealed secret to unseal but `dependents`
     // reports records, throws MasterSecretLost instead of generating a replacement (#326).
     void initGuarded(const DependentsCheck& dependents);
-    [[nodiscard]] const std::vector<uint8_t>& getMasterKey() const;
+    // The secret, in locked memory that is zeroed when this provider is destroyed or the secret replaced (#350).
+    // Valid until then; empty before init(). Read it where it is needed; never copy it into a buffer that outlives
+    // the call (wrap a copy an API insists on in crypto::WipedKeyCopy).
+    [[nodiscard]] std::span<const uint8_t> getMasterKey() const noexcept { return master_.bytes(); }
 
-    void updateMasterKey(const std::vector<uint8_t>& newMasterKey);
+    // Seals `newMasterKey` (a generated secret when it is empty) over the stored one, then holds it. When sealing
+    // throws, the provider keeps the secret it had.
+    void updateMasterKey(std::span<const uint8_t> newMasterKey);
 
     [[nodiscard]] bool sealedExists() const;
 
@@ -50,14 +59,20 @@ public:
 
     // A fresh master secret from libsodium's CSPRNG (the OS generator: getrandom(2) / arc4random). Throws if
     // libsodium can't initialize. Never std::random_device, whose source is implementation-defined (#318).
-    [[nodiscard]] static std::vector<uint8_t> generateMasterSecret(std::size_t bytes = 32);
+    [[nodiscard]] static crypto::SecretBytes generateMasterSecret(std::size_t bytes = 32);
+
+    // Tests only: runs on each secret a sealer returns, before the provider keeps it, so a test can fail an unseal
+    // midway (by throwing) and check that the unsealed bytes were wiped. nullptr (the default) turns it off.
+    using UnsealHook = void (*)(std::span<const uint8_t> unsealed);
+    static void setUnsealHookForTesting(UnsealHook hook) noexcept;
 
 private:
-    std::vector<uint8_t> masterKey_;
+    crypto::SecretBytes master_;
     std::string name_;
     std::filesystem::path sealedDir_;
 
-    void generateAndSeal();
+    void unsealStored();
+    void sealAndKeep(crypto::SecretBytes candidate);
     static void requirePosture();
 };
 
