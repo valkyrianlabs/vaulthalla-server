@@ -113,6 +113,17 @@ else
   build_image
 fi
 
+# 12g (2026-11-05): the VPS CI pool is 22G/24G shared by up to three jobs, and a full-parallelism build of this repo
+# peaked at 12-19G, so one job could take the whole pool. Memory, not CPUs, bounds the build instead: memory.high
+# throttles 1G below the cap (reclaim before an OOM kill), and the compile runs VH_BUILD_JOBS = memory / 2.4G jobs
+# (a unity TU's cc1plus peaks near 2G; at 12g that is 5 jobs; full parallelism at 12g used to OOM-kill cc1plus).
+memory="${CI_MEMORY:-12g}"
+memory_bytes="$(numfmt --from=iec "${memory^^}")"
+build_jobs=$(( memory_bytes * 10 / (24 * 1024 * 1024 * 1024) ))
+cpus="$(nproc)"
+[ "$build_jobs" -ge 1 ] || build_jobs=1
+[ "$build_jobs" -le "$cpus" ] || build_jobs="$cpus"
+
 # --- environment -----------------------------------------------------------------------------
 # The step's environment (workflow/job/step env, secrets it was given, GITHUB_*, RUNNER_*, OIDC
 # request variables) is forwarded, minus what describes the host itself; the step's own code on
@@ -127,7 +138,7 @@ while IFS= read -r name; do
     *) env_args+=(--env "$name") ;;
   esac
 done < <(compgen -e)
-env_args+=(--env CI=true --env HOME=/home/ci --env GITHUB_WORKSPACE=/workspace
+env_args+=(--env CI=true --env HOME=/home/ci --env GITHUB_WORKSPACE=/workspace --env "VH_BUILD_JOBS=$build_jobs"
   --env npm_config_store_dir=/cache/pnpm-store --env pnpm_config_store_dir=/cache/pnpm-store
   --env NPM_CONFIG_CACHE=/cache/npm)
 # As container root (stock images have no /home/ci), root's own home.
@@ -187,9 +198,8 @@ reap pod
 name="ci-${GITHUB_RUN_ID:-local}-${GITHUB_JOB:-job}-$$"
 name="${name//[^a-zA-Z0-9_.-]/-}"
 pod=""
-# 20g: the host keeps >= 24 GB free for CI, and a -Werror build of the unity test objects needs more than the old 12g
-# at full parallelism (the kernel OOM-killed cc1plus).
-limits=(--memory "${CI_MEMORY:-20g}" --pids-limit 16384 --label "ci.run-ci.pid=$$")
+limits=(--memory "$memory" --cgroup-conf "memory.high=$(( memory_bytes - 1024 * 1024 * 1024 ))"
+  --pids-limit 16384 --label "ci.run-ci.pid=$$")
 
 # shellcheck disable=SC2317 # trap handler
 cleanup() {

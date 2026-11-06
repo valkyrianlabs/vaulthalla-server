@@ -6,6 +6,7 @@
 #include "identities/Manager.hpp"
 #include "log/Registry.hpp"
 #include "log/RotationService.hpp"
+#include "audit/Trail.hpp"
 #include "notifications/OperatorEmailService.hpp"
 #include "protocols/ProtocolService.hpp"
 #include "protocols/device/Service.hpp"
@@ -34,6 +35,7 @@ constexpr auto kRestartDelay = std::chrono::milliseconds(500);
 constexpr auto kWatchdogInterval = std::chrono::seconds(2);
 
 constexpr std::array kBaseStartOrder{
+    "AuditTrail",  // first in, last out: it records what every other service does
     "FUSE",
     "IdentityWatcher",
     "SyncController",
@@ -65,7 +67,8 @@ constexpr std::array kBaseStopOrder{
     "LogRotationService",
     "UpstreamEventService",
     "SyncController",
-    "FUSE"
+    "FUSE",
+    "AuditTrail"
 };
 }
 
@@ -87,8 +90,10 @@ Manager::Manager()
       vaultRetentionService(std::make_shared<vault::RetentionService>()),
       statsSnapshotService(std::make_shared<stats::SnapshotService>()),
       operatorEmailService(std::make_shared<notifications::OperatorEmailService>()),
-      upstreamEventService(std::make_shared<sync::events::Service>()) {
+      upstreamEventService(std::make_shared<sync::events::Service>()),
+      auditTrail(audit::Trail::instance()) {
 
+    services_["AuditTrail"] = auditTrail;
     services_["SyncController"] = syncController;
     if (fuseService) services_["FUSE"] = fuseService;  // null: built without the kernel FUSE bridge
     services_["ProtocolService"] = protocolService;

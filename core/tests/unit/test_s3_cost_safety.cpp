@@ -581,26 +581,67 @@ void clearS3PriceBudgetStateForDbTest() {
     });
 }
 
+void ensureWritableTestPathRoots();
+void carrySealedSecrets(const std::filesystem::path& from, const std::filesystem::path& to);
+const std::filesystem::path& sealedHome();
+
 void ensureDbReady() {
     static bool initialized = false;
     if (!initialized) {
         vh::db::Transactions::init();
         vh::db::seed::nuke_and_recreate_schema_public();
         vh::db::Transactions::dbPool_->initPreparedStatements();
+        // The test host's gateway master exists before any credential row does, as on a real host: tests seed rows
+        // directly (with placeholder ciphertext), and KeyProvider never invents a master once rows exist (#326).
+        ensureWritableTestPathRoots();
+        { const vh::protocols::s3::CredentialManager warm; }
+        carrySealedSecrets(vh::paths::backingPath, sealedHome());
         initialized = true;
     }
     clearS3PriceBudgetStateForDbTest();
 }
 
+// The host's sealed master secrets live under the backing path. A test that moves the backing path is still the same
+// host with the same database, so the sealed secrets move with it; a fresh root without them is a host that lost its
+// masters, which KeyProvider refuses to paper over (#326).
+void carrySealedSecrets(const std::filesystem::path& from, const std::filesystem::path& to) {
+    std::error_code ec;
+    if (from.empty() || !std::filesystem::is_directory(from, ec)) return;
+    for (const auto& item : std::filesystem::directory_iterator(from, ec)) {
+        const auto name = item.path().filename().string();
+        if (name.starts_with(".sealed_test_"))  // test-mode slots only, never a real install's secrets
+            std::filesystem::copy(item.path(), to / name, std::filesystem::copy_options::recursive |
+                                                              std::filesystem::copy_options::overwrite_existing, ec);
+    }
+}
+
+// One place the test host's sealed secrets live between backing roots (every root syncs with it).
+const std::filesystem::path& sealedHome() {
+    static const auto home = [] {
+        auto dir = std::filesystem::temp_directory_path() / uniqueSuffix("vh_s3_cost_safety_sealed");
+        std::filesystem::create_directories(dir);
+        return dir;
+    }();
+    return home;
+}
+
 void ensureWritableTestPathRoots() {
     static bool initialized = false;
-    if (initialized) return;
+    if (initialized) {
+        // Secrets a scoped root sealed since are the host's too.
+        carrySealedSecrets(vh::paths::backingPath, sealedHome());
+        carrySealedSecrets(sealedHome(), vh::paths::backingPath);
+        return;
+    }
 
     const auto root = std::filesystem::temp_directory_path() / uniqueSuffix("vh_s3_cost_safety_paths");
     std::filesystem::remove_all(root);
+    const auto previousBacking = vh::paths::backingPath;
     vh::paths::backingPath = root / "backing";
     vh::paths::mountPath = root / "mount";
     std::filesystem::create_directories(vh::paths::backingPath);
+    carrySealedSecrets(previousBacking, sealedHome());
+    carrySealedSecrets(sealedHome(), vh::paths::backingPath);
     std::filesystem::create_directories(vh::paths::mountPath);
     initialized = true;
 }
@@ -1104,15 +1145,27 @@ public:
         vh::paths::mountPath = root_ / "mount";
         std::filesystem::create_directories(vh::paths::backingPath);
         std::filesystem::create_directories(vh::paths::mountPath);
+        carrySealedSecrets(oldBackingPath_, sealedHome());
+        carrySealedSecrets(sealedHome(), vh::paths::backingPath);
     }
 
     ~ScopedPathRoots() {
+        // Secrets first sealed under this root belong to the host too: hand them back.
+        carrySealedSecrets(vh::paths::backingPath, sealedHome());
+        carrySealedSecrets(sealedHome(), oldBackingPath_);
+        restore();
+    }
+
+    ScopedPathRoots(const ScopedPathRoots&) = delete;
+    ScopedPathRoots& operator=(const ScopedPathRoots&) = delete;
+
+private:
+    void restore() {
         vh::paths::backingPath = oldBackingPath_;
         vh::paths::mountPath = oldMountPath_;
         std::filesystem::remove_all(root_);
     }
 
-private:
     std::filesystem::path root_;
     std::filesystem::path oldBackingPath_;
     std::filesystem::path oldMountPath_;

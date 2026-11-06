@@ -1,6 +1,7 @@
 #include "ops/VaultKeys.hpp"
 
 #include "crypto/secrets/KeyProvider.hpp"
+#include "crypto/secrets/Dependents.hpp"
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/util/verify.hpp"
@@ -123,7 +124,7 @@ public:
     crypto::SecretKeyPtr unseal(const vault::model::Key& rec) {
         if (!provider_) {
             provider_.emplace(paths::testMode ? "test_vault_master" : "vault_master");
-            provider_->init();
+            provider_->initGuarded(crypto::secrets::dependents::vaultMaster());
         }
         auto raw = crypto::util::decrypt_aes256_gcm(rec.encrypted_key, provider_->getMasterKey(), rec.iv);
         if (raw.size() != crypto::util::AES_KEY_SIZE) {
@@ -140,6 +141,9 @@ public:
     std::pair<std::vector<uint8_t>, std::vector<uint8_t>> seal(const crypto::SecretKey& key) {
         if (!provider_) {
             provider_.emplace(paths::testMode ? "test_vault_master" : "vault_master");
+            // Not guarded: importing per-vault key backups under a new installation master is how vault contents
+            // are recovered after the old master is lost (#326). Rows still wrapped by the lost master stay
+            // unreadable until their own backups are imported; nothing that was readable becomes unreadable.
             provider_->init();
         }
         std::vector<uint8_t> raw(key.bytes().begin(), key.bytes().end());

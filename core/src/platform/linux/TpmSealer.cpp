@@ -308,6 +308,26 @@ namespace vh::platform::sealer {
 
     std::string_view backend() noexcept { return "tpm2"; }
 
+    // What the TCTI the daemon would pick is (the same order as select_tcti_backend), decided once per process.
+    std::string_view posture() noexcept {
+        static const std::string_view decided = [] {
+            try {
+                for (const char* var : {"VH_TPM_TCTI", "TSS2_TCTI", "TPM2TOOLS_TCTI"}) {
+                    if (const auto v = env_override(var)) {
+                        if (v->starts_with("device:")) return std::string_view("hardware");
+                        if (v->starts_with("swtpm") || v->starts_with("mssim")) return std::string_view("software");
+                        return std::string_view("unknown");
+                    }
+                }
+                if (device_tpm_exists("/dev/tpmrm0") || device_tpm_exists("/dev/tpm0")) return std::string_view("hardware");
+                return std::string_view("software");
+            } catch (...) {
+                return std::string_view("unknown");
+            }
+        }();
+        return decided;
+    }
+
     // A KEYEDHASH object holding the secret under the TPM's storage primary, which is recreated on each use (no
     // persistent handle). The blob only loads into this TPM. No PCR policy: whoever can read `dir` and reach the TPM
     // can unseal it.

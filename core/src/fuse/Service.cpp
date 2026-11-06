@@ -253,9 +253,9 @@ void Service::runLoop() {
         return;
     }
 
-    // Working copies from a previous run hold plaintext and are no longer open anywhere.
+    // Working copies from a previous run are no longer open anywhere, and their key ended with that run.
     try {
-        WorkingCopies::instance().clearStale();
+        (void)WorkingCopies::instance().clearStale();
     } catch (const std::exception& e) {
         log::Registry::fuse()->warn("[FUSE] Could not clear stale working copies: {}", e.what());
     }
@@ -271,6 +271,7 @@ void Service::runLoop() {
     log::Registry::fuse()->info("[FUSE] Mounted FUSE filesystem at {}", opts.mountpoint);
     runtime::Deps::get().setFuseSession(session_);
     loopActive_.store(true);
+    WorkingCopies::instance().startRetrying();
 
     while (!fuse_session_exited(session_) && !shouldStop()) {
         fuse_buf buf{};
@@ -306,6 +307,12 @@ void Service::runLoop() {
     if (const auto& pool = ThreadPoolManager::instance().fusePool();
         pool && !pool->waitIdle(std::chrono::steady_clock::now() + std::chrono::seconds(2)))
         log::Registry::fuse()->warn("[FUSE] FUSE requests still running 2s after the loop ended");
+    // Changes whose seal failed get a last chance; whatever is still unsaved is reported lost (its key ends with us).
+    try {
+        (void)WorkingCopies::instance().shutdown();
+    } catch (const std::exception& e) {
+        log::Registry::fuse()->error("[FUSE] Could not write back unsaved working copies: {}", e.what());
+    }
     fuse_session_destroy(session_);
     session_ = nullptr;
 

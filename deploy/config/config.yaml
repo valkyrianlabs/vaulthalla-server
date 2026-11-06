@@ -231,6 +231,20 @@ caching:
 #    max_edit_bytes: 2097152         # Largest text file the web editor saves (2 MiB)
 
 
+# === 🔐 Sealed Secrets ===
+# Master secrets are sealed to this machine: a TPM on Linux, the Secure Enclave on macOS (docs: vaults/secrets-and-key-export).
+secrets:
+  require_hardware: false                 # true: refuse to start unless a hardware TPM / the Secure Enclave seals them (no swtpm, no files)
+  allow_development_file_backend: false   # macOS without a usable Secure Enclave: allow plain 0600 key files (development only)
+
+
+# === 📝 Logging ===
+# File and folder names can themselves be sensitive (a patient's name, a case number). By default log lines name files
+# by entry id, and paths with no id by an opaque tag that is only meaningful within one daemon run.
+logging:
+  file_paths: ids                   # ids | full (full adds vault paths to log lines; for hosts holding nothing sensitive)
+
+
 # === ⚖️ Auditing ===
 # Auditing settings manage log rotation, encryption waivers, and trashed files.
 # Logs are rotated to prevent excessive disk usage.
@@ -243,6 +257,12 @@ auditing:
     compression: zstd               # Compress rotated files to save disk, options: none, gzip, zstd
     max_retained_logs_size: 1G      # Max total size for retained logs, minimum 100MB  (M for MB, G for GB)
     strict_retention: false         # Enforce strict retention_period, disables max_retained_logs_size
+
+  trail:                         # The tamper-evident audit trail in the database (docs: admin/audit-trail)
+    retention_days: 2190         # Keep audit events six years (HIPAA documentation retention), minimum 30 days
+    head_interval_minutes: 15    # Sign the chain head this often, 1..1440
+    syslog: false                # Also send audit events to the local syslog (forward them to a SIEM)
+    syslog_facility: authpriv    # auth | authpriv | local0..local7
 
   encryption_waivers:
     retention_days: 180          # Permanently delete encryption waivers after this many days, minimum 30 days

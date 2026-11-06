@@ -2,6 +2,7 @@
 #include "storage/CloudEngine.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
+#include "log/Redact.hpp"
 #include "sync/model/ScopedOp.hpp"
 #include "sync/model/Baseline.hpp"
 #include "sync/tasks/Baseline.hpp"
@@ -30,7 +31,7 @@ void Download::operator()() {
         op->success = true;
         if (local) recordBaseline(engine, vh::sync::model::Baseline::afterDownload(*local, *file));
     } catch (const std::exception& e) {
-        log::Registry::sync()->error("[DownloadTask] Failed to download file: {} - {}", file->path.string(), e.what());
+        log::Registry::sync()->error("[DownloadTask] Failed to download file: {} - {}", log::file(file->id, file->path), e.what());
     }
 
     if (op) op->stop();

@@ -362,6 +362,16 @@ vh device remote disable
 
 A paired device acts as your account. `--all` and `remote` are for super admins. See [Paired Devices](/admin/devices).
 
+## Audit Trail
+
+```bash
+vh audit list [--action <prefix>] [--since <date>] [--until <date>] [--limit <n>] [--json]
+vh audit verify [--json]
+vh audit export [--since <date>] [--until <date>] > audit.ndjson
+```
+
+Read the tamper-evident audit trail. All three need the **view audits** admin permission and are themselves recorded. Dates are `YYYY-MM-DD` (UTC) or Unix seconds. `verify` exits with status 1 when the trail was altered. See [Audit Trail](/admin/audit-trail).
+
 ## Internal Secrets
 
 ```bash

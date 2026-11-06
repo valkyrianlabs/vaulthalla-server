@@ -370,7 +370,9 @@ std::vector<WsModel> statsSystemModels() {
                  str("mount_backend"),
                  str("mount_isolation").desc("enforced | unproven | not_applicable."),
                  statsNullable(str("mount_detail")),
-                 str("secrets_backend").desc("\"tpm2\" (Linux), \"secure-enclave\" (macOS), or \"file\" (macOS development backend, no hardware binding).")}),
+                 str("secrets_backend").desc("\"tpm2\" (Linux), \"secure-enclave\" (macOS), \"file\" (macOS development backend, no hardware binding) or \"unavailable\" (macOS without a usable Secure Enclave: sealing refuses)."),
+                 str("secrets_posture").oneOf({"hardware", "software", "development", "unknown"}).opt()
+                     .desc("What protects the sealed secrets: hardware (TPM, Secure Enclave), software (swtpm), development (files).")}),
          object("shell", "", {statsNullable(boolean("admin_uid_bound"))}),
          object("database", "",
                 {statsUint("pool_size"), statsUint("idle"), statsUint("in_use"), statsUint("broken_idle"),

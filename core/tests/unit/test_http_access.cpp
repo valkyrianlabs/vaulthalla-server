@@ -165,6 +165,7 @@ protected:
     inline static UserPtr admin, reader, plain;
     inline static std::shared_ptr<storage::Engine> vaultA, vaultB;
     inline static std::vector<uint8_t> big;
+    inline static uint32_t noteId = 0, otherId = 0;
 
     static void SetUpTestSuite() {
         if (!(std::getenv("VH_TEST_DB_USER") && std::getenv("VH_TEST_DB_PASS") && std::getenv("VH_TEST_DB_HOST") &&
@@ -209,8 +210,8 @@ protected:
         const std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>)";
         write(vaultA, "/vec.svg", {svg.begin(), svg.end()});
         const std::string text = "hello vault\n";
-        write(vaultA, "/note.txt", {text.begin(), text.end()});
-        write(vaultB, "/other.jpg", jpegOf(64, 64));
+        noteId = write(vaultA, "/note.txt", {text.begin(), text.end()})->id;
+        otherId = write(vaultB, "/other.jpg", jpegOf(64, 64))->id;
 
         big.resize(3 * 1024 * 1024 + 123);
         std::mt19937 rng(9);
@@ -282,6 +283,38 @@ TEST_F(HttpAccessDbTest, HumanPreviewEnforcesFilesystemRbacBeforeAnyWork) {
     const auto items = nlohmann::json::parse(bodyOf(Router::route(std::move(batch)))).at("items");
     EXPECT_EQ(items.at(0).at("status"), "unsupported");
     EXPECT_FALSE(items.at(0).contains("url"));
+}
+
+// #327: the console addresses files by entry id (`entry=<id>`), so names and paths stay out of URLs and access logs.
+// Addressing by id resolves to the same path and runs the same RBAC and no-existence-oracle rules as addressing by path.
+TEST_F(HttpAccessDbTest, EntryIdAddressingFollowsThePathRules) {
+    const auto byId = [](const std::shared_ptr<storage::Engine>& engine, const uint32_t id) {
+        return "/download/content?vault_id=" + std::to_string(engine->vault->id) + "&entry=" + std::to_string(id);
+    };
+    const std::string text = "hello vault\n";
+
+    as(admin);
+    auto ok = Router::route(get(byId(vaultA, noteId)));
+    ASSERT_EQ(statusOf(ok), status::ok);
+    EXPECT_EQ(bodyOf(ok), std::vector<uint8_t>(text.begin(), text.end()));
+
+    as(reader);
+    EXPECT_EQ(statusOf(Router::route(get(byId(vaultA, noteId)))), status::ok);
+    // An id from another vault is the same as a missing path there: 404 to a caller who can read the vault root.
+    EXPECT_EQ(statusOf(Router::route(get(byId(vaultA, otherId)))), status::not_found);
+    EXPECT_EQ(statusOf(Router::route(get(byId(vaultA, 0x7ffffff0)))), status::not_found);
+    // ... and 403 to one who can't, so ids can't be probed for existence.
+    EXPECT_EQ(statusOf(Router::route(get(byId(vaultB, otherId)))), status::forbidden);
+    EXPECT_EQ(statusOf(Router::route(get(byId(vaultB, 0x7ffffff0)))), status::forbidden);
+
+    as(plain);
+    EXPECT_EQ(statusOf(Router::route(get(byId(vaultA, noteId)))), status::forbidden);
+
+    as(admin);
+    EXPECT_EQ(statusOf(Router::route(get(byId(vaultA, noteId) + "&path=%2Fnote.txt"))), status::bad_request);
+    for (const auto* bad : {"", "0", "-1", "12x", "99999999999"})
+        EXPECT_EQ(statusOf(Router::route(get("/download/content?vault_id=" + std::to_string(vaultA->vault->id) +
+                                             "&entry=" + bad))), status::bad_request) << bad;
 }
 
 // The grid's readiness check answers from the index: nothing is opened or decrypted, nothing counts as a cache hit,
@@ -451,7 +484,7 @@ TEST_F(HttpAccessDbTest, DownloadsLargerThanTheOldInMemoryCapStream) {
         }
     }
     const auto file = fs::Filesystem::createFile({.path = "/huge.bin", .fuse_path = vaultA->vaultPathToFusePath("/huge.bin"),
-                                                  .source_path = source, .engine = vaultA, .user = admin, .overwrite = true});
+                                                  .source = vh::fs::sourceOf(source), .engine = vaultA, .user = admin, .overwrite = true});
     std::filesystem::remove(source);
     ASSERT_EQ(file->size_bytes, 300ull << 20);
 

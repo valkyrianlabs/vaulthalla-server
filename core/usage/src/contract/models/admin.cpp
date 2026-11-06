@@ -321,8 +321,46 @@ std::vector<WsModel> adminSettingsModels() {
         {boolean("enabled"), boolean("admin_role_changes")}));
 
     out.push_back(model("AuditConfig", "auditing.* (Config.cpp to_json(AuditConfig)).",
-        {object("audit_log", "AuditLogConfig"), object("encryption_waivers", "EncryptionWaiverConfig"),
-         object("files_trashed", "FilesTrashedConfig")}));
+        {object("audit_log", "AuditLogConfig"), object("trail", "AuditTrailConfig").opt(),
+         object("encryption_waivers", "EncryptionWaiverConfig"), object("files_trashed", "FilesTrashedConfig")}));
+    out.push_back(model("AuditEvent",
+        "One event of the audit trail (ops::audit::toJson(Record), core/src/ops/Audit.cpp; migration 117).",
+        {uinteger("seq").desc("Position in the hash chain."),
+         uinteger("occurred_us").desc("µs since the Unix epoch (UTC)."),
+         str("occurred_at").desc("ISO-8601 UTC."),
+         str("level"),
+         str("action").desc("Dotted: auth.login.success, rbac.role.update, fs.delete, ..."),
+         str("outcome").oneOf({"success", "failure", "denied", "info"}),
+         uinteger("actor_id").nullable(),
+         str("actor"),
+         str("origin").desc("Where it came from when known (\"device <id>\" for a paired device)."),
+         uinteger("vault_id").nullable(),
+         uinteger("entry_id").nullable().desc("The file or folder, by id (never its name)."),
+         str("message"),
+         str("details").desc("A JSON object as text: the exact bytes the hash covers."),
+         str("prev_hash").desc("SHA-256, hex."),
+         str("hash").desc("SHA-256, hex (audit/Chain.hpp has the byte layout).")}));
+    out.push_back(model("AuditVerification",
+        "audit.verify's answer (ops::audit::toJson(Verification)).",
+        {boolean("ok").desc("The chain is intact and every signed head checks out."),
+         uinteger("events_checked"),
+         uinteger("first_seq").nullable(),
+         uinteger("last_seq").nullable(),
+         uinteger("anchor_seq").nullable().desc("The retention checkpoint the chain starts after."),
+         uinteger("broken_at").nullable().desc("The first event that fails."),
+         str("problem"),
+         uinteger("heads_valid"),
+         uinteger("heads_invalid"),
+         uinteger("last_signed_seq").nullable(),
+         uinteger("unsigned_events").desc("Events after the newest valid signed head (signed at the next interval)."),
+         strArray("head_problems")}));
+    out.push_back(model("AuditTrailConfig",
+        "auditing.trail.*: the hash-chained audit trail in the database (Config.cpp to_json(AuditTrailConfig)).",
+        {uinteger("retention_days").desc("Days of audit events kept (minimum 30; default 2190, six years)."),
+         uinteger("head_interval_minutes").desc("How often the chain head is signed (1..1440)."),
+         boolean("syslog").desc("Also send audit events to the local syslog."),
+         str("syslog_facility").oneOf({"auth", "authpriv", "local0", "local1", "local2", "local3", "local4",
+                                       "local5", "local6", "local7"})}));
     out.push_back(model("AuditLogConfig",
         "auditing.audit_log.* (Config.cpp to_json(AuditLogConfig)). Sizes are \"<n>MB\"/\"<n>GB\", the interval "
         "\"<n>h\"/\"<n>d\".",
@@ -335,7 +373,9 @@ std::vector<WsModel> adminSettingsModels() {
         {uinteger("retention_days")}));
 
     out.push_back(model("LoggingConfig", "logging.* (Config.cpp to_json(LoggingConfig)).",
-        {object("levels", "LogLevelsConfig")}));
+        {object("levels", "LogLevelsConfig"),
+         str("file_paths").oneOf({"ids", "full"}).opt()
+             .desc("How log lines name files: ids (entry ids, opaque per-run tags) or full (with vault paths).")}));
     out.push_back(model("LogLevelsConfig", "logging.levels.* (Config.cpp to_json(LogLevelsConfig)).",
         {adminLogLevel("console_log_level"), adminLogLevel("file_log_level"),
          object("subsystem_levels", "SubsystemLogLevelsConfig")}));

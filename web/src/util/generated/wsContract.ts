@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '3f461dbda227f2189f4691e7a2269b113c7663fa782ef6ec88f7f8be35157f76'
+export const WS_CONTRACT_HASH = '799049bb18175a04a74f8728b1c348617c1eb3e1868321c538e7240eeaba36d9'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'cae78e2e50581fd80a7c9f49bbf878535fe0521cade68dd31521e8dcf74e1828'
+export const WS_MODELS_HASH = '0e7099c80fe633cb2599a7f526951d1943790d94893cf33616d40fa40339913e'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -105,8 +105,29 @@ export interface WsModels {
    */
   'AuditConfig': {
     audit_log: WsModels['AuditLogConfig']
+    trail?: WsModels['AuditTrailConfig']
     encryption_waivers: WsModels['EncryptionWaiverConfig']
     files_trashed: WsModels['FilesTrashedConfig']
+  }
+  /**
+   * One event of the audit trail (ops::audit::toJson(Record), core/src/ops/Audit.cpp; migration 117).
+   */
+  'AuditEvent': {
+    seq: number
+    occurred_us: number
+    occurred_at: string
+    level: string
+    action: string
+    outcome: 'success' | 'failure' | 'denied' | 'info'
+    actor_id: number | null
+    actor: string
+    origin: string
+    vault_id: number | null
+    entry_id: number | null
+    message: string
+    details: string
+    prev_hash: string
+    hash: string
   }
   /**
    * auditing.audit_log.* (Config.cpp to_json(AuditLogConfig)). Sizes are "<n>MB"/"<n>GB", the interval
@@ -119,6 +140,32 @@ export interface WsModels {
     compression: 'none' | 'gzip' | 'zstd'
     max_retained_logs_size: string
     strict_retention: boolean
+  }
+  /**
+   * auditing.trail.*: the hash-chained audit trail in the database (Config.cpp to_json(AuditTrailConfig)).
+   */
+  'AuditTrailConfig': {
+    retention_days: number
+    head_interval_minutes: number
+    syslog: boolean
+    syslog_facility: 'auth' | 'authpriv' | 'local0' | 'local1' | 'local2' | 'local3' | 'local4' | 'local5' | 'local6' | 'local7'
+  }
+  /**
+   * audit.verify's answer (ops::audit::toJson(Verification)).
+   */
+  'AuditVerification': {
+    ok: boolean
+    events_checked: number
+    first_seq: number | null
+    last_seq: number | null
+    anchor_seq: number | null
+    broken_at: number | null
+    problem: string
+    heads_valid: number
+    heads_invalid: number
+    last_signed_seq: number | null
+    unsigned_events: number
+    head_problems: string[]
   }
   /**
    * auth.* (Config.cpp to_json(AuthConfig)); the JWT secret is never part of it.
@@ -547,7 +594,7 @@ export interface WsModels {
   /**
    * logging.* (Config.cpp to_json(LoggingConfig)).
    */
-  'LoggingConfig': { levels: WsModels['LogLevelsConfig'] }
+  'LoggingConfig': { levels: WsModels['LogLevelsConfig']; file_paths?: 'ids' | 'full' }
   /**
    * Filesystem operation queue and share upload figures, one vault or the system
    * (core/src/stats/model/OperationStats.cpp to_json).
@@ -1918,6 +1965,7 @@ export interface WsModels {
       mount_isolation: string
       mount_detail: string | null
       secrets_backend: string
+      secrets_posture?: 'hardware' | 'software' | 'development' | 'unknown'
     }
     shell: { admin_uid_bound: boolean | null }
     database: {
@@ -2736,6 +2784,41 @@ export interface WsModels {
 }
 
 export interface WsContract {
+  /**
+   * The events in [since_us, until_us) as NDJSON (vh-audit-export-v1: a header line, the events with their
+   * hashes, then the signed heads that cover them), verifiable offline. Up to 32 MiB; use `vh audit export`
+   * for more. Needs admin.audits.view; recorded as audit.export.
+   */
+  'audit.export': {
+    payload: { since_us?: number | null; until_us?: number | null }
+    response: { ndjson: string; events: number }
+  }
+  /**
+   * The tamper-evident audit trail, newest first, filtered. Needs admin.audits.view; the first page is itself
+   * recorded (audit.view).
+   */
+  'audit.list': {
+    payload: {
+      before_seq?: number | null
+      since_us?: number | null
+      until_us?: number | null
+      action?: string | null
+      actor_id?: number | null
+      vault_id?: number | null
+      outcome?: 'success' | 'failure' | 'denied' | 'info' | null
+      limit?: number
+    }
+    response: { events: WsModels['AuditEvent'][]; next_before: number | null }
+  }
+  /**
+   * Recomputes the whole retained hash chain and checks every signed head (signature, and that the chain
+   * still holds the hash it signed). Needs admin.audits.view; recorded as audit.verify (or
+   * audit.verify.failed).
+   */
+  'audit.verify': {
+    payload: null
+    response: { verification: WsModels['AuditVerification'] }
+  }
   /**
    * Report that the person at the console is using it (keyboard, pointer, scroll), at most about once a
    * minute. It resets the session's idle sign-out clock
@@ -5534,6 +5617,9 @@ export interface WsContract {
 export type WsContractCommand = keyof WsContract
 
 export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
+  'audit.export',
+  'audit.list',
+  'audit.verify',
   'auth.activity',
   'auth.isAuthenticated',
   'auth.login',
@@ -5809,6 +5895,9 @@ export const WS_CONTRACT_CONFIRMATIONS: Readonly<
 
 // Client timeouts the server declares per command (a timeout means "no answer yet", never "failed").
 export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> = {
+  'audit.export': 120000,
+  'audit.list': 15000,
+  'audit.verify': 120000,
   'auth.activity': 15000,
   'auth.isAuthenticated': 15000,
   'auth.login': 20000,

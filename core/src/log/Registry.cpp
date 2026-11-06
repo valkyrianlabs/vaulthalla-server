@@ -1,11 +1,15 @@
 #include "log/Registry.hpp"
 #include "config/Registry.hpp"
+#include "log/Redact.hpp"
 #include "log/AuditOrigin.hpp"
+#include "audit/Trail.hpp"
 
 #include <spdlog/pattern_formatter.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/syslog_sink.h>
+#include <syslog.h>
 #include <paths.h>
 #include <filesystem>
 
@@ -30,6 +34,19 @@ public:
         return std::make_unique<AuditOriginFlag>();
     }
 };
+
+int syslogFacility(const std::string& name) {
+    if (name == "auth") return LOG_AUTH;
+    if (name == "local0") return LOG_LOCAL0;
+    if (name == "local1") return LOG_LOCAL1;
+    if (name == "local2") return LOG_LOCAL2;
+    if (name == "local3") return LOG_LOCAL3;
+    if (name == "local4") return LOG_LOCAL4;
+    if (name == "local5") return LOG_LOCAL5;
+    if (name == "local6") return LOG_LOCAL6;
+    if (name == "local7") return LOG_LOCAL7;
+    return LOG_AUTHPRIV;
+}
 
 std::unique_ptr<spdlog::formatter> auditFormatter(const std::string& pattern) {
     auto formatter = std::make_unique<spdlog::pattern_formatter>();
@@ -88,6 +105,7 @@ void Registry::init() {
     if (!fs::exists(log_dir_)) fs::create_directories(log_dir_);
 
     const auto cnf = config::Registry::get().logging;
+    setFilePaths(cnf.file_paths == config::LogFilePaths::Full ? FilePaths::Full : FilePaths::Ids);
 
     // console
     console_sink_ = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
@@ -132,7 +150,16 @@ void Registry::init() {
         audit_file_sink_ = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
             audit_log_path_.string(), /*truncate=*/false);
         audit_file_sink_->set_formatter(auditFormatter("%+"));
-        std::vector<spdlog::sink_ptr> sinks = { audit_file_sink_ };
+        // Every audit line also enters the database's hash chain (audit/Trail.hpp, #323), and, when enabled, the
+        // local syslog, which journald/rsyslog can forward to a SIEM.
+        std::vector<spdlog::sink_ptr> sinks = { audit_file_sink_, audit::makeChainSink() };
+        if (const auto& trail = config::Registry::get().auditing.trail; trail.syslog) {
+            auto syslog = std::make_shared<spdlog::sinks::syslog_sink_mt>("vaulthalla-audit", LOG_PID,
+                                                                          syslogFacility(trail.syslog_facility),
+                                                                          /*enable_formatting=*/true);
+            syslog->set_formatter(auditFormatter("%v"));
+            sinks.push_back(std::move(syslog));
+        }
         const auto logger = std::make_shared<spdlog::logger>("audit", sinks.begin(), sinks.end());
         logger->set_level(spdlog::level::info);
         logger->flush_on(spdlog::level::info);

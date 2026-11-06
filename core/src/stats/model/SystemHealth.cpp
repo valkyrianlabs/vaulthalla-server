@@ -196,7 +196,8 @@ SystemHealth SystemHealth::snapshot() {
         .mountBackend = mount.backend,
         .mountIsolation = mount.isolation,
         .mountDetail = mount.detail,
-        .secretsBackend = std::string(crypto::secrets::KeyProvider::backend())
+        .secretsBackend = std::string(crypto::secrets::KeyProvider::backend()),
+        .secretsPosture = std::string(crypto::secrets::KeyProvider::posture())
     };
 
     out.shell.adminUidBound = shellServer ? std::optional<bool>(shellServer->adminUIDSet()) : std::nullopt;
@@ -310,6 +311,7 @@ void to_json(nlohmann::json& j, const DependencyHealth& health) {
         {"mount_isolation", health.mountIsolation},
         {"mount_detail", health.mountDetail.empty() ? nlohmann::json(nullptr) : nlohmann::json(health.mountDetail)},
         {"secrets_backend", health.secretsBackend},
+        {"secrets_posture", health.secretsPosture},
     };
 }
 

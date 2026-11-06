@@ -22,6 +22,8 @@
 namespace vh::platform::sealer {
 
 [[nodiscard]] std::string_view backend() noexcept;
+// "hardware", "software", "development" or "unknown" (crypto::secrets::KeyProvider::posture()).
+[[nodiscard]] std::string_view posture() noexcept;
 
 void seal(const std::filesystem::path& dir, const std::string& name, const std::vector<uint8_t>& secret);
 [[nodiscard]] std::vector<uint8_t> unseal(const std::filesystem::path& dir, const std::string& name);

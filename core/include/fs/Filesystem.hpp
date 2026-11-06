@@ -14,6 +14,7 @@
 
 #include "fuse/resolver/Resolved.hpp"
 #include "fs/Fwd.hpp"
+#include "fs/PlaintextSource.hpp"
 #include "identities/Fwd.hpp"
 #include "recovery/Fwd.hpp"
 #include "storage/Fwd.hpp"
@@ -64,7 +65,8 @@ using SealedWriter = std::function<SealedContent(const std::filesystem::path& ds
 struct NewFileContext {
     std::filesystem::path path{}, fuse_path{};
     std::vector<uint8_t> buffer{};
-    std::optional<std::filesystem::path> source_path{};
+    // Plaintext to seal, streamed (staged uploads: a crypto::ScratchFile; fs::sourceOf). Takes precedence over buffer.
+    std::optional<PlaintextSource> source{};
     std::shared_ptr<storage::Engine> engine = nullptr;
     std::shared_ptr<identities::User> user = nullptr;
     std::shared_ptr<identities::Group> group = nullptr;

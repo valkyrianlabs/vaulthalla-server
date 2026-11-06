@@ -21,6 +21,7 @@
 #include "protocols/http/Session.hpp"
 #include "protocols/http/upload/Content.hpp"
 #include "protocols/http/upload/Coordinator.hpp"
+#include "protocols/http/upload/Staging.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
 #include "runtime/Deps.hpp"
@@ -36,6 +37,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <paths.h>
+#include <iterator>
 
 #if defined(__APPLE__)
 #include <mach/mach.h>
@@ -624,6 +626,59 @@ TEST_F(HttpUploadContentDbTest, AnUploadSessionCommitsALargeFileInBoundedMemory)
     EXPECT_TRUE(matchesPattern(engine, stored, kSize));
     EXPECT_LT(growth, 64ull << 20) << "the commit grew resident memory by " << (growth >> 20) << " MiB for a "
                                    << (kSize >> 20) << " MiB file";
+}
+
+// #328: private staging (<backing>/.upload-staging, the macOS default) holds only ciphertext under the process key, on
+// both HTTP lanes. Mount staging (the Linux default) lands in a FUSE working copy, encrypted the same way
+// (WorkingCopiesTest); unit tests have no real mount, so that case is covered there.
+TEST_F(HttpUploadContentDbTest, PrivateStagingHoldsOnlyCiphertext) {
+    if (upload::staging::mode() != "private") GTEST_SKIP() << "mount staging: covered by WorkingCopiesTest";
+    const std::string unit = "UPLOAD-PLAINTEXT-MARKER|";
+    std::string body;
+    while (body.size() < 512 * 1024) body += unit;
+    const auto stagedBytes = [] {
+        std::string all;
+        std::error_code ec;
+        for (auto it = std::filesystem::recursive_directory_iterator(paths::getBackingPath() / ".upload-staging", ec);
+             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+            if (it->is_regular_file()) {
+                std::ifstream in(it->path(), std::ios::binary);
+                all.append(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+            }
+        return all;
+    };
+
+    // The upload-session lane.
+    request createReq{verb::post, "/upload/session", 11};
+    const auto created = upload::Coordinator::instance().createSession(createReq, {
+        {"vault_id", engine->vault->id},
+        {"files", json::array({{{"file_id", "s1"}, {"path", "/staged/session.txt"}, {"size", body.size()}}})}});
+    const auto uploadId = created.at("upload_id").get<std::string>();
+    request putReq{verb::put, "/upload/" + uploadId + "/files/s1", 11};
+    {
+        auto stream = upload::Coordinator::instance().beginFile(putReq, body.size());
+        stream.write(body.data(), body.size());
+        const auto raw = stagedBytes();
+        EXPECT_GE(raw.size(), 7 * 64 * 1024u) << "staged on disk";
+        EXPECT_EQ(raw.find("PLAINTEXT-MARKER"), std::string::npos);
+        (void)stream.finish();
+    }
+    request finishReq{verb::post, "/upload/" + uploadId + "/finish", 11};
+    (void)upload::Coordinator::instance().finishSession(finishReq, uploadId);
+    EXPECT_EQ(download("/staged/session.txt").body, body);
+
+    // The content lane.
+    request req{verb::put, target("/staged/content.txt"), 11};
+    req.set(field::if_none_match, "*");
+    auto begun = upload::content::begin(req, body.size());
+    ASSERT_FALSE(begun.refusal);
+    begun.upload.write(body.data(), body.size());
+    const auto raw = stagedBytes();
+    EXPECT_GE(raw.size(), 7 * 64 * 1024u);
+    EXPECT_EQ(raw.find("PLAINTEXT-MARKER"), std::string::npos);
+    EXPECT_EQ(statusOf(begun.upload.commit(req)), status::created);
+    EXPECT_EQ(download("/staged/content.txt").body, body);
+    EXPECT_EQ(stagedBytes(), "") << "nothing left behind";
 }
 
 TEST_F(HttpUploadContentDbTest, AFailedUploadSessionPutCanBeSentAgain) {

@@ -325,8 +325,18 @@ struct FilesTrashedConfig {
     std::chrono::days retention_days = std::chrono::days(60);
 };
 
+// The tamper-evident audit trail in the database (#323, audit/Trail.hpp): retention, how often the chain head is
+// signed, and whether events are also sent to the local syslog (journald/rsyslog forward them to a SIEM).
+struct AuditTrailConfig {
+    std::chrono::days retention_days = std::chrono::days(2190);  // 6 years (HIPAA §164.316(b)(2)); minimum 30
+    unsigned int head_interval_minutes = 15;                    // 1..1440
+    bool syslog = false;
+    std::string syslog_facility = "authpriv";                  // auth | authpriv | local0..local7
+};
+
 struct AuditConfig {
     AuditLogConfig audit_log;
+    AuditTrailConfig trail;
     EncryptionWaiverConfig encryption_waivers;
     FilesTrashedConfig files_trashed;
 };
@@ -388,8 +398,21 @@ struct LogLevelsConfig {
     SubsystemLogLevelsConfig subsystem_levels;
 };
 
+// How log lines name files (#327, log/Redact.hpp): `ids` (entry ids and opaque per-run tags) or `full` (with paths).
+enum class LogFilePaths { Ids, Full };
+
 struct LoggingConfig {
     LogLevelsConfig levels;
+    LogFilePaths file_paths = LogFilePaths::Ids;
+};
+
+// How sealed secrets may be protected (#326, crypto/secrets/KeyProvider.hpp). Read from config.yaml at startup; not a
+// console setting.
+struct SecretsConfig {
+    // Refuse to seal or unseal unless a hardware TPM or the Secure Enclave protects the secrets (no swtpm, no files).
+    bool require_hardware = false;
+    // macOS without a usable Secure Enclave: allow the plain-file development backend instead of refusing to start.
+    bool allow_development_file_backend = false;
 };
 
 struct Config {
@@ -426,6 +449,7 @@ struct Config {
     Config& operator=(Config&&) noexcept;
 
     void save() const;
+    SecretsConfig secrets;
 };
 
 // Deprecated keys found while loading (one message each, e.g. a renamed key). The daemon logs them once at startup,
@@ -443,6 +467,8 @@ std::string previewRemoteModeToString(PreviewRemoteMode mode);
 PreviewRemoteMode previewRemoteModeFromString(std::string_view value);
 std::string previewHwaccelToString(PreviewHwaccel hwaccel);
 PreviewHwaccel previewHwaccelFromString(std::string_view value);
+std::string logFilePathsToString(LogFilePaths mode);
+LogFilePaths logFilePathsFromString(std::string_view value);
 std::string previewTranscodeModeToString(PreviewTranscodeMode mode);
 PreviewTranscodeMode previewTranscodeModeFromString(std::string_view value);
 void to_json(nlohmann::json& j, const Config& c);
@@ -531,6 +557,10 @@ void to_json(nlohmann::json& j, const EncryptionWaiverConfig& c);
 void from_json(const nlohmann::json& j, EncryptionWaiverConfig& c);
 void to_json(nlohmann::json& j, const FilesTrashedConfig& c);
 void from_json(const nlohmann::json& j, FilesTrashedConfig& c);
+void to_json(nlohmann::json& j, const AuditTrailConfig& c);
+void from_json(const nlohmann::json& j, AuditTrailConfig& c);
+// Throws std::invalid_argument naming the bad auditing.trail setting.
+void validateAuditTrail(const AuditTrailConfig& c);
 void to_json(nlohmann::json& j, const AuditConfig& c);
 void from_json(const nlohmann::json& j, AuditConfig& c);
 void to_json(nlohmann::json& j, const DevConfig& c);

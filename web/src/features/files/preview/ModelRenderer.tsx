@@ -83,12 +83,12 @@ export default function ModelRenderer({ source, entry, plan, onDownload }: Rende
         let response: Response
         if (derivedKind) {
           setState({ phase: 'converting', elapsed: 0 })
-          response = await pollDerived(source.derivedUrl(entry.path, derivedKind), {
+          response = await pollDerived(source.derivedUrl({ id: entry.id, path: entry.path }, derivedKind), {
             signal: controller.signal,
             onQueued: elapsed => setState({ phase: 'converting', elapsed }),
           })
         } else {
-          response = await fetch(source.contentUrl(entry.path, 'inline'), { credentials: 'same-origin', signal: controller.signal })
+          response = await fetch(source.contentUrl({ id: entry.id, path: entry.path }, 'inline'), { credentials: 'same-origin', signal: controller.signal })
           if (!response.ok) throw new PreviewHttpError(response.status, 'http', describeStatus(response.status, 'this model'))
         }
         setState({ phase: 'loading', loaded: 0, total: null })
@@ -105,7 +105,7 @@ export default function ModelRenderer({ source, entry, plan, onDownload }: Rende
       }
     })()
     return () => controller.abort()
-  }, [source, entry.path, entry.size, format, derivedKind, plan.renderer])
+  }, [source, entry.id, entry.path, entry.size, format, derivedKind, plan.renderer])
 
   // Side files (glTF buffers/textures, OBJ materials) come from the same folder through the same authorized route.
   // The viewer aborts `signal` when it closes (or the load fails) and caps the bytes left for the model as a whole.

@@ -720,9 +720,17 @@ TEST_F(WsShareUploadTest, HttpShareUploadStreamsBodyToTempFileAndRecordsBytes) {
     ASSERT_NE(store->getUpload(transferId), nullptr);
     EXPECT_EQ(store->getUpload(transferId)->received_size_bytes, 5u);
     EXPECT_TRUE(writer->bytes_by_path.empty());
-    // The staged bytes are the only file in the staging area (with FUSE: anywhere under the mount).
-    EXPECT_EQ(readOnlyRegularFileUnder(http_upload::staging::mode() == "mount" ? vh::paths::mountPath : tempPath.parent_path()),
-              "hello");
+    // The staged bytes are the only file in the staging area (with FUSE: anywhere under the mount). Private staging
+    // holds them as ciphertext under the process key (#328); mount staging lands in a FUSE working copy, encrypted
+    // there, and unit tests have no real mount (WorkingCopiesTest covers that layer).
+    const auto staged = readOnlyRegularFileUnder(http_upload::staging::mode() == "mount" ? vh::paths::mountPath
+                                                                                         : tempPath.parent_path());
+    if (http_upload::staging::mode() == "mount") {
+        EXPECT_EQ(staged, "hello");
+    } else {
+        EXPECT_EQ(staged.size(), 5u + 40u) << "one block: nonce, ciphertext, tag";
+        EXPECT_EQ(staged.find("hello"), std::string::npos);
+    }
 
     const auto cancelled = http_upload::Coordinator::instance().cancelSession(
         httpRequest(vh::protocols::http::verb::delete_, "/upload/" + batchId + "?share=1"),

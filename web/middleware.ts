@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { parseLegacySharePath, shareHref } from './src/features/share/shareLocation.ts'
 
 export const config = {
   matcher: ['/((?!api|_next|favicon.ico|robots.txt|sitemap.xml).*)'],
@@ -27,6 +28,16 @@ const redirectToLogin = (req: NextRequest) => {
 // daemon is down. Pages carry no data (everything loads over the socket after the gate), so there is nothing to
 // protect here, and an upstream check per navigation only added a round trip (#171).
 export function middleware(req: NextRequest) {
+  // Links issued before #327 put the share token (and folder names) in the path, where access logs and `Referer`
+  // see them. Answer them with one redirect to the fragment form, which never leaves the browser again.
+  if (req.nextUrl.pathname.startsWith('/share/')) {
+    const location = parseLegacySharePath(req.nextUrl.pathname)
+    const target = new URL(location ? shareHref(location) : '/share', req.url)
+    const res = NextResponse.redirect(target, 308)
+    res.headers.set('Referrer-Policy', 'no-referrer')
+    res.headers.set('Cache-Control', 'no-store')
+    return res
+  }
   if (isPublic(req) || req.cookies.get('refresh')?.value) return NextResponse.next()
   return redirectToLogin(req)
 }

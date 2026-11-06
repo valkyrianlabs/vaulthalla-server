@@ -6,6 +6,7 @@
 
 #include "config/Config.hpp"
 #include "email/DeliveryHistory.hpp"
+#include "ops/Audit.hpp"
 #include "protocols/ws/handler/Email.hpp"
 #include "storage/s3/pricing/LocalEstimator.hpp"
 #include "storage/s3/pricing/PriceBotModels.hpp"
@@ -310,9 +311,57 @@ void checkEmail(Checker& c) {
 
 }
 
+namespace vh::test_contract_models_admin {
+
+// ---- audit trail (#323) -----------------------------------------------------------------------------------------
+
+void checkAudit(Checker& c) {
+    audit::Record full;
+    full.seq = 12;
+    full.occurred_us = 1762300800123456ULL;
+    full.level = "info";
+    full.action = "auth.login.success";
+    full.outcome = "success";
+    full.actor_id = 9;
+    full.actor = "alice";
+    full.origin = "device ab12";
+    full.vault_id = 3;
+    full.entry_id = 44;
+    full.message = "[auth] alice signed in";
+    full.details = R"({"method":"password"})";
+    full.hash = audit::computeHash(full);
+    c.check(ops::audit::toJson(full), "AuditEvent", "structured event with actor, vault and entry");
+    audit::Record bare;
+    bare.seq = 1;
+    bare.action = "log";
+    bare.outcome = "info";
+    c.check(ops::audit::toJson(bare), "AuditEvent", "plain audit line without actor or target");
+
+    ops::audit::Verification ok;
+    ok.ok = true;
+    ok.events_checked = 40;
+    ok.first_seq = 11;
+    ok.last_seq = 50;
+    ok.anchor_seq = 10;
+    ok.heads_valid = 3;
+    ok.last_signed_seq = 48;
+    ok.unsigned_events = 2;
+    c.check(ops::audit::toJson(ok), "AuditVerification", "intact chain after a retention checkpoint");
+    ops::audit::Verification broken;
+    broken.events_checked = 4;
+    broken.broken_at = 5;
+    broken.problem = "its contents do not match its hash (the event was altered)";
+    broken.heads_invalid = 1;
+    broken.head_problems = {"head at event 9: names event 9, which is missing"};
+    c.check(ops::audit::toJson(broken), "AuditVerification", "broken chain without anchor");
+}
+
+}
+
 namespace vh::test::contract_models {
 
 void checkAdminModels(Checker& c) {
+    test_contract_models_admin::checkAudit(c);
     test_contract_models_admin::checkBudgets(c);
     test_contract_models_admin::checkEstimates(c);
     test_contract_models_admin::checkSettings(c);

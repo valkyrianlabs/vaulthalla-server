@@ -562,7 +562,7 @@ TEST_F(ShareManagerTest, CreatePublicShareSucceedsWhenAuthorizerAllows) {
     ASSERT_NE(result.link, nullptr);
     EXPECT_EQ(result.link->created_by, user->id);
     EXPECT_TRUE(result.public_token.starts_with("vhs_"));
-    EXPECT_EQ(result.public_url_path, "/share/" + result.public_token);
+    EXPECT_EQ(result.public_url_path, "/share#" + result.public_token);
     EXPECT_TRUE(Token::verify(result.link->token_hash, TokenKind::PublicShare, Token::parse(result.public_token).secret));
     EXPECT_FALSE(result.link->toManagementJson().dump().contains(Token::parse(result.public_token).secret));
     EXPECT_FALSE(store->audits.empty());

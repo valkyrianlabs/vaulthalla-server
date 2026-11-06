@@ -73,6 +73,8 @@ struct DependencyHealth {
     // The secret sealing backend (platform/Sealer.hpp): "tpm2", or "file" (macOS development backend, no hardware
     // binding).
     std::string secretsBackend;
+    // What actually protects them (#326): "hardware", "software" (swtpm), "development" (files) or "unknown".
+    std::string secretsPosture{"unknown"};
 };
 
 struct ShellHealth {

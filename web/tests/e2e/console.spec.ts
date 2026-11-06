@@ -231,7 +231,7 @@ test.describe.serial('console', () => {
     await page.getByRole('menuitem', { name: 'Share link…' }).click()
     await page.getByRole('button', { name: 'Create link' }).click()
     const browseUrl = ((await page.locator('code').first().textContent()) ?? '').trim()
-    expect(browseUrl).toMatch(/\/share\//)
+    expect(browseUrl).toMatch(/\/share#vhs_/)
     await page.getByRole('button', { name: 'Create another' }).click()
     await page.getByRole('radio', { name: /upload dropbox/i }).click()
     await page.getByRole('button', { name: 'Create link' }).click()
