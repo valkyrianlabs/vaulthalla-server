@@ -82,6 +82,42 @@ vh vault keys rotate all
 
 Use `--sync-now` when remote encrypted objects should be brought forward immediately where supported by the sync plan.
 
+## Content Format And Conversion
+
+File content is stored in VHF1, an authenticated, chunked format: a header that names the vault, the file and the key
+version, then 64 KiB chunks that are each authenticated with their position, so truncated, reordered or swapped content
+is refused and partial reads only ever return authenticated bytes. Builds before VHF1 stored each file as one
+AES-256-GCM message with no header (the legacy format).
+
+After the upgrade, a background conversion re-seals every legacy local file and every legacy recovery generation
+(snapshot members, local versions and the upstream backlog in `.vh-recovery`) as VHF1:
+
+- It never rotates a key: each item keeps its key version, including generations retained under a retired key.
+- Each item is verified before the legacy form is removed: the legacy authentication tag over the whole file, then the
+  new file is read back in full and its plaintext digest compared with the original's. Anything that doesn't verify
+  (damage, a size that doesn't match the catalog) is left exactly as it was and reported.
+- No plaintext is written to disk; the only file written is the new VHF1 file.
+- A recovery blob that is a hard link of a live file is converted once, together with the file, and stays a hard link.
+- It is resumable: a crash or restart at any point leaves every file readable, and the next pass continues.
+- It pauses while a key rotation or a key salvage of the vault runs, and files open for writing wait for the next pass.
+- It is rate-limited (`vaults.format_conversion` in [Configuration](/reference/configuration#vault-format-conversion)).
+
+S3/R2 vaults with upstream encryption keep their live files' local and bucket copies identical, so those convert with
+the bucket's layout migration instead; their recovery generations convert here. Vaults that store plaintext upstream
+convert their local copies here.
+
+Check progress:
+
+```bash
+vh vault format status all
+vh vault format status <vault> --json
+```
+
+`state` is `converted` when nothing legacy is left, `pending` or `converting` while work remains, `blocked` during a key
+rotation or salvage, `disabled` when the conversion is turned off, and `awaiting_layout_migration` when only an
+upstream-encrypted vault's live files are left. `remaining` lists live files and recovery blobs still in the legacy
+format, as items and bytes on disk.
+
 ## S3/R2 Upstream Encryption
 
 For S3/R2 vaults, upstream encryption controls whether object bodies uploaded to the bucket are encrypted by Vaulthalla before upload.

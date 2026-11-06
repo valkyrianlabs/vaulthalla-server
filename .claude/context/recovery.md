@@ -35,7 +35,10 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
   and unlink the origin only after the transaction commits (`Capture::committed()`), so a crash before commit never
   loses the live file. Every delete path (FUSE unlink, `Filesystem::remove`, `Engine::removeLocally`,
   `CloudEngine::indexAndDeleteFile`, `ObjectStore::purgeLocalObjectState`) retains under `Filesystem::contentWriteMutex`
-  with the row re-read, so a concurrent seal can't be linked under the old IV. Fallbacks: reflink (FICLONE / macOS `clonefile`), then copy. A blob is immutable once linked.
+  with the row re-read, so a concurrent seal can't be linked under the old IV. Fallbacks: reflink (FICLONE / macOS `clonefile`), then copy. A blob is immutable once linked. The local format conversion (#372, `vault/FormatConversion.hpp`) is the one change to a
+  blob row: a legacy (gcm0) blob's row moves (compare-and-set) to a new VHF1 file under a new storage name and the same
+  key version, and the old file is unlinked; a blob of a live file's generation is linked from the converted file. A
+  file's bytes are still never rewritten.
 - **Invariant this rests on: nothing writes a backing file in place.** A linked blob shares the live file's inode until
   the next rename-replace; an in-place writer would silently rewrite history. Every backing-file writer must replace
   by rename (or the capture must use `captureCopy`). Guard: `tools/contracts/test_backing_writers_contract.py` scans
