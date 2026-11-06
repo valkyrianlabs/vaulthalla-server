@@ -461,27 +461,6 @@ if get_option('build_unit_tests')
          depends: unit_test_helper_targets)
 endif
 
-# libFuzzer target for the VHF1 header parser and chunk walker (spec 02 §7; never built by default or in CI):
-#   CC=clang CXX=clang++ meson setup build-fuzz -Dfuzz=true && meson compile -C build-fuzz vh_fuzz_vhf1
-#   build-fuzz/core/vh_fuzz_vhf1 -max_total_time=600 <corpus dir>
-# It compiles the codec's own sources (OpenSSL and libsodium only), not libvaulthalla.
-if get_option('fuzz')
-    if meson.get_compiler('cpp').get_id() != 'clang'
-        error('-Dfuzz=true needs clang (libFuzzer)')
-    endif
-    fuzz_flags = ['-fsanitize=fuzzer,address,undefined', '-fno-sanitize-recover=all']
-    executable('vh_fuzz_vhf1',
-               files(join_paths(core_root, 'tests/fuzz/fuzz_vhf1.cpp'),
-                     src / 'crypto/vhf1/Format.cpp', src / 'crypto/vhf1/Reader.cpp', src / 'crypto/vhf1/Writer.cpp',
-                     src / 'crypto/SecretKey.cpp', src / 'crypto/util/Gcm.cpp'),
-               include_directories: inc,
-               dependencies: [dependency('openssl', version: '>=3.0'), dependency('libsodium')],
-               cpp_args: fuzz_flags,
-               link_args: fuzz_flags,
-               install: false,
-    )
-endif
-
 # Drift: the committed web contract (web/src/util/generated/wsContract.{json,ts}) must be what this build's usage
 # module generates. Fix with: python3 tools/contracts/ws_contract.py --write --vh-usage <build>/core/vh_usage
 python3 = find_program('python3', required: false)

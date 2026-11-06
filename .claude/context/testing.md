@@ -322,7 +322,7 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   libFuzzer target is dev-box only (clang 19 there; Apple clang has no libFuzzer):
   `CC=clang-19 CXX=clang++-19 meson setup build-fuzz -Dfuzz=true -Dbuild_unit_tests=false -Dpreview_cad=disabled
   -Dpreview_media=disabled -Dmanpage=false && meson compile -C build-fuzz -j 6 vh_fuzz_vhf1`, then
-  `build-fuzz/core/vh_fuzz_vhf1 -max_total_time=600 -max_len=16384 <corpus>` from a `mktemp -d` directory (seed it
+  `build-fuzz/core/tests/fuzz/vh_fuzz_vhf1 -max_total_time=600 -max_len=16384 <corpus>` from a `mktemp -d` directory (seed it
   with the vectors' objects, mode byte 0 first). Its iteration (`core/tests/fuzz/vhf1_fuzz_body.hpp`) also runs as
   `Vhf1Fuzz` in the unit tests. Keep `build-fuzz` out of rsync `--delete` mirrors.
 
