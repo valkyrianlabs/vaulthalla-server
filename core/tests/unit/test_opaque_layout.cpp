@@ -12,8 +12,8 @@
 #include "../helpers/db_suite.hpp"
 #include "../helpers/versioned_bucket.hpp"
 
-#include "crypto/recovery/Kev1.hpp"
-#include "crypto/recovery/Seed.hpp"
+#include <vl/keykit/kev1.hpp>
+#include <vl/keykit/seed.hpp>
 #include "crypto/util/encrypt.hpp"
 #include "crypto/vhf1/Format.hpp"
 #include "db/query/fs/File.hpp"
@@ -81,7 +81,7 @@ TEST(OpaqueObjectKeys, KeysAreBuiltParsedAndClassifiedInOnePlace) {
         EXPECT_EQ(keys::classify(k), keys::KeyClass::Metadata) << k;
     EXPECT_EQ(keys::classify(".vaulthalla/seg/" + crypto::id::toBase32(uid)), keys::KeyClass::Metadata);
     EXPECT_EQ(keys::classify(".vaulthalla/key/" + crypto::id::toBase32(uid)), keys::KeyClass::Metadata);
-    const auto envelopeKey = crypto::kev1::objectKey(crypto::kev1::kid(bytes("any envelope bytes")));
+    const auto envelopeKey = vl::keykit::kev1::objectKey(vl::keykit::kev1::kid(bytes("any envelope bytes")));
     EXPECT_EQ(keys::classify(envelopeKey), keys::KeyClass::Metadata) << "KEV1 envelopes (#370) are allowlisted";
     for (const auto* k : {"Reports/Q3 board pack.pdf", ".vaulthalla/index-v1.json", ".vaulthalla/seg/nope", "o/",
                           "o/x/y", "/o/abc"})
@@ -404,7 +404,7 @@ TEST_F(OpaqueLayoutTest, OpaqueRequestAudit) {
     struct ResetEnvelopeStore {
         ~ResetEnvelopeStore() { vault::envelopes::setStoreFactoryForTesting({}); }
     } resetEnvelopeStore;
-    const auto seed = crypto::recovery::RecoverySeed::generate();
+    const auto seed = vl::keykit::RecoverySeed::generate();
     (void)ops::recovery_recipients::add(superUser, {.vault_id = v.id(),
                                                     .public_key = crypto::util::b64_encode(seed.x25519PublicKey()),
                                                     .label = std::string("Recovery kit")},
@@ -511,7 +511,7 @@ TEST_F(OpaqueLayoutTest, OpaqueRequestAudit) {
     }
     EXPECT_FALSE(v.bucket->current(".vaulthalla/index-v1.json"));
     const auto envelopes = std::ranges::count_if(v.bucket->keys(), [](const auto& k) {
-        return k.starts_with(crypto::kev1::kObjectPrefix);
+        return k.starts_with(vl::keykit::kev1::kObjectPrefix);
     });
     EXPECT_GE(envelopes, 2) << "the enrolled recipient's envelopes, for the first key and the rotated one";
 

@@ -3,8 +3,8 @@
 #include "auth/stepup/StepUp.hpp"
 
 #include "crypto/id/ObjectUid.hpp"
-#include "crypto/recovery/Kev1.hpp"
-#include "crypto/recovery/Kit.hpp"
+#include <vl/keykit/kev1.hpp>
+#include <vl/keykit/kit.hpp>
 #include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/SecretBytes.hpp"
 #include "crypto/secrets/Dependents.hpp"
@@ -961,10 +961,10 @@ std::vector<Candidate> candidatesFromKit(const nlohmann::json& doc, const Import
     if (t.deleted)
         throw Conflict("vault '" + t.name + "' is deleted: restore it (vh vault restore) before importing its keys from a "
                        "recovery kit");
-    std::optional<crypto::recovery::Kit> kit;
+    std::optional<vl::keykit::Kit> kit;
     try {
-        kit.emplace(crypto::recovery::parseKit(doc));
-    } catch (const crypto::recovery::KitError& e) {
+        kit.emplace(vl::keykit::parseKit(doc));
+    } catch (const vl::keykit::KitError& e) {
         throw Invalid(e.what());
     }
     const auto vault = db::query::vault::Vault::getVault(t.vault_id);
@@ -978,7 +978,7 @@ std::vector<Candidate> candidatesFromKit(const nlohmann::json& doc, const Import
     std::vector<sync::manifest::ListedObject> listed;
     try {
         store = vault::envelopes::storeFor(t.vault_id);
-        listed = store->list(std::string(crypto::kev1::kObjectPrefix));
+        listed = store->list(std::string(vl::keykit::kev1::kObjectPrefix));
     } catch (const std::exception& e) {
         throw Conflict(std::string("the vault's bucket can't be read for its recovery envelopes (") + e.what() +
                        "); check the vault's API key and bucket, then try again");
@@ -996,11 +996,11 @@ std::vector<Candidate> candidatesFromKit(const nlohmann::json& doc, const Import
         const auto obj = store->get(o.key);
         if (!obj) continue;
         try {
-            auto u = crypto::kev1::unwrap(obj->bytes, sk.bytes(), crypto::kev1::Suite::X25519, uid);
+            auto u = vl::keykit::kev1::unwrap(obj->bytes, sk.bytes(), vl::keykit::kev1::Suite::X25519, uid);
             ++report.unwrapped;
-            unwrapped[u.key_version].push_back(std::move(u.key));
-        } catch (const crypto::kev1::Error& e) {
-            if (crypto::kev1::skippedByRestore(e.code())) ++report.skipped;
+            unwrapped[u.key_version].push_back(std::make_shared<const crypto::SecretKey>(u.key.bytes()));
+        } catch (const vl::keykit::kev1::Error& e) {
+            if (vl::keykit::kev1::skippedByRestore(e.code())) ++report.skipped;
             else ++report.rejected;
         }
     }

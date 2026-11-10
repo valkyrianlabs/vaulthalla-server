@@ -30,6 +30,17 @@ Comment:
  statically linked into vaulthalla-server, built from the release tarball
  pinned in subprojects/vl-sigv4.wrap.
 
+Files: subprojects/packagecache/vl-keykit-*.tar.xz
+       subprojects/vl-keykit-*/*
+Copyright:
+  2026 Valkyrian Labs LLC <cooper@valkyrianlabs.com>
+License: MIT
+Comment:
+ vl-keykit (https://github.com/valkyrianlabs/vl-keykit), the KEV1 key envelope,
+ recovery seed and recovery kit library statically linked into vaulthalla-server
+ and vh-recovery, built from the release tarball pinned in
+ subprojects/vl-keykit.wrap.
+
 Files: deploy/password-lists/common-passwords.txt
 Copyright:
   2018 Daniel Miessler

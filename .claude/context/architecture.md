@@ -890,9 +890,9 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   `vault_recover_salvage`, salvage via `ops::vault_keys::salvageRecoveredVault`, reinstate, publish epoch + 1), CLI
   `vh vault recover` (kit and export read by `vh`, sent as one `client_input` bundle), ws `vault.recover` (paired
   devices). Rotation and salvage PUTs update the remote index (`CloudEngine::recordOwnUpload`).
-- **Recovery recipients and KEV1 envelopes** (#370, spec 03 §5, §5.8; migration 127). `crypto::kev1` and
-  `crypto::recovery::{RecoverySeed, Kit}` (`crypto/recovery/`, self-contained: the offline `vh-recovery` tool,
-  `core/main/recovery.cpp`, links only them, libsodium and OpenSSL). `db::query::vault::RecoveryGrants`
+- **Recovery recipients and KEV1 envelopes** (#370, spec 03 §5, §5.8; migration 127). `vl::keykit::kev1` and
+  `vl::keykit::{RecoverySeed, Kit}` (the vl-keykit library, `subprojects/vl-keykit.wrap`, MIT, shared with Vaulthalla
+  Cloud; the offline `vh-recovery` tool, `core/main/recovery.cpp`, links only it and OpenSSL). `db::query::vault::RecoveryGrants`
   (`vault_recovery_grant`: class CHECKed to `customer`; `vault_key_envelope`). `vault::envelopes`
   (`vault/RecoveryEnvelopes.*`): `put`/`record`/`discard` for one version (no request without a usable grant),
   `ensure` for every held version, `material` (D2: `not_required | recipient | export | recovery_material_missing`),

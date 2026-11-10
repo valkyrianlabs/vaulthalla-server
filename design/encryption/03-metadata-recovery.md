@@ -375,10 +375,11 @@ sent to Valkyrian Labs until such a service is designed, approved and explicitly
 
 ### 5.8 As implemented (#370)
 
-- **Codecs.** `crypto::kev1` (`core/{include,src}/crypto/recovery/Kev1.*`: `wrap`, `unwrap` with the reader's checks in
-  §5.2's order, `inspect`, `kid`, `skippedByRestore`; suites 1 and 2, OpenSSL 3), `crypto::recovery::RecoverySeed`
-  (`Seed.*`) and the kit (`Kit.*`, `parseKit`/`toJson`). Every `kev1` and `recovery_seed` vector passes
-  (`Kev1Vectors`, `RecoverySeedVectors`, `Kev1ReservedFields`, `RecoveryKit`).
+- **Codecs.** The vl-keykit library (`valkyrianlabs/vl-keykit`, MIT, pinned in `subprojects/vl-keykit.wrap`; shared
+  with Vaulthalla Cloud): `vl::keykit::kev1` (`wrap`, `unwrap` with the reader's checks in §5.2's order, `inspect`,
+  `kid`, `skippedByRestore`; suites 1 and 2, OpenSSL 3), `vl::keykit::RecoverySeed` and the kit (`parseKit`/`toJson`).
+  Every `kev1`, `recovery_seed` and `object_ids` vector passes in its suite; its `vectors/` is a byte-identical copy of
+  `vectors/` here (`KeykitVectors`).
 - **Grants and envelopes** (migration 127): `vault_recovery_grant` (one row per grant: `grant_id` base32, `recipient_id`,
   X25519 `public_key`, suite 1, `class` CHECKed to `customer`, label, `added_at`, `authorized_by` = `user:<id> via
   cli|device`, `revoked_at`/`revoked_by`; one active grant per recipient key) and `vault_key_envelope` (grant ×

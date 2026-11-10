@@ -9,9 +9,9 @@
 #include "auth/stepup/StepUp.hpp"
 #include "audit/Trail.hpp"
 #include "crypto/id/ObjectUid.hpp"
-#include "crypto/recovery/Kev1.hpp"
-#include "crypto/recovery/Kit.hpp"
-#include "crypto/recovery/Seed.hpp"
+#include <vl/keykit/kev1.hpp>
+#include <vl/keykit/kit.hpp>
+#include <vl/keykit/seed.hpp>
 #include "crypto/util/encrypt.hpp"
 #include "db/Transactions.hpp"
 #include "db/encoding/bytea.hpp"
@@ -73,7 +73,7 @@ using UserPtr = std::shared_ptr<identities::User>;
 using EnginePtr = std::shared_ptr<storage::Engine>;
 namespace rr = ops::recovery_recipients;
 namespace keys = ops::vault_keys;
-namespace kev1 = crypto::kev1;
+namespace kev1 = vl::keykit::kev1;
 using Channel = keys::Channel;
 using WsKeys = protocols::ws::handler::VaultKeys;
 
@@ -248,7 +248,7 @@ protected:
 
     static kev1::VaultUid uidOf(const EnginePtr& engine) { return *engine->vault->uid; }
 
-    static rr::AddResult enroll(const EnginePtr& engine, const crypto::recovery::RecoverySeed& seed,
+    static rr::AddResult enroll(const EnginePtr& engine, const vl::keykit::RecoverySeed& seed,
                                 const std::optional<std::string>& label = std::string("Recovery kit")) {
         return rr::add(superUser, {.vault_id = engine->vault->id, .public_key = b64(seed.x25519PublicKey()),
                                    .label = label},
@@ -257,14 +257,14 @@ protected:
 
     // The key versions of the vault's envelopes in its bucket that `seed` unwraps, with the keys they hold.
     static std::map<uint32_t, crypto::SecretKeyPtr> unwrapAll(const EnginePtr& engine,
-                                                              const crypto::recovery::RecoverySeed& seed) {
+                                                              const vl::keykit::RecoverySeed& seed) {
         std::map<uint32_t, crypto::SecretKeyPtr> out;
         const auto sk = seed.x25519SecretKey();
         for (const auto& [key, bytes] : storeOf(engine->vault->id)->objects()) {
             if (!key.starts_with(kev1::kObjectPrefix)) continue;
             try {
                 auto u = kev1::unwrap(bytes, sk.bytes(), kev1::Suite::X25519, uidOf(engine));
-                out[u.key_version] = u.key;
+                out[u.key_version] = std::make_shared<const crypto::SecretKey>(u.key.bytes());
             } catch (const kev1::Error&) {}
         }
         return out;
@@ -319,7 +319,7 @@ protected:
         });
     }
 
-    static json kitFor(const crypto::recovery::RecoverySeed& seed, const std::vector<kev1::VaultUid>& vaults = {}) {
+    static json kitFor(const vl::keykit::RecoverySeed& seed, const std::vector<kev1::VaultUid>& vaults = {}) {
         json doc{{"type", "vh.recovery-kit"}, {"v", 1}, {"recovery_seed", seed.text()}, {"vaults", json::array()}};
         for (const auto& uid : vaults) doc["vaults"].push_back({{"vault_uid", crypto::id::toBase32(uid)}});
         return doc;
@@ -361,7 +361,7 @@ TEST_F(RecoveryRecipient, EnrollmentWrapsEveryHeldVersionAndEveryFutureOne) {
     rotate(engine);  // v2, before any recipient: no envelope, no request
     EXPECT_TRUE(storeOf(engine->vault->id)->puts.empty());
 
-    const auto seed = crypto::recovery::RecoverySeed::generate();
+    const auto seed = vl::keykit::RecoverySeed::generate();
     const auto added = enroll(engine, seed);
     EXPECT_FALSE(added.note) << *added.note;
     EXPECT_EQ(added.envelopes_written, 2u);
@@ -407,7 +407,7 @@ TEST_F(RecoveryRecipient, EnrollmentWrapsEveryHeldVersionAndEveryFutureOne) {
 TEST_F(RecoveryRecipient, ARotationThatCantWriteItsEnvelopesNeverStarts) {
     const auto engine = s3Vault();
     write(engine, "/a.txt", "v1");
-    const auto seed = crypto::recovery::RecoverySeed::generate();
+    const auto seed = vl::keykit::RecoverySeed::generate();
     (void)enroll(engine, seed);
     const auto store = storeOf(engine->vault->id);
     store->failPuts = true;
@@ -424,7 +424,7 @@ TEST_F(RecoveryRecipient, ARotationThatCantWriteItsEnvelopesNeverStarts) {
 
 TEST_F(RecoveryRecipient, EnrollmentIsForTheCliAndPairedDevicesWithTheExportPermission) {
     const auto engine = s3Vault();
-    const auto seed = crypto::recovery::RecoverySeed::generate();
+    const auto seed = vl::keykit::RecoverySeed::generate();
     const auto pk = b64(seed.x25519PublicKey());
     const json payload{{"vault_id", engine->vault->id}, {"public_key", pk}};
 
@@ -474,8 +474,8 @@ TEST_F(RecoveryRecipient, EnrollmentIsForTheCliAndPairedDevicesWithTheExportPerm
 
 TEST_F(RecoveryRecipient, RevocationStopsNewEnvelopesAndAsksForARotation) {
     const auto engine = s3Vault();
-    const auto a = crypto::recovery::RecoverySeed::generate();
-    const auto b = crypto::recovery::RecoverySeed::generate();
+    const auto a = vl::keykit::RecoverySeed::generate();
+    const auto b = vl::keykit::RecoverySeed::generate();
     const auto grantA = enroll(engine, a).recipient.grant_id;
     (void)enroll(engine, b);
 
@@ -542,7 +542,7 @@ TEST_F(RecoveryRequirement, ACurrentExportCoversTheVaultUntilARotation) {
 TEST_F(RecoveryRequirement, ARecipientCoversEveryNeededVersionOnlyWithItsEnvelopes) {
     const auto engine = s3Vault();
     write(engine, "/a.txt", "x");
-    const auto seed = crypto::recovery::RecoverySeed::generate();
+    const auto seed = vl::keykit::RecoverySeed::generate();
     (void)enroll(engine, seed);
     EXPECT_EQ(statusOf(engine->vault->id).recovery.state, "recipient");
 
@@ -583,7 +583,7 @@ TEST_F(RecoveryNoSilentCustody, NoFlowAddsANonCustomerGrantOrSendsKeyMaterialAny
 
     // Enrolling a recipient writes envelopes to that vault's bucket and nowhere else: customer class, purpose 1, this
     // vault, this recipient.
-    const auto seed = crypto::recovery::RecoverySeed::generate();
+    const auto seed = vl::keykit::RecoverySeed::generate();
     (void)enroll(engine, seed);
     EXPECT_GE(requestsFor(engine->vault->id), 1);
     EXPECT_EQ(requestsFor(local->vault->id), 0);
@@ -615,7 +615,7 @@ TEST_F(RecoveryNoSilentCustody, NoFlowAddsANonCustomerGrantOrSendsKeyMaterialAny
 TEST_F(KeysImportFromKit, RestoresTheVaultAfterItsVaultMasterIsLost) {
     const auto engine = s3Vault();
     write(engine, "/a.txt", "readable again");
-    const auto seed = crypto::recovery::RecoverySeed::generate();
+    const auto seed = vl::keykit::RecoverySeed::generate();
     (void)enroll(engine, seed);
     const auto id = engine->vault->id;
     const auto name = engine->vault->name;
@@ -645,13 +645,13 @@ TEST_F(KeysImportFromKit, RestoresTheVaultAfterItsVaultMasterIsLost) {
 
 TEST_F(KeysImportFromKit, RefusesAnotherVaultsKitAWrongSeedAndSalvage) {
     const auto engine = s3Vault();
-    const auto seed = crypto::recovery::RecoverySeed::generate();
+    const auto seed = vl::keykit::RecoverySeed::generate();
     (void)enroll(engine, seed);
     corruptCurrentKey(engine->vault->id);
     runtime::Deps::get().storageManager->retireVault(engine->vault->id);
 
     EXPECT_EQ(code([&] { return importKit(engine, kitFor(seed, {crypto::id::newObjectUid()})); }), "invalid");
-    EXPECT_EQ(code([&] { return importKit(engine, kitFor(crypto::recovery::RecoverySeed::generate())); }), "invalid");
+    EXPECT_EQ(code([&] { return importKit(engine, kitFor(vl::keykit::RecoverySeed::generate())); }), "invalid");
     const auto kit = kitFor(seed);
     EXPECT_EQ(code([&] {
                   return keys::importKeys(superUser,
@@ -675,7 +675,7 @@ TEST_F(KeysImportFromKit, RefusesAnotherVaultsKitAWrongSeedAndSalvage) {
 TEST_F(KeysImportFromKit, SkipsReservedEnvelopesIgnoresPlantedKeysAndNeverIntroducesAVersion) {
     const auto engine = s3Vault();
     write(engine, "/a.txt", "genuine");
-    const auto seed = crypto::recovery::RecoverySeed::generate();
+    const auto seed = vl::keykit::RecoverySeed::generate();
     (void)enroll(engine, seed);
     const auto id = engine->vault->id;
     const auto store = storeOf(id);
@@ -683,9 +683,9 @@ TEST_F(KeysImportFromKit, SkipsReservedEnvelopesIgnoresPlantedKeysAndNeverIntrod
 
     // Anyone who can write to the bucket can wrap a key of their own to the recipient's public key.
     const auto planted = crypto::SecretKey::random();
-    const auto fake1 = kev1::wrap(*planted, kev1::Suite::X25519, 1, uidOf(engine), pk);
+    const auto fake1 = kev1::wrap(planted->bytes(), kev1::Suite::X25519, 1, uidOf(engine), pk);
     store->plant(kev1::objectKey(kev1::kid(fake1)), fake1);
-    const auto fake9 = kev1::wrap(*planted, kev1::Suite::X25519, 9, uidOf(engine), pk);
+    const auto fake9 = kev1::wrap(planted->bytes(), kev1::Suite::X25519, 9, uidOf(engine), pk);
     store->plant(kev1::objectKey(kev1::kid(fake9)), fake9);
     // A reserved recipient class (a future custodian) and a reserved purpose: skipped, never fatal.
     auto reservedClass = fake1;
@@ -695,8 +695,8 @@ TEST_F(KeysImportFromKit, SkipsReservedEnvelopesIgnoresPlantedKeysAndNeverIntrod
     reservedPurpose[12] = 2;
     store->plant(kev1::objectKey(kev1::kid(reservedPurpose)), reservedPurpose);
     // Another recipient's envelope.
-    const auto other = crypto::recovery::RecoverySeed::generate();
-    const auto others = kev1::wrap(*planted, kev1::Suite::X25519, 1, uidOf(engine), other.x25519PublicKey());
+    const auto other = vl::keykit::RecoverySeed::generate();
+    const auto others = kev1::wrap(planted->bytes(), kev1::Suite::X25519, 1, uidOf(engine), other.x25519PublicKey());
     store->plant(kev1::objectKey(kev1::kid(others)), others);
 
     corruptCurrentKey(id);

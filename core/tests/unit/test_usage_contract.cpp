@@ -233,7 +233,7 @@ const std::map<std::string, std::string>& opaqueObjects() {
         {"User.vault_roles", "the {} alternative: identities::to_json(User) sends an empty object instead of [] for a user without vault roles"},
         {"share.link.create payload.metadata", "the object alternative: the link creator's free-form metadata, stored as given"},
         {"share.link.update payload.metadata", "the object alternative: the link creator's free-form metadata, stored as given"},
-        {"vault.recover payload.kit", "the customer's recovery kit (vh.recovery-kit v1, design spec 03 §5.3) as a whole document: crypto::recovery::parseKit reads it, never the contract"},
+        {"vault.recover payload.kit", "the customer's recovery kit (vh.recovery-kit v1, design spec 03 §5.3) as a whole document: vl::keykit::parseKit reads it, never the contract"},
     };
     return kOpaque;
 }

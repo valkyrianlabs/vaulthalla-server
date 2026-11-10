@@ -1,6 +1,6 @@
 #include "vault/RecoveryEnvelopes.hpp"
 
-#include "crypto/recovery/Kev1.hpp"
+#include <vl/keykit/kev1.hpp>
 #include "db/query/vault/Key.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "log/Registry.hpp"
@@ -28,7 +28,7 @@ std::string versionList(const std::vector<uint32_t>& versions) {
     return out;
 }
 
-crypto::kev1::VaultUid vaultUidOf(const uint32_t vaultId) {
+vl::keykit::kev1::VaultUid vaultUidOf(const uint32_t vaultId) {
     const auto vault = db::query::vault::Vault::getVault(vaultId);
     if (!vault || !vault->uid) throw std::runtime_error("vault " + std::to_string(vaultId) + " has no uid");
     return *vault->uid;
@@ -70,11 +70,11 @@ Pending put(const uint32_t vaultId, const uint32_t version, const crypto::Secret
     out.store = storeFor(vaultId);
     try {
         for (const auto& g : grants) {
-            if (!g.usable() || g.suite != static_cast<uint16_t>(crypto::kev1::Suite::X25519)) continue;
-            const auto env = crypto::kev1::wrap(key, crypto::kev1::Suite::X25519, version, uid, g.public_key);
-            const auto kid = crypto::kev1::kid(env);
+            if (!g.usable() || g.suite != static_cast<uint16_t>(vl::keykit::kev1::Suite::X25519)) continue;
+            const auto env = vl::keykit::kev1::wrap(key.bytes(), vl::keykit::kev1::Suite::X25519, version, uid, g.public_key);
+            const auto kid = vl::keykit::kev1::kid(env);
             try {
-                (void)out.store->putIfAbsent(crypto::kev1::objectKey(kid), env);
+                (void)out.store->putIfAbsent(vl::keykit::kev1::objectKey(kid), env);
             } catch (const sync::manifest::PreconditionFailed&) {
                 // kid is the envelope's hash: an object under it already holds these exact bytes.
             }
@@ -98,7 +98,7 @@ void discard(const Pending& pending) noexcept {
     if (!pending.store) return;
     for (const auto& e : pending.envelopes) {
         try {
-            pending.store->remove(crypto::kev1::objectKey(e.kid));
+            pending.store->remove(vl::keykit::kev1::objectKey(e.kid));
         } catch (const std::exception& ex) {
             log::Registry::crypto()->warn("[vault::envelopes] Vault {}: could not remove the unused envelope {}: {}",
                                           pending.vault_id, e.kid, ex.what());

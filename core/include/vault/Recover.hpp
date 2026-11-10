@@ -2,7 +2,7 @@
 
 #include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
-#include "crypto/recovery/Kit.hpp"
+#include <vl/keykit/kit.hpp>
 #include "sync/manifest/Content.hpp"
 #include "sync/manifest/Reader.hpp"
 #include "sync/manifest/Store.hpp"
@@ -63,7 +63,7 @@ struct ExportedVault {
 [[nodiscard]] std::vector<ExportedVault> parseExport(const nlohmann::json& doc);
 
 struct Material {
-    std::optional<crypto::recovery::Kit> kit;
+    std::optional<vl::keykit::Kit> kit;
     std::vector<ExportedVault> exports;
 };
 
