@@ -152,6 +152,15 @@ else
 endif
 fuse_bridge_sources = ['fuse/Bridge.cpp', 'fuse/Reply.cpp', 'fuse/Resolver.cpp', 'fuse/Service.cpp']
 
+# KEV1 envelopes, the recovery seed and kit (Valkyrian Labs, MIT; shared with vaulthalla-cloud), statically linked from
+# the release pinned in subprojects/vl-keykit.wrap, whose tarball is committed under subprojects/packagecache/ like
+# vl-sigv4's. Its golden vectors are the ones in design/encryption/vectors/ (test_keykit_vectors checks the copy).
+# kit.hpp takes nlohmann::json in its API, so the subproject must build against the same copy as the daemon: the
+# vendored one (core/vendor/nlohmann), not the system's. A mismatch would fail to link (nlohmann's ABI namespaces).
+meson.override_dependency('nlohmann_json',
+    declare_dependency(include_directories: include_directories('vendor'), version: '3.12.0'))
+vl_keykit_dep = dependency('vl-keykit', version: '>=0.1.0', fallback: ['vl-keykit', 'vl_keykit_dep'])
+
 deps = [
     dependency('libsodium', required: true),
     dependency('libcurl', required: true),
@@ -172,6 +181,7 @@ deps = [
     # tarball is committed under subprojects/packagecache/, so the Debian build (--wrap-mode=nodownload) needs no
     # network. As a subproject it installs nothing and builds no tests.
     dependency('vl-sigv4', version: '>=0.2.1', fallback: ['vl-sigv4', 'vl_sigv4_dep']),
+    vl_keykit_dep,
     dependency('zlib', required: true),
     fmt_dep
 ]
@@ -318,6 +328,8 @@ if get_option('build_unit_tests')
         '-DVH_TEST_PASSWORD_LISTS_DIR="' + join_paths(repo_root, 'deploy', 'password-lists') + '"',
         # The #329 golden vectors (test_vhf1.cpp reads vectors.json at test time).
         '-DVH_TEST_VECTORS_DIR="' + join_paths(repo_root, 'design', 'encryption', 'vectors') + '"',
+        # vl-keykit's copy of them (test_keykit_vectors.cpp requires the two to be identical).
+        '-DVH_TEST_KEYKIT_VECTORS_DIR="' + vl_keykit_dep.get_variable(internal: 'vectors_dir', default_value: '') + '"',
     ]
 
     unit_test_objects = static_library(
@@ -396,11 +408,9 @@ vh_cli = executable('vaulthalla-cli',
 # The offline recovery-kit tool (design/encryption/03-metadata-recovery.md §5.3, #370): only the recovery codecs and
 # their crypto, no daemon code and no network. Customers run it on their own device, never on the server.
 vh_recovery = executable('vh-recovery',
-           files(join_paths(core_root, 'main/recovery.cpp'), src / 'crypto/recovery/Kev1.cpp',
-                 src / 'crypto/recovery/Kit.cpp', src / 'crypto/recovery/Seed.cpp', src / 'crypto/id/ObjectUid.cpp',
-                 src / 'crypto/SecretBytes.cpp', src / 'crypto/SecretKey.cpp'),
-           include_directories: include_directories('vendor', 'include'),
-           dependencies: [dependency('libsodium', required: true), dependency('openssl', version: '>=3.0', required: true)],
+           files(join_paths(core_root, 'main/recovery.cpp')),
+           include_directories: include_directories('vendor'),
+           dependencies: [vl_keykit_dep],
            install: true
 )
 

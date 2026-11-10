@@ -13,12 +13,10 @@
 //
 // A kit file is written with mode 0600 and never over an existing file (add-vault replaces it atomically).
 
-#include "crypto/id/ObjectUid.hpp"
-#include "crypto/recovery/Kit.hpp"
-#include "crypto/recovery/Seed.hpp"
+#include <vl/keykit/kit.hpp>
+#include <vl/keykit/seed.hpp>
 
 #include <nlohmann/json.hpp>
-#include <sodium.h>
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -37,7 +35,7 @@
 
 namespace {
 
-using vh::crypto::recovery::Kit;
+using vl::keykit::Kit;
 
 constexpr const char* kUsage =
     "usage: vh-recovery kit create --output <kit.json>\n"
@@ -48,13 +46,6 @@ constexpr const char* kUsage =
     "Generate the recovery kit on your own device, never on the server. Keep it offline (or in a password manager);\n"
     "anyone holding it can decrypt the vaults it serves. Enroll its public key on a vault with:\n"
     "  vh vault keys recipient add <vault> --public-key <key>\n";
-
-std::string base64(const std::vector<uint8_t>& bytes) {
-    std::string out(sodium_base64_encoded_len(bytes.size(), sodium_base64_VARIANT_ORIGINAL), '\0');
-    sodium_bin2base64(out.data(), out.size(), bytes.data(), bytes.size(), sodium_base64_VARIANT_ORIGINAL);
-    out.resize(out.size() - 1);
-    return out;
-}
 
 std::string readAll(const std::string& path) {
     if (path == "-") return {std::istreambuf_iterator<char>(std::cin), std::istreambuf_iterator<char>()};
@@ -68,7 +59,7 @@ void writePrivate(const std::string& path, std::string text, const bool replace)
     const auto target = replace ? path + ".tmp-" + std::to_string(::getpid()) : path;
     const int fd = ::open(target.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
     if (fd < 0) {
-        vh::crypto::wipeSecret(text);
+        vl::keykit::wipe(text);
         throw std::runtime_error("can't create " + target + ": " + std::strerror(errno) +
                                  (errno == EEXIST ? " (a kit is never overwritten)" : ""));
     }
@@ -79,12 +70,12 @@ void writePrivate(const std::string& path, std::string text, const bool replace)
             if (errno == EINTR) continue;
             ::close(fd);
             ::unlink(target.c_str());
-            vh::crypto::wipeSecret(text);
+            vl::keykit::wipe(text);
             throw std::runtime_error("can't write " + target + ": " + std::strerror(errno));
         }
         done += static_cast<std::size_t>(n);
     }
-    vh::crypto::wipeSecret(text);
+    vl::keykit::wipe(text);
     if (::fsync(fd) != 0 || ::close(fd) != 0) throw std::runtime_error("can't write " + target);
     if (replace && ::rename(target.c_str(), path.c_str()) != 0) {
         ::unlink(target.c_str());
@@ -98,13 +89,13 @@ Kit loadKit(const std::string& path) {
     try {
         doc = nlohmann::json::parse(text);
     } catch (const std::exception&) {
-        vh::crypto::wipeSecret(text);
+        vl::keykit::wipe(text);
         throw std::runtime_error(path + " is not a JSON recovery kit");
     }
-    vh::crypto::wipeSecret(text);
-    auto kit = vh::crypto::recovery::parseKit(doc);
+    vl::keykit::wipe(text);
+    auto kit = vl::keykit::parseKit(doc);
     if (doc.contains("recovery_seed") && doc["recovery_seed"].is_string())
-        vh::crypto::wipeSecret(doc["recovery_seed"].get_ref<std::string&>());
+        vl::keykit::wipe(doc["recovery_seed"].get_ref<std::string&>());
     return kit;
 }
 
@@ -117,9 +108,9 @@ std::optional<std::string> option(const std::vector<std::string>& args, const st
 int create(const std::vector<std::string>& args) {
     const auto output = option(args, "--output");
     if (!output) throw std::runtime_error("kit create needs --output <kit.json> (the kit holds your recovery seed)");
-    Kit kit{vh::crypto::recovery::RecoverySeed::generate(), {}};
-    const auto pk = base64(kit.seed.x25519PublicKey());
-    writePrivate(*output, vh::crypto::recovery::toJson(kit).dump(2) + "\n", false);
+    Kit kit{vl::keykit::RecoverySeed::generate(), {}};
+    const auto pk = vl::keykit::base64Encode(kit.seed.x25519PublicKey());
+    writePrivate(*output, vl::keykit::toJson(kit).dump(2) + "\n", false);
     std::cout << pk << "\n";
     std::cerr << "Wrote a new recovery kit to " << *output << " (mode 0600). Keep it offline: it decrypts every vault\n"
               << "you enroll it on. The line above is its public key; enroll it on a vault with\n"
@@ -131,7 +122,7 @@ int create(const std::vector<std::string>& args) {
 
 int publicKey(const std::vector<std::string>& args) {
     if (args.empty()) throw std::runtime_error("kit public-key needs the kit file");
-    std::cout << base64(loadKit(args[0]).seed.x25519PublicKey()) << "\n";
+    std::cout << vl::keykit::base64Encode(loadKit(args[0]).seed.x25519PublicKey()) << "\n";
     return 0;
 }
 
@@ -164,12 +155,12 @@ int addVault(const std::vector<std::string>& args) {
                 keys.push_back({{"key_id", k.at("key_id")}, {"public_key", k.at("public_key")}});
         entry["attestation_public_keys"] = keys;
         if (s.contains("checkpoint") && s["checkpoint"].is_object()) entry["checkpoint"] = s["checkpoint"];
-        auto vault = vh::crypto::recovery::kitVaultFromJson(entry);
+        auto vault = vl::keykit::kitVaultFromJson(entry);
         std::erase_if(kit.vaults, [&](const auto& v) { return v.vault_uid == vault.vault_uid; });
         kit.vaults.push_back(std::move(vault));
         ++added;
     }
-    writePrivate(args[0], vh::crypto::recovery::toJson(kit).dump(2) + "\n", true);
+    writePrivate(args[0], vl::keykit::toJson(kit).dump(2) + "\n", true);
     std::cerr << "Pinned " << added << " vault(s) in " << args[0] << "\n";
     return 0;
 }
@@ -177,9 +168,9 @@ int addVault(const std::vector<std::string>& args) {
 int show(const std::vector<std::string>& args) {
     if (args.empty()) throw std::runtime_error("kit show needs the kit file");
     const auto kit = loadKit(args[0]);
-    nlohmann::json out{{"public_key", base64(kit.seed.x25519PublicKey())},
-                       {"signing_public_key", base64(kit.seed.ed25519PublicKey())}, {"vaults", nlohmann::json::array()}};
-    for (const auto& v : kit.vaults) out["vaults"].push_back(vh::crypto::recovery::toJson(v));
+    nlohmann::json out{{"public_key", vl::keykit::base64Encode(kit.seed.x25519PublicKey())},
+                       {"signing_public_key", vl::keykit::base64Encode(kit.seed.ed25519PublicKey())}, {"vaults", nlohmann::json::array()}};
+    for (const auto& v : kit.vaults) out["vaults"].push_back(vl::keykit::toJson(v));
     std::cout << out.dump(2) << "\n";
     return 0;
 }
@@ -188,10 +179,6 @@ int show(const std::vector<std::string>& args) {
 
 int main(int argc, char** argv) {
     std::vector<std::string> args(argv + 1, argv + argc);
-    if (sodium_init() < 0) {
-        std::cerr << "vh-recovery: libsodium failed to initialize\n";
-        return 1;
-    }
     if (args.size() < 2 || args[0] != "kit" || args[1] == "help" || args[1] == "--help") {
         std::cerr << kUsage;
         return args.size() >= 2 && (args[1] == "help" || args[1] == "--help") ? 0 : 2;

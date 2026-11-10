@@ -1,0 +1,8 @@
+[wrap-file]
+directory = vl-keykit-0.1.0
+source_url = https://github.com/valkyrianlabs/vl-keykit/releases/download/v0.1.0/vl-keykit-0.1.0.tar.xz
+source_filename = vl-keykit-0.1.0.tar.xz
+source_hash = 448f25554da18f154ff84fb2d1f44f6507ae3643483726be1d12982ccf10adcc
+
+[provide]
+vl-keykit = vl_keykit_dep

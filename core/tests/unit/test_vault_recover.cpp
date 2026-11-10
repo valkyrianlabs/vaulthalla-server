@@ -14,8 +14,8 @@
 #include "../helpers/db_suite.hpp"
 #include "../helpers/versioned_bucket.hpp"
 
-#include "crypto/recovery/Kit.hpp"
-#include "crypto/recovery/Seed.hpp"
+#include <vl/keykit/kit.hpp>
+#include <vl/keykit/seed.hpp>
 #include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "db/query/fs/File.hpp"
@@ -215,7 +215,7 @@ TEST_F(VaultRecoverTrustAnchor, PinsComeFromTheKitEntryAndExportsOfThisVault) {
     const auto uid = crypto::id::newObjectUid();
     rec::Material m;
     EXPECT_FALSE(rec::pinsFor(m, uid).supplied);
-    m.kit.emplace(crypto::recovery::Kit{crypto::recovery::RecoverySeed::generate(), {}});
+    m.kit.emplace(vl::keykit::Kit{vl::keykit::RecoverySeed::generate(), {}});
     EXPECT_FALSE(rec::pinsFor(m, uid).supplied) << "a kit that doesn't list the vault pins nothing";
     m.kit->vaults.push_back({uid, a.id, kVault, {}, std::nullopt});
     EXPECT_TRUE(rec::pinsFor(m, uid).supplied);
@@ -258,7 +258,7 @@ protected:
         uint32_t id{};
         std::string name;
         crypto::id::ObjectUid uid{};
-        std::string seed = crypto::recovery::RecoverySeed::generate().text();  // the kit's seed text
+        std::string seed = vl::keykit::RecoverySeed::generate().text();  // the kit's seed text
         std::map<std::string, std::string> files;  // path → plaintext (live files)
     };
 
@@ -317,7 +317,7 @@ protected:
 
     static void enroll(const Origin& o) {
         (void)ops::recovery_recipients::add(
-            superUser, {.vault_id = o.id, .public_key = crypto::util::b64_encode(crypto::recovery::RecoverySeed::parse(o.seed).x25519PublicKey()),
+            superUser, {.vault_id = o.id, .public_key = crypto::util::b64_encode(vl::keykit::RecoverySeed::parse(o.seed).x25519PublicKey()),
                         .label = std::string("Recovery kit")},
             keys::Channel::Cli);
     }
@@ -354,7 +354,7 @@ protected:
 
     static json kitOf(const Origin& o, const bool pinKeys = true, const bool checkpoint = true) {
         const auto status = keys::status(superUser, o.id).front();
-        crypto::recovery::KitVault v;
+        vl::keykit::KitVault v;
         v.vault_uid = o.uid;
         v.origin_node_id = status.node_id;
         v.origin_vault_id = o.id;
@@ -362,9 +362,9 @@ protected:
             for (const auto& k : status.attestation_public_keys)
                 v.attestation_public_keys.push_back({k.key_id, crypto::util::b64_decode(k.public_key)});
         if (checkpoint && status.checkpoint)
-            v.checkpoint = crypto::recovery::KitCheckpoint{status.checkpoint->epoch, status.checkpoint->root_sha256,
+            v.checkpoint = vl::keykit::KitCheckpoint{status.checkpoint->epoch, status.checkpoint->root_sha256,
                                                            std::nullopt};
-        return crypto::recovery::toJson(crypto::recovery::Kit{crypto::recovery::RecoverySeed::parse(o.seed), {v}});
+        return vl::keykit::toJson(vl::keykit::Kit{vl::keykit::RecoverySeed::parse(o.seed), {v}});
     }
 
     static json exportOf(const Origin& o) {
@@ -650,7 +650,7 @@ TEST_F(VaultRecoverDb, AWrongSeedOrAnotherVaultsKitIsRefused) {
     EXPECT_EQ(code([&] { return recover(o, &other, nullptr); }), "kit_vault_mismatch");
     // The right vault, another seed.
     auto wrongSeed = kit;
-    wrongSeed["recovery_seed"] = crypto::recovery::RecoverySeed::generate().text();
+    wrongSeed["recovery_seed"] = vl::keykit::RecoverySeed::generate().text();
     EXPECT_EQ(code([&] { return recover(o, &wrongSeed, nullptr); }), "recovery_material_mismatch");
     EXPECT_EQ(code([&] { return recover(o, nullptr, nullptr); }), "invalid");
 }

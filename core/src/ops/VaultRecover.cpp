@@ -3,7 +3,7 @@
 #include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "crypto/id/Generator.hpp"
-#include "crypto/recovery/Kev1.hpp"
+#include <vl/keykit/kev1.hpp>
 #include "db/query/sync/Manifest.hpp"
 #include "db/query/vault/Key.hpp"
 #include "db/query/vault/Recover.hpp"
@@ -101,10 +101,10 @@ std::vector<db::query::vault::RecoverGrant> grantsOf(const rec::Plan& plan, cons
         if (g.recipient_class != mf::kCustomerClass || g.suite != 1) continue;
         std::optional<std::vector<uint8_t>> pk;
         if (g.public_key) pk = b64(*g.public_key);
-        if ((!pk || pk->size() != crypto::kev1::kX25519KeySize) && kitKey &&
-            hexOf(crypto::kev1::recipientId(*kitKey)) == g.recipient_id)
+        if ((!pk || pk->size() != vl::keykit::kev1::kX25519KeySize) && kitKey &&
+            hexOf(vl::keykit::kev1::recipientId(*kitKey)) == g.recipient_id)
             pk = kitKey;
-        if (!pk || pk->size() != crypto::kev1::kX25519KeySize || hexOf(crypto::kev1::recipientId(*pk)) != g.recipient_id)
+        if (!pk || pk->size() != vl::keykit::kev1::kX25519KeySize || hexOf(vl::keykit::kev1::recipientId(*pk)) != g.recipient_id)
             continue;
         out.push_back({g.grant_id, g.recipient_id, *pk, 1, g.label, g.added_at, g.authorized_by, g.revoked_at});
     }
@@ -144,8 +144,8 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
     rec::Material material;
     if (req.kit) {
         try {
-            material.kit.emplace(crypto::recovery::parseKit(*req.kit));
-        } catch (const crypto::recovery::KitError& e) {
+            material.kit.emplace(vl::keykit::parseKit(*req.kit));
+        } catch (const vl::keykit::KitError& e) {
             throw Invalid(std::string("the recovery kit is not usable: ") + e.what());
         }
     }

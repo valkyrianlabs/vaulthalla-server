@@ -4,7 +4,7 @@
 #include "auth/stepup/StepUp.hpp"
 #include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
-#include "crypto/recovery/Kev1.hpp"
+#include <vl/keykit/kev1.hpp>
 #include "crypto/util/encrypt.hpp"
 #include "db/query/vault/RecoveryGrants.hpp"
 #include "db/query/vault/Vault.hpp"
@@ -84,11 +84,11 @@ std::vector<uint8_t> parsePublicKey(const std::string& text) {
             throw Invalid("the public key is neither base64 nor hex");
         out.resize(len);
     }
-    if (out.size() != crypto::kev1::kX25519KeySize)
+    if (out.size() != vl::keykit::kev1::kX25519KeySize)
         throw Invalid("a recovery recipient is an X25519 public key: 32 bytes (base64 or hex)");
     // Refuse a degenerate key (all-zero, small order): no envelope could ever be written to it.
     try {
-        (void)crypto::kev1::wrap(*crypto::SecretKey::random(), crypto::kev1::Suite::X25519, 1, crypto::id::newObjectUid(),
+        (void)vl::keykit::kev1::wrap(crypto::SecretKey::random()->bytes(), vl::keykit::kev1::Suite::X25519, 1, crypto::id::newObjectUid(),
                                  out);
     } catch (const std::exception&) {
         throw Invalid("the public key is not a usable X25519 key (degenerate or small-order point)");
@@ -173,9 +173,9 @@ AddResult add(const Actor& actor, const AddRequest& request, const vault_keys::C
     db::query::vault::RecoveryGrant g;
     g.vault_id = vault->id;
     g.grant_id = crypto::id::toBase32(crypto::id::newObjectUid());
-    g.recipient_id = hex(crypto::kev1::recipientId(publicKey));
+    g.recipient_id = hex(vl::keykit::kev1::recipientId(publicKey));
     g.public_key = publicKey;
-    g.suite = static_cast<uint16_t>(crypto::kev1::Suite::X25519);
+    g.suite = static_cast<uint16_t>(vl::keykit::kev1::Suite::X25519);
     g.recipient_class = "customer";
     g.label = request.label;
     g.authorized_by = fmt::format("user:{} via {}", actor->id, channelName(channel));

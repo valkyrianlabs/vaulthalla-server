@@ -1,6 +1,6 @@
 #include "vault/Recover.hpp"
 
-#include "crypto/recovery/Kev1.hpp"
+#include <vl/keykit/kev1.hpp>
 #include "crypto/vhf1/Format.hpp"
 #include "log/Registry.hpp"
 #include "sync/manifest/Chain.hpp"
@@ -406,7 +406,7 @@ Proof prove(const uint32_t version, const std::span<const uint8_t> key, const st
 void MeteredStore::count(const std::string& key, const uint64_t bytes, const bool ranged) {
     if (ranged) ++downloads_.ranged_gets;
     else ++downloads_.gets;
-    if (key.starts_with(crypto::kev1::kObjectPrefix)) downloads_.envelope_bytes += bytes;
+    if (key.starts_with(vl::keykit::kev1::kObjectPrefix)) downloads_.envelope_bytes += bytes;
     else if (key.starts_with(".vaulthalla/")) downloads_.manifest_bytes += bytes;
     else if (key.starts_with(sync::manifest::kObjectPrefix) && ranged && bytes <= crypto::vhf1::kHeaderSize)
         downloads_.header_bytes += bytes;
@@ -514,9 +514,9 @@ Plan plan(sync::manifest::ObjectStore& inner, const Material& material, const Op
     std::map<uint32_t, std::vector<Candidate>> candidates;
     std::set<uint32_t> seen;
     {
-        std::optional<crypto::SecretBytes> sk;
+        std::optional<vl::keykit::SecretBytes> sk;
         if (material.kit) sk.emplace(material.kit->seed.x25519SecretKey());
-        for (const auto& o : store.list(std::string(crypto::kev1::kObjectPrefix))) {
+        for (const auto& o : store.list(std::string(vl::keykit::kev1::kObjectPrefix))) {
             if (out.envelopes.listed >= kMaxEnvelopes) break;
             ++out.envelopes.listed;
             if (o.size > kMaxEnvelopeBytes) {
@@ -526,20 +526,20 @@ Plan plan(sync::manifest::ObjectStore& inner, const Material& material, const Op
             const auto obj = store.get(o.key, std::nullopt);
             if (!obj) continue;
             try {
-                const auto h = crypto::kev1::inspect(obj->bytes);
+                const auto h = vl::keykit::kev1::inspect(obj->bytes);
                 if (h.vault_uid == *uid) {
                     seen.insert(h.key_version);
-                    out.envelope_index[o.key.substr(crypto::kev1::kObjectPrefix.size())] = {hexOf(h.recipient_id),
+                    out.envelope_index[o.key.substr(vl::keykit::kev1::kObjectPrefix.size())] = {hexOf(h.recipient_id),
                                                                                            h.key_version};
                 }
             } catch (const std::exception&) {}
             if (!sk) continue;
             try {
-                auto u = crypto::kev1::unwrap(obj->bytes, sk->bytes(), crypto::kev1::Suite::X25519, *uid);
+                auto u = vl::keykit::kev1::unwrap(obj->bytes, sk->bytes(), vl::keykit::kev1::Suite::X25519, *uid);
                 ++out.envelopes.unwrapped;
-                addCandidate(candidates, u.key_version, u.key, true);
-            } catch (const crypto::kev1::Error& e) {
-                if (crypto::kev1::skippedByRestore(e.code())) ++out.envelopes.skipped;
+                addCandidate(candidates, u.key_version, std::make_shared<const crypto::SecretKey>(u.key.bytes()), true);
+            } catch (const vl::keykit::kev1::Error& e) {
+                if (vl::keykit::kev1::skippedByRestore(e.code())) ++out.envelopes.skipped;
                 else ++out.envelopes.rejected;
             }
         }
