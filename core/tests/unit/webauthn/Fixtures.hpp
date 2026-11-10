@@ -1,11 +1,12 @@
 #pragma once
 
-// Test-only authenticator for the WebAuthn verifier tests (#355): fresh OpenSSL / libsodium keys, a minimal CBOR writer
-// (able to write the malformed encodings the strict parser must refuse), and builders for clientDataJSON,
-// authenticatorData and attestation objects. Signing happens only here, in tests; the verifier only verifies.
+// Test-only authenticator for the daemon's passkey tests (sign-in, step-up, device approvals): fresh OpenSSL /
+// libsodium keys, a minimal CBOR writer, and builders for clientDataJSON, authenticatorData and attestation objects.
+// Signing happens only here, in tests; the verifier (vl-webauthn) only verifies. It began as #355's fixture, which
+// vl-webauthn's own tests/Fixtures.hpp still carries for the verifier's suite.
 
-#include "auth/webauthn/Base64Url.hpp"
-#include "auth/webauthn/Types.hpp"
+#include <vl/webauthn/Base64Url.hpp>
+#include <vl/webauthn/Types.hpp>
 
 #include <nlohmann/json.hpp>
 #include <openssl/bn.h>
@@ -24,7 +25,7 @@
 #include <string_view>
 #include <vector>
 
-namespace vh::auth::webauthn {
+namespace vl::webauthn {
 // Readable gtest messages: refusals print their name.
 inline void PrintTo(const Failure f, std::ostream* os) { *os << toString(f); }
 inline void PrintTo(const AttestationType t, std::ostream* os) { *os << toString(t); }
@@ -33,7 +34,7 @@ inline void PrintTo(const Algorithm a, std::ostream* os) { *os << toString(a); }
 
 namespace vh::test_webauthn {
 
-namespace wa = vh::auth::webauthn;
+namespace wa = vl::webauthn;
 using wa::Bytes;
 using wa::ByteView;
 

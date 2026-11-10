@@ -1,7 +1,7 @@
 #pragma once
 
 #include "auth/mfa/Factors.hpp"
-#include "auth/webauthn/Types.hpp"
+#include <vl/webauthn/Types.hpp>
 
 #include <nlohmann/json_fwd.hpp>
 
@@ -30,7 +30,7 @@ inline constexpr std::chrono::seconds kChallengeTtl{120};
 // also rate limited per client IP (protocols/ws/ShareRateLimit.cpp).
 inline constexpr std::size_t kMaxLoginChallenges = 10'000;
 
-[[nodiscard]] webauthn::RelyingParty relyingParty();
+[[nodiscard]] vl::webauthn::RelyingParty relyingParty();
 // Whether passkeys can be used at all: an rp_id and origins are configured.
 [[nodiscard]] bool available();
 

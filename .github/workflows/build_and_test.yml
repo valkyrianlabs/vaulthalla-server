@@ -115,9 +115,10 @@ jobs:
           "$RUNNER_TEMP/harness-venv/bin/pip" install -q -r tools/harness/requirements.txt
           VERIFY_HARNESS_PYTHON="$RUNNER_TEMP/harness-venv/bin/python" bash tools/dev/verify.sh harness
 
-      # The WebAuthn libFuzzer targets always build (a few files). They run for their 60 s budget when the change can
-      # affect them (decision D5: the parsers are fuzzed on every change to them) and on every push to main; other pull
-      # requests stop after the build. It shares this job because the vps-ci pool has three runners: a fourth job per
-      # pull request would queue behind the other three.
-      - name: WebAuthn fuzz (build; 60 s per target when relevant)
-        uses: ./.github/actions/fuzz
+      # The libFuzzer targets (-Dfuzz=true: the VHF1 codec's, core/tests/fuzz) build on every run, silently, so they
+      # keep compiling. The WebAuthn parsers moved to vl-webauthn, whose own CI fuzzes them (decision D5).
+      - name: libFuzzer targets (build)
+        run: |
+          CXX=clang++-18 meson setup build-fuzz -Dfuzz=true -Db_sanitize=address,undefined -Db_lundef=false \
+            -Dwerror=true -Dbuildtype=debugoptimized > fuzz-setup.log 2>&1 || { cat fuzz-setup.log; exit 1; }
+          bash tools/dev/quiet-build.sh build-fuzz fuzz-setup.log

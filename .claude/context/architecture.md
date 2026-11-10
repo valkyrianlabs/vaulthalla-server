@@ -9,9 +9,9 @@ core-backend, and protocol-map docs, with stale claims corrected.
   `unity=on`, `unity_size=9`, `warning_level=3`, `werror=false`, `prefix=/usr`, meson >= 1.3.0.
   It enters C++ via `subdir('core')` and also installs `deploy/lifecycle` → `/usr/lib/vaulthalla/lifecycle`.
 - `core/meson.build`: deps `libsodium libcurl boost(filesystem) libpqxx-vh pdfium yaml-cpp spdlog fmt openssl>=3
-  libmagic libjpeg libturbojpeg pugixml zlib threads`, the WebAuthn verifier library `vh_webauthn`
-  (`core/src/auth/webauthn/meson.build`: libcbor >= 0.10, OpenSSL, libsodium; skipped by libvaulthalla's source
-  discovery, `own_library_prefixes`; `-Dfuzz=true` builds only it and its libFuzzer targets), plus `fuse3` when the kernel bridge is built (`-Dfuse`, auto:
+  libmagic libjpeg libturbojpeg pugixml zlib threads`, the WebAuthn verifier `vl-webauthn`
+  (the pinned subproject: libcbor >= 0.10, OpenSSL, libsodium, the vendored nlohmann; `-Dfuzz=true` builds only the
+  VHF1 libFuzzer target), plus `fuse3` when the kernel bridge is built (`-Dfuse`, auto:
   required on Linux; never on macOS, where `-Dfuse=enabled` is a setup error) and the Linux-only `uuid tss2-esys tss2-tctildr tss2-rc`.
   OS-specific code lives only in `core/src/platform/{linux,darwin}/` behind `core/include/platform/*.hpp` (see
   `macos.md`); source discovery adds the host's directory and, without FUSE, swaps the four libfuse sources for
@@ -379,11 +379,13 @@ whose UID is bound to `admin` (root/system/sudo refused). Startup `retireLegacyD
 `vh!adm1n` with a generated one (file written, admin's refresh tokens revoked). `vh setup nginx` (lifecycle Python)
 warns while generated + file present and offers rotate / delete file / continue / cancel; non-TTY warns and continues.
 
-### WebAuthn verifier (`auth/webauthn/`, #355)
+### WebAuthn verifier (vl-webauthn, from #355)
 
 The relying-party half of passkeys (design `docs/dev/mfa-design.md` 4.1, decision D5); the daemon's adapter is
-`auth/mfa/Passkeys.hpp` (#357, below). Its own library with no daemon includes (`tools/contracts/test_webauthn_contract.py`), namespace
-`vh::auth::webauthn`, so it can be extracted as a `vl-*` library. `Verifier` = check 1 (`ChallengeStore`: in-memory,
+`auth/mfa/Passkeys.hpp` (#357, below). It is `valkyrianlabs/vl-webauthn` (MIT, shared with vaulthalla-cloud;
+namespace `vl::webauthn`, headers `<vl/webauthn/*.hpp>`), the release pinned in `subprojects/vl-webauthn.wrap` with its
+tarball in `subprojects/packagecache/`; its suites, vectors, fuzz targets and corpora live there
+(`tools/contracts/test_webauthn_contract.py` pins the wrap and that no in-tree copy remains). `Verifier` = check 1 (`ChallengeStore`: in-memory,
 single use, 120 s, bound to ws session, `Purpose`, user and scope, burnt before any signature check) + the pure
 `verifyRegistration`/`verifyAssertion` (checks 2-14). Persistence is the caller's: `CredentialLookup` is an
 interface, and an `Outcome` says what to store (new signCount, BS) or do (`suspendCredential` on a device-bound
@@ -448,7 +450,7 @@ codes (`RecoveryCodes.hpp`): 10 × `XXXXX-XXXXX` Crockford (50 bits); a batch is
 acknowledging supersedes the active one (partial unique index), a newer generate drops an unacknowledged batch; a code
 is spent by one conditional UPDATE joined to an acknowledged, unsuperseded batch. Passkeys: storage only
 (`addWebAuthnCredential`, lookup by credential id, compare-and-set `recordWebAuthnUse`, suspend) plus the adapters for
-the `auth/webauthn` verifier (#355): `fromVerified(webauthn::NewCredential, …)`, `CredentialStore` (its
+the vl-webauthn verifier (#355): `fromVerified(vl::webauthn::NewCredential, …)`, `CredentialStore` (its
 `CredentialLookup`, joined with `user_mfa`'s handle) and `recordAssertion(VerifiedAssertion, expectedSignCount)`. Factors are removed by `disabled_at` (kept for audit). Audit actions
 `auth.mfa.factor.enroll|rename|remove|suspend`, `auth.mfa.recovery.generate|acknowledge|use` with ids only;
 `ws::LogRedaction` redacts codes, seeds, `otpauth:` URIs (by value) and WebAuthn material. `vh secrets export

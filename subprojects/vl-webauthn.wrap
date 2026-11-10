@@ -1,0 +1,8 @@
+[wrap-file]
+directory = vl-webauthn-0.1.0
+source_url = https://github.com/valkyrianlabs/vl-webauthn/releases/download/v0.1.0/vl-webauthn-0.1.0.tar.xz
+source_filename = vl-webauthn-0.1.0.tar.xz
+source_hash = 66715d5def6b4e95eceb2cfe41ec585b7699a26c1a0d6ff56d398360ba8ac307
+
+[provide]
+vl-webauthn = vl_webauthn_dep

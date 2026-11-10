@@ -115,7 +115,8 @@ an operator compliant, and the docs must not say it does.
 **Verifier.** An in-tree verifier in `core/src/auth/webauthn/` on **libcbor** (CBOR, Ubuntu `libcbor-dev`, Homebrew
 `libcbor`) and the **OpenSSL 3** and **libsodium** already linked (`core/meson.build:156`, `:170`). It handles
 registration (`none` and `packed` self attestation) and assertions, with an interface clean enough to extract later
-as a `vl-*` library like `vl-sigv4` (decision D5).
+as a `vl-*` library like `vl-sigv4` (decision D5). It has since been extracted: `valkyrianlabs/vl-webauthn` (MIT,
+namespace `vl::webauthn`, shared with vaulthalla-cloud), pinned in `subprojects/vl-webauthn.wrap`.
 
 The verifier is acceptable only when all of these hold:
 
@@ -1031,7 +1032,7 @@ as `aal 1`; policy `admins` refuses an old admin row at next use; admin reset ef
 
 **Fuzzing (decision D5)**: libFuzzer targets (clang, `-Dfuzz=true`, off in normal builds) for the CBOR/COSE decoder,
 the `authenticatorData` parser and the `clientDataJSON` parser, seeded with the vectors. CI runs them for a bounded
-time on every change under `core/src/auth/webauthn/`, and any crash becomes a regression vector.
+time on every change to the parsers (now in vl-webauthn's CI), and any crash becomes a regression vector.
 
 **Audit**: each flow in section 8 asserts its `audit_event` actions and outcomes (section 7.5), and `vh audit verify`
 passes afterwards. The recovery-code flow is reconstructed from the trail alone.

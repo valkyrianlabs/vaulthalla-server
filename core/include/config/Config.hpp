@@ -163,7 +163,7 @@ struct DatabaseConfig {
 
 // auth.webauthn.* (#355, docs/dev/mfa-design.md section 4.1): the passkey relying party. Explicit configuration only:
 // nothing is derived from Host, Origin or forwarded headers, so a misconfigured proxy can't widen it. An empty rp_id
-// means passkeys are unavailable. Rules: auth/webauthn/RelyingParty.hpp; config.yaml and settings.update both refuse
+// means passkeys are unavailable. Rules: vl-webauthn's vl/webauthn/RelyingParty.hpp; config.yaml and settings.update both refuse
 // a value that breaks them.
 struct WebAuthnConfig {
     std::string rp_id;
