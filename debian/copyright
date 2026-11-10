@@ -41,6 +41,16 @@ Comment:
  and vh-recovery, built from the release tarball pinned in
  subprojects/vl-keykit.wrap.
 
+Files: subprojects/packagecache/vl-webauthn-*.tar.xz
+       subprojects/vl-webauthn-*/*
+Copyright:
+  2026 Valkyrian Labs LLC <cooper@valkyrianlabs.com>
+License: MIT
+Comment:
+ vl-webauthn (https://github.com/valkyrianlabs/vl-webauthn), the WebAuthn
+ relying-party verifier statically linked into vaulthalla-server, built from
+ the release tarball pinned in subprojects/vl-webauthn.wrap.
+
 Files: deploy/password-lists/common-passwords.txt
 Copyright:
   2018 Daniel Miessler

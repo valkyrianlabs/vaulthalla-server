@@ -1,10 +1,10 @@
 #include "auth/mfa/Passkeys.hpp"
 
 #include "audit/Trail.hpp"
-#include "auth/webauthn/Base64Url.hpp"
-#include "auth/webauthn/Challenge.hpp"
-#include "auth/webauthn/Verifier.hpp"
-#include "auth/webauthn/Wire.hpp"
+#include <vl/webauthn/Base64Url.hpp>
+#include <vl/webauthn/Challenge.hpp>
+#include <vl/webauthn/Verifier.hpp>
+#include <vl/webauthn/Wire.hpp>
 #include "config/Registry.hpp"
 #include "log/Registry.hpp"
 #include "ops/Error.hpp"
@@ -15,52 +15,52 @@ namespace vh::auth::mfa::passkeys {
 
 namespace {
 
-webauthn::ChallengeStore& passkeyChallenges() {
-    static webauthn::ChallengeStore store(kChallengeTtl);
+vl::webauthn::ChallengeStore& passkeyChallenges() {
+    static vl::webauthn::ChallengeStore store(kChallengeTtl);
     return store;
 }
 
 // Discoverable sign-in (purpose login): anonymous sockets ask for these, so they never share capacity with the
 // ceremonies of signed-in and pending sockets.
-webauthn::ChallengeStore& passkeyLoginChallenges() {
-    static webauthn::ChallengeStore store(kChallengeTtl, kMaxLoginChallenges);
+vl::webauthn::ChallengeStore& passkeyLoginChallenges() {
+    static vl::webauthn::ChallengeStore store(kChallengeTtl, kMaxLoginChallenges);
     return store;
 }
 
 nlohmann::json passkeyDescriptor(const WebAuthnCredential& c) {
-    return {{"type", "public-key"}, {"id", webauthn::base64urlEncode(c.credential_id)}, {"transports", c.transports}};
+    return {{"type", "public-key"}, {"id", vl::webauthn::base64urlEncode(c.credential_id)}, {"transports", c.transports}};
 }
 
-std::string passkeyChallenge(const webauthn::Expectation& binding,
-                             webauthn::ChallengeStore& store = passkeyChallenges()) {
+std::string passkeyChallenge(const vl::webauthn::Expectation& binding,
+                             vl::webauthn::ChallengeStore& store = passkeyChallenges()) {
     const auto challenge = store.issue(binding);
     if (!challenge) throw ops::Refused("rate_limited", "Too many passkey requests are open. Try again shortly.");
-    return webauthn::base64urlEncode(*challenge);
+    return vl::webauthn::base64urlEncode(*challenge);
 }
 
-void passkeyRefusal(const char* ceremony, const uint32_t userId, const webauthn::Failure failure) {
+void passkeyRefusal(const char* ceremony, const uint32_t userId, const vl::webauthn::Failure failure) {
     log::Registry::auth()->warn("[auth::mfa::passkeys] {} refused for user {}: {}", ceremony, userId,
-                                webauthn::toString(failure));
+                                vl::webauthn::toString(failure));
 }
 
 // An assertion against a challenge of `store` bound to `expected` (purpose mfa for a known account, login for
 // discoverable sign-in), then the write-back: the counter and backup state, a suspension on a device-bound counter
 // regression, the audit of a synced one. The owner it returns is the credential's, which the verifier has checked
 // against expected.user (mfa) or the assertion's userHandle (login).
-std::optional<SignedInPasskey> passkeyAssert(webauthn::ChallengeStore& challenges, const webauthn::Expectation& expected,
+std::optional<SignedInPasskey> passkeyAssert(vl::webauthn::ChallengeStore& challenges, const vl::webauthn::Expectation& expected,
                                              const std::string_view credentialJson) {
     const auto who = expected.user ? "for user " + std::to_string(*expected.user) : std::string("for a passkey sign-in");
-    const auto refuse = [&](const webauthn::Failure failure) {
-        log::Registry::auth()->warn("[auth::mfa::passkeys] assertion {} refused: {}", who, webauthn::toString(failure));
+    const auto refuse = [&](const vl::webauthn::Failure failure) {
+        log::Registry::auth()->warn("[auth::mfa::passkeys] assertion {} refused: {}", who, vl::webauthn::toString(failure));
     };
-    const auto response = webauthn::wire::parseAssertion(credentialJson);
+    const auto response = vl::webauthn::wire::parseAssertion(credentialJson);
     if (!response) {
-        refuse(webauthn::Failure::MalformedResponse);
+        refuse(vl::webauthn::Failure::MalformedResponse);
         return std::nullopt;
     }
     const CredentialStore store;
     const auto before = store.find(response->rawId);  // the count the write-back compares against
-    const webauthn::Verifier verifier(relyingParty(), challenges, store);
+    const vl::webauthn::Verifier verifier(relyingParty(), challenges, store);
     const auto outcome = verifier.assertion(*response, expected);
     const auto row = webAuthnCredential(response->rawId);
     if (!outcome) {
@@ -88,9 +88,9 @@ std::optional<SignedInPasskey> passkeyAssert(webauthn::ChallengeStore& challenge
 
 }
 
-webauthn::RelyingParty relyingParty() {
+vl::webauthn::RelyingParty relyingParty() {
     const auto& c = config::Registry::get().auth.webauthn;
-    webauthn::RelyingParty rp;
+    vl::webauthn::RelyingParty rp;
     rp.id = c.rp_id;
     if (!rp.id.empty()) rp.origins = c.origins;
     return rp;
@@ -122,7 +122,7 @@ nlohmann::json requestOptions(const std::string& sessionUuid, const uint32_t use
     if (!rp.configured()) throw ops::Invalid("Passkeys are not configured on this server");
     nlohmann::json allow = nlohmann::json::array();
     for (const auto& c : credentials) allow.push_back(passkeyDescriptor(c));
-    return {{"challenge", passkeyChallenge({.session = sessionUuid, .purpose = webauthn::Purpose::Mfa,
+    return {{"challenge", passkeyChallenge({.session = sessionUuid, .purpose = vl::webauthn::Purpose::Mfa,
                                             .user = static_cast<int64_t>(userId), .scope = {}})},
             {"rpId", rp.id},
             {"timeout", std::chrono::milliseconds(kChallengeTtl).count()},
@@ -133,7 +133,7 @@ nlohmann::json requestOptions(const std::string& sessionUuid, const uint32_t use
 nlohmann::json loginOptions(const std::string& sessionUuid) {
     const auto rp = relyingParty();
     if (!rp.configured()) throw ops::Invalid("Passkeys are not configured on this server");
-    return {{"challenge", passkeyChallenge({.session = sessionUuid, .purpose = webauthn::Purpose::Login,
+    return {{"challenge", passkeyChallenge({.session = sessionUuid, .purpose = vl::webauthn::Purpose::Login,
                                             .user = std::nullopt, .scope = {}},
                                            passkeyLoginChallenges())},
             {"rpId", rp.id},
@@ -152,10 +152,10 @@ nlohmann::json creationOptions(const std::string& sessionUuid, const uint32_t us
     nlohmann::json params = nlohmann::json::array();
     for (const int alg : {-8, -7, -257}) params.push_back({{"type", "public-key"}, {"alg", alg}});
     return {{"rp", {{"id", rp.id}, {"name", config::Registry::get().auth.webauthn.rp_name}}},
-            {"user", {{"id", webauthn::base64urlEncode(mfa.webauthn_user_handle)},
+            {"user", {{"id", vl::webauthn::base64urlEncode(mfa.webauthn_user_handle)},
                       {"name", userName},
                       {"displayName", userName}}},
-            {"challenge", passkeyChallenge({.session = sessionUuid, .purpose = webauthn::Purpose::Register,
+            {"challenge", passkeyChallenge({.session = sessionUuid, .purpose = vl::webauthn::Purpose::Register,
                                             .user = static_cast<int64_t>(userId), .scope = {}})},
             {"pubKeyCredParams", std::move(params)},
             {"timeout", std::chrono::milliseconds(kChallengeTtl).count()},
@@ -170,15 +170,15 @@ nlohmann::json creationOptions(const std::string& sessionUuid, const uint32_t us
 std::optional<WebAuthnCredential> registerCredential(const std::string& sessionUuid, const uint32_t userId,
                                                      const std::string_view credentialJson,
                                                      const RegistrationDetails& details) {
-    const auto response = webauthn::wire::parseRegistration(credentialJson);
+    const auto response = vl::webauthn::wire::parseRegistration(credentialJson);
     if (!response) {
-        passkeyRefusal("registration", userId, webauthn::Failure::MalformedResponse);
+        passkeyRefusal("registration", userId, vl::webauthn::Failure::MalformedResponse);
         return std::nullopt;
     }
     const CredentialStore store;
-    const webauthn::Verifier verifier(relyingParty(), passkeyChallenges(), store);
+    const vl::webauthn::Verifier verifier(relyingParty(), passkeyChallenges(), store);
     const auto outcome = verifier.registration(*response, {.session = sessionUuid,
-                                                           .purpose = webauthn::Purpose::Register,
+                                                           .purpose = vl::webauthn::Purpose::Register,
                                                            .user = static_cast<int64_t>(userId), .scope = {}});
     if (!outcome) {
         passkeyRefusal("registration", userId, outcome.failure);
@@ -196,7 +196,7 @@ std::optional<WebAuthnCredential> registerCredential(const std::string& sessionU
     try {
         return addWebAuthnCredential(userId, fromVerified(*outcome.value, withHints));
     } catch (const ops::Conflict&) {
-        passkeyRefusal("registration", userId, webauthn::Failure::CredentialAlreadyRegistered);
+        passkeyRefusal("registration", userId, vl::webauthn::Failure::CredentialAlreadyRegistered);
         return std::nullopt;
     }
 }
@@ -204,7 +204,7 @@ std::optional<WebAuthnCredential> registerCredential(const std::string& sessionU
 std::optional<VerifiedFactor> verifyAssertion(const std::string& sessionUuid, const uint32_t userId,
                                               const std::string_view credentialJson) {
     const auto ok = passkeyAssert(passkeyChallenges(),
-                                  {.session = sessionUuid, .purpose = webauthn::Purpose::Mfa,
+                                  {.session = sessionUuid, .purpose = vl::webauthn::Purpose::Mfa,
                                    .user = static_cast<int64_t>(userId), .scope = {}},
                                   credentialJson);
     if (!ok) return std::nullopt;
@@ -213,7 +213,7 @@ std::optional<VerifiedFactor> verifyAssertion(const std::string& sessionUuid, co
 
 std::optional<SignedInPasskey> verifyLogin(const std::string& sessionUuid, const std::string_view credentialJson) {
     return passkeyAssert(passkeyLoginChallenges(),
-                         {.session = sessionUuid, .purpose = webauthn::Purpose::Login, .user = std::nullopt,
+                         {.session = sessionUuid, .purpose = vl::webauthn::Purpose::Login, .user = std::nullopt,
                           .scope = {}},
                          credentialJson);
 }
@@ -224,7 +224,7 @@ nlohmann::json stepUpOptions(const std::string& sessionUuid, const uint32_t user
     if (!rp.configured()) throw ops::Invalid("Passkeys are not configured on this server");
     nlohmann::json allow = nlohmann::json::array();
     for (const auto& c : credentials) allow.push_back(passkeyDescriptor(c));
-    return {{"challenge", passkeyChallenge({.session = sessionUuid, .purpose = webauthn::Purpose::StepUp,
+    return {{"challenge", passkeyChallenge({.session = sessionUuid, .purpose = vl::webauthn::Purpose::StepUp,
                                             .user = static_cast<int64_t>(userId), .scope = scope})},
             {"rpId", rp.id},
             {"timeout", std::chrono::milliseconds(kChallengeTtl).count()},
@@ -235,7 +235,7 @@ nlohmann::json stepUpOptions(const std::string& sessionUuid, const uint32_t user
 std::optional<VerifiedFactor> verifyStepUp(const std::string& sessionUuid, const uint32_t userId,
                                            const std::string_view credentialJson, const std::string& scope) {
     const auto ok = passkeyAssert(passkeyChallenges(),
-                                  {.session = sessionUuid, .purpose = webauthn::Purpose::StepUp,
+                                  {.session = sessionUuid, .purpose = vl::webauthn::Purpose::StepUp,
                                    .user = static_cast<int64_t>(userId), .scope = scope},
                                   credentialJson);
     if (!ok) return std::nullopt;
@@ -248,7 +248,7 @@ nlohmann::json approvalOptions(const std::string& sessionUuid, const uint32_t us
     if (!rp.configured()) throw ops::Invalid("Passkeys are not configured on this server");
     nlohmann::json allow = nlohmann::json::array();
     for (const auto& c : credentials) allow.push_back(passkeyDescriptor(c));
-    return {{"challenge", passkeyChallenge({.session = sessionUuid, .purpose = webauthn::Purpose::Approval,
+    return {{"challenge", passkeyChallenge({.session = sessionUuid, .purpose = vl::webauthn::Purpose::Approval,
                                             .user = static_cast<int64_t>(userId), .scope = scope})},
             {"rpId", rp.id},
             {"timeout", std::chrono::milliseconds(kChallengeTtl).count()},
@@ -259,7 +259,7 @@ nlohmann::json approvalOptions(const std::string& sessionUuid, const uint32_t us
 std::optional<VerifiedFactor> verifyApproval(const std::string& sessionUuid, const uint32_t userId,
                                              const std::string_view credentialJson, const std::string& scope) {
     const auto ok = passkeyAssert(passkeyChallenges(),
-                                  {.session = sessionUuid, .purpose = webauthn::Purpose::Approval,
+                                  {.session = sessionUuid, .purpose = vl::webauthn::Purpose::Approval,
                                    .user = static_cast<int64_t>(userId), .scope = scope},
                                   credentialJson);
     if (!ok) return std::nullopt;

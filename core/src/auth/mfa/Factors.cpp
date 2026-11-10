@@ -635,7 +635,7 @@ bool suspendWebAuthnCredential(const uint32_t userId, const uint32_t id, const s
 
 // ---- the verifier's side
 
-NewWebAuthnCredential fromVerified(const webauthn::NewCredential& verified, const RegistrationDetails& details) {
+NewWebAuthnCredential fromVerified(const vl::webauthn::NewCredential& verified, const RegistrationDetails& details) {
     NewWebAuthnCredential out{.credential_id = verified.id,
                               .public_key_cose = verified.publicKeyCose,
                               .cose_alg = static_cast<int>(verified.algorithm),
@@ -665,11 +665,11 @@ NewWebAuthnCredential fromVerified(const webauthn::NewCredential& verified, cons
     return out;
 }
 
-std::optional<webauthn::StoredCredential> CredentialStore::find(const webauthn::ByteView credentialId) const {
+std::optional<vl::webauthn::StoredCredential> CredentialStore::find(const vl::webauthn::ByteView credentialId) const {
     if (credentialId.empty() || credentialId.size() > 1023) return std::nullopt;
     const std::vector<uint8_t> id(credentialId.begin(), credentialId.end());
     return db::Transactions::exec("auth::mfa::CredentialStore::find",
-                                  [&](pqxx::work& txn) -> std::optional<webauthn::StoredCredential> {
+                                  [&](pqxx::work& txn) -> std::optional<vl::webauthn::StoredCredential> {
         const auto res = txn.exec(
             "SELECT c.credential_id, c.user_id, m.webauthn_user_handle, c.public_key_cose, c.rp_id, c.sign_count, "
             "c.backup_eligible, c.backup_state, c.disabled_at IS NOT NULL, c.suspended_at IS NOT NULL "
@@ -678,10 +678,10 @@ std::optional<webauthn::StoredCredential> CredentialStore::find(const webauthn::
         if (res.empty()) return std::nullopt;
         const auto r = res.one_row();
         const auto signCount = r[5].as<int64_t>();
-        return webauthn::StoredCredential{
+        return vl::webauthn::StoredCredential{
             .id = from_hex_bytea(r[0].as<std::string>()),
             .userId = r[1].as<int64_t>(),
-            .userHandle = r[2].is_null() ? webauthn::Bytes{} : from_hex_bytea(r[2].as<std::string>()),
+            .userHandle = r[2].is_null() ? vl::webauthn::Bytes{} : from_hex_bytea(r[2].as<std::string>()),
             .publicKeyCose = from_hex_bytea(r[3].as<std::string>()),
             .rpId = r[4].as<std::string>(),
             .signCount = static_cast<uint32_t>(std::clamp<int64_t>(signCount, 0, UINT32_MAX)),
@@ -692,7 +692,7 @@ std::optional<webauthn::StoredCredential> CredentialStore::find(const webauthn::
     });
 }
 
-bool recordAssertion(const webauthn::VerifiedAssertion& assertion, const uint32_t expectedSignCount) {
+bool recordAssertion(const vl::webauthn::VerifiedAssertion& assertion, const uint32_t expectedSignCount) {
     if (assertion.credentialId.empty() || assertion.credentialId.size() > 1023) return false;
     const int64_t next = assertion.storeSignCount ? assertion.signCount : expectedSignCount;
     return db::Transactions::exec("auth::mfa::recordAssertion", [&](pqxx::work& txn) {

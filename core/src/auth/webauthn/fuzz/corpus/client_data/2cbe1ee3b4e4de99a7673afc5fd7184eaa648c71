@@ -1,1 +1,0 @@
-{"type":"webauthn.get","challenge":"1UpcjKS2Ko47syHjsrxzhW-FoQFQ2yk5rBlXOeseoGY","origin":"https://example.org","crossOrigin":true,"topOrigin":"https://example.com","extraData":"clientDataJSON may be extended with additional fields in the future, such as this: UiFoJMVRQHDAFWFi4vxUpQ"}

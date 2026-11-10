@@ -1,7 +1,7 @@
 #include "config/Config.hpp"
 #include "config/config_yaml.hpp"
 #include "config/util.hpp"
-#include "auth/webauthn/RelyingParty.hpp"
+#include <vl/webauthn/RelyingParty.hpp>
 #include "platform/Mount.hpp"
 
 #include <cstdlib>
@@ -849,7 +849,7 @@ Config& Config::operator=(Config&&) noexcept = default;
     }
 
     void validateWebAuthn(const WebAuthnConfig &c) {
-        vh::auth::webauthn::validateRelyingParty(c.rp_id, c.origins, c.rp_name);
+        vl::webauthn::validateRelyingParty(c.rp_id, c.origins, c.rp_name);
     }
 
     void to_json(nlohmann::json &j, const SyncConfig &c) {

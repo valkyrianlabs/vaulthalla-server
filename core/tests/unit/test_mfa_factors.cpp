@@ -430,9 +430,9 @@ TEST_F(MfaFactorsDb, PasskeysAreStoredWithTheirFlagsAndCountersMoveOnlyByCompare
 TEST_F(MfaFactorsDb, AVerifiedRegistrationIsStoredAndServesTheVerifiersLookup) {
     const auto user = newUser();
     const auto account = ensureUser(user);
-    webauthn::NewCredential verified{.id = std::vector<uint8_t>(20, 0x51),
+    vl::webauthn::NewCredential verified{.id = std::vector<uint8_t>(20, 0x51),
                                      .publicKeyCose = {0xa5, 0x01, 0x02},
-                                     .algorithm = webauthn::Algorithm::EdDSA,
+                                     .algorithm = vl::webauthn::Algorithm::EdDSA,
                                      .aaguid = {0xad, 0xce, 0x00, 0x02, 0x35, 0xbc, 0xc6, 0x0a, 0x64, 0x8b, 0x0b, 0x25,
                                                 0xf1, 0xf0, 0x55, 0x03},
                                      .signCount = 0,
@@ -449,7 +449,7 @@ TEST_F(MfaFactorsDb, AVerifiedRegistrationIsStoredAndServesTheVerifiersLookup) {
 
     const auto stored = addWebAuthnCredential(user, row);
     const CredentialStore store;
-    const webauthn::CredentialLookup& lookup = store;
+    const vl::webauthn::CredentialLookup& lookup = store;
     auto found = lookup.find(stored.credential_id);
     ASSERT_TRUE(found);
     EXPECT_EQ(found->userId, user);
@@ -459,7 +459,7 @@ TEST_F(MfaFactorsDb, AVerifiedRegistrationIsStoredAndServesTheVerifiersLookup) {
     EXPECT_FALSE(found->disabled || found->suspended);
     EXPECT_FALSE(lookup.find(std::vector<uint8_t>(20, 0x52)));
 
-    webauthn::VerifiedAssertion signedIn{.userId = user, .credentialId = stored.credential_id, .signCount = 7,
+    vl::webauthn::VerifiedAssertion signedIn{.userId = user, .credentialId = stored.credential_id, .signCount = 7,
                                          .storeSignCount = true, .userVerified = true};
     EXPECT_TRUE(recordAssertion(signedIn, found->signCount));
     EXPECT_FALSE(recordAssertion(signedIn, found->signCount)) << "the count moved under a second writer";

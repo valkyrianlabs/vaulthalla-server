@@ -36,7 +36,7 @@ namespace vh::auth::mfa::test_signin {
 using namespace vh::test::web;
 using Decision = protocols::ws::Router::CommandAuthDecision;
 using protocols::ws::handler::Mfa;
-namespace wa = vh::auth::webauthn;
+namespace wa = vl::webauthn;
 namespace tw = vh::test_webauthn;
 
 // ── DB-free: the router's pending mode ─────────────────────────────────────────────────────────────────────────────
