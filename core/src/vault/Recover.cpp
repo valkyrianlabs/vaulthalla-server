@@ -594,11 +594,14 @@ Plan plan(sync::manifest::ObjectStore& inner, const Material& material, const Op
             }
     } catch (const std::exception&) {}
 
-    // 3. The manifest (chain rules against the kit's checkpoint), or the blind floor.
+    // 3. The manifest (chain rules against the kit's checkpoint, else the one supplied with the material), or the blind
+    // floor.
     std::optional<mf::Checkpoint> checkpoint;
     if (material.kit)
         if (const auto* kv = material.kit->find(*uid); kv && kv->checkpoint)
             checkpoint = mf::Checkpoint{kv->checkpoint->epoch, kv->checkpoint->root_sha256, kv->checkpoint->at};
+    if (!checkpoint && material.checkpoint)
+        checkpoint = mf::Checkpoint{material.checkpoint->epoch, material.checkpoint->root_sha256, material.checkpoint->at};
     std::optional<mf::RestoreLoad> loaded;
     try {
         loaded = mf::loadForRestore(store, *uid, lookup, checkpoint, options.accept_rollback);

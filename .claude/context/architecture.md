@@ -399,8 +399,9 @@ enrollment (spec 05 §3.2; key-backup.md "Recovery recipients"): the bucket's en
 `CloudRecoveryEnrollment` in `test_recovery_recipients.cpp`.
 `ops::cloud_restore` (`vh vault recover --from-cloud`) is the receiving side of the cloud's restore relay: a temporary
 X25519 secret in process memory (by restore id), a signed request, polling, the bundle opened into an export document
-(records' key checks and attestations, anchors' public keys) that `ops::vault_recover` proves like any export; complete
-on success, cancel on every other way out. Tests: `VaultRecoverFromCloud` in `test_vault_recover.cpp`.
+(records' key checks and attestations, anchors' public keys) that `ops::vault_recover` proves like any export, with
+the records' checkpoint as the rollback bound (`rec::Material::checkpoint`, used when no kit entry has one; a malformed
+one refuses the restore); complete on success, cancel on every other way out. Tests: `VaultRecoverFromCloud` in `test_vault_recover.cpp`.
 
 ### WebAuthn verifier (vl-webauthn, from #355)
 

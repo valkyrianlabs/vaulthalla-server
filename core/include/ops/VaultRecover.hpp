@@ -6,6 +6,7 @@
 #include "sync/Fwd.hpp"
 
 #include <nlohmann/json.hpp>
+#include <vl/keykit/kit.hpp>
 
 #include <functional>
 #include <memory>
@@ -40,6 +41,8 @@ struct Request {
     std::string bucket{};
     nlohmann::json const* kit{};         // a recovery kit (vh-recovery kit create), not owned
     nlohmann::json const* exported{};    // a key export (vh vault keys export), not owned
+    // A checkpoint from outside the bucket that isn't in a kit (--from-cloud: the cloud's record); see rec::Material.
+    std::optional<vl::keykit::KitCheckpoint> checkpoint{};
     std::optional<std::string> into{};   // the new vault's name (default: the manifest's)
     std::optional<std::string> vault_uid{};  // which vault of the bucket (base32; default: the kit's or the hint)
     std::optional<unsigned int> owner_id{};

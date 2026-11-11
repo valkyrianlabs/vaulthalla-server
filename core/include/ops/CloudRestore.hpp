@@ -4,6 +4,7 @@
 #include "ops/VaultKeys.hpp"
 
 #include <nlohmann/json.hpp>
+#include <vl/keykit/kit.hpp>
 
 #include <ctime>
 #include <optional>
@@ -31,6 +32,9 @@ Started start(const Actor& actor, const std::string& vaultUid, Channel channel);
 
 struct Delivered {
     nlohmann::json exported;   // a key export document; holds key bytes (base64): the caller wipes it
+    // The manifest checkpoint the cloud recorded at enrollment (the vault's own node uploaded it): the restore's
+    // rollback bound. nullopt when the vault was enrolled without one.
+    std::optional<vl::keykit::KitCheckpoint> checkpoint;
     std::string deliverer;     // the delivering device's name
     unsigned int versions = 0;
 };

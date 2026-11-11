@@ -80,7 +80,9 @@ vh vault recover --api-key r2-main --bucket finance-vault --vault-uid <uid> --fr
    show the same restore code**; if it doesn't, don't deliver: someone may be substituting a key of their own.
 4. The server opens the delivered keys with its temporary key and restores the vault exactly as from a key export:
    every key version must match the bucket's own manifest records and the original server's attestation, so keys
-   anyone made up are refused and nothing is written. Then it tells the cloud, which deletes the delivered copy.
+   anyone made up are refused and nothing is written. The manifest checkpoint this server's predecessor sent at
+   enrollment bounds rollback, as a recovery kit's checkpoint does: a bucket showing an older state than the last
+   enrollment is refused unless you pass `--accept-rollback`. Then it tells the cloud, which deletes the delivered copy.
 
 Ctrl-C (or any failure) cancels the restore. The vault uid is in `vh cloud recovery status` on the original server,
 or on vaulthalla.cloud.

@@ -293,7 +293,7 @@ vaulthalla.cloud account; explicit per vault (super admin or Export, CLI or devi
 agent), refused unless every needed version has an envelope, and revocable (`vh cloud recovery unenroll` deletes the
 cloud's records). No key, seed, kit or export ever leaves. Restoring from the cloud is `vh vault recover --from-cloud`
 (`ops::cloud_restore`): keys arrive wrapped to a temporary key held in memory and are imported as an export (D1
-unchanged).
+unchanged), and the checkpoint the cloud recorded at the last enrollment bounds rollback like a kit's (§4.5).
 
 | Operation | CLI | ws | Who | Where |
 |---|---|---|---|---|
