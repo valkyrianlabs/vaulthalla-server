@@ -79,6 +79,9 @@ const std::vector<Exclusion>& exclusions() {
         {{"device", "deny"}, kPairingReason},
         {{"device", "remote", "enable"}, kExposureReason},
         {{"device", "remote", "disable"}, kExposureReason},
+        // Which vaulthalla.cloud account this server belongs to: never an agent's decision.
+        {{"cloud", "link"}, "linking this server to a Vaulthalla Cloud account is decided by a human"},
+        {{"cloud", "unlink"}, "unlinking this server from Vaulthalla Cloud is decided by a human"},
     };
     return list;
 }

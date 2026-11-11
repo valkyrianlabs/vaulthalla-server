@@ -354,6 +354,18 @@ TEST(ShippedConfig, UsesTheNewKeysWithTheirDefaults) {
     EXPECT_EQ(cfg.stats_snapshots.rollup_1h_retention_days, 365u);
     EXPECT_EQ(json(cfg.transfer), json(config::TransferConfig{})) << "the shipped transfer section is the defaults";
     EXPECT_EQ(json(cfg.auth.webauthn), json(config::WebAuthnConfig{})) << "passkeys ship unconfigured";
+    EXPECT_EQ(cfg.cloud.endpoint, config::CloudConfig{}.endpoint);
+}
+
+// cloud.endpoint (design/cloud/server-link.md): https, or http only to localhost; config.yaml only.
+TEST_F(ConfigSettingsTest, CloudEndpointIsHttpsOrLocalhost) {
+    EXPECT_EQ(load("dev:\n  enabled: false\n").cloud.endpoint, "https://api.vaulthalla.cloud");
+    EXPECT_EQ(load("cloud:\n  endpoint: https://staging.vaulthalla.cloud/\n").cloud.endpoint,
+              "https://staging.vaulthalla.cloud/");
+    EXPECT_EQ(load("cloud:\n  endpoint: http://127.0.0.1:8085\n").cloud.endpoint, "http://127.0.0.1:8085");
+    for (const auto* bad : {"http://api.vaulthalla.cloud", "ftp://x", "api.vaulthalla.cloud", "https://x/v1",
+                            "https://user@x", "http://localhost.evil.test"})
+        EXPECT_THROW((void)load(std::string("cloud:\n  endpoint: ") + bad + "\n"), std::invalid_argument) << bad;
 }
 
 

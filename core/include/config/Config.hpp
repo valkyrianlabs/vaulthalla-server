@@ -470,6 +470,12 @@ struct LoggingConfig {
 
 // How sealed secrets may be protected (#326, crypto/secrets/KeyProvider.hpp). Read from config.yaml at startup; not a
 // console setting.
+// Vaulthalla Cloud (design/cloud/server-link.md; not open yet). Read from config.yaml only, like `secrets`: never written back or exposed
+// through settings. Linking is never required; nothing contacts the endpoint until a super admin runs `vh cloud link`.
+struct CloudConfig {
+    std::string endpoint = "https://api.vaulthalla.cloud";  // https, or http only to localhost (development)
+};
+
 struct SecretsConfig {
     // Refuse to seal or unseal unless a hardware TPM or the Secure Enclave protects the secrets (no swtpm, no files).
     bool require_hardware = false;
@@ -502,6 +508,7 @@ struct Config {
     DevConfig dev;
     MountConfig mount;
     TransferConfig transfer;
+    CloudConfig cloud;
 
     LoggingConfig logging; // internal only
 

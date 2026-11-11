@@ -187,7 +187,7 @@ usage book and the operation catalog and no daemon types, so the client links it
   (`McpCatalog.RunLinesParseAsCheckedForEveryDocumentedExample`). Refused before running: unknown commands, groups,
   `--`, odd option spellings, confirmation flags in the command, and `mcp::exclusions()` (one list: `vault key export|import`,
   `secrets export|update`, `setup`, `teardown`, `fs get|put`, `mcp`, `skill`, `device pair|approve|deny`,
-  `device remote enable|disable`; also checked case-insensitively). Defense in depth for key material:
+  `device remote enable|disable`, `cloud link|unlink`; also checked case-insensitively). Defense in depth for key material:
   `protocols::shell::AgentCallScope` marks a command run for an MCP client (`/mcp`'s executor; a `vh mcp` request
   carries `"agent": true`), and the vault key handlers refuse under it (`key-backup.md`).
 - Confirmations: a leaf's gates are its flags spelled `yes`/`accept-*`/`adopt-bucket` and the `confirm-token` option.
@@ -378,6 +378,21 @@ daemon shell command (`setup/superAdminPassword.cpp` → `ops::users::setSuperAd
 whose UID is bound to `admin` (root/system/sudo refused). Startup `retireLegacyDefaultPassword()` replaces a pre-1.8.0
 `vh!adm1n` with a generated one (file written, admin's refresh tokens revoked). `vh setup nginx` (lifecycle Python)
 warns while generated + file present and offers rotate / delete file / continue / cancel; non-TTY warns and continues.
+
+### Vaulthalla Cloud link (`vh cloud`, migration 134)
+
+Optional link to a vaulthalla.cloud account (valkyrianlabs/vaulthalla-cloud plan step 6; operator page
+held in `design/cloud/server-link.md` until vaulthalla.cloud opens: the claims lint allows no published text about it). `cloud/Signing` is VHC1-Ed25519 request signing (libsodium; the cloud's documented vector is
+`CloudSigning.MatchesTheCloudsDocumentedVector`). `cloud/Identity` is the Ed25519 seed sealed in KeyProvider slot
+`cloud_identity` (`test_cloud_identity`), created by `vh cloud link` and destroyed by unlink; nothing is wrapped under
+it. `cloud/Client` makes JSON calls over `storage::s3::curl::http` (bounded, no redirects; `cloud.endpoint` must be
+https or loopback http, checked at config load). `db::query::cloud::Link` is the single `cloud_link` row (pending
+with the cloud's request id, or linked with installation and account ids). `ops::cloud`
+(`startLink`/`claimLink`/`status`/`unlink`) is super admins only, channel Cli or Agent (Agent refused), and
+`cloud link|unlink` are in `mcp::exclusions()`. CLI only (no ws command yet). Unlink sends a signed
+`DELETE /v1/installation`, and `--force` forgets the link when the cloud can't confirm. Tests:
+`test_cloud_signing.cpp` (DB-free) and `test_cloud_link_db.cpp` (a fake cloud over the http seam verifies every proof
+and signature).
 
 ### WebAuthn verifier (vl-webauthn, from #355)
 
