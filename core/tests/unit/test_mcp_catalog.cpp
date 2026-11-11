@@ -155,7 +155,7 @@ TEST(McpCatalog, ExclusionListIsExactlyTheAgreedOne) {
                                             "setup set-super-admin-password", "teardown", "fs get", "fs put", "mcp",
                                             "skill", "device pair", "device approve", "device deny",
                                             "device remote enable", "device remote disable", "cloud link",
-                                            "cloud unlink"};
+                                            "cloud unlink", "cloud recovery enroll", "cloud recovery unenroll"};
     EXPECT_EQ(paths, expected);
 }
 
@@ -168,7 +168,8 @@ TEST(McpCatalog, ExcludedCommandsAreNeitherListedNorRunnable) {
                           "secrets jwt rotate", "secrets device-identity rotate", "secrets reseal", "setup db", "setup caddy",
                           "setup set-super-admin-password", "teardown db", "fs get", "fs put", "mcp", "skill install",
                           "device pair", "device approve", "device deny", "device remote enable",
-                          "device remote disable", "cloud link", "cloud unlink"})
+                          "device remote disable", "cloud link", "cloud unlink", "cloud recovery enroll",
+                          "cloud recovery unenroll"})
         EXPECT_TRUE(excluded.contains(c)) << c;
 
     // No typed tool binds one, and nothing in a tool definition offers it.

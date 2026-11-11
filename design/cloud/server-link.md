@@ -44,6 +44,28 @@ approve only when the one vaulthalla.cloud shows matches the one on your own scr
 - **Nothing else, yet.** Linking sends no vault data, keys or recovery material. Cloud recovery will be a separate,
   explicit step per vault.
 
+## Cloud recovery of a vault's keys
+
+Once linked, a vault can be enrolled in cloud recovery, explicitly and one vault at a time:
+
+```bash
+vh cloud recovery enroll photos --owner alice
+vh cloud recovery status
+vh cloud recovery unenroll photos --owner alice
+```
+
+- **What is sent.** The vault's recovery envelopes, exactly as they are in its bucket. They are wrapped to the
+  recovery recipients *you* enrolled (`vh vault keys recipient add`), so vaulthalla.cloud can't open them. Alongside
+  them go the public facts a restore checks against: each key version's key check and this server's attestation, the
+  attestation public keys, and the manifest checkpoint. Never a vault key, a recovery seed, a kit or an export.
+- **When it is refused.** Without a link, without a recovery recipient, while a needed key version has no envelope
+  yet (the next sync pass writes it), or when an object in the bucket isn't the envelope this server wrote.
+- **After a key rotation.** `vh cloud recovery status` says `behind`; run `vh cloud recovery enroll` again.
+- **Undo.** `vh cloud recovery unenroll` deletes every record vaulthalla.cloud holds for the vault. Your recovery kit
+  or export recovers the vault exactly as before, with or without the cloud.
+- **Who.** Super admins or users with the export encryption keys permission, in a terminal on the server or from a
+  paired device (with its approval), never through the browser or an agent.
+
 ## Check and undo
 
 ```bash

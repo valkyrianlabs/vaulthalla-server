@@ -285,7 +285,13 @@ Design: spec 03 §5 (as built: §5.8). A recovery recipient is a customer-held X
 customer's device: Desktop or `vh-recovery kit create`); every held and future key version is wrapped to it as a KEV1
 envelope in the vault's own bucket (`.vaulthalla/key/<kid>`). Custody amendment (#344): only class `customer` exists
 (DB CHECK), the server sees only public keys, envelopes go to the bucket and nowhere else, and nothing but a person's
-`recipient add` enrolls one (`RecoveryNoSilentCustody`).
+`recipient add` enrolls one (`RecoveryNoSilentCustody`). One exception since the product owner's 2026-11-10 approval
+of Tier B (spec 05 §3.2): `vh cloud recovery enroll <vault>` (`ops::cloud_recovery`, migration 135
+`cloud_recovery_vault`) sends a vault's existing envelopes, byte for byte from the bucket and checked against their
+`vault_key_envelope` rows, plus key checks, attestations, attestation public keys and the checkpoint, to the linked
+vaulthalla.cloud account; explicit per vault (super admin or Export, CLI or device with the keys step-up, never an
+agent), refused unless every needed version has an envelope, and revocable (`vh cloud recovery unenroll` deletes the
+cloud's records). No key, seed, kit or export ever leaves.
 
 | Operation | CLI | ws | Who | Where |
 |---|---|---|---|---|

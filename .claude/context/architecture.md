@@ -187,7 +187,7 @@ usage book and the operation catalog and no daemon types, so the client links it
   (`McpCatalog.RunLinesParseAsCheckedForEveryDocumentedExample`). Refused before running: unknown commands, groups,
   `--`, odd option spellings, confirmation flags in the command, and `mcp::exclusions()` (one list: `vault key export|import`,
   `secrets export|update`, `setup`, `teardown`, `fs get|put`, `mcp`, `skill`, `device pair|approve|deny`,
-  `device remote enable|disable`, `cloud link|unlink`; also checked case-insensitively). Defense in depth for key material:
+  `device remote enable|disable`, `cloud link|unlink`, `cloud recovery enroll|unenroll`; also checked case-insensitively). Defense in depth for key material:
   `protocols::shell::AgentCallScope` marks a command run for an MCP client (`/mcp`'s executor; a `vh mcp` request
   carries `"agent": true`), and the vault key handlers refuse under it (`key-backup.md`).
 - Confirmations: a leaf's gates are its flags spelled `yes`/`accept-*`/`adopt-bucket` and the `confirm-token` option.
@@ -393,6 +393,10 @@ with the cloud's request id, or linked with installation and account ids). `ops:
 `DELETE /v1/installation`, and `--force` forgets the link when the cloud can't confirm. Tests:
 `test_cloud_signing.cpp` (DB-free) and `test_cloud_link_db.cpp` (a fake cloud over the http seam verifies every proof
 and signature).
+`ops::cloud_recovery` (`vh cloud recovery enroll|status|unenroll`, migration 135 `cloud_recovery_vault`) is Tier B
+enrollment (spec 05 §3.2; key-backup.md "Recovery recipients"): the bucket's envelopes (checked against
+`vault_key_envelope`), key status provenance, signed `PUT|GET|DELETE /v1/recovery/vaults/{uid}`. Tests:
+`CloudRecoveryEnrollment` in `test_recovery_recipients.cpp`.
 
 ### WebAuthn verifier (vl-webauthn, from #355)
 

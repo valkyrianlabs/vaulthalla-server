@@ -2,6 +2,9 @@
 
 #include "identities/User.hpp"
 #include "ops/Cloud.hpp"
+#include "ops/CloudRecovery.hpp"
+#include "protocols/shell/commands/vault.hpp"
+#include "vault/model/Vault.hpp"
 #include "ops/Error.hpp"
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/commands/helpers.hpp"
@@ -145,6 +148,98 @@ CommandResult handleUnlink(const CommandCall& call) {
     });
 }
 
+namespace recovery = ::vh::ops::cloud_recovery;
+
+recovery::Channel keysChannel() { return AgentCallScope::active() ? recovery::Channel::Agent : recovery::Channel::Cli; }
+
+std::string versionList(const std::vector<unsigned int>& versions) {
+    std::string out;
+    for (const auto v : versions) out += (out.empty() ? "" : ", ") + std::to_string(v);
+    return out;
+}
+
+// The vault a recovery subcommand names (by ID, or by name with --owner).
+std::optional<unsigned int> recoveryVault(const CommandCall& call, const std::string& arg, const std::string& leaf,
+                                          std::string& error) {
+    const auto lookup = ::vh::protocols::shell::commands::vault::resolveVault(call, arg, resolveUsage({"cloud", "recovery", leaf}), "cloud recovery " + leaf);
+    if (!lookup || !lookup.ptr) {
+        error = lookup.error;
+        return std::nullopt;
+    }
+    return lookup.ptr->id;
+}
+
+CommandResult handleRecoveryEnroll(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"cloud", "recovery", "enroll"}));
+    std::string error;
+    const auto vaultId = recoveryVault(call, call.positionals.at(0), "enroll", error);
+    if (!vaultId) return invalid(error);
+    return runOp("cloud recovery enroll", [&] { return recovery::enroll(call.user, *vaultId, keysChannel()); },
+                 [](const recovery::Enrolled& e) {
+        std::string out = fmt::format("{} vault {} ({}) in Vaulthalla Cloud recovery: {} envelope(s) sent, {} new; no "
+                                      "keys left this server.\n",
+                                      e.created ? "Enrolled" : "Updated", e.vault_id, e.vault_uid, e.envelopes_sent,
+                                      e.envelopes_added);
+        if (e.coverage.is_object() && e.coverage.contains("ready"))
+            out += e.coverage["ready"].get<bool>() ? "The cloud covers every key version it knows of.\n"
+                                                   : "The cloud reports versions it can't cover yet (`vh cloud recovery "
+                                                     "status`).\n";
+        return out;
+    });
+}
+
+CommandResult handleRecoveryStatus(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"cloud", "recovery", "status"}));
+    const bool json = hasFlag(call, "json");
+    std::optional<unsigned int> vaultId;
+    if (const auto arg = optVal(call, "vault")) {
+        std::string error;
+        vaultId = recoveryVault(call, *arg, "status", error);
+        if (!vaultId) return invalid(error);
+    }
+    return runOp("cloud recovery status", [&] { return recovery::status(call.user, vaultId); },
+                 [&](const std::vector<recovery::VaultCoverage>& list) {
+        if (json) {
+            auto vaults = nlohmann::json::array();
+            for (const auto& c : list)
+                vaults.push_back({{"vault_id", c.vault_id}, {"vault_name", c.vault_name}, {"vault_uid", c.vault_uid},
+                                  {"state", c.state}, {"not_in_cloud", c.not_in_cloud}, {"enrolled_at", c.enrolled_at},
+                                  {"last_upload_at", c.last_upload_at}, {"cloud", c.cloud},
+                                  {"detail", c.detail ? nlohmann::json(*c.detail) : nlohmann::json(nullptr)}});
+            return jsonText({{"vaults", vaults}});
+        }
+        if (list.empty()) return std::string("No vault of this server is enrolled in cloud recovery.\n");
+        std::string out;
+        for (const auto& c : list) {
+            out += fmt::format("Vault {} {} ({}): {}", c.vault_id, c.vault_name, c.vault_uid, c.state);
+            if (!c.not_in_cloud.empty()) out += "; not in the cloud: version(s) " + versionList(c.not_in_cloud);
+            if (c.detail) out += " (" + *c.detail + ")";
+            out += fmt::format("; enrolled {}, last sent {}\n", utc(c.enrolled_at), utc(c.last_upload_at));
+        }
+        return out;
+    });
+}
+
+CommandResult handleRecoveryUnenroll(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"cloud", "recovery", "unenroll"}));
+    std::string error;
+    const auto vaultId = recoveryVault(call, call.positionals.at(0), "unenroll", error);
+    if (!vaultId) return invalid(error);
+    return runOp("cloud recovery unenroll", [&] { recovery::unenroll(call.user, *vaultId, keysChannel()); },
+                 [&] { return fmt::format("Vault {} is no longer in cloud recovery; the cloud's records were deleted. "
+                                          "Your recovery kit or export still recovers it.\n", *vaultId); });
+}
+
+CommandResult handleRecovery(const CommandCall& call) {
+    if (call.positionals.empty()) return usage(call.constructFullArgs());
+    const auto [sub, subcall] = descend(call);
+    const auto is = [&](const char* name) { return isCommandMatch({"cloud", "recovery", name}, sub); };
+    if (is("enroll")) return handleRecoveryEnroll(subcall);
+    if (is("status")) return handleRecoveryStatus(subcall);
+    if (is("unenroll")) return handleRecoveryUnenroll(subcall);
+    return invalid(call.constructFullArgs(), "Unknown cloud recovery subcommand: '" + std::string(sub) + "'");
+}
+
 CommandResult handleCloud(const CommandCall& call) {
     if (call.positionals.empty()) return usage(call.constructFullArgs());
     const auto [sub, subcall] = descend(call);
@@ -152,6 +247,7 @@ CommandResult handleCloud(const CommandCall& call) {
     if (is("link")) return handleLink(subcall);
     if (is("status")) return handleStatus(subcall);
     if (is("unlink")) return handleUnlink(subcall);
+    if (is("recovery")) return handleRecovery(subcall);
     return invalid(call.constructFullArgs(), "Unknown cloud subcommand: '" + std::string(sub) + "'");
 }
 

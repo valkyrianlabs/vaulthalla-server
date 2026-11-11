@@ -28,6 +28,13 @@
 #include "ops/Audit.hpp"
 #include "ops/Error.hpp"
 #include "ops/RecoveryRecipients.hpp"
+#include "cloud/Identity.hpp"
+#include "cloud/Signing.hpp"
+#include "config/Registry.hpp"
+#include "db/query/cloud/Link.hpp"
+#include "db/query/cloud/RecoveryVault.hpp"
+#include "ops/CloudRecovery.hpp"
+#include "storage/s3/curl/Http.hpp"
 #include "ops/Users.hpp"
 #include "ops/VaultKeys.hpp"
 #include "ops/Vaults.hpp"
@@ -746,6 +753,208 @@ TEST_F(VaultKeyExportProvenance, ExportsCarryTheAttestationPublicKeyAndOldExport
     r = WsKeys::importKeys({{"vault_id", id}, {"keys", old}, {"confirm_name", engine->vault->name}}, device(superUser));
     EXPECT_EQ(r.at("versions").at(0).at("outcome"), "restored") << r.dump();
     EXPECT_EQ(readFile(id, "/a.txt"), "x");
+}
+
+// ---- Cloud recovery enrollment (Tier B, spec 05 §3.2) ------------------------------------------------------------------
+//
+// `vh cloud recovery enroll|status|unenroll` against a fake Vaulthalla Cloud (the http seam): what leaves the server is
+// exactly the bucket's envelopes, byte for byte, and public provenance; never a key. Explicit per vault, refused without
+// a link or a recipient, by an agent or the browser, or when the bucket object isn't the envelope this server wrote.
+
+class CloudRecoveryEnrollment : public RecipientFixture {
+protected:
+    void SetUp() override {
+        RecipientFixture::SetUp();
+        if (IsSkipped()) return;
+        auto cfg = config::Registry::get();
+        previousEndpoint_ = cfg.cloud.endpoint;
+        cfg.cloud.endpoint = "https://api.vaulthalla.test";
+        config::Registry::set(cfg);
+        storage::s3::curl::http::setTransportForTesting(
+            [this](const storage::s3::curl::http::Request& r) { return cloud(r); });
+    }
+    void TearDown() override {
+        if (!IsSkipped()) {
+            storage::s3::curl::http::setTransportForTesting(std::nullopt);
+            for (const auto& row : db::query::cloud::RecoveryVaults::list())  // the suite shares one database
+                (void)db::query::cloud::RecoveryVaults::remove(row.vault_id);
+            db::query::cloud::Link::clear();
+            cloud::identity::destroy();
+            auto cfg = config::Registry::get();
+            cfg.cloud.endpoint = previousEndpoint_;
+            config::Registry::set(cfg);
+        }
+        RecipientFixture::TearDown();
+    }
+
+    void link() {
+        const auto seed = cloud::identity::create();
+        db::query::cloud::LinkRow row{.endpoint = "https://api.vaulthalla.test", .status = "pending",
+                                      .public_key = cloud::publicKeyOf(seed.bytes()), .name = "test",
+                                      .request_id = std::string("0123456789abcdefghjkmnpqrs"), .request_expires_at = 0,
+                                      .installation_id = std::nullopt, .account_id = std::nullopt,
+                                      .requested_by = "admin", .requested_at = 0, .linked_at = std::nullopt};
+        ASSERT_TRUE(db::query::cloud::Link::putPending(row));
+        ASSERT_TRUE(db::query::cloud::Link::markLinked("0123456789abcdefghjkmnpqrs", installation_, 7));
+    }
+
+    // Enough of the cloud: it checks the request is signed as the linked installation, keeps each vault's upload and
+    // reports coverage from the envelopes it holds.
+    storage::s3::curl::http::Response cloud(const storage::s3::curl::http::Request& r) {
+        storage::s3::curl::http::Response res;
+        const std::string prefix = "https://api.vaulthalla.test/v1/recovery/vaults/";
+        std::string auth;
+        for (const auto& [k, v] : r.headers)
+            if (k == "Authorization") auth = v;
+        if (!r.url.starts_with(prefix) || auth.find("Installation=" + installation_) == std::string::npos) {
+            res.status = 401;
+            res.body = R"({"error":{"code":"unauthenticated","message":"request signature rejected"}})";
+            return res;
+        }
+        const auto uid = r.url.substr(prefix.size());
+        requests.push_back(r.method + " " + uid);
+        if (r.method == "PUT") {
+            uploads[uid] = json::parse(r.body);
+            rawUploads.push_back(r.body);
+        } else if (r.method == "DELETE") {
+            if (!uploads.erase(uid)) {
+                res.status = 404;
+                return res;
+            }
+            res.status = 204;
+            return res;
+        }
+        const auto it = uploads.find(uid);
+        if (it == uploads.end()) {
+            res.status = 404;
+            res.body = R"({"error":{"code":"not_found","message":"not enrolled"}})";
+            return res;
+        }
+        std::map<unsigned, json> versions;
+        for (const auto& e : it->second.at("envelopes")) {
+            const auto h = kev1::inspect(*vl::keykit::base64Decode(e.get<std::string>()));
+            versions[h.key_version] = {{"version", h.key_version}, {"recipients", {"r"}}};
+        }
+        json list = json::array();
+        for (const auto& [v, j] : versions) list.push_back(j);
+        const json coverage{{"vault_uid", uid}, {"versions", list}, {"ready", true}};
+        res.status = 200;
+        res.body = (r.method == "PUT" ? json{{"created", true}, {"envelopes_added", it->second.at("envelopes").size()},
+                                             {"versions_added", versions.size()}, {"coverage", coverage}}
+                                      : coverage).dump();
+        return res;
+    }
+
+    std::string installation_ = "kceypk9vfn5tv6yx5c6qpfebdm";
+    std::map<std::string, json> uploads;
+    std::vector<std::string> rawUploads;
+    std::vector<std::string> requests;
+    std::string previousEndpoint_;
+};
+
+TEST_F(CloudRecoveryEnrollment, IsRefusedWithoutALinkARecipientOrAHumanAtTheTerminal) {
+    const auto engine = s3Vault("cr_refused");
+    const auto id = engine->vault->id;
+    EXPECT_THROW((void)ops::cloud_recovery::enroll(superUser, id, Channel::Cli), ops::Conflict) << "not linked";
+    link();
+    EXPECT_THROW((void)ops::cloud_recovery::enroll(superUser, id, Channel::Cli), ops::Conflict) << "no recipient";
+    (void)enroll(engine, vl::keykit::RecoverySeed::generate());
+    EXPECT_THROW((void)ops::cloud_recovery::enroll(superUser, id, Channel::Agent), ops::Denied);
+    EXPECT_THROW((void)ops::cloud_recovery::enroll(superUser, id, Channel::Console), ops::Refused);
+    EXPECT_TRUE(requests.empty()) << "nothing reached the cloud";
+    EXPECT_FALSE(db::query::cloud::RecoveryVaults::get(id).has_value());
+}
+
+TEST_F(CloudRecoveryEnrollment, SendsTheBucketsEnvelopesByteForByteAndNeverAKey) {
+    link();
+    const auto engine = s3Vault("cr_send");
+    write(engine, "/a.txt", "x");
+    const auto seed = vl::keykit::RecoverySeed::generate();
+    (void)enroll(engine, seed);
+    rotate(engine);  // two versions, both wrapped to the recipient
+    const auto keysOf = unwrapAll(engine, seed);
+    ASSERT_GE(keysOf.size(), 2u);
+
+    const auto e = ops::cloud_recovery::enroll(superUser, engine->vault->id, Channel::Cli);
+    EXPECT_TRUE(e.created);
+    const auto uid = crypto::id::toBase32(uidOf(engine));
+    EXPECT_EQ(e.vault_uid, uid);
+    ASSERT_TRUE(uploads.contains(uid));
+    const auto& body = uploads.at(uid);
+
+    // The envelopes are the bucket's objects, unchanged, and nothing else.
+    std::set<std::vector<uint8_t>> bucket, sent;
+    for (const auto& [key, bytes] : storeOf(engine->vault->id)->objects())
+        if (key.starts_with(kev1::kObjectPrefix)) bucket.insert(bytes);
+    for (const auto& env : body.at("envelopes")) sent.insert(*vl::keykit::base64Decode(env.get<std::string>()));
+    EXPECT_EQ(sent, bucket);
+    EXPECT_EQ(e.envelopes_sent, bucket.size());
+
+    // The provenance is the vault's key status: needed versions with their key checks and attestations, this node.
+    const auto ks = keys::status(superUser, engine->vault->id).front();
+    ASSERT_EQ(body.at("key_versions").size(), ks.needed_versions.size());
+    for (std::size_t i = 0; i < ks.needed_versions.size(); ++i) {
+        EXPECT_EQ(body.at("key_versions")[i].at("version"), ks.needed_versions[i].version);
+        EXPECT_EQ(body.at("key_versions")[i].at("key_check"), *ks.needed_versions[i].key_check);
+    }
+    EXPECT_EQ(body.at("origin").at("node_id"), ks.node_id);
+    EXPECT_EQ(body.at("attestation_public_keys").size(), ks.attestation_public_keys.size());
+
+    // No vault key, in any encoding, is in what was sent.
+    for (const auto& [version, key] : keysOf) {
+        const std::vector<uint8_t> raw(key->bytes().begin(), key->bytes().end());
+        for (const auto& text : rawUploads) {
+            EXPECT_EQ(text.find(crypto::util::b64_encode(raw)), std::string::npos) << "version " << version;
+            EXPECT_EQ(text.find(std::string(raw.begin(), raw.end())), std::string::npos) << "version " << version;
+        }
+    }
+    EXPECT_TRUE(db::query::cloud::RecoveryVaults::get(engine->vault->id).has_value());
+}
+
+TEST_F(CloudRecoveryEnrollment, RefusesABucketObjectThatIsntTheEnvelopeItRecorded) {
+    link();
+    const auto engine = s3Vault("cr_tamper");
+    write(engine, "/a.txt", "x");
+    (void)enroll(engine, vl::keykit::RecoverySeed::generate());
+    // Someone with write access to the bucket swaps an envelope for one wrapped to their own key.
+    const auto store = storeOf(engine->vault->id);
+    std::string victim;
+    for (const auto& [key, bytes] : store->objects())
+        if (key.starts_with(kev1::kObjectPrefix)) victim = key;
+    ASSERT_FALSE(victim.empty());
+    const auto attacker = vl::keykit::RecoverySeed::generate();
+    const std::vector<uint8_t> fake(32, 7);
+    store->plant(victim, kev1::wrap(fake, kev1::Suite::X25519, 1, uidOf(engine), attacker.x25519PublicKey()));
+    EXPECT_THROW((void)ops::cloud_recovery::enroll(superUser, engine->vault->id, Channel::Cli), ops::Conflict);
+    EXPECT_TRUE(requests.empty()) << "nothing was sent";
+}
+
+TEST_F(CloudRecoveryEnrollment, StatusComparesWithTheCloudAndUnenrollingDeletesItsRecords) {
+    link();
+    const auto engine = s3Vault("cr_status");
+    write(engine, "/a.txt", "x");
+    (void)enroll(engine, vl::keykit::RecoverySeed::generate());
+    const auto id = engine->vault->id;
+    EXPECT_TRUE(ops::cloud_recovery::status(superUser).empty());
+    (void)ops::cloud_recovery::enroll(superUser, id, Channel::Cli);
+    auto s = ops::cloud_recovery::status(superUser, id);
+    ASSERT_EQ(s.size(), 1u);
+    EXPECT_EQ(s[0].state, "ready") << s[0].detail.value_or("");
+
+    // A rotation: the new version's envelope is in the bucket, not yet in the cloud.
+    rotate(engine);
+    s = ops::cloud_recovery::status(superUser, id);
+    EXPECT_EQ(s[0].state, "behind");
+    EXPECT_FALSE(s[0].not_in_cloud.empty());
+    (void)ops::cloud_recovery::enroll(superUser, id, Channel::Cli);
+    EXPECT_EQ(ops::cloud_recovery::status(superUser, id)[0].state, "ready");
+
+    EXPECT_THROW(ops::cloud_recovery::unenroll(superUser, id, Channel::Agent), ops::Denied);
+    ops::cloud_recovery::unenroll(superUser, id, Channel::Cli);
+    EXPECT_TRUE(uploads.empty()) << "the cloud's records are gone";
+    EXPECT_FALSE(db::query::cloud::RecoveryVaults::get(id).has_value());
+    EXPECT_THROW((void)ops::cloud_recovery::status(superUser, id), ops::NotFound);
+    EXPECT_THROW(ops::cloud_recovery::unenroll(superUser, id, Channel::Cli), ops::NotFound);
 }
 
 }
