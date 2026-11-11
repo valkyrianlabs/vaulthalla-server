@@ -397,6 +397,10 @@ and signature).
 enrollment (spec 05 §3.2; key-backup.md "Recovery recipients"): the bucket's envelopes (checked against
 `vault_key_envelope`), key status provenance, signed `PUT|GET|DELETE /v1/recovery/vaults/{uid}`. Tests:
 `CloudRecoveryEnrollment` in `test_recovery_recipients.cpp`.
+`ops::cloud_restore` (`vh vault recover --from-cloud`) is the receiving side of the cloud's restore relay: a temporary
+X25519 secret in process memory (by restore id), a signed request, polling, the bundle opened into an export document
+(records' key checks and attestations, anchors' public keys) that `ops::vault_recover` proves like any export; complete
+on success, cancel on every other way out. Tests: `VaultRecoverFromCloud` in `test_vault_recover.cpp`.
 
 ### WebAuthn verifier (vl-webauthn, from #355)
 

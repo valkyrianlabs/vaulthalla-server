@@ -291,7 +291,9 @@ of Tier B (spec 05 §3.2): `vh cloud recovery enroll <vault>` (`ops::cloud_recov
 `vault_key_envelope` rows, plus key checks, attestations, attestation public keys and the checkpoint, to the linked
 vaulthalla.cloud account; explicit per vault (super admin or Export, CLI or device with the keys step-up, never an
 agent), refused unless every needed version has an envelope, and revocable (`vh cloud recovery unenroll` deletes the
-cloud's records). No key, seed, kit or export ever leaves.
+cloud's records). No key, seed, kit or export ever leaves. Restoring from the cloud is `vh vault recover --from-cloud`
+(`ops::cloud_restore`): keys arrive wrapped to a temporary key held in memory and are imported as an export (D1
+unchanged).
 
 | Operation | CLI | ws | Who | Where |
 |---|---|---|---|---|
