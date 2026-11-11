@@ -37,9 +37,10 @@ inside the limits below. `vh skill install` sets an agent up in one step.
 - **Keys and secrets stay with you.** These commands are never available to agents: `vh vault keys export`,
   `vh secrets export`, `vh secrets update`, every `vh setup` and `vh teardown` command (including
   `vh setup set-super-admin-password`), and `vh fs get` / `vh fs put`. Neither are pairing decisions
-  (`vh device pair`, `approve`, `deny`) or `vh device remote enable|disable`, nor the master secret rotations
-  (`vh secret master rotate|finalize|rollback`, `vh secret jwt rotate`, `vh secret device-identity rotate`). To back
-  up a vault key, run `vh vault keys export <vault>` yourself in a terminal.
+  (`vh device pair`, `approve`, `deny`), `vh device remote enable|disable` or `vh cloud link|unlink`, nor the master
+  secret rotations (`vh secret master rotate|finalize|rollback`, `vh secret jwt rotate`,
+  `vh secret device-identity rotate`). To back up a vault key, run `vh vault keys export <vault>` yourself in a
+  terminal.
 
 :::callout[Your account, your blast radius]{variant="warning"}
 An agent with your account can still make every change your account can: delete vaults, revoke credentials, change

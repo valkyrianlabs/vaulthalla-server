@@ -272,6 +272,13 @@ caching:
 #    max_edit_bytes: 2097152         # Largest text file the web editor saves (2 MiB)
 
 
+# === ☁️ Vaulthalla Cloud ===
+# Linking this server to a vaulthalla.cloud account is optional, and vaulthalla.cloud isn't open yet; nothing contacts
+# the endpoint until a super admin runs `vh cloud link`. Read from this file only.
+cloud:
+  endpoint: https://api.vaulthalla.cloud   # https, or http only to localhost (development)
+
+
 # === 🔐 Sealed Secrets ===
 # Master secrets are sealed to this machine: a TPM on Linux, the Secure Enclave on macOS (docs: vaults/secrets-and-key-export).
 secrets:

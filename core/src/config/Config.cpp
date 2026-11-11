@@ -1,6 +1,7 @@
 #include "config/Config.hpp"
 #include "config/config_yaml.hpp"
 #include "config/util.hpp"
+#include "cloud/Client.hpp"
 #include <vl/webauthn/RelyingParty.hpp>
 #include "platform/Mount.hpp"
 
@@ -184,6 +185,15 @@ Config& Config::operator=(Config&&) noexcept = default;
         }
 
         if (auto node = root["logging"]) YAML::convert<LoggingConfig>::decode(node, cfg.logging);
+        // Read-only like `secrets`: config.yaml only (design/cloud/server-link.md).
+        if (auto node = root["cloud"]; node && node.IsMap()) {
+            if (node["endpoint"]) cfg.cloud.endpoint = node["endpoint"].as<std::string>();
+            try {
+                (void)vh::cloud::endpoint(cfg.cloud.endpoint);
+            } catch (const std::invalid_argument& e) {
+                throw std::invalid_argument(std::string("config.yaml: ") + e.what());
+            }
+        }
         // Read-only here like `mount`: config.yaml only, never written back or exposed through settings (#326).
         if (auto node = root["secrets"]; node && node.IsMap()) {
             cfg.secrets.require_hardware = node["require_hardware"].as<bool>(false);
