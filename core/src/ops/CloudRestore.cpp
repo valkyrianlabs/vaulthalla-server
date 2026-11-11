@@ -14,6 +14,7 @@
 
 #include <sodium.h>
 
+#include <algorithm>
 #include <map>
 #include <mutex>
 
@@ -78,6 +79,21 @@ std::vector<uint8_t> unb64(const nlohmann::json& j, const char* what) {
     return std::move(*out);
 }
 
+// The checkpoint in the restore's records ({epoch, root_sha256}, or null). A malformed one refuses the restore rather
+// than silently dropping the rollback bound.
+std::optional<vl::keykit::KitCheckpoint> checkpointOf(const nlohmann::json& records) {
+    if (!records.is_object() || !records.contains("checkpoint") || records.at("checkpoint").is_null()) return std::nullopt;
+    const auto& c = records.at("checkpoint");
+    const auto hex = [](const std::string& s) {
+        return s.size() == 64 && std::ranges::all_of(s, [](const char ch) { return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'); });
+    };
+    if (!c.is_object() || !c.contains("epoch") || !c.at("epoch").is_number_unsigned() || !c.contains("root_sha256") ||
+        !c.at("root_sha256").is_string() || !hex(c.at("root_sha256").get<std::string>()))
+        throw Refused("cloud_restore_malformed", "Vaulthalla Cloud sent a malformed checkpoint; nothing was imported");
+    return vl::keykit::KitCheckpoint{.epoch = c.at("epoch").get<uint64_t>(),
+                                     .root_sha256 = c.at("root_sha256").get<std::string>(), .at = std::nullopt};
+}
+
 // The delivered bundle as a key export: each envelope opened with the temporary secret (it must be this vault's and
 // the version it claims), with the key check and the origin node's attestation the cloud recorded at enrollment. The
 // attestation carries its public key, which the restore pins (D1); vault_recover then requires every version to
@@ -86,6 +102,7 @@ Delivered exportOf(const nlohmann::json& status, const Pending& p) {
     const auto uid = vl::keykit::fromBase32(p.vault_uid);
     if (!uid) throw Invalid("the vault uid isn't one");
     const auto& records = status.contains("records") ? status.at("records") : nlohmann::json::object();
+    auto checkpoint = checkpointOf(records);  // before any key is opened: a refusal leaves nothing to wipe
     if (!status.contains("bundle") || !status.at("bundle").is_array() || status.at("bundle").empty())
         throw Refused("cloud_restore_malformed", "Vaulthalla Cloud delivered no keys");
 
@@ -153,7 +170,7 @@ Delivered exportOf(const nlohmann::json& status, const Pending& p) {
     if (status.contains("deliverer") && status.at("deliverer").is_object() && status.at("deliverer").contains("name") &&
         status.at("deliverer").at("name").is_string())
         deliverer = status.at("deliverer").at("name").get<std::string>();
-    return {.exported = std::move(doc), .deliverer = std::move(deliverer),
+    return {.exported = std::move(doc), .checkpoint = std::move(checkpoint), .deliverer = std::move(deliverer),
             .versions = static_cast<unsigned int>(status.at("bundle").size())};
 }
 

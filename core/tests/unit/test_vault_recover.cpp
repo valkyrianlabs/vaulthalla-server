@@ -786,6 +786,10 @@ protected:
         json anchors = json::array();
         for (const auto& k : ks.attestation_public_keys) anchors.push_back({{"key_id", k.key_id}, {"public_key", k.public_key}});
         records_["attestation_public_keys"] = anchors;
+        // The checkpoint, as `vh cloud recovery enroll` sends it (ops::cloud_recovery).
+        records_["checkpoint"] = ks.checkpoint ? json{{"epoch", ks.checkpoint->epoch},
+                                                      {"root_sha256", ks.checkpoint->root_sha256}}
+                                               : json(nullptr);
         // The deliverer's side: the vault keys, opened from the bucket's envelopes with the recipient's secret.
         const auto sk = vl::keykit::RecoverySeed::parse(o.seed).x25519SecretKey();
         mf::S3Store store(o.bucket);
@@ -845,6 +849,7 @@ protected:
         for (int i = 0; i < 5 && !delivered; ++i) delivered = ops::cloud_restore::poll(superUser, started.restore_id);
         if (!delivered) throw std::runtime_error("not delivered");
         extra.vault_uid = vaultUid_;
+        extra.checkpoint = delivered->checkpoint;  // as recover.cpp passes it
         try {
             auto r = recover(o, nullptr, &delivered->exported, extra);
             ops::cloud_restore::complete(superUser, started.restore_id);
@@ -877,6 +882,8 @@ TEST_F(VaultRecoverFromCloud, RestoresTheVaultWithKeysADeviceRelayedThroughTheCl
     EXPECT_EQ(r.mode, "canonical");
     EXPECT_EQ(r.report.at("canonical_versions"), json({1, 2, 3}));
     for (const auto& v : r.report.at("key_versions")) EXPECT_EQ(v.at("verdict"), "verified") << v.dump();
+    ASSERT_FALSE(records_.at("checkpoint").is_null());
+    EXPECT_EQ(r.report.at("freshness"), "verified") << "the cloud's checkpoint bounds rollback";
     const auto engine = runtime::Deps::get().storageManager->getEngine(*r.vault_id);
     for (const auto& [path, content] : o.files) EXPECT_EQ(readFile(engine, path), content) << path;
     const auto restoredStatus = keys::status(superUser, *r.vault_id);
@@ -887,6 +894,44 @@ TEST_F(VaultRecoverFromCloud, RestoresTheVaultWithKeysADeviceRelayedThroughTheCl
     EXPECT_EQ(calls.back(), "POST /v1/recovery/restores/rst0123456789abcdefghjkmnp/complete");
     // The temporary key is gone once the restore completed.
     EXPECT_THROW((void)ops::cloud_restore::poll(superUser, "rst0123456789abcdefghjkmnp"), ops::Refused);
+}
+
+TEST_F(VaultRecoverFromCloud, ARollbackIsRefusedAgainstTheCloudsCheckpointUnlessAccepted) {
+    auto o = populated();
+    o.engine->publishRemoteIndexManifest();
+    const auto older = o.bucket->current(std::string(mf::kRootKey));
+    ASSERT_TRUE(older);
+    write(o, "/after.txt", bytes("written after the older root"));
+    pass(o.engine);
+    enrolled(o);  // the cloud records the newer root's checkpoint
+    becomeAnotherNode(o.id);
+    (void)o.bucket->seed(std::string(mf::kRootKey), older->body);  // the bucket presents the older root
+
+    const auto vaultsBefore = db::query::vault::Vault::listVaults().size();
+    EXPECT_EQ(code([&] { return restoreFromCloud(o); }), "rollback");
+    EXPECT_EQ(db::query::vault::Vault::listVaults().size(), vaultsBefore) << "nothing was written";
+    EXPECT_EQ(calls.back(), "POST /v1/recovery/restores/rst0123456789abcdefghjkmnp/cancel");
+    polls_ = 0;
+    ops::vault_recover::Request req;
+    req.dry_run = true;
+    req.accept_rollback = true;
+    EXPECT_EQ(restoreFromCloud(o, req).report.at("freshness"), "rollback_accepted");
+}
+
+TEST_F(VaultRecoverFromCloud, AMalformedCheckpointRefusesTheRestore) {
+    auto o = populated();
+    enrolled(o);
+    becomeAnotherNode(o.id);
+    records_["checkpoint"] = {{"epoch", 3}, {"root_sha256", "not hex"}};
+    const auto started = ops::cloud_restore::start(superUser, vaultUid_, keys::Channel::Cli);
+    EXPECT_FALSE(ops::cloud_restore::poll(superUser, started.restore_id).has_value());
+    try {
+        (void)ops::cloud_restore::poll(superUser, started.restore_id);
+        FAIL() << "a malformed checkpoint never silently drops the rollback bound";
+    } catch (const ops::Refused& e) {
+        EXPECT_EQ(e.code, "cloud_restore_malformed");
+    }
+    ops::cloud_restore::cancel(superUser, started.restore_id);
 }
 
 TEST_F(VaultRecoverFromCloud, KeysTheCloudMadeUpAreRefusedAndNothingIsWritten) {

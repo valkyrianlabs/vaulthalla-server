@@ -65,6 +65,11 @@ struct ExportedVault {
 struct Material {
     std::optional<vl::keykit::Kit> kit;
     std::vector<ExportedVault> exports;
+    // A checkpoint recorded outside the bucket and outside the kit: the one Vaulthalla Cloud holds for an enrolled vault
+    // (`vh vault recover --from-cloud`). It bounds rollback like the kit's (§4.5) when the kit's entry has none. It was
+    // uploaded by the vault's own node at enrollment; the cloud can withhold it or give an older one, which bounds less,
+    // never more, and a root that forks from it is refused like any other.
+    std::optional<vl::keykit::KitCheckpoint> checkpoint;
 };
 
 // ---- trust anchors (D1) ----------------------------------------------------------------------------------------------

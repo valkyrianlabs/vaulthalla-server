@@ -156,6 +156,7 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
             throw Invalid(std::string("the key export is not usable: ") + e.what());
         }
     }
+    material.checkpoint = req.checkpoint;
     rec::Options options;
     options.accept_rollback = req.accept_rollback;
     options.self_keys = selfKeys();

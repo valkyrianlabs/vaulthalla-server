@@ -87,9 +87,11 @@ std::string text(const recover_ops::Result& r) {
 }
 
 // `--from-cloud`: asks the linked Vaulthalla Cloud account for the vault's keys and waits, printing the restore code,
-// until a device delivers them (ops::cloud_restore). Returns the export they make, or the result to stop with.
+// until a device delivers them (ops::cloud_restore). Returns the export they make (and sets `checkpoint` to the cloud's
+// record, the restore's rollback bound), or the result to stop with.
 std::variant<nlohmann::json, CommandResult> keysFromCloud(const CommandCall& call, const std::string& vaultUid,
-                                                          const keys_ops::Channel channel, std::string& restoreId) {
+                                                          const keys_ops::Channel channel, std::string& restoreId,
+                                                          std::optional<vl::keykit::KitCheckpoint>& checkpoint) {
     namespace restore = vh::ops::cloud_restore;
     constexpr const auto* ERR = "vault recover";
     if (!call.io)
@@ -116,6 +118,7 @@ std::variant<nlohmann::json, CommandResult> keysFromCloud(const CommandCall& cal
             if (auto delivered = restore::poll(call.user, restoreId)) {
                 call.io->print(fmt::format("{} delivered {} key version(s); restoring...\n", delivered->deliverer,
                                            delivered->versions));
+                checkpoint = delivered->checkpoint;
                 return std::move(delivered->exported);
             }
         } catch (const ops::Refused& e) {
@@ -207,7 +210,7 @@ CommandResult handle_vault_recover(const CommandCall& call) {
     if (fromCloud) {
         if (!req.vault_uid) return invalid(std::string(ERR) + ": --from-cloud needs --vault-uid (`vh cloud recovery status` "
                                            "on the original server, or vaulthalla.cloud, shows it)");
-        auto keys = keysFromCloud(call, *req.vault_uid, channel, cloudRestore.id);
+        auto keys = keysFromCloud(call, *req.vault_uid, channel, cloudRestore.id, req.checkpoint);
         if (auto* stop = std::get_if<CommandResult>(&keys)) return std::move(*stop);
         exported = std::move(std::get<nlohmann::json>(keys));
         req.exported = &exported;
