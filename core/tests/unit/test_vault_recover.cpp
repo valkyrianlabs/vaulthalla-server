@@ -14,8 +14,12 @@
 #include "../helpers/db_suite.hpp"
 #include "../helpers/versioned_bucket.hpp"
 
+#include <vl/keykit/kev1.hpp>
 #include <vl/keykit/kit.hpp>
 #include <vl/keykit/seed.hpp>
+#include "cloud/Identity.hpp"
+#include "cloud/Signing.hpp"
+#include "config/Registry.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "db/query/fs/File.hpp"
@@ -23,12 +27,15 @@
 #include "db/query/vault/Key.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "fs/model/File.hpp"
+#include "db/query/cloud/Link.hpp"
+#include "ops/CloudRestore.hpp"
 #include "ops/Error.hpp"
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
 #include "ops/VaultRecover.hpp"
 #include "storage/ObjectKeys.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "storage/s3/curl/Http.hpp"
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Store.hpp"
 #include "sync/rotation/Runtime.hpp"
@@ -724,6 +731,189 @@ TEST_F(VaultRecoverDb, ACorruptSegmentLeavesItsFilesUnderRecovered) {
         if (!content.empty()) expected.insert(content);
     expected.insert("in the trash");
     EXPECT_EQ(contents, expected);
+}
+
+// ---- Restoring with keys relayed through Vaulthalla Cloud (`vh vault recover --from-cloud`, ops::cloud_restore) -------
+//
+// What the cloud holds for the vault is what `vh cloud recovery enroll` sent: the bucket's envelopes and the key
+// status's provenance. The deliverer (Desktop in production) opens the envelopes with the recipient it holds (here the
+// kit's seed) and re-wraps each key to the restoring server's temporary key. The restore then proves every version
+// exactly as for an export: keys the cloud invented are refused and nothing is written.
+
+class VaultRecoverFromCloud : public VaultRecoverDb {
+protected:
+    void SetUp() override {
+        VaultRecoverDb::SetUp();
+        if (IsSkipped()) return;
+        auto cfg = config::Registry::get();
+        previousEndpoint_ = cfg.cloud.endpoint;
+        cfg.cloud.endpoint = "https://api.vaulthalla.test";
+        config::Registry::set(cfg);
+        storage::s3::curl::http::setTransportForTesting(
+            [this](const storage::s3::curl::http::Request& r) { return cloud(r); });
+        const auto seed = cloud::identity::create();
+        db::query::cloud::LinkRow row{.endpoint = "https://api.vaulthalla.test", .status = "pending",
+                                      .public_key = cloud::publicKeyOf(seed.bytes()), .name = "restorer",
+                                      .request_id = std::string("0123456789abcdefghjkmnpqrs"), .request_expires_at = 0,
+                                      .installation_id = std::nullopt, .account_id = std::nullopt,
+                                      .requested_by = "admin", .requested_at = 0, .linked_at = std::nullopt};
+        ASSERT_TRUE(db::query::cloud::Link::putPending(row));
+        ASSERT_TRUE(db::query::cloud::Link::markLinked("0123456789abcdefghjkmnpqrs", "kceypk9vfn5tv6yx5c6qpfebdm", 7));
+    }
+    void TearDown() override {
+        if (!skipTests) {
+            storage::s3::curl::http::setTransportForTesting(std::nullopt);
+            db::query::cloud::Link::clear();
+            cloud::identity::destroy();
+            auto cfg = config::Registry::get();
+            cfg.cloud.endpoint = previousEndpoint_;
+            config::Registry::set(cfg);
+        }
+        VaultRecoverDb::TearDown();
+    }
+
+    // The cloud's copy of the vault's records, as enrollment sent them (taken before node A is destroyed).
+    void enrolled(const Origin& o) {
+        const auto ks = keys::status(superUser, o.id).front();
+        records_ = {{"origin", {{"node_id", ks.node_id}, {"vault_id", o.id}}}};
+        json versions = json::array();
+        for (const auto& v : ks.needed_versions) {
+            json att = nullptr;
+            if (v.attestation) att = {{"key_id", v.attestation->key_id}, {"signature", v.attestation->signature}};
+            versions.push_back({{"version", v.version}, {"key_check", *v.key_check}, {"attestation", att}});
+        }
+        records_["key_versions"] = versions;
+        json anchors = json::array();
+        for (const auto& k : ks.attestation_public_keys) anchors.push_back({{"key_id", k.key_id}, {"public_key", k.public_key}});
+        records_["attestation_public_keys"] = anchors;
+        // The deliverer's side: the vault keys, opened from the bucket's envelopes with the recipient's secret.
+        const auto sk = vl::keykit::RecoverySeed::parse(o.seed).x25519SecretKey();
+        mf::S3Store store(o.bucket);
+        for (const auto& obj : store.list(std::string(vl::keykit::kev1::kObjectPrefix))) {
+            const auto got = store.get(obj.key, std::nullopt);
+            try {
+                auto u = vl::keykit::kev1::unwrap(got->bytes, sk.bytes(), vl::keykit::kev1::Suite::X25519, o.uid);
+                keys_[u.key_version] = Bytes(u.key.bytes().begin(), u.key.bytes().end());
+            } catch (const vl::keykit::kev1::Error&) {}
+        }
+        vaultUid_ = crypto::id::toBase32(o.uid);
+    }
+
+    storage::s3::curl::http::Response cloud(const storage::s3::curl::http::Request& r) {
+        storage::s3::curl::http::Response res;
+        const std::string base = "https://api.vaulthalla.test";
+        const auto path = r.url.substr(base.size());
+        calls.push_back(r.method + " " + path);
+        res.status = 200;
+        if (r.method == "POST" && path == "/v1/recovery/restores") {
+            const auto body = json::parse(r.body);
+            temporaryKey_ = *vl::keykit::base64Decode(body.at("temporary_public_key").get<std::string>());
+            EXPECT_EQ(body.at("vault_uid"), vaultUid_);
+            res.status = 201;
+            res.body = json{{"id", "rst0123456789abcdefghjkmnp"}, {"status", "requested"},
+                            {"restore_code", "abcd-ef01-2345-6789"}}.dump();
+            return res;
+        }
+        if (r.method == "GET" && path == "/v1/recovery/restores/rst0123456789abcdefghjkmnp") {
+            if (++polls_ < 2 || answer_ != "delivered") {
+                res.body = json{{"status", polls_ < 2 ? "approved" : answer_}}.dump();
+                return res;
+            }
+            json bundle = json::array();
+            for (const auto& [version, key] : keys_) {
+                const auto k = forged_ ? randomBytes(32, version) : key;
+                bundle.push_back({{"key_version", version},
+                                  {"envelope", vl::keykit::base64Encode(vl::keykit::kev1::wrap(
+                                                   k, vl::keykit::kev1::Suite::X25519, version, *vl::keykit::fromBase32(vaultUid_),
+                                                   temporaryKey_))}});
+            }
+            res.body = json{{"status", "delivered"}, {"bundle", bundle}, {"records", records_},
+                            {"deliverer", {{"installation_id", "x"}, {"name", "MacBook"}}}}.dump();
+            return res;
+        }
+        if (r.method == "POST" && path.ends_with("/complete")) return res;
+        if (r.method == "POST" && path.ends_with("/cancel")) return res;
+        res.status = 404;
+        return res;
+    }
+
+    // What `vh vault recover --from-cloud` does, without the terminal.
+    ops::vault_recover::Result restoreFromCloud(const Origin& o, ops::vault_recover::Request extra = {}) {
+        const auto started = ops::cloud_restore::start(superUser, vaultUid_, keys::Channel::Cli);
+        EXPECT_EQ(started.restore_code, "abcd-ef01-2345-6789");
+        std::optional<ops::cloud_restore::Delivered> delivered;
+        for (int i = 0; i < 5 && !delivered; ++i) delivered = ops::cloud_restore::poll(superUser, started.restore_id);
+        if (!delivered) throw std::runtime_error("not delivered");
+        extra.vault_uid = vaultUid_;
+        try {
+            auto r = recover(o, nullptr, &delivered->exported, extra);
+            ops::cloud_restore::complete(superUser, started.restore_id);
+            return r;
+        } catch (...) {
+            ops::cloud_restore::cancel(superUser, started.restore_id);
+            throw;
+        }
+    }
+
+    json records_;
+    std::map<uint32_t, Bytes> keys_;
+    std::string vaultUid_;
+    std::vector<uint8_t> temporaryKey_;
+    std::string answer_ = "delivered";
+    bool forged_ = false;
+    int polls_ = 0;
+    std::vector<std::string> calls;
+    std::string previousEndpoint_;
+};
+
+TEST_F(VaultRecoverFromCloud, RestoresTheVaultWithKeysADeviceRelayedThroughTheCloud) {
+    auto o = populated();
+    enrolled(o);
+    ASSERT_EQ(keys_.size(), 3u);
+    becomeAnotherNode(o.id);
+
+    const auto r = restoreFromCloud(o);
+    ASSERT_TRUE(r.written) << r.report.dump(2);
+    EXPECT_EQ(r.mode, "canonical");
+    EXPECT_EQ(r.report.at("canonical_versions"), json({1, 2, 3}));
+    for (const auto& v : r.report.at("key_versions")) EXPECT_EQ(v.at("verdict"), "verified") << v.dump();
+    const auto engine = runtime::Deps::get().storageManager->getEngine(*r.vault_id);
+    for (const auto& [path, content] : o.files) EXPECT_EQ(readFile(engine, path), content) << path;
+    const auto restoredStatus = keys::status(superUser, *r.vault_id);
+    for (const auto& n : restoredStatus.front().needed_versions) {
+        ASSERT_TRUE(n.origin) << "version " << n.version;
+        EXPECT_EQ(n.origin->anchor, "export");
+    }
+    EXPECT_EQ(calls.back(), "POST /v1/recovery/restores/rst0123456789abcdefghjkmnp/complete");
+    // The temporary key is gone once the restore completed.
+    EXPECT_THROW((void)ops::cloud_restore::poll(superUser, "rst0123456789abcdefghjkmnp"), ops::Refused);
+}
+
+TEST_F(VaultRecoverFromCloud, KeysTheCloudMadeUpAreRefusedAndNothingIsWritten) {
+    auto o = populated();
+    enrolled(o);
+    becomeAnotherNode(o.id);
+    forged_ = true;  // a cloud (or anyone) handing over keys of its own, with the real records
+    const auto vaultsBefore = db::query::vault::Vault::listVaults().size();
+    EXPECT_NE(code([&] { return restoreFromCloud(o); }), "ok");
+    EXPECT_EQ(db::query::vault::Vault::listVaults().size(), vaultsBefore) << "no vault was created";
+    EXPECT_EQ(calls.back(), "POST /v1/recovery/restores/rst0123456789abcdefghjkmnp/cancel");
+}
+
+TEST_F(VaultRecoverFromCloud, ADeniedRestoreAndAnAgentStopBeforeAnyKey) {
+    auto o = populated();
+    enrolled(o);
+    EXPECT_THROW((void)ops::cloud_restore::start(superUser, vaultUid_, keys::Channel::Agent), ops::Denied);
+    EXPECT_THROW((void)ops::cloud_restore::start(superUser, vaultUid_, keys::Channel::Console), ops::Refused);
+    answer_ = "denied";
+    const auto started = ops::cloud_restore::start(superUser, vaultUid_, keys::Channel::Cli);
+    EXPECT_FALSE(ops::cloud_restore::poll(superUser, started.restore_id).has_value());  // approved, waiting
+    try {
+        (void)ops::cloud_restore::poll(superUser, started.restore_id);
+        FAIL() << "a denied restore delivers nothing";
+    } catch (const ops::Refused& e) {
+        EXPECT_EQ(e.code, "cloud_restore_denied");
+    }
 }
 
 }

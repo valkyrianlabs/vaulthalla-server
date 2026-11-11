@@ -66,6 +66,25 @@ vh cloud recovery unenroll photos --owner alice
 - **Who.** Super admins or users with the export encryption keys permission, in a terminal on the server or from a
   paired device (with its approval), never through the browser or an agent.
 
+## Restore a vault on a new server
+
+When the original server is gone, link a new one to the same account (`vh cloud link`), then:
+
+```bash
+vh vault recover --api-key r2-main --bucket finance-vault --vault-uid <uid> --from-cloud
+```
+
+1. The new server makes a temporary key pair (the secret never leaves its memory) and prints a **restore code**.
+2. Approve the restore on vaulthalla.cloud (with a fresh second factor).
+3. On a device that holds one of the vault's recovery recipients (Vaulthalla Desktop), deliver the keys. **It must
+   show the same restore code**; if it doesn't, don't deliver: someone may be substituting a key of their own.
+4. The server opens the delivered keys with its temporary key and restores the vault exactly as from a key export:
+   every key version must match the bucket's own manifest records and the original server's attestation, so keys
+   anyone made up are refused and nothing is written. Then it tells the cloud, which deletes the delivered copy.
+
+Ctrl-C (or any failure) cancels the restore. The vault uid is in `vh cloud recovery status` on the original server,
+or on vaulthalla.cloud.
+
 ## Check and undo
 
 ```bash

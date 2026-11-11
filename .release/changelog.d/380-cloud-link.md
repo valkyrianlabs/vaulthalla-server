@@ -7,3 +7,6 @@
   linked server sends a vault's existing KEV1 envelopes, byte for byte from its bucket, with key checks, attestations,
   attestation public keys and the checkpoint, to its vaulthalla.cloud account; explicit per vault, revocable, never a
   key. Migration 135 (`cloud_recovery_vault`); `vault/RecoveryEnvelopes.hpp`'s bucket-only rule names this exception.
+- `vh vault recover --from-cloud --vault-uid <uid>`: a restore whose keys a device relays through the linked
+  vaulthalla.cloud account to a temporary X25519 key held only in the daemon's memory (`ops::cloud_restore`); the
+  delivered keys are proven and imported as a key export, unchanged rules (D1, the bucket's records).

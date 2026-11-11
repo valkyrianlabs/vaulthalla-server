@@ -50,7 +50,9 @@ inline std::string lower(std::string_view s) {
     const auto a = detail::lower(argv[0]), b = detail::lower(argv[1]), c = detail::lower(argv[2]);
     if ((a == "vault" || a == "vaults" || a == "v") && b == "recover") {
         p.active = true;
+        bool fromCloud = false;
         for (std::size_t i = 2; i < argv.size(); ++i) {
+            if (argv[i] == "--from-cloud") fromCloud = true;
             const bool isKit = argv[i] == "--kit" || argv[i] == "--recovery-kit";
             const bool isExport = argv[i] == "--export" || argv[i] == "--key-file";
             if (!isKit && !isExport) continue;
@@ -65,11 +67,17 @@ inline std::string lower(std::string_view s) {
             }
             p.bundle.emplace_back(name, argv[i + 1]);
         }
+        // --from-cloud: the keys come through the daemon, from the linked account; nothing is read here.
+        if (fromCloud) {
+            if (!p.bundle.empty()) p.error = "--from-cloud replaces --kit and --export";
+            else p.active = false;
+            return p;
+        }
         if (std::ranges::count_if(p.bundle, [](const auto& d) { return d.second == "-"; }) > 1)
             p.error = "only one of --kit and --export can read standard input";
         else if (p.bundle.empty())
             p.error = "usage: vh vault recover --api-key <key> --bucket <bucket> --kit <kit.json|-> [--export "
-                      "<keys.json|->] [--into <name>] [--dry-run]";
+                      "<keys.json|->] [--into <name>] [--dry-run]  (or --vault-uid <uid> --from-cloud)";
         return p;
     }
     if (!(a == "vault" || a == "vaults" || a == "v") || !(b == "key" || b == "keys" || b == "k") || c != "import")

@@ -1,21 +1,27 @@
 // `vh vault recover` (#371, design/encryption/03-metadata-recovery.md §6): ops::vault_recover over the CLI. The kit
 // and the export are read by vh on the caller's side and arrive as one bundle (shell/ClientInput.hpp); the daemon
-// never opens a path the caller names.
+// never opens a path the caller names. With --from-cloud the keys come from the linked Vaulthalla Cloud account
+// instead (ops::cloud_restore), as an export the same restore proves.
 
 #include "protocols/shell/commands/vault.hpp"
 #include "protocols/shell/ClientInput.hpp"
+#include "protocols/shell/SocketIO.hpp"
 #include "protocols/shell/types.hpp"
 #include "protocols/shell/util/argsHelpers.hpp"
 #include "protocols/shell/commands/helpers.hpp"
 #include "CommandUsage.hpp"
 #include "ops/Error.hpp"
+#include "ops/CloudRestore.hpp"
 #include "ops/VaultRecover.hpp"
 #include "identities/User.hpp"
 
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <string>
+#include <thread>
+#include <variant>
 
 namespace vh::protocols::shell::commands::vault {
 
@@ -80,6 +86,47 @@ std::string text(const recover_ops::Result& r) {
     return out;
 }
 
+// `--from-cloud`: asks the linked Vaulthalla Cloud account for the vault's keys and waits, printing the restore code,
+// until a device delivers them (ops::cloud_restore). Returns the export they make, or the result to stop with.
+std::variant<nlohmann::json, CommandResult> keysFromCloud(const CommandCall& call, const std::string& vaultUid,
+                                                          const keys_ops::Channel channel, std::string& restoreId) {
+    namespace restore = vh::ops::cloud_restore;
+    constexpr const auto* ERR = "vault recover";
+    if (!call.io)
+        return invalid(std::string(ERR) + ": --from-cloud waits for your devices, so it runs in a terminal");
+    restore::Started started;
+    try {
+        started = restore::start(call.user, vaultUid, channel);
+    } catch (const ops::Refused& e) {
+        return invalid(std::string(ERR) + ": " + e.what() + " [" + e.code + "]");
+    } catch (const ops::Error& e) {
+        return invalid(std::string(ERR) + ": " + e.what());
+    }
+    restoreId = started.restore_id;
+    call.io->print(fmt::format(
+        "Restore code   {}\n"
+        "  1. Approve the restore on vaulthalla.cloud.\n"
+        "  2. On a device that holds a recovery recipient of this vault (Vaulthalla Desktop), deliver the keys; it must "
+        "show the same code. If it doesn't, don't deliver.\n"
+        "Waiting... (Ctrl-C cancels the restore)\n",
+        started.restore_code));
+    for (;;) {
+        if (!call.io->peerConnected()) return invalid(std::string(ERR) + ": stopped; the restore was cancelled");
+        try {
+            if (auto delivered = restore::poll(call.user, restoreId)) {
+                call.io->print(fmt::format("{} delivered {} key version(s); restoring...\n", delivered->deliverer,
+                                           delivered->versions));
+                return std::move(delivered->exported);
+            }
+        } catch (const ops::Refused& e) {
+            return invalid(std::string(ERR) + ": " + e.what() + " [" + e.code + "]");
+        } catch (const ops::Error& e) {
+            return invalid(std::string(ERR) + ": " + e.what());
+        }
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+    }
+}
+
 }  // namespace recover_cli
 
 CommandResult handle_vault_recover(const CommandCall& call) {
@@ -87,12 +134,14 @@ CommandResult handle_vault_recover(const CommandCall& call) {
     constexpr const auto* ERR = "vault recover";
     const auto usage = resolveUsage({"vault", "recover"});
     validatePositionals(call, usage);
-    if (!call.input)
+    const bool fromCloud = hasFlag(call, "from-cloud");
+    if (fromCloud && call.input) return invalid(std::string(ERR) + ": --from-cloud replaces --kit and --export");
+    if (!fromCloud && !call.input)
         return invalid(std::string(ERR) + ": no recovery material came with the request. vh reads --kit and --export on "
                        "your side and sends their contents; the daemon never opens them (is vh older than the daemon?)");
     nlohmann::json bundle, kit, exported;
     try {
-        bundle = nlohmann::json::parse(*call.input);
+        if (!fromCloud) bundle = nlohmann::json::parse(*call.input);
     } catch (const std::exception&) {
         return invalid(std::string(ERR) + ": the attached material is not what vh sends (is vh older than the daemon?)");
     }
@@ -110,7 +159,8 @@ CommandResult handle_vault_recover(const CommandCall& call) {
                 }
         }
     } wipeAll{kit, exported, bundle};
-    if (!bundle.is_object() || bundle.value("type", "") != vh::protocols::shell::client_input::kBundleType)
+    if (!fromCloud &&
+        (!bundle.is_object() || bundle.value("type", "") != vh::protocols::shell::client_input::kBundleType))
         return invalid(std::string(ERR) + ": the attached material is not what vh sends (is vh older than the daemon?)");
     try {
         if (bundle.contains("kit")) kit = nlohmann::json::parse(bundle["kit"].get<std::string>());
@@ -144,6 +194,25 @@ CommandResult handle_vault_recover(const CommandCall& call) {
     const bool json = hasFlag(call, usage->resolveFlag("json_output")->aliases);
     const auto channel = AgentCallScope::active() ? keys_ops::Channel::Agent : keys_ops::Channel::Cli;
 
+    // --from-cloud: the keys come from the linked account through a device; the restore completes only once they
+    // were imported (or a dry run reported), and is cancelled on every other way out.
+    struct CloudRestore {
+        const CommandCall& call;
+        std::string id;
+        bool done = false;
+        ~CloudRestore() {
+            if (!id.empty() && !done) vh::ops::cloud_restore::cancel(call.user, id);
+        }
+    } cloudRestore{call, {}, false};
+    if (fromCloud) {
+        if (!req.vault_uid) return invalid(std::string(ERR) + ": --from-cloud needs --vault-uid (`vh cloud recovery status` "
+                                           "on the original server, or vaulthalla.cloud, shows it)");
+        auto keys = keysFromCloud(call, *req.vault_uid, channel, cloudRestore.id);
+        if (auto* stop = std::get_if<CommandResult>(&keys)) return std::move(*stop);
+        exported = std::move(std::get<nlohmann::json>(keys));
+        req.exported = &exported;
+    }
+
     try {
         recover_ops::Result result;
         try {
@@ -162,6 +231,10 @@ CommandResult handle_vault_recover(const CommandCall& call) {
             } catch (const ops::NeedsConfirmation&) {
                 return invalid(std::string(ERR) + ": that is not the vault's name; nothing was written");
             }
+        }
+        if (fromCloud) {
+            vh::ops::cloud_restore::complete(call.user, cloudRestore.id);
+            cloudRestore.done = true;
         }
         if (json) return ok(recover_ops::toJson(result).dump(4));
         return ok(text(result));

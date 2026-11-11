@@ -357,12 +357,20 @@ static std::shared_ptr<CommandUsage> recover(const std::weak_ptr<CommandUsage>& 
                            Flag::Alias("salvage",
                                        "Versions that can't be proven: re-encrypt what their keys decrypt under a fresh "
                                        "key; never store the supplied keys",
-                                       "salvage")};
+                                       "salvage"),
+                           Flag::Alias("from_cloud",
+                                       "Instead of --kit or --export: have the keys relayed through your linked "
+                                       "Vaulthalla Cloud account (needs --vault-uid and a terminal). Prints a restore "
+                                       "code; approve on vaulthalla.cloud and deliver from a device that holds a "
+                                       "recovery recipient after checking it shows the same code",
+                                       "from-cloud")};
     cmd->examples = {
         {"vh vault recover --api-key r2-main --bucket finance-vault --kit kit.json --dry-run",
          "Show what a restore of the vault in bucket 'finance-vault' would recover, and how each key version is proven."},
         {"vh vault recover --api-key r2-main --bucket finance-vault --kit kit.json",
          "Restore it here (cache strategy; files are fetched when read)."},
+        {"vh vault recover --api-key r2-main --bucket finance-vault --vault-uid 0123456789abcdefghjkmnpqrs --from-cloud",
+         "Restore it with keys relayed through Vaulthalla Cloud from your own device (no kit file)."},
         {"vh vault recover --api-key 3 --bucket finance-vault --kit kit.json --export keys.json --into finance-restored",
          "Use a key export too, and give the restored vault another name."}
     };
