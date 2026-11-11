@@ -9,6 +9,7 @@
 #include "db/query/vault/RecoveryGrants.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "identities/User.hpp"
+#include "rbac/permission/admin/keys/Encryption.hpp"
 #include "sync/manifest/Store.hpp"
 #include "vault/RecoveryEnvelopes.hpp"
 #include "vault/model/S3Vault.hpp"
