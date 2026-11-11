@@ -48,6 +48,54 @@ std::shared_ptr<CommandUsage> status(const std::weak_ptr<CommandUsage>& parent) 
     return cmd;
 }
 
+const auto vaultPos = Positional::WithAliases("vault", "Name or ID of the vault", {"name", "id"},
+                                              contract::gen::ref("vault", {"id"}));
+const auto owner = Optional::Multi("owner", "User ID or username of the vault owner (required if using name)",
+                                   {"owner", "o"}, {"id", "name"})
+                       .withGen("id", contract::gen::ref("user", {"id"}));
+
+std::shared_ptr<CommandUsage> recovery(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->aliases = {"recovery"};
+    cmd->description = "Cloud recovery of vault keys (customer-key-controlled): keep a copy of a vault's recovery "
+                       "envelopes in your Vaulthalla Cloud account. They are wrapped to your own recovery recipients, "
+                       "so the cloud can't open them. Explicit per vault; self-managed recovery is unchanged.";
+    const auto self = cmd->weak_from_this();
+
+    auto enroll = build(self);
+    enroll->effect = CommandEffect::Write;
+    enroll->aliases = {"enroll"};
+    enroll->description = "Send a vault's recovery envelopes (from its bucket), key checks, attestations and checkpoint "
+                          "to your Vaulthalla Cloud account; run again after a key rotation. Never a key, seed or "
+                          "export. Needs a linked server and a recovery recipient covering every needed key version.";
+    enroll->positionals = {vaultPos};
+    enroll->optional = {owner};
+    enroll->examples = {{"vh cloud recovery enroll 12", "Enroll vault 12 in cloud recovery (or update its records)."},
+                        {"vh cloud recovery enroll photos --owner alice", "The same, by name."}};
+
+    auto status = build(self);
+    status->effect = CommandEffect::Read;
+    status->aliases = {"status"};
+    status->description = "The enrolled vaults, and whether the cloud covers every key version each one needs.";
+    status->optional = {Optional::ManyToOne("vault", "Only this vault (name or ID)", {"vault"}, "vault"), owner};
+    status->optional_flags = {jsonFlag};
+    status->examples = {{"vh cloud recovery status", "Every vault enrolled from this server."},
+                        {"vh cloud recovery status --vault 12 --json", "One vault, as JSON."}};
+
+    auto unenroll = build(self);
+    unenroll->effect = CommandEffect::Destructive;
+    unenroll->aliases = {"unenroll"};
+    unenroll->description = "Delete the cloud's records of a vault and stop enrolling it. Your own recovery kit or "
+                            "export still recovers it.";
+    unenroll->positionals = {vaultPos};
+    unenroll->optional = {owner};
+    unenroll->examples = {{"vh cloud recovery unenroll 12", "Remove vault 12 from cloud recovery."}};
+
+    cmd->subcommands = {enroll, status, unenroll};
+    cmd->examples = {{"vh cloud recovery enroll 12", "Enroll vault 12."}, {"vh cloud recovery status", "Coverage."}};
+    return cmd;
+}
+
 std::shared_ptr<CommandUsage> unlink(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->effect = CommandEffect::Destructive;
@@ -71,7 +119,8 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
     root->aliases = {"cloud"};
     root->description = "Link this server to a vaulthalla.cloud account (optional; Vaulthalla never needs it). "
                         "vaulthalla.cloud isn't open yet.";
-    root->subcommands = {link(root->weak_from_this()), status(root->weak_from_this()), unlink(root->weak_from_this())};
+    root->subcommands = {link(root->weak_from_this()), status(root->weak_from_this()), unlink(root->weak_from_this()),
+                         recovery(root->weak_from_this())};
     root->examples = {
         {"vh cloud link", "Link this server to your vaulthalla.cloud account."},
         {"vh cloud status", "Show the link."},

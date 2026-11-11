@@ -13,8 +13,11 @@
 
 // KEV1 envelopes for a vault's recovery recipients (design/encryption/03-metadata-recovery.md §5.1): every key
 // version the vault holds, current and future, wrapped to every usable (customer, not revoked) grant and written to
-// the vault's own bucket as `.vaulthalla/key/<kid>` (If-None-Match: *). The bucket is the only place key material
-// goes: no other host, account or service ever receives an envelope or a key (RecoveryNoSilentCustody).
+// the vault's own bucket as `.vaulthalla/key/<kid>` (If-None-Match: *). The bucket is where envelopes are written, and
+// no other host, account or service ever receives a key (RecoveryNoSilentCustody). One exception for envelopes, by
+// the product owner's decision of 2026-11-10 (spec 05 §3, Tier B): `vh cloud recovery enroll` sends a vault's existing
+// envelopes, read byte for byte from this bucket, to the linked Vaulthalla Cloud account, explicitly per vault and
+// revocably (ops::cloud_recovery). They are ciphertext to the customer's own recipients; nothing else sends them.
 //
 // When:
 //   - a rotation (EncryptionManager::prepare_key_rotation, the salvage key, a vault's first key): the new version's

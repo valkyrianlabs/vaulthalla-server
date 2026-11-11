@@ -72,8 +72,8 @@ Recovery Tier A or B (§3.1). Tier C enrollment that lets Valkyrian Labs recover
 
 | | Tier A: Self-Managed Recovery | Tier B: Vaulthalla Cloud Assisted Recovery | Tier C: Vaulthalla Cloud Custodial Recovery |
 |---|---|---|---|
-| Status | **the design in these specs** | **PLANNED / NOT IMPLEMENTED** | **PLANNED / NOT IMPLEMENTED**; needs its own approved security architecture, custody model, threat model, incident response and disclosure process before any implementation |
-| Account / payment | none | a vaulthalla.cloud account, a payment method and a commercial agreement | an account, an active paid arrangement and explicit enrollment in custody |
+| Status | **the design in these specs** | **BEING BUILT, NOT OFFERED**: the product owner approved the customer-key-controlled design on 2026-11-10 (§3.2); vaulthalla.cloud isn't open | **PLANNED / NOT IMPLEMENTED**; needs its own approved security architecture, custody model, threat model, incident response and disclosure process before any implementation |
+| Account / payment | none | a vaulthalla.cloud account; no payment method for the free allowance (10 vaults, product owner 2026-11-06), a commercial agreement beyond it | an account, an active paid arrangement and explicit enrollment in custody |
 | Who holds recovery material | the customer only (kit, exports) | the customer; recovery can stay entirely customer-key-controlled | Valkyrian Labs may hold protected recovery material or take part in threshold recovery |
 | What VL can do | nothing: no unilateral decryption authority | orchestration, encrypted backup management, disaster-recovery assistance | depending on the model, possibly recover plaintext; the exact keys or shares held, what they permit and whether VL can decrypt alone are documented per customer |
 | Depends on VL infrastructure | no | for the assistance only; Tier A recovery stays available | for the custodial path; Tier A recovery stays available |
@@ -93,7 +93,26 @@ Separation rules (binding now, for any future work):
   rotation and, for data it could already read, re-encryption (spec 03 §5.7).
 
 The recipient formats are ready for separately authorized recipients and threshold participants without a
-redesign (spec 03 §5.7), and nothing more: no APIs, tables, billing hooks or scaffolding exist for Tiers B and C.
+redesign (spec 03 §5.7), and nothing more for Tier C: no APIs, tables, billing hooks or scaffolding exist for it.
+
+### 3.2 Tier B as approved (product owner, 2026-11-10)
+
+Customer-key-controlled cloud recovery: the cloud keeps an independent copy of a vault's recovery records and relays
+restores, and can never decrypt them alone. On the server (`vh cloud recovery enroll|status|unenroll`,
+`ops::cloud_recovery`; the cloud's `docs/design/recovery-enrollment.md` and `recovery-restore.md`):
+
+- **Explicit, per vault.** A linked server (`vh cloud link`), a super admin or the export encryption keys permission,
+  the local CLI or a paired device with the vault-bound keys step-up, never the browser or an agent. Linking, an
+  account, a payment or managed storage never enrolls a vault.
+- **What is sent:** the vault's existing KEV1 envelopes, read byte for byte from its bucket and checked against their
+  records, wrapped only to customer-class recipients the customer enrolled; the key checks, attestations, attestation
+  public keys and manifest checkpoint (public, as in a recovery kit). Never a vault key, a seed, a kit or an export.
+  Enrollment is refused unless every needed key version has an envelope.
+- **Revocable.** `vh cloud recovery unenroll` deletes every record the cloud holds for the vault. That doesn't undo
+  past disclosure: a recipient whose key leaked keeps the versions it covered until a rotation (spec 03 §5.7).
+- **Tier A is unchanged.** A vault in cloud recovery is still recovered from the customer's kit or export without
+  Valkyrian Labs, and the claims of §4 still hold (VL receives no vault keys, exports, seeds or kits).
+- **Claims:** until vaulthalla.cloud opens, §6's row for cloud recovery still applies to product text.
 
 ## 4. Conditions behind "operator-blind to Valkyrian Labs" (A′)
 
@@ -161,8 +180,8 @@ backup/restore that doesn't exist).
 
 ## 9. Future workstream: Vaulthalla Cloud Recovery (Tiers B and C)
 
-Not designed here and not to be implemented until a separate design is approved by the product owner. Its scope must
-cover at least:
+Tier B's customer-key-controlled design was approved on 2026-11-10 (§3.2). Tier C is not designed here and not to be
+implemented until a separate design is approved by the product owner. Its scope must cover at least:
 
 - enrollment and disclosure (what is held, what it permits, whether VL can decrypt alone);
 - MFA and step-up before enrolling in or changing custody (#325 framework, #359);

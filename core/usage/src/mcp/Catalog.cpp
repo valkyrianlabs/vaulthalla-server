@@ -82,6 +82,8 @@ const std::vector<Exclusion>& exclusions() {
         // Which vaulthalla.cloud account this server belongs to: never an agent's decision.
         {{"cloud", "link"}, "linking this server to a Vaulthalla Cloud account is decided by a human"},
         {{"cloud", "unlink"}, "unlinking this server from Vaulthalla Cloud is decided by a human"},
+        {{"cloud", "recovery", "enroll"}, "where a vault's recovery records go is decided by a human (D4)"},
+        {{"cloud", "recovery", "unenroll"}, "where a vault's recovery records go is decided by a human (D4)"},
     };
     return list;
 }
