@@ -65,7 +65,7 @@ Everything else here is a proposal.
    and the probe JSON. `bucket_capability_insufficient` (neither conditional PUT nor versioning) refuses. In
    `version_log` mode every manifest write follows spec 06, not only the root: envelopes, segments and the layout hint
    are plain PUTs (§5.2 step 1, §7), and the root is published and settled by rule C1 with `writers = [this node]`
-   (§5.5). On Backblaze, which very likely needs `version_log`, attach depends on spec 06's work items 2-5.
+   (§5.5). On Backblaze, which needs `version_log`, attach depends on spec 06's work items 2-5.
 8. **Preflight.** BYOS: the price budget (`pricing`, operation `remote_attach`): per file one PUT or a multipart
    upload of its VHF1 size, the envelopes, the manifest, two listings and the read-back sample; worst case every
    object read back when the provider's ETags are not MD5s. Unpriced needs `accept_unpriced`. Managed: the vault's

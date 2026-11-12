@@ -164,7 +164,7 @@ exceeds 8,192 entries or 4 MiB of plaintext and merges with a neighbor below 1,0
 5. Garbage collection (janitor, daily): delete segments referenced neither by the current root nor by the previous
    two, and older than 24 h. A reader that loaded an older root a moment ago therefore still finds its segments.
 
-Buckets that don't honor conditional PUT (B2 very likely) publish as [06](06-publish-without-preconditions.md) says.
+Buckets that don't honor conditional PUT (B2, confirmed live 2026-11-12) publish as [06](06-publish-without-preconditions.md) says.
 Amended 2026-11-12 (as proposed in 06 §5.2): there the root is PUT unconditionally, the root's version list decides
 which root won (rule C1), and a loser deletes its version and merges as in step 3; `writers` (§3.2) applies in both
 modes.

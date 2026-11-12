@@ -5,7 +5,7 @@ Depends on [01](01-provider-blind-storage.md) and [03](03-metadata-recovery.md);
 [`design/cloud/mirrors.md`](../cloud/mirrors.md). Normative words: MUST, MUST NOT, SHOULD.
 
 A second publish path for the `opaque_v1` manifest (spec 03 §3) on versioned buckets that reject `If-Match` /
-`If-None-Match` on PUT, as reports say B2 does, for one writer and several, and how the server picks it per bucket. It
+`If-None-Match` on PUT, as B2 does, for one writer and several, and how the server picks it per bucket. It
 changes no VHF1, KEV1, key or segment format and does not design mirrors, which need more (`mirrors.md`).
 
 ## 1. Decisions this spec encodes
@@ -13,8 +13,8 @@ changes no VHF1, KEV1, key or segment format and does not design mirrors, which 
 - **Decided (Cooper, 2026-11-12, plan §3.1):** one bucket per vault; mirrored deployments optional, per vault, solo by
   default, starting simple with the existing conflict resolution. **Earlier (#329, spec 01 §1):** managed storage
   enforces `encrypt_upstream=true` and `opaque_v1`. Everything else here is a proposal; open choices are in §10.
-- **Found, not decided:** B2 very likely answers conditional PUTs with `501 NotImplemented` (a Proxmox Backup Server
-  patch and forum thread, July/August 2025; two GitHub reports, October 2026); not reproduced by us yet.
+- **Found, not decided:** B2 answers conditional PUTs with `501 NotImplemented`. Confirmed live on 2026-11-12
+  (`s3.us-west-004`, both `If-None-Match: *` and `If-Match`, nothing written), after reports from others.
 
 ## 2. Today: what depends on conditional writes
 
@@ -34,7 +34,7 @@ provider restore) and `x-amz-copy-source-if-match` (`s3/version.cpp:365`), are p
 
 ### 2.1 What this means for BYOS vaults on B2 today
 
-If the reports are right, **they are broken** (read from the code, not reproduced). **`opaque_v1`** (every new
+**They are broken.** The 501 is confirmed; what follows is read from the code, not reproduced with a server. **`opaque_v1`** (every new
 encrypting vault since #371): content uploads land, but every publish fails at its first segment PUT, each pass that
 changed anything ends in an error, and **no root is ever written**, so `vh vault recover` has only the blind rebuild
 (names and tree lost, spec 03 §4.3). Envelope PUTs fail: recipient enrollment fails, and so does rotating a vault that
