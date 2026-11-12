@@ -127,7 +127,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
   `x-amz-copy-source-if-match` honoured (412/200). Listings read-after-write and concurrent ordering held in the
   trials of spec 06 §4; a stalled-body PUT got 500 (the publisher treats a 5xx on the root PUT as an unknown
   outcome and looks for its version by hash), lifecycle prefix rules unverified. Live suite `LiveB2.*`
-  (testing.md), not run yet.
+  (testing.md): run once, 2026-11-12, provider behaviour as expected.
 
 - AWS test identity `vaulthalla-test-admin`: S3 admin works; **no SQS permissions** and no
   `s3:GetBucketObjectLockConfiguration` → AWS event delivery untested live. Needed statement: docs/vaults/upstream-buckets.md.

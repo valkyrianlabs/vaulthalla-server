@@ -2,8 +2,9 @@
 
 Status: design for review (managed storage plan of 2026-11-12, workstream E, step 0). Work items 2-5 (§9) are
 implemented: the capability probe (§7), and the `version_log` publish, read, repair, GC and `writers` (§5). Each
-section's "As implemented" note records where the code differs from or adds to the text; §8.3 (live on Backblaze) has
-not run yet.
+section's "As implemented" note records where the code differs from or adds to the text. §8.3's automated suite ran
+once against Backblaze (2026-11-12, us-west-004): every provider behaviour was as expected; the one failure was a wrong
+assertion in the test, fixed since and not rerun.
 Depends on [01](01-provider-blind-storage.md) and [03](03-metadata-recovery.md); used by
 [`design/cloud/mirrors.md`](../cloud/mirrors.md). Normative words: MUST, MUST NOT, SHOULD.
 
@@ -377,7 +378,8 @@ once, so none has a root on top of a displaced one and the repair rule's change 
 test). A head under a crashed loser past
 `expireNoncurrent` fails as `fork` (`ManifestChainVersionLog`). `vault::recover` over a bucket with a losing sibling
 and a marker: `VaultRecoverDb.OnABackblazeLike*`. The one extra LIST: `ManifestPublishVersionLog.ASoloPublish*`.
-§8.3: `LiveB2.TheManifestPublishesAsVersionsOfItsRoot` (opt-in, not run yet) covers the probe, publishes, a blind
+§8.3: `LiveB2.TheManifestPublishesAsVersionsOfItsRoot` (opt-in; run once, 2026-11-12: publishes 2-4 cost 2 PUT and
+1 LIST each, the first 3 PUT and 3 LIST; one wrong test assertion, fixed, not rerun) covers the probe, publishes, a blind
 reload, a repaired sibling, GC of every version and an envelope; items 3-8 are not automated.
 
 **8.3 Live on Backblaze** (one `vh-test-*` bucket per run, deleted afterwards): (1) conditional PUTs (the coordinator's

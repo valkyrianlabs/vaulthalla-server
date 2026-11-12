@@ -552,8 +552,9 @@ Two hard rules, enforced by `tests/helpers/live_bucket.hpp` (the only way a test
   `RunB2BucketEnvironment` deletes every version and the bucket after the last test, also on failure. One
   consolidated test, `TheManifestPublishesAsVersionsOfItsRoot` (probe says version_log; four publishes through the
   real `S3Store` with their request counts; a blind reload; a sibling landed after our PUT and repaired; GC of every
-  version of a collected segment; an envelope written and read back). `LiveB2Guard.*` runs in CI. **Not run yet**
-  (2026-11-12). Run: `(eval "$(grep -E '^export VH_B2_TEST_' .bashrc)"; VH_LIVE_TESTS=1 build/core/vh_unit_tests
+  version of a collected segment; an envelope written and read back). `LiveB2Guard.*` runs in CI. **Run once**
+  (2026-11-12, us-west-004): every provider behaviour as expected, one wrong test assertion (GC reports keys, not sids),
+  fixed and not rerun since. Run: `(eval "$(grep -E '^export VH_B2_TEST_' .bashrc)"; VH_LIVE_TESTS=1 build/core/vh_unit_tests
   --gtest_filter='LiveB2*')`.
 - **Guard:** `LiveBucketGuard.*` (no credentials, no DB; runs in CI) proves the name checks, the orphan selection and
   the guarded provider factory. A violation fails the test even if the code under test swallows the exception.
