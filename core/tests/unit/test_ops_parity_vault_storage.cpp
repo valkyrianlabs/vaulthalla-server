@@ -133,7 +133,7 @@ TEST_F(VaultStorageParityTest, ProbeAgreesOnBothSurfacesForEverySeededAdminRole)
             const auto cliAnswer = json::parse(out);
             EXPECT_EQ(cliAnswer.at("probe").at("capability"), wsAnswer->at("probe").at("capability"));
             EXPECT_EQ(cliAnswer.at("probe").at("capability"), "version_log");
-            EXPECT_EQ(cliAnswer.at("manifest_publishable"), false);
+            EXPECT_EQ(cliAnswer.at("manifest_publishable"), true) << "an opaque vault publishes as versions (spec 06 §5)";
         }
         const auto expected = allowed ? WriteCapability::VersionLog : WriteCapability::Unknown;
         EXPECT_EQ(db::query::vault::BucketCapability::get(viaCli).capability, expected);
