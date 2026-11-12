@@ -1312,7 +1312,10 @@ is deliberately ungated, see Stats below), `conflicts` (sync conflicts, #187: ws
 `vh resolve`, the HTTP `/download/conflict` lane's authorization), `upstream` (S3/R2 bucket administration and event
 sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`), `recovery` (file recovery: ws `recovery.*` / `vault.recovery.*`, `vh snapshot|recovery …`, `vh vault recovery …`; see `recovery.md`), `devices` (paired devices: ws `device.*`, `vh device …`; see "Device listener
 and pairing"), `vault_keys` (key backup and restoration: ws `vault.keys.status|export|export.confirm|import`, `vh vault keys
-status|export|import`; key material only through the CLI or a paired device, D4; see `key-backup.md`). Still per-surface: the ws-only
+status|export|import`; key material only through the CLI or a paired device, D4; see `key-backup.md`), `vault_storage`
+(the bucket write-capability probe, spec 06 §7: ws `vault.storage.probe`, `vh vault storage probe`; the vault's admin
+Edit permission; audited `vault.storage.probe`; agent-available (effect write: it writes and deletes only its own
+`.vaulthalla/probe/` versions, no key material); see `upstream-control-plane.md`). Still per-surface: the ws-only
 pricing preflight/override/notification endpoints, email test-send/history, `vh vault keys inspect|rotate`, sync
 diagnostics, and lifecycle commands (`setup`, `teardown`, `secrets`).
 

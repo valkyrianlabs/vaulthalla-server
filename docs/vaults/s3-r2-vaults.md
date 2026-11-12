@@ -123,6 +123,41 @@ vh vault update archive --encrypt --accept-overwrite-waiver
 
 Read the prompt and understand whether existing objects will remain as-is, be overwritten, or need a planned migration.
 
+## Providers Without Conditional Writes
+
+Some writes must never overwrite another writer's object: the encrypted manifest's root, its segments, recovery
+envelopes and the file index. Vaulthalla sends those with conditional headers (`If-None-Match`, `If-Match`), which AWS
+S3 and Cloudflare R2 honour. Some S3-compatible providers don't: **Backblaze B2 answers them with `501 NotImplemented`**.
+
+Vaulthalla therefore probes each bucket once, when a vault is created on it or moved to it (an older vault is probed
+on its first use), and records what it supports:
+
+```bash
+vh vault storage probe <vault>
+```
+
+The probe writes a few bytes under `.vaulthalla/probe/` (about ten requests) and deletes exactly the versions it
+wrote. It reports whether conditional writes are honoured, rejected or silently ignored, whether the bucket keeps object
+versions, and whether a read pinned to an ETag (`If-Match` on GET) is honoured.
+
+On a bucket without conditional writes (Backblaze B2):
+
+| Vault | What happens |
+|---|---|
+| Without upstream encryption (`--no-encrypt`) | Works. Its index is written without conditions; one server writes it. |
+| Encrypting, created before release 1.22 (`path_v0`) | Works, as before: its index is written without conditions. Moving it to opaque storage (`vh vault migrate-layout`) is refused on this bucket for now. |
+| Encrypting, opaque storage (`opaque_v1`), new | Not supported yet: `vh vault create` refuses it with `conditional_writes_unsupported`. |
+| Encrypting, opaque storage, existing | Files keep uploading, but the encrypted manifest that holds their names and folders can't be written there yet: the vault's sync stops with `manifest_publish_unsupported` and `vh status` lists it as degraded. Its bucket holds only encrypted file contents, so a restore from it recovers contents without names. |
+
+Recovery recipients can be enrolled on any of them: envelopes are named by their own hash, so they are written without
+conditions.
+
+If a bucket that was probed as supporting conditional writes later refuses one (the endpoint, a proxy in front of
+it or the provider changed), Vaulthalla never falls back to writing without the condition: the vault's sync stops with
+`bucket_capability_changed`, the operators are notified once, and it stays stopped until you check the endpoint and
+run `vh vault storage probe <vault>` again. Changing a credential's provider or endpoint (`vh api-key update`) makes
+every vault using it probe again.
+
 ## Sync Strategies
 
 | Strategy | Behavior |

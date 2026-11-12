@@ -439,6 +439,13 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   that every chain error/warning is one `sync::manifest` knows). `ManifestDbTest.*` (`test_manifest_db.cpp`,
   db-only) compares DB → collect → publish → load → a scratch schema with an independent SQL projection of the live
   tables, and covers `remote_manifest_state`, the refused-root alert and the opaque_v1 `CloudEngine` path.
+- Bucket write capability (spec 06 §7, `test_bucket_capability.cpp`): `BucketProbe.*` (DB-free, every verdict row on
+  the versioned fake: `conditionalPuts` Supported/Reject501/Ignore, `ignoreGetIfMatch`, versioning modes, the opaque
+  request rules, refused cleanup, a failed probe) and `BucketCapabilityDbTest.*` (db: stored verdict, bucket change,
+  the path_v0 index on a Reject501 bucket (regression), an opaque_v1 vault's stall and health entry, a conditional
+  bucket that starts refusing, lazy probing, envelopes, create refusal). `ManifestStore.*` and
+  `ManifestPublish.*Refuses*|*RejectsConditions*` (`test_manifest.cpp`) cover the Store seam; CLI ↔ ws:
+  `VaultStorageParityTest.*` (`test_ops_parity_vault_storage.cpp`, db-only).
 - opaque_v1 data plane (#369, `test_opaque_layout.cpp`): `OpaqueObjectKeys.*`, `OpaqueRequestPolicy.*` and
   `OpaqueMultipart.*` are DB-free (the 60 GiB object is a sparse file behind a part-counting controller: ~20 s);
   `OpaqueLayoutTest.*` (db) makes a vault opaque_v1 before it holds anything (test mode; `UPDATE s3 SET
