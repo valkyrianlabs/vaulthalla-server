@@ -28,6 +28,10 @@ struct VaultKeys {
     static json layoutStatus(const json& payload, const std::shared_ptr<Session>& session);
     static json layoutMigrate(const json& payload, const std::shared_ptr<Session>& session);
     static json layoutCleanup(const json& payload, const std::shared_ptr<Session>& session);
+    // vault.storage.probe (ops::vault_storage; design/encryption/06-publish-without-preconditions.md §7): what the
+    // vault's bucket supports for writes that must never overwrite, probed now and recorded. Any signed-in session
+    // with the vault's admin Edit permission.
+    static json storageProbe(const json& payload, const std::shared_ptr<Session>& session);
 };
 
 }

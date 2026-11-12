@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '871cc02a52740f5112fff169444a8af57b04bbdeb647b5fcb7823b223a0a7969'
+export const WS_CONTRACT_HASH = '76118089af9b2047f60ce62924de694bbd47965b6a52ad314e319473b828c36b'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'e150b9c0831c4974a8444a38c09d7e6adf54b6783972a337e2ede83f4f238003'
+export const WS_MODELS_HASH = '4c37c5aad2c8dbf96a9172dbdd9c7a5b2ac1cbb4a029c6fb5c78b505903dae83'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -2061,6 +2061,12 @@ export interface WsModels {
       detail: string
     }[]
     vaults_recovery_material_missing?: { vault_id: number; vault_name: string; reason: 'recovery_material_missing'; detail: string }[]
+    vaults_manifest_unpublishable?: {
+      vault_id: number
+      vault_name: string
+      reason: 'conditional_writes_unsupported' | 'bucket_capability_insufficient' | 'bucket_capability_changed'
+      detail: string
+    }[]
     legacy_content?: {
       remaining: boolean
       path_v0_vaults: number[]
@@ -3058,6 +3064,29 @@ export interface WsModels {
    * stats.vault: capacity plus the vault engine's latest sync run (core/src/vault/model/Stat.cpp to_json).
    */
   'VaultStat': { capacity: WsModels['VaultCapacity']; latest_sync_event: WsModels['SyncEvent'] | null }
+  /**
+   * ops::vault_storage::toJson(ProbeAnswer): what the vault's bucket supports for writes that must never
+   * overwrite (design/encryption/06-publish-without-preconditions.md §7), probed now and recorded.
+   */
+  'VaultStorageProbe': {
+    vault_id: number
+    vault_name: string
+    layout: 'transparent' | 'path_v0' | 'opaque_v1'
+    previous: 'unknown' | 'conditional' | 'version_log' | 'insufficient'
+    previously_changed: boolean
+    manifest_publishable: boolean
+    probe: {
+      capability: 'conditional' | 'version_log' | 'insufficient'
+      conditional_put: 'supported' | 'rejected' | 'ignored' | 'inconsistent'
+      versioning: boolean
+      get_if_match: boolean
+      md5_etags: boolean
+      reason: string
+      steps: { step: string; expected: 'ok' | 'precondition_failed'; got: string }[]
+      leftover_versions: number
+      probed_at: number
+    }
+  }
   /**
    * A vault's sync health (core/src/stats/model/VaultSyncHealth.cpp to_json).
    */
@@ -6101,7 +6130,10 @@ export interface WsContract {
    * backing directory. S3 vaults also need api_key_id and bucket. A refusal with data.code
    * 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the
    * person accepts. With provision (#237) the daemon creates a managed bucket or adopts an existing one;
-   * 'upstream_adoption' asks for provision.accept_adoption.
+   * 'upstream_adoption' asks for provision.accept_adoption. The bucket's write capability is probed first
+   * (design/encryption/06-publish-without-preconditions.md §7): a vault that encrypts upstream is refused
+   * with 'conditional_writes_unsupported' on a bucket without conditional writes (e.g. Backblaze B2) and
+   * 'bucket_capability_insufficient' on one that keeps no versions either.
    */
   'storage.vault.add': {
     payload: {
@@ -6214,7 +6246,9 @@ export interface WsContract {
    * Patch a vault (absent or null members are unchanged; a vault's type never changes). Owner reassignment
    * also needs Create for the new owner, a key change needs Consume on the key, sync settings need vault
    * sync.config.edit. A refusal with data.code 'encryption_waiver' means the bucket already holds data:
-   * resend with accept_encryption_waiver once the person accepts.
+   * resend with accept_encryption_waiver once the person accepts. A new bucket or key is probed first: an
+   * opaque_v1 vault is refused with 'conditional_writes_unsupported' or 'bucket_capability_insufficient' as
+   * storage.vault.add says.
    */
   'storage.vault.update': {
     payload: {
@@ -6818,6 +6852,36 @@ export interface WsContract {
     }
     response: { status: WsModels['RecoveryStatus'] }
   }
+  /**
+   * Probe what the vault's bucket supports for writes that must never overwrite another writer's object
+   * (design/encryption/06-publish-without-preconditions.md §7): conditional PUT honoured, rejected or
+   * ignored, object versions, GET If-Match. About ten requests under .vaulthalla/probe/, whose versions are
+   * deleted by id afterwards. Records the verdict, which replaces a bucket_capability_changed mark. The
+   * vault's admin Edit permission; refused (denied) on a protected bucket, bucket_probe_failed when the
+   * bucket can't be reached.
+   */
+  'vault.storage.probe': {
+    payload: { vault_id: number }
+    response: {
+      vault_id: number
+      vault_name: string
+      layout: 'transparent' | 'path_v0' | 'opaque_v1'
+      previous: 'unknown' | 'conditional' | 'version_log' | 'insufficient'
+      previously_changed: boolean
+      manifest_publishable: boolean
+      probe: {
+        capability: 'conditional' | 'version_log' | 'insufficient'
+        conditional_put: 'supported' | 'rejected' | 'ignored' | 'inconsistent'
+        versioning: boolean
+        get_if_match: boolean
+        md5_etags: boolean
+        reason: string
+        steps: { step: string; expected: 'ok' | 'precondition_failed'; got: string }[]
+        leftover_versions: number
+        probed_at: number
+      }
+    }
+  }
 }
 
 export type WsContractCommand = keyof WsContract
@@ -7095,6 +7159,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'vault.recovery.status',
   'vault.recovery.suspend',
   'vault.recovery.update',
+  'vault.storage.probe',
 ]
 
 // The NeedsConfirmation refusals per command: data.code, and the payload member (dotted path) a resend sets to
@@ -7481,4 +7546,5 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'vault.recovery.status': 60000,
   'vault.recovery.suspend': 60000,
   'vault.recovery.update': 180000,
+  'vault.storage.probe': 60000,
 }

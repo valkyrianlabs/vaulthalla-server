@@ -10,6 +10,7 @@
 #include "ops/VaultKeys.hpp"
 #include "ops/VaultLayout.hpp"
 #include "ops/VaultRecover.hpp"
+#include "ops/VaultStorage.hpp"
 #include "vault/KeyAttestation.hpp"
 
 #include <gtest/gtest.h>
@@ -290,6 +291,22 @@ void checkVaultKeyModels(Checker& c) {
             "VaultRecoveryRecipientAdd", "vault.keys.recipients.add");
     c.check(rr::toJson(rr::RevokeResult{.recipient = t::recipient(true), .recovery = t::missingMaterial()}),
             "VaultRecoveryRecipientRevoke", "vault.keys.recipients.revoke");
+
+    // Spec 06 §7: the bucket capability probe.
+    namespace vs = ops::vault_storage;
+    vs::ProbeAnswer probed{.vault_id = 3, .vault_name = "archive", .layout = "opaque_v1",
+                           .previous = storage::s3::WriteCapability::Unknown, .previously_changed = true, .probe = {},
+                           .manifest_publishable = false};
+    probed.probe.capability = storage::s3::WriteCapability::VersionLog;
+    probed.probe.conditional_put = "rejected";
+    probed.probe.versioning = true;
+    probed.probe.get_if_match = true;
+    probed.probe.md5_etags = true;
+    probed.probe.reason = "the bucket rejects conditional writes (not implemented) and keeps object versions";
+    probed.probe.steps = {{"put_if_none_match_absent", "ok", "not_implemented"}};
+    probed.probe.leftover_versions = 0;
+    probed.probe.probed_at = 1'700'000'000;
+    c.check(vs::toJson(probed), "VaultStorageProbe", "vault.storage.probe (Backblaze B2)");
 
     // #373: the bucket layout migration.
     namespace vl = ops::vault_layout;

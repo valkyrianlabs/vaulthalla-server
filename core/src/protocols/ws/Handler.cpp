@@ -159,6 +159,8 @@ void Handler::registerVaultKeyHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("vault.layout.status", &handler::VaultKeys::layoutStatus);
     r->registerPayload("vault.layout.migrate", &handler::VaultKeys::layoutMigrate);
     r->registerPayload("vault.layout.cleanup", &handler::VaultKeys::layoutCleanup);
+    // Spec 06 §7: what the vault's bucket supports for writes that must never overwrite (probed now, recorded).
+    r->registerPayload("vault.storage.probe", &handler::VaultKeys::storageProbe);
 }
 
 void Handler::registerMetaHandlers(const std::shared_ptr<Router>& r) {
