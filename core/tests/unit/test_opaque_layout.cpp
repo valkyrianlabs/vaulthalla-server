@@ -83,8 +83,10 @@ TEST(OpaqueObjectKeys, KeysAreBuiltParsedAndClassifiedInOnePlace) {
     EXPECT_EQ(keys::classify(".vaulthalla/key/" + crypto::id::toBase32(uid)), keys::KeyClass::Metadata);
     const auto envelopeKey = vl::keykit::kev1::objectKey(vl::keykit::kev1::kid(bytes("any envelope bytes")));
     EXPECT_EQ(keys::classify(envelopeKey), keys::KeyClass::Metadata) << "KEV1 envelopes (#370) are allowlisted";
+    EXPECT_EQ(keys::classify(".vaulthalla/probe/" + crypto::id::toBase32(uid)), keys::KeyClass::Metadata)
+        << "the bucket capability probe's object (spec 06 §7)";
     for (const auto* k : {"Reports/Q3 board pack.pdf", ".vaulthalla/index-v1.json", ".vaulthalla/seg/nope", "o/",
-                          "o/x/y", "/o/abc"})
+                          "o/x/y", "/o/abc", ".vaulthalla/probe/Reports"})
         EXPECT_EQ(keys::classify(k), keys::KeyClass::Foreign) << k;
 
     for (const auto* p : {"", "o/", ".vaulthalla/", ".vaulthalla/seg/"}) EXPECT_TRUE(keys::isAllowedListPrefix(p)) << p;

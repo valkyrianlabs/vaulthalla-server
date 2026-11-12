@@ -13,6 +13,9 @@
 //                   test_manifest_db.cpp).
 // ManifestReplay*   an older complete state authenticates; without a checkpoint the report says "freshness
 //                   unverified"; with one, older states are refused (spec 03 §4.5).
+// ManifestStore*    the Store seam on buckets without conditional writes (design/encryption/
+//                   06-publish-without-preconditions.md §7): plain PUTs with version ids, putOnce by mode, versions
+//                   with ETags in provider order, DELETE of one version; a refused condition is typed.
 
 #include "../helpers/bytes.hpp"
 #include "crypto/SecretKey.hpp"
@@ -648,6 +651,68 @@ TEST(ManifestPublish, AConflictingRootThatForksIsNeverOverwritten) {
     }
     EXPECT_EQ(rootBytesSha(*bucket), before);
     EXPECT_EQ(*a.known, known1);
+}
+
+// ── ManifestStore: buckets without conditional writes (spec 06 §7) ──────────────────────────────────────────────
+
+TEST(ManifestStore, PutOnceSendsAConditionOnlyWhereTheBucketHonoursIt) {
+    using storage::s3::WriteCapability;
+    const auto bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
+    const Bytes body{1, 2, 3};
+
+    // Conditional (and Unknown: never probed, no silent downgrade): If-None-Match: *, so an existing name refuses.
+    for (const auto mode : {WriteCapability::Conditional, WriteCapability::Unknown}) {
+        S3Store store(bucket, mode);
+        const auto key = ".vaulthalla/seg/" + uidText(uidOf(static_cast<uint8_t>(mode), 1));
+        (void)store.putOnce(key, body);
+        EXPECT_THROW((void)store.putOnce(key, body), PreconditionFailed) << storage::s3::to_string(mode);
+    }
+
+    // Backblaze B2: a condition is refused outright (typed, nothing written)...
+    bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+    S3Store unprobed(bucket);
+    const auto key = std::string(".vaulthalla/key/") + uidText(uidOf(9, 9));
+    EXPECT_THROW((void)unprobed.putIfAbsent(key, body), ConditionsUnsupported);
+    EXPECT_TRUE(bucket->history(key).empty()) << "a refused condition writes nothing";
+
+    // ...and a store whose bucket was probed version_log writes plainly, with the version id.
+    S3Store plain(bucket, WriteCapability::VersionLog);
+    EXPECT_EQ(plain.mode(), WriteCapability::VersionLog);
+    (void)plain.putOnce(key, body);
+    const auto second = plain.put(key, Bytes{4, 5});
+    ASSERT_TRUE(second.version_id);
+    EXPECT_FALSE(second.etag.empty());
+
+    // Versions in provider order, newest first, with their ETags and the current one marked.
+    const auto versions = plain.versions(key);
+    ASSERT_EQ(versions.size(), 2u);
+    EXPECT_EQ(versions.front().version_id, *second.version_id);
+    EXPECT_EQ(versions.front().etag, second.etag);
+    EXPECT_TRUE(versions.front().is_latest);
+    EXPECT_FALSE(versions.back().is_latest);
+
+    // DELETE of one version: exactly that one goes, the previous one is current again.
+    plain.removeVersion(key, *second.version_id);
+    ASSERT_EQ(plain.versions(key).size(), 1u);
+    EXPECT_EQ(bucket->current(key)->body, body);
+}
+
+TEST(ManifestStore, TheBaseStoreRefusesPlainWritesItCannotMake) {
+    Writer w;
+    RecordingStore rec(*w.store);
+    EXPECT_THROW((void)rec.put("k", {}), std::logic_error);
+    EXPECT_THROW(rec.removeVersion("k", "v"), std::logic_error);
+    EXPECT_EQ(rec.mode(), storage::s3::WriteCapability::Unknown);
+}
+
+TEST(ManifestPublish, ABucketThatRejectsConditionsFailsTypedWithoutAPartialPublish) {
+    // The failure every opaque_v1 vault on Backblaze B2 hit before spec 06: the first segment PUT answered 501. It is
+    // now a typed refusal (ConditionsUnsupported, which the engine turns into a stall and a re-probe), and the bucket
+    // holds nothing of the publish.
+    Writer w;
+    w.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+    EXPECT_THROW((void)w.publish(smallVault(3)), ConditionsUnsupported);
+    EXPECT_TRUE(w.bucket->keys().empty());
 }
 
 TEST(ManifestPublish, GcKeepsTheLastThreeRootsSegmentsAndYoungOnes) {

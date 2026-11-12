@@ -15,6 +15,8 @@
 //   .vaulthalla/root             the manifest root
 //   .vaulthalla/seg/<sid>        a manifest segment (or snapshot segment)
 //   .vaulthalla/key/<kid>        a key envelope (KEV1, #370)
+//   .vaulthalla/probe/<uid>      the bucket capability probe's object, deleted by version id once it has answered
+//                                (storage/s3/Capability.hpp; design/encryption/06-publish-without-preconditions.md §7)
 //
 // Uids are lower-case Crockford base32 (crypto::id::toBase32), 26 symbols, one spelling per id. Anything else in an
 // opaque_v1 bucket is a foreign object (spec 01 §4.4). Under path_v0 and transparent the key is the vault path
@@ -33,7 +35,7 @@ inline constexpr std::string_view kImportedRoot = "/Imported";
 
 enum class KeyClass {
     Content,    // o/<uid>
-    Metadata,   // .vaulthalla/layout.json, root, seg/<sid>, key/<kid>
+    Metadata,   // .vaulthalla/layout.json, root, seg/<sid>, key/<kid>, probe/<uid>
     Foreign,    // anything else
 };
 [[nodiscard]] KeyClass classify(std::string_view key);

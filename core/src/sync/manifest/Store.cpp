@@ -27,7 +27,21 @@ std::optional<std::time_t> parseListTime(const std::string& value) {
 
 }
 
-S3Store::S3Store(std::shared_ptr<storage::s3::Controller> s3) : s3_(std::move(s3)) {
+PutResult ObjectStore::put(const std::string& key, const std::vector<uint8_t>&) {
+    throw std::logic_error("this store can't write " + key + " without a precondition");
+}
+
+void ObjectStore::removeVersion(const std::string& key, const std::string& versionId) {
+    throw std::logic_error("this store can't delete version " + versionId + " of " + key);
+}
+
+std::string ObjectStore::putOnce(const std::string& key, const std::vector<uint8_t>& bytes) {
+    if (storage::s3::sendsPreconditions(mode())) return putIfAbsent(key, bytes);
+    return put(key, bytes).etag;
+}
+
+S3Store::S3Store(std::shared_ptr<storage::s3::Controller> s3, const storage::s3::WriteCapability mode)
+    : s3_(std::move(s3)), mode_(mode) {
     if (!s3_) throw std::invalid_argument("manifest::S3Store needs a controller");
 }
 
@@ -81,8 +95,20 @@ std::string S3Store::put(const std::string& key, const std::vector<uint8_t>& byt
         s3_->uploadBufferWithMetadataConditional(key, bytes, storage::s3::RequestOptions{}, ifMatch, ifNoneMatch);
     } catch (const storage::s3::ConditionalRequestFailed& e) {
         throw PreconditionFailed(e.what());
+    } catch (const storage::s3::PreconditionsUnsupported& e) {
+        throw ConditionsUnsupported(e.what());
     }
     return storage::s3::Controller::lastPutOutcome().etag;
+}
+
+PutResult S3Store::put(const std::string& key, const std::vector<uint8_t>& bytes) {
+    s3_->uploadBufferWithMetadataConditional(key, bytes, storage::s3::RequestOptions{}, std::nullopt, std::nullopt);
+    const auto outcome = storage::s3::Controller::lastPutOutcome();
+    return {outcome.etag, outcome.version_id};
+}
+
+void S3Store::removeVersion(const std::string& key, const std::string& versionId) {
+    s3_->deleteObjectVersion(key, versionId);
 }
 
 std::string S3Store::putIfAbsent(const std::string& key, const std::vector<uint8_t>& bytes) {
@@ -120,7 +146,7 @@ std::vector<StoredVersion> S3Store::versions(const std::string& key) {
         const auto page = s3_->listObjectVersionsPage(key, keyMarker, versionMarker);
         for (const auto& v : page.versions) {
             if (v.key != key) continue;
-            out.push_back({v.version_id, v.size, v.last_modified, v.delete_marker});
+            out.push_back({v.version_id, v.size, v.last_modified, v.delete_marker, v.etag, v.is_latest});
         }
         if (!page.truncated) break;
         keyMarker = page.next_key_marker;

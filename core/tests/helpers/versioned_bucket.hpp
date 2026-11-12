@@ -41,6 +41,10 @@
 //                                  unversioned DELETE of the key) is refused with 403 AccessDenied until the retain-until
 //                                  date (bucket clock) passes or the hold is released. Governance bypass doesn't exist.
 //   refuseDeletes                  every DELETE is refused (403 AccessDenied), as a key without s3:DeleteObjectVersion.
+//   conditionalPuts                Supported (default), Reject501 (Backblaze B2: a PUT with If-Match / If-None-Match
+//                                  throws PreconditionsUnsupported and writes nothing) or Ignore (the conditions are
+//                                  silently dropped).
+//   ignoreGetIfMatch               a GET's If-Match is not enforced.
 //   setNow(t) / advance(s)         the clock writes stamp LastModified with; every mutation then ticks it by 1 s
 //                                  (autoTick) so versions have strictly increasing timestamps.
 // Seeding and inspection never meter: seed(), seedDeleteMarker(), purgeVersion(), history(), current(), version().
@@ -175,6 +179,12 @@ public:
     std::atomic<bool> failPuts{false};     // uploads throw before metering
     std::atomic<bool> md5Etags{false};     // S3 MD5 ETags (see the header comment)
     std::atomic<bool> refuseDeletes{false};  // every DELETE answers 403 AccessDenied
+    // How a PUT carrying If-Match / If-None-Match is answered (design/encryption/06-publish-without-preconditions.md):
+    // Supported evaluates it (412 when it doesn't hold, as S3), Reject501 refuses to evaluate it and writes nothing
+    // (Backblaze B2: 501 NotImplemented, storage::s3::PreconditionsUnsupported), Ignore writes as if it weren't there.
+    enum class ConditionalPuts { Supported, Reject501, Ignore };
+    std::atomic<ConditionalPuts> conditionalPuts{ConditionalPuts::Supported};
+    std::atomic<bool> ignoreGetIfMatch{false};  // GET If-Match is not enforced (a provider that drops the header)
 
     // Object Lock retention of one version (mode GOVERNANCE or COMPLIANCE) until `until` (bucket clock).
     void lockVersion(const std::string& key, const std::string& versionId, const std::string& mode,
@@ -730,7 +740,8 @@ protected:
                 response.headers += "x-amz-delete-marker: true\r\n";
                 return response;
             }
-            if (const auto it = extraHeaders.find("if-match"); it != extraHeaders.end() && it->second != v->etag)
+            if (const auto it = extraHeaders.find("if-match");
+                it != extraHeaders.end() && it->second != v->etag && !ignoreGetIfMatch.load())
                 return deliver(412, "<Error><Code>PreconditionFailed</Code></Error>", onBody);
             etag = v->etag;
             bytes = v->body;
@@ -986,10 +997,16 @@ private:
         ++counters_.put;
         const auto* latest = latestLocked(key);
         const bool exists = latest && !latest->delete_marker;
-        if (ifMatch && (!exists || latest->etag != *ifMatch))
-            throw storage::s3::ConditionalRequestFailed("Conditional S3 PUT failed (HTTP 412)");
-        if (ifNoneMatch && *ifNoneMatch == "*" && exists)
-            throw storage::s3::ConditionalRequestFailed("Conditional S3 PUT failed (HTTP 412)");
+        const auto conditional = conditionalPuts.load();
+        if ((ifMatch || ifNoneMatch) && conditional == ConditionalPuts::Reject501)
+            throw storage::s3::PreconditionsUnsupported("the bucket does not support conditional writes (HTTP 501 "
+                                                        "NotImplemented, test)");
+        if (conditional == ConditionalPuts::Supported) {
+            if (ifMatch && (!exists || latest->etag != *ifMatch))
+                throw storage::s3::ConditionalRequestFailed("Conditional S3 PUT failed (HTTP 412)");
+            if (ifNoneMatch && *ifNoneMatch == "*" && exists)
+                throw storage::s3::ConditionalRequestFailed("Conditional S3 PUT failed (HTTP 412)");
+        }
         Version v;
         v.body = std::move(body);
         v.etag = etagOf(v.body);

@@ -237,6 +237,13 @@ public:
     [[nodiscard]] std::vector<sync::manifest::ListedObject> list(const std::string& prefix) override;
     [[nodiscard]] std::vector<sync::manifest::StoredVersion> versions(const std::string& key) override;
     void remove(const std::string& key) override { inner_->remove(key); }
+    sync::manifest::PutResult put(const std::string& key, const std::vector<uint8_t>& bytes) override {
+        return inner_->put(key, bytes);
+    }
+    void removeVersion(const std::string& key, const std::string& versionId) override {
+        inner_->removeVersion(key, versionId);
+    }
+    [[nodiscard]] storage::s3::WriteCapability mode() const override { return inner_->mode(); }
 
 private:
     void count(const std::string& key, uint64_t bytes, bool ranged);
