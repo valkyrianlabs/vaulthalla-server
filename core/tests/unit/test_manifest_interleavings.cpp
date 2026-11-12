@@ -354,6 +354,8 @@ struct RunReport {
     bool fault_fired{false};
     bool order_broken{false};               // the true chain lost an element (A4 broken)
     bool settled_displaced{false};          // a root a writer settled or the reader adopted left the chain
+    unsigned forks{0}, order_violations{0}; // writers (and the reader) refused so at the end
+    bool deleted_canonical{false};          // repair or GC deleted a version that had been canonical
     bool order_violation_seen{false};
     bool reverted_by_restart{false};
 };
@@ -574,8 +576,10 @@ private:
         // I6 rests on A3 and A4: with versions ordered by their start, the writer whose stalled PUT displaced a settled
         // root repairs that root away as a stray above its head, and the displaced writer sees a fork (below).
         for (const auto& id : world_.deleted)
-            if (everCanonical_.contains(id) && !sc_.order_by_start)
-                violation("I6: deleted a version that was canonical: " + id);
+            if (everCanonical_.contains(id)) {
+                if (sc_.order_by_start) report_.deleted_canonical = true;
+                else violation("I6: deleted a version that was canonical: " + id);
+            }
         if (!brokenOrder())
             for (const auto& w : writers_)
                 for (const auto& id : w.recorded)
@@ -618,8 +622,11 @@ private:
                 w.refused = e.code();
             }
         }
-        for (const auto& w : writers_)
+        for (const auto& w : writers_) {
             if (displacedRefusal(w.refused)) report_.order_violation_seen = true;
+            if (w.refused == ChainError::Fork) ++report_.forks;
+            if (w.refused == ChainError::OrderViolation) ++report_.order_violations;
+        }
         bool readerDisplaced = false;
         if (reader_.result && !reader_.refused) {
             LoadOptions o;
@@ -629,6 +636,8 @@ private:
                 (void)load(*store, world_.vault, world_.lookup(), o);
             } catch (const ChainRejected& e) {
                 readerDisplaced = displacedRefusal(e.code());
+                if (e.code() == ChainError::Fork) ++report_.forks;
+                if (e.code() == ChainError::OrderViolation) ++report_.order_violations;
                 if (!readerDisplaced) reader_.refused = e.code();
             }
         }
@@ -701,6 +710,7 @@ struct Explored {
     unsigned with_fault{0};
     unsigned order_broken{0};
     unsigned settled_displaced{0};
+    unsigned forks{0}, order_violations{0}, deleted_canonical{0};
     unsigned order_violation{0};
     unsigned reverted_by_restart{0};
     bool nondeterministic{false};
@@ -714,6 +724,9 @@ void tally(Explored& e, const RunReport& r, const std::string& label) {
     if (r.fault_fired) ++e.with_fault;
     if (r.order_broken) ++e.order_broken;
     if (r.settled_displaced) ++e.settled_displaced;
+    e.forks += r.forks;
+    e.order_violations += r.order_violations;
+    if (r.deleted_canonical) ++e.deleted_canonical;
     if (r.order_violation_seen) ++e.order_violation;
     if (r.reverted_by_restart) ++e.reverted_by_restart;
     if (!r.violations.empty() && e.first_violations.size() < 5)
@@ -835,6 +848,9 @@ TEST(ManifestVersionLogBrokenOrder, VersionsOrderedByTheirStartKeepI3OrEndInOrde
     RecordProperty("order_broken", static_cast<int>(e.order_broken));
     RecordProperty("settled_displaced", static_cast<int>(e.settled_displaced));
     RecordProperty("refused", static_cast<int>(e.order_violation));
+    RecordProperty("fork_refusals", static_cast<int>(e.forks));
+    RecordProperty("order_violation_refusals", static_cast<int>(e.order_violations));
+    RecordProperty("runs_deleting_a_once_canonical_root", static_cast<int>(e.deleted_canonical));
 }
 
 }

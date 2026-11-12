@@ -97,6 +97,10 @@ PublishReport Service::publishLocked(const Content& produced) {
         if (!report.repaired.empty())
             log::Registry::cloud()->info("[manifest] Vault {}: deleted {} stray root version(s) above the head",
                                          vaultId_, report.repaired.size());
+        if (!report.ahead.empty())
+            log::Registry::cloud()->warn("[manifest] Vault {}: {} authentic root version(s) of a higher epoch sit above "
+                                         "the root just published; left in place, the next read judges them",
+                                         vaultId_, report.ahead.size());
         if (report.gap)
             log::Registry::cloud()->warn("[manifest] Vault {}: another writer published several roots since epoch {} "
                                          "(gap); merged and continued at epoch {}",

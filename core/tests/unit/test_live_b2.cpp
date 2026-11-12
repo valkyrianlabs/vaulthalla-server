@@ -258,7 +258,7 @@ TEST_F(LiveB2, TheManifestPublishesAsVersionsOfItsRoot) {
         const mf::UnreferencedClock clock{.first = [&](const std::string&) { return now - 2 * 24 * 60 * 60; },
                                           .forget = [](const std::string&) {}};
         const auto report = mf::collectGarbageVersionLog(*s3, retained, now, clock);
-        EXPECT_TRUE(std::ranges::find(report.deleted, collected) != report.deleted.end());
+        EXPECT_TRUE(std::ranges::find(report.deleted, segKey) != report.deleted.end()) << "the report names keys";
         EXPECT_TRUE(s3->versions(segKey).empty()) << "every version deleted by id, no hide marker left";
         for (const auto& sid : retained) EXPECT_TRUE(s3->get(mf::segmentKey(sid), std::nullopt)) << sid;
         mf::LoadOptions o;

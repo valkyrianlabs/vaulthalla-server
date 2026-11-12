@@ -16,8 +16,13 @@
 //
 //   C1   succ(X) is the earliest version (provider order) whose root has epoch X.epoch + 1 and prev = SHA-256(X).
 //        From an anchor A the canonical chain is A, succ(A), succ(succ(A)), ...; its last element is the head. The
-//        anchor is the settled known root, a customer checkpoint, or with neither the end of the longest chain (ties:
-//        the earliest). Every other version is a sibling, a branch, a duplicate or stale, and is ignored.
+//        anchor is the settled known root, a customer checkpoint, or with neither the chain whose head has the highest
+//        epoch (ties: the longer chain, then the earliest head). Every other version is a sibling, a branch, a
+//        duplicate or stale, and is ignored.
+//
+//   Repair never deletes an authentic root whose epoch is above the head's, nor one such a root builds on: a chain
+//   from the anchor that stops below one is incomplete (a version missing in between, or a broken provider order), and the reader falls back to the
+//   anchorless choice instead (Reader.cpp).
 //
 // Opening a version is one GET by version id; a version's bytes never change, so opened roots are cached by id
 // (RootCache, kept by the caller across publishes).
@@ -76,14 +81,20 @@ struct Walk {
     std::size_t anchor{};
     std::size_t head{};
     std::vector<std::size_t> chain;    // anchor, succ(anchor), ..., head (indexes into the log, ascending)
-    std::vector<std::size_t> strays;   // versions and delete markers newer than the head that are not on the chain
+    // Versions newer than the head that are not on the chain and repair may delete: delete markers, versions that
+    // don't authenticate, authentic roots whose epoch is at most the head's and that no kept root builds on.
+    std::vector<std::size_t> strays;
+    // Authentic roots newer than the head with a higher epoch than the head's, and the roots those build on: never
+    // deleted. Their presence means the chain from this anchor is incomplete.
+    std::vector<std::size_t> ahead;
 };
 
 // Rule C1 from the anchor at `anchor` (which must open).
 [[nodiscard]] Walk walk(RootLog& log, std::size_t anchor);
 
-// With no anchor: the end of the longest chain among the authentic versions (ties: the earliest end), walked from
-// its first root. nullopt when no version authenticates.
+// With no anchor: among the chains of the authentic versions (each walked from a version that is no one's earliest
+// successor) the one whose head has the highest epoch; ties: the longer chain, then the earliest head. Every authentic
+// root lies on some chain, so nothing authentic is ahead of that head. nullopt when no version authenticates.
 [[nodiscard]] std::optional<Walk> walkBlind(RootLog& log);
 
 // succ of the root (epoch, sha): the earliest version at index >= from whose root has epoch + 1 and prev = sha. With

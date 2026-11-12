@@ -97,15 +97,21 @@ stalled PUT with `500 InternalError`), and A6 (the run stopped before the lifecy
 open are skipped). For a root *X*, **succ(X)** is the earliest version in *L* with `epoch = X.epoch + 1` and
 `prev = SHA-256(X)`. From an anchor *A* the **canonical chain** is *A*, succ(*A*), succ(succ(*A*)), …, ending at the
 **head**. The anchor is the settled known root (normal operation), the customer checkpoint (restore), or with neither
-the end of the longest chain in *L* (ties: earliest). Any other version is a **sibling** (canonical `prev`, not
+the head of the chain in *L* whose head has the **highest epoch** (ties: the longer chain, then the earliest head;
+in honest operation that is the longest chain, since siblings are chains of one at epochs no higher than the head's).
+A chain from an anchor is **incomplete** when an authentic root newer than its head has a higher epoch than the head
+(a version missing in between, an anchor behind the bucket, or a broken provider order): the reader then reads as if
+it had no anchor and judges the result against what it knows (§5.3). Any other version is a **sibling** (canonical `prev`, not
 first), a **branch** (non-canonical `prev`), a **duplicate** (a canonical root's bytes) or **stale** (none of these:
 only tampering or replay makes one; ignored and reported as `manifest_replay`, security, warning).
 
 **As implemented (work item 5):** `sync/manifest/VersionLog.hpp`. `RootLog` is one `ListObjectVersions` of the
 root key (all pages, or down to a given version: `ObjectStore::versionsSince`); a version is opened by one GET by id
 and cached by id in `RootCache`, which the caller keeps across publishes. `walk` is C1 from an anchor (one forward
-scan: each successor sits after its predecessor), `walkBlind` the longest chain (chains start at versions that are
-no one's earliest successor; ties: the earliest head), `successorOf` succ(X) from a position. Stale versions are
+scan: each successor sits after its predecessor; it separates the versions above the head repair may delete from
+those it must keep, `Walk::ahead`), `walkBlind` the anchorless choice (chains start at versions that are no one's
+earliest successor; highest head epoch, then the longer chain, then the earliest head), `successorOf` succ(X) from a
+position. Stale versions are
 ignored as non-canonical but **not reported** (`manifest_replay` doesn't exist yet); the root janitor deletes them
 after 24 h (§5.4).
 
@@ -162,14 +168,15 @@ anchor, fetch and check the head's segments (spec 03 §4.1 step 3). C1 replaces 
 | canonical successors of the anchor | advance to the head, record it as settled |
 | only non-canonical versions above the anchor | unchanged; repair |
 | an id inside a recorded settle window that wasn't there at settlement | `order_violation`: refuse, alert |
-| anchor absent from *L*: best candidate older / another root at its epoch / newer roots not linking to it | `rollback` / `fork` / `gap` (the longest chain's head, warning), as today |
+| anchor absent from *L*, or its chain incomplete (§5.1): best candidate older / another root at its epoch / newer roots not linking to it | `rollback` / `fork` / `gap` (the highest-epoch chain's head, warning), as today |
 | the head names another `publish` mode than the bucket's | refuse, `publish_mode_mismatch` (I9) |
 
 **As implemented:** `manifest::load` takes this path when the store's mode is `VersionLog`, or when the root
 declares `publish: version_log` (the current object, or, when that is no root at all, a delete marker or a stray, the
 newest authentic version), so `vh vault recover` reads C1 without probing first. The anchor is found by version id
-(checked against its hash), else by hash among the newest 64 versions; with none, `walkBlind`, then the chain rules
-against what is known (`rollback`, `fork`, `gap`). **The mode check sits with the writers, not the reader:** a head
+(checked against its hash), else by hash among the newest 64 versions; with none, or when the chain from it is
+incomplete (§5.1), `walkBlind`, then the chain rules against what is known (`rollback`, `fork`, `gap`): an anchor
+behind a missing version reads the newest root as a gap, a displaced writer whose rival built on top reads a fork. **The mode check sits with the writers, not the reader:** a head
 another node published in the other mode is refused when a node builds on it or adopts it (`checkHeadForWriter`),
 while a node may switch its own vault's mode after a re-probe. `Service::verifyRemote` on `version_log`: one HEAD while
 the root's ETag is the settled one; otherwise a load from the settled anchor (window checked), the §5.5 check,
@@ -179,7 +186,8 @@ restore recorded) gets its version id recorded.
 ### 5.4 Repair, retention, garbage collection
 
 - **Repair:** after any listing, non-canonical versions and delete markers *newer than the head* are deleted by id, so
-  the head is current again (A5). **Root janitor** (daily): deletes by id non-canonical versions older than 24 h and
+  the head is current again (A5), **except authentic roots of a higher epoch than the head and the roots they build
+  on**: those are the newest state of an incomplete chain (§5.1), never deleted. **Root janitor** (daily): deletes by id non-canonical versions older than 24 h and
   canonical roots superseded over 7 days, never the head or its two predecessors (gap walk, spec 03 §4.2).
 - **Lifecycle (A6):** between a crash and the next repair the head is noncurrent; expiring it leaves the loser as sole
   candidate, which settled readers report as a fork (a head lost anyway gets that refusal, never a silent switch). The
@@ -195,10 +203,16 @@ before its root: they end up below the new head, non-canonical, and go to the ja
 (`collectRootVersions`, with the daily GC): keeps the head and its two canonical predecessors, deletes older
 canonical roots after 7 days and non-canonical versions and markers below the head after 24 h. **Segments**
 (`collectGarbageVersionLog`): `remote_manifest_gc.first_unreferenced_at` per sid, collected after 24 h unreferenced by
-the last three canonical roots, every version deleted by id. Found by the §8.2 suite: when A4 breaks (a stalled PUT
-ordered by its start), the writer whose version displaced a settled root deletes that root as a stray above its head,
-and the displaced writer then sees a `fork` rather than `order_violation`. That is still a refusal, but I6 holds only
-under A3 and A4.
+the last three canonical roots, every version deleted by id. Repair (both sites) and the janitor never delete an
+authentic root of a higher epoch than the head, nor a root such a root builds on (`Walk::ahead`); the publisher logs
+the ones above its new root and leaves them to the next read. Found by the §8.2 suite (finding 7a): when A4 breaks (a
+stalled PUT ordered by its start), the writer whose version displaced a settled root used to delete that root, and
+anything built on it, as strays above its head. Now a displaced root with something on top stays with it, and the
+displacing writer's next read refuses the vault as a `fork` (`ManifestChainVersionLog.AWriterWhoseStalledRoot*`); a
+displaced root with nothing on top (an epoch equal to the head's) is still deleted, and its holder sees a `fork`
+rather than `order_violation`. Both end in a refusal, but I6 holds only under A3 and A4. With a version missing below
+the newest roots (a lifecycle rule, a manual delete) nothing newer is deleted either: the reader takes the newest
+root as a gap (`ManifestChainVersionLog.AnAnchorBehindAMissingVersion*`).
 
 ### 5.5 Who may write (both paths)
 
@@ -269,7 +283,7 @@ writer needs less:** no root PUT is concurrent, so A1, A2, A5, A6 suffice. **Wav
 rests on documented B2 behaviour**; two or more writers (a mirror, a restore racing its old node) also need A3, A4.
 
 **As implemented:** I1-I9 are checked after every step of the §8.2 scheduler. Under broken A4 the suite found the
-I6 exception described in §5.4 (repair deleting a displaced settled root).
+I6 exception described in §5.4 (repair deleting a displaced settled root with nothing on top).
 
 ## 7. Choosing the path
 
@@ -358,7 +372,9 @@ interleaving of three writers, 200 seeded schedules of three writers and a reade
 eight steps of one writer with a restart from the database only (every order of the other writer's PUTs plus 30
 seeds each); a lost PUT reply (a 5xx after the commit), a 5xx before it, failed DELETEs and listings at every step
 under every interleaving of two writers; `listingLag` (I3 holds: the fake hides a suffix of the order) and
-`orderBy(Start)` (every displaced settled root is refused by its holder). A head under a crashed loser past
+`orderBy(Start)` (every displaced settled root is refused by its holder; in the 300 sampled runs each writer publishes
+once, so none has a root on top of a displaced one and the repair rule's change shows only in the deterministic
+test). A head under a crashed loser past
 `expireNoncurrent` fails as `fork` (`ManifestChainVersionLog`). `vault::recover` over a bucket with a losing sibling
 and a marker: `VaultRecoverDb.OnABackblazeLike*`. The one extra LIST: `ManifestPublishVersionLog.ASoloPublish*`.
 §8.3: `LiveB2.TheManifestPublishesAsVersionsOfItsRoot` (opt-in, not run yet) covers the probe, publishes, a blind

@@ -33,7 +33,9 @@
 #include "../helpers/versioned_bucket.hpp"
 
 #include <functional>
+#include <future>
 #include <set>
+#include <thread>
 
 namespace vh::sync::manifest::test_manifest_suite {
 
@@ -1570,6 +1572,148 @@ TEST(ManifestChainVersionLog, WithoutItsAnchorTheChainRulesStillRefuseRollbackAn
     const auto gap = load(*w.store, w.vault, w.lookup(), o);
     EXPECT_TRUE(gap.acceptance.gap);
     EXPECT_EQ(gap.known(), k[2]);
+}
+
+TEST(ManifestChainVersionLog, AnAnchorBehindAMissingVersionReadsTheNewestStateAsAGapAndDeletesNothing) {
+    // A reader whose anchor is behind the bucket (a database from a backup) while one root between is gone (a lifecycle
+    // rule, a manual delete): 5 (anchor), [6], 7, 8, 9. The chain from 5 stops at 5; 7-9 are the newest authentic
+    // state, never strays.
+    namespace f = version_log_fixture;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    auto c = f::ofNode(smallVault(3), "node-a");
+    std::vector<Known> k;
+    std::optional<SettledWindow> s5;
+    for (int i = 1; i <= 9; ++i) {
+        nthFile(c, 0).size = 100 + i;
+        (void)w.publish(c);
+        k.push_back(*w.known);
+        if (i == 5) s5 = w.settled;
+    }
+    ASSERT_TRUE(w.bucket->purgeVersion(std::string(kRootKey), *k[5].version_id));   // epoch 6
+    const auto before = f::rootIds(*w.bucket);
+    LoadOptions o;
+    o.known = k[4];
+    o.settled = s5;
+    const auto read = load(*w.store, w.vault, w.lookup(), o);
+    EXPECT_EQ(read.known(), k[8]) << "epoch 9, not the anchor";
+    EXPECT_TRUE(read.acceptance.gap) << "the walk back from 9 can't reach 5";
+    EXPECT_TRUE(read.strays.empty()) << "nothing for repair to delete";
+
+    // A writer whose database says epoch 5 publishes on 9 (merged, a gap) and deletes nothing either.
+    auto stale = f::vlWriter(w.bucket, "node-a");
+    stale.known = k[4];
+    stale.settled = s5;
+    stale.ownEpoch = 5;
+    nthFile(c, 1).size = 7;
+    const auto r = stale.publish(c);
+    EXPECT_EQ(r.published.known.epoch, 10u);
+    EXPECT_TRUE(r.gap);
+    EXPECT_TRUE(r.repaired.empty());
+    EXPECT_EQ(f::rootIds(*w.bucket).size(), before.size() + 1);
+}
+
+TEST(ManifestChainVersionLog, ABlindReadTakesTheHighestEpochNotTheLongestChain) {
+    // 1-6, [7], 8, 9: the chain 1-6 is longer, but 8, 9 is the newest authentic state (a conditional bucket's reader
+    // reads 9 as the current object too).
+    namespace f = version_log_fixture;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    auto c = f::ofNode(smallVault(3), "node-a");
+    std::vector<Known> k;
+    for (int i = 1; i <= 9; ++i) {
+        nthFile(c, 0).size = 100 + i;
+        (void)w.publish(c);
+        k.push_back(*w.known);
+    }
+    ASSERT_TRUE(w.bucket->purgeVersion(std::string(kRootKey), *k[6].version_id));   // epoch 7
+    const auto read = load(*w.store, w.vault, w.lookup(), {});
+    EXPECT_EQ(read.known(), k[8]);
+    EXPECT_TRUE(read.strays.empty());
+}
+
+TEST(ManifestChainVersionLog, AReplayedOlderRootAboveTheHeadIsStillAStray) {
+    // Only an authentic root of a higher epoch is kept: a replay of epoch 2's bytes above epoch 5 is repaired.
+    namespace f = version_log_fixture;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    auto c = f::ofNode(smallVault(3), "node-a");
+    std::vector<uint8_t> epoch2;
+    for (int i = 1; i <= 5; ++i) {
+        nthFile(c, 0).size = 100 + i;
+        (void)w.publish(c);
+        if (i == 2) epoch2 = w.bucket->current(std::string(kRootKey))->body;
+    }
+    const auto replay = w.bucket->seed(std::string(kRootKey), epoch2);
+    const auto read = w.loadKnown();
+    EXPECT_EQ(read.known(), *w.known);
+    EXPECT_EQ(read.strays, std::vector<std::string>{replay});
+}
+
+TEST(ManifestPublishVersionLog, AHigherEpochRootLandedAboveOursIsLeftForTheNextRead) {
+    // An authentic root of a higher epoch that lands after our PUT (here a key holder's root on a base this writer
+    // never saw) is not repaired away: the publish leaves it, and the next read takes it as the newest state (a gap,
+    // its chain doesn't reach ours).
+    namespace f = version_log_fixture;
+    namespace ms = vh::test_support::manifest_store;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    auto c = f::ofNode(smallVault(3), "node-a");
+    (void)w.publish(c);
+    nthFile(c, 0).size = 1;
+    (void)w.publish(c);
+    const auto ahead = f::rootLike(w, w.cache.base->root, 9, std::string(64, 'c'), "node-a");
+    auto hooked = std::make_shared<ms::HookedStore>(w.store);
+    std::string aheadId;
+    hooked->after = [&](const ms::StoreOp op, const std::string& key, const std::string&, const bool failed) {
+        if (op != ms::StoreOp::Put || key != kRootKey || failed || !aheadId.empty()) return;
+        aheadId = w.bucket->seed(std::string(kRootKey), ahead);
+    };
+    w.store = hooked;
+    nthFile(c, 0).size = 2;
+    const auto r = w.publish(c);
+    EXPECT_EQ(r.published.known.epoch, 3u);
+    EXPECT_TRUE(r.repaired.empty());
+    EXPECT_EQ(r.ahead, std::vector<std::string>{aheadId});
+    EXPECT_TRUE(w.bucket->version(std::string(kRootKey), aheadId)) << "left in place";
+    const auto next = w.loadKnown();
+    EXPECT_EQ(next.acceptance.epoch, 9u);
+    EXPECT_TRUE(next.acceptance.gap);
+}
+
+TEST(ManifestChainVersionLog, AWriterWhoseStalledRootDisplacedAnotherWritersChainIsRefusedAsAFork) {
+    // A4 broken on purpose: A's root PUT is ordered where it started (holdPut, on its own thread) while B settles
+    // epoch 4 and builds epoch 5 on it. A then finds its root the earliest successor of epoch 3 and settles, but B's
+    // roots stay (5 is newer than A's head, 4 is what 5 builds on), and A's next read refuses the vault as a fork
+    // instead of deleting the newer chain. B, anchored on its own chain, reads on.
+    namespace f = version_log_fixture;
+    const auto bucket = f::b2Bucket();
+    auto base = f::ofNode(smallVault(4), "node-a");
+    auto [a, b] = f::twoWriters(bucket, base);
+    nthFile(base, 0).size = 77;
+    bucket->orderBy(VersionedBucket::Order::Start);
+    std::promise<void> held, go;
+    std::optional<PublishReport> ra;
+    std::thread stalled([&] {
+        bucket->holdPut(std::string(kRootKey));   // A's root PUT starts now...
+        held.set_value();
+        go.get_future().wait();
+        ra = a.publish(f::withFile(base, uidT(0x91, 3), "from-a"));   // ...and commits after B's two roots
+    });
+    held.get_future().wait();
+    (void)b.publish(f::withFile(f::ofNode(base, "node-b"), uidT(0x90, 2), "from-b"));   // epoch 4
+    auto more = f::withFile(f::withFile(f::ofNode(base, "node-b"), uidT(0x90, 2), "from-b"), uidT(0x92, 5), "more-b");
+    (void)b.publish(more);                                                                 // epoch 5
+    go.set_value();
+    stalled.join();
+    ASSERT_TRUE(ra);
+    EXPECT_EQ(ra->published.known.epoch, 4u) << "A's root is the earliest successor of epoch 3 now";
+    EXPECT_TRUE(ra->repaired.empty()) << "B's chain is not repaired away";
+    EXPECT_EQ(ra->ahead.size(), 2u);
+    EXPECT_EQ(f::rootIds(*bucket).size(), 6u);
+    try {
+        (void)a.loadKnown();
+        ADD_FAILURE() << "the displacing writer read on";
+    } catch (const ChainRejected& e) {
+        EXPECT_EQ(e.code(), ChainError::Fork);
+    }
+    EXPECT_EQ(b.loadKnown().acceptance.epoch, 5u);
 }
 
 TEST(ManifestChainVersionLog, AVersionThatDoesNotAuthenticateIsSkipped) {

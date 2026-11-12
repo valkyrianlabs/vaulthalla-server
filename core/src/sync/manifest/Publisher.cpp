@@ -370,8 +370,10 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
                 continue;
             }
 
-            // Won. Repair: every version newer than the head that isn't on the chain (a crashed loser, a marker).
+            // Won. Repair: every version newer than the head that isn't on the chain (a crashed loser, a marker), never
+            // an authentic root of a higher epoch than ours (the next read takes it, or refuses it).
             const auto w = walk(log, *ours);
+            for (const auto i : w.ahead) report.ahead.push_back(log.versions()[i].version_id);
             for (const auto i : w.strays) {
                 const auto& v = log.versions()[i];
                 try {
@@ -494,6 +496,12 @@ JanitorReport collectRootVersions(ObjectStore& store, const Uid& vaultUid, const
         // head only non-canonical versions remain, after a day. Delete markers carry nothing.
         const bool due = v.delete_marker ? age >= strayAge : i < oldest ? age >= supersededAge : age >= strayAge;
         if (!v.last_modified || !due) {
+            ++report.kept;
+            continue;
+        }
+        // Never an authentic root of a higher epoch than the head (possible below it only when the provider's order
+        // broke): it is the newest state, for the reads to judge.
+        if (const auto* r = v.delete_marker ? nullptr : log.open(i); r && r->root.epoch > log.open(*head)->root.epoch) {
             ++report.kept;
             continue;
         }

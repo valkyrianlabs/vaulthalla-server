@@ -116,6 +116,8 @@ struct PublishReport {
     // version_log
     Settled settled;
     std::vector<std::string> repaired;   // version ids deleted after the publish settled (stray newer versions)
+    // Authentic roots above ours with a higher epoch, left in place (never repaired): the next read judges them.
+    std::vector<std::string> ahead;
     unsigned lost{0};                    // rounds our root lost to another writer's
 };
 

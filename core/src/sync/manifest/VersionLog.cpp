@@ -98,7 +98,21 @@ Walk walk(RootLog& log, const std::size_t anchor) {
             w.chain.push_back(i);
         }
     }
-    for (std::size_t i = w.head + 1; i < versions.size(); ++i) w.strays.push_back(i);
+    const auto headEpoch = log.open(w.head)->root.epoch;
+    std::set<std::string> builtOn;   // prev hashes of the roots kept
+    for (std::size_t i = versions.size(); i-- > w.head + 1;) {   // newest first: a prev always points further back
+        const auto* r = log.open(i);
+        // Kept: a root of a higher epoch than the head, and any root a kept one builds on (deleting it would cut the
+        // newer chain from its history, and with it the evidence of a fork).
+        if (r && (r->root.epoch > headEpoch || builtOn.contains(r->sha256))) {
+            w.ahead.push_back(i);
+            if (r->root.prev) builtOn.insert(*r->root.prev);
+        } else {
+            w.strays.push_back(i);
+        }
+    }
+    std::ranges::reverse(w.ahead);
+    std::ranges::reverse(w.strays);
     return w;
 }
 
@@ -122,12 +136,17 @@ std::optional<Walk> walkBlind(RootLog& log) {
         }
     }
     std::optional<Walk> best;
+    uint64_t bestEpoch = 0;
     for (const auto start : authentic) {
         if (successors.contains(start)) continue;
         auto w = walk(log, start);
-        if (!best || w.chain.size() > best->chain.size() ||
-            (w.chain.size() == best->chain.size() && w.head < best->head))
+        const auto epoch = log.open(w.head)->root.epoch;
+        if (!best || epoch > bestEpoch ||
+            (epoch == bestEpoch && (w.chain.size() > best->chain.size() ||
+                                    (w.chain.size() == best->chain.size() && w.head < best->head)))) {
             best = std::move(w);
+            bestEpoch = epoch;
+        }
     }
     return best;
 }

@@ -911,11 +911,13 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 - **version_log publish** (spec `design/encryption/06-publish-without-preconditions.md` §5; migration 137): on a
   bucket whose probe says VersionLog (Backblaze B2) the root is PUT plainly and the provider versions of
   `.vaulthalla/root` are the log. `VersionLog.hpp` (`RootLog`: one ListObjectVersions, roots opened by version id and
-  cached in `RootCache`; `walk` = rule C1 from an anchor, `walkBlind` = longest chain, `successorOf`, `windowBroken`).
+  cached in `RootCache`; `walk` = rule C1 from an anchor, `walkBlind` = highest head epoch, `successorOf`, `windowBroken`).
   `publish`: segments, root PUT (a 5xx or transport error = `PutOutcomeUnknown`: found by hash), list (retries 1, 2,
   4, 8 s, then `PublishUnsettled`), won when ours is succ(base) (record version id, base version id and settle
   window), else delete ours by id, reload, merge, retry (max(3, writers + 1)); repair deletes versions newer than the
-  head. `load` follows C1 whenever the store is VersionLog or the root declares `publish: version_log` (a restore
+  head, never an authentic root of a higher epoch nor one such a root builds on (`Walk::ahead`). A chain from the
+  anchor with such a root above it is incomplete: the read falls back to `walkBlind` (highest head epoch, then the
+  longer chain, then the earliest head) and the chain rules (gap, fork, rollback). `load` follows C1 whenever the store is VersionLog or the root declares `publish: version_log` (a restore
   reads without a probe). Both modes: the root names `publish` and `writers` (the base's set while it names this
   node; a node that never published here takes over with itself alone); a head newer than this node's
   `own_epoch` that excludes it is `superseded`, a head of another node in the other mode `publish_mode_mismatch`, an

@@ -193,13 +193,22 @@ void chooseVersionLogRoot(ObjectStore& store, const Uid& vaultUid, const crypto:
                 if (const auto* r = log.open(*i); r && r->sha256 == options.known->root_sha256) anchor = i;
         if (!anchor) anchor = log.findBySha(options.known->root_sha256);
         if (anchor) w = walk(log, *anchor);
+        // An authentic root above the anchored head with a higher epoch: the chain from the anchor is incomplete (a
+        // version missing in between, a reader whose anchor is behind the bucket, or a broken provider order). Read
+        // the newest authentic state instead and judge it against what is known, as when the anchor is gone: a gap
+        // when the walk back can't be completed, a fork when it contradicts the anchor. Never repaired away.
+        if (w && !w->ahead.empty()) {
+            w.reset();
+            if (log.partial()) log.list();   // the walk back needs the whole log
+        }
     }
     if (w) {
         const auto* head = log.open(w->head);
         out.acceptance = Acceptance{head->root.epoch, head->sha256, false};
     } else {
-        // No anchor (a blind read), or the anchor is gone from the bucket: the longest chain, then the chain rules
-        // against what the reader knows (rollback, fork, gap), as on a conditional bucket.
+        // No anchor (a blind read), the anchor is gone from the bucket, or its chain is incomplete: the chain with the
+        // highest head epoch, then the chain rules against what the reader knows (rollback, fork, gap), as on a
+        // conditional bucket.
         w = walkBlind(log);
         if (!w)
             throw NoUsableRoot(log.versions().empty() ? "the bucket has no manifest root"

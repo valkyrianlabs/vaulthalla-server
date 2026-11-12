@@ -159,7 +159,8 @@ What changes for an opaque vault on such a bucket:
   recent root uses it. Don't set a lifecycle rule that removes old versions under `.vaulthalla/` (in Backblaze, "Keep
   only the last version of the file" or a rule with `daysFromHidingToDeleting`): it could remove the current root
   while a stray version from a crashed write sits above it, and the vault then refuses its manifest (`fork`) instead
-  of reading the wrong one.
+  of reading the wrong one; when it removes an older version between roots, the server reads the newest root and
+  reports a gap in the manifest's history.
 - **One server per vault.** A vault restored elsewhere with `vh vault recover` takes the vault over: the old server,
   if it still runs, stops publishing the vault's manifest and alerts its operators (`manifest_superseded`).
 - **New alerts** (operator notifications, and the vault's sync stalls until someone looks):
