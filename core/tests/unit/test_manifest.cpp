@@ -15,7 +15,7 @@
 //                   unverified"; with one, older states are refused (spec 03 §4.5).
 // ManifestStore*    the Store seam on buckets without conditional writes (design/encryption/
 //                   06-publish-without-preconditions.md §7): plain PUTs with version ids, putOnce by mode, versions
-//                   with ETags in provider order, DELETE of one version; a refused condition is typed.
+//                   with ETags in provider order, DELETE of one version; the publish refuses before any request.
 
 #include "../helpers/bytes.hpp"
 #include "crypto/SecretKey.hpp"
@@ -703,6 +703,20 @@ TEST(ManifestStore, TheBaseStoreRefusesPlainWritesItCannotMake) {
     EXPECT_THROW((void)rec.put("k", {}), std::logic_error);
     EXPECT_THROW(rec.removeVersion("k", "v"), std::logic_error);
     EXPECT_EQ(rec.mode(), storage::s3::WriteCapability::Unknown);
+}
+
+TEST(ManifestPublish, OnABucketWithoutConditionalWritesTheRootPublishRefusesBeforeAnyRequest) {
+    // Spec 06 §5 is not implemented yet: never half a publish (no segment, no hint, no root).
+    for (const auto mode : {storage::s3::WriteCapability::VersionLog, storage::s3::WriteCapability::Insufficient}) {
+        Writer w;
+        w.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+        w.store = std::make_shared<S3Store>(w.bucket, mode);
+        w.bucket->resetCounters();
+        EXPECT_THROW((void)w.publish(smallVault(3)), PublishUnsupported) << storage::s3::to_string(mode);
+        const auto c = w.bucket->counters();
+        EXPECT_EQ(c.put + c.get + c.head + c.list + c.del, 0u) << "no request at all";
+        EXPECT_TRUE(w.bucket->keys().empty());
+    }
 }
 
 TEST(ManifestPublish, ABucketThatRejectsConditionsFailsTypedWithoutAPartialPublish) {

@@ -125,6 +125,16 @@ struct VaultRecoveryMaterialHealth {
     std::string detail;
 };
 
+// An opaque_v1 vault whose encrypted manifest can't be published on its bucket (design/encryption/
+// 06-publish-without-preconditions.md §7): the bucket was probed without conditional writes (version_log, e.g.
+// Backblaze B2), as insufficient, or as conditional and has refused a condition since. The vault's sync stalls.
+struct VaultManifestUnpublishableHealth {
+    unsigned int vaultId = 0;
+    std::string vaultName;
+    std::string reason;   // conditional_writes_unsupported | bucket_capability_insufficient | bucket_capability_changed
+    std::string detail;
+};
+
 // Whether legacy-format content remains on this host (#373/#376): encrypting S3 vaults still on path_v0, cut-over
 // layout migrations whose path-named objects are not all gone yet, and legacy (gcm0) live files, recovery blobs and
 // unfinished resumable uploads. The gcm0 readers have no other callers once `remaining` is false; the next release's
@@ -158,6 +168,7 @@ struct SystemHealth {
     std::optional<DatabaseHealth> database; // nullopt until the pool exists (critical)
     std::vector<VaultUnavailableHealth> vaultsUnavailable;
     std::vector<VaultRecoveryMaterialHealth> vaultsRecoveryMaterialMissing;
+    std::vector<VaultManifestUnpublishableHealth> vaultsManifestUnpublishable;
     std::optional<LegacyContentHealth> legacyContent;   // nullopt when the database could not be asked
     HealthSummary summary;
 
@@ -179,6 +190,7 @@ void to_json(nlohmann::json& j, const DatabaseHealth& health);
 void to_json(nlohmann::json& j, const HealthSummary& health);
 void to_json(nlohmann::json& j, const VaultUnavailableHealth& health);
 void to_json(nlohmann::json& j, const VaultRecoveryMaterialHealth& health);
+void to_json(nlohmann::json& j, const VaultManifestUnpublishableHealth& health);
 void to_json(nlohmann::json& j, const LegacyContentHealth& health);
 void to_json(nlohmann::json& j, const SystemHealth& health);
 

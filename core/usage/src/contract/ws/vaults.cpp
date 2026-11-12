@@ -63,6 +63,15 @@ WsField vaultProvision() {
               "mode existing binds `bucket` as before; bucket may be empty with generate_name.");
 }
 
+// The generic kinds, plus the two ops::Refused codes of a bucket whose write capability can't hold an encrypting
+// (opaque_v1) vault (ops::vaults vault_capability; spec 06 §7).
+std::vector<std::string> capabilityRefusals() {
+    auto out = opsRefusals();
+    out.emplace_back("conditional_writes_unsupported");
+    out.emplace_back("bucket_capability_insufficient");
+    return out;
+}
+
 }
 
 std::vector<WsCommandUsage> vaultCommands() {
@@ -75,7 +84,11 @@ std::vector<WsCommandUsage> vaultCommands() {
                        "daemon picks the backing directory. S3 vaults also need api_key_id and bucket. A refusal with "
                        "data.code 'encryption_waiver' means the bucket already holds data: resend with "
                        "accept_encryption_waiver once the person accepts. With provision (#237) the daemon creates a managed "
-                       "bucket or adopts an existing one; 'upstream_adoption' asks for provision.accept_adoption.",
+                       "bucket or adopts an existing one; 'upstream_adoption' asks for provision.accept_adoption. The "
+                       "bucket's write capability is probed first (design/encryption/06-publish-without-preconditions.md "
+                       "§7): a vault that encrypts upstream is refused with 'conditional_writes_unsupported' on a "
+                       "bucket without conditional writes (e.g. Backblaze B2) and 'bucket_capability_insufficient' on "
+                       "one that keeps no versions either.",
         .payload = {str("name").gen(gen::freshName("vault_")),
                     str("type").oneOf({"local", "s3"}).gen(gen::constant("local")),
                     uinteger("owner_id").opt().nullable().gen(gen::ref("user", {"id"})),
@@ -91,7 +104,7 @@ std::vector<WsCommandUsage> vaultCommands() {
                     boolean("accept_encryption_waiver").opt(),
                     vaultProvision()},
         .response = {vaultObject()},
-        .refusal_codes = opsRefusals(),
+        .refusal_codes = capabilityRefusals(),
         .confirmations = {{.code = "encryption_waiver",
                            .accept_field = "accept_encryption_waiver",
                            .description = "The bucket already holds data Vaulthalla did not write (or encryption "
@@ -168,7 +181,9 @@ std::vector<WsCommandUsage> vaultCommands() {
         .description = "Patch a vault (absent or null members are unchanged; a vault's type never changes). Owner "
                        "reassignment also needs Create for the new owner, a key change needs Consume on the key, sync "
                        "settings need vault sync.config.edit. A refusal with data.code 'encryption_waiver' means the "
-                       "bucket already holds data: resend with accept_encryption_waiver once the person accepts.",
+                       "bucket already holds data: resend with accept_encryption_waiver once the person accepts. A new "
+                       "bucket or key is probed first: an opaque_v1 vault is refused with 'conditional_writes_unsupported' "
+                       "or 'bucket_capability_insufficient' as storage.vault.add says.",
         .payload = {vaultIdPayload(),
                     str("type").opt().oneOf({"local", "s3"}).desc("Must equal the vault's current type."),
                     str("name").opt().nullable(),
@@ -185,7 +200,7 @@ std::vector<WsCommandUsage> vaultCommands() {
                     vaultSyncPatch(),
                     boolean("accept_encryption_waiver").opt()},
         .response = {vaultObject()},
-        .refusal_codes = opsRefusals(),
+        .refusal_codes = capabilityRefusals(),
         .confirmations = {{.code = "encryption_waiver",
                            .accept_field = "accept_encryption_waiver",
                            .description = "The bucket already holds data Vaulthalla did not write (or encryption "

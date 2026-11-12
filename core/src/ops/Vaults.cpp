@@ -21,6 +21,8 @@
 #include "rbac/resolver/admin/all.hpp"
 #include "rbac/resolver/vault/all.hpp"
 #include "runtime/Deps.hpp"
+#include "db/query/vault/BucketCapability.hpp"
+#include "storage/BucketCapability.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/s3/Controller.hpp"
@@ -176,6 +178,49 @@ bool bucketHoldsData(const S3Vault& s3) {
     return !controller.isBucketEmpty();
 }
 
+}
+
+// The bucket a vault is about to be bound to, probed (design/encryption/06-publish-without-preconditions.md §7). An
+// opaque_v1 vault needs conditional writes until the manifest publish without them exists (spec 06 §5): refused
+// otherwise, before anything is created. A probe that can't run refuses nothing: the binding stays unprobed and the
+// first use probes it.
+namespace vault_capability {
+
+std::optional<storage::s3::ProbeResult> probeBinding(const unsigned int apiKeyId, const std::string& bucket,
+                                                     const bool opaque) {
+    std::optional<storage::s3::ProbeResult> probe;
+    try {
+        probe = storage::bucket_capability::probeBinding(apiKeyId, bucket, opaque);
+    } catch (const storage::s3::ProbeFailed& e) {
+        log::Registry::cloud()->warn("[ops::vaults] The bucket could not be probed for its write capability ({}); it "
+                                     "is probed again on first use", e.what());
+        return std::nullopt;
+    }
+    if (!probe || !opaque || storage::s3::sendsPreconditions(probe->capability)) return probe;
+    if (probe->capability == storage::s3::WriteCapability::VersionLog)
+        throw Refused("conditional_writes_unsupported",
+                      "this bucket does not support conditional writes (" + probe->reason + "). A vault that encrypts "
+                      "upstream keeps its file names and folders in an encrypted manifest, which this server version "
+                      "can only publish with conditional writes; create it on a bucket that supports them, or without "
+                      "upstream encryption (the provider then reads its objects and names)");
+    throw Refused("bucket_capability_insufficient",
+                  "this bucket can't hold an encrypting vault: " + probe->reason);
+}
+
+void record(const unsigned int vaultId, const std::optional<storage::s3::ProbeResult>& probe) {
+    if (!probe) return;
+    try {
+        db::query::vault::BucketCapability::record(vaultId, *probe);
+    } catch (const std::exception& e) {
+        log::Registry::cloud()->warn("[ops::vaults] Vault {}: the bucket probe was not recorded ({}); it is probed "
+                                     "again on first use", vaultId, e.what());
+    }
+}
+
+}
+
+namespace {
+
 std::string waiverTextFor(const S3Vault& s3) {
     return std::string(s3.encrypt_upstream ? vault::terms::ENABLE_UPSTREAM_ENCRYPTION_WAIVER
                                            : vault::terms::DISABLE_UPSTREAM_ENCRYPTION_WAIVER);
@@ -328,6 +373,7 @@ VaultPtr create(const Actor& actor, const Create& req) {
     }
 
     std::shared_ptr<S3Vault> needsWaiver;
+    std::optional<storage::s3::ProbeResult> probe;
     try {
         if (req.type == VaultType::S3) {
             const auto s3 = std::static_pointer_cast<S3Vault>(vault);
@@ -337,9 +383,13 @@ VaultPtr create(const Actor& actor, const Create& req) {
                 if (!accepted) throw NeedsConfirmation("encryption_waiver", waiverTextFor(*s3));
                 needsWaiver = s3;
             }
+            probe = vault_capability::probeBinding(
+                s3->api_key_id, s3->bucket,
+                vault::model::layoutForNewVault(s3->encrypt_upstream) == vault::model::StorageLayout::OpaqueV1);
         }
 
         vault = runtime::Deps::get().storageManager->addVault(vault, policy);
+        vault_capability::record(vault->id, probe);
     } catch (const std::exception& e) {
         upstream::abortProvision(ticket, e.what());
         throw;
@@ -434,8 +484,21 @@ VaultPtr update(const Actor& actor, const Update& req) {
         applySync(*newPolicy, existing->type, req.sync);
     }
 
+    // A new bucket or key is probed before the vault moves to it (spec 06 §7); the upsert clears the old verdict.
+    std::optional<storage::s3::ProbeResult> probe;
+    bool rebound = false;
+    if (existing->type == VaultType::S3) {
+        const auto s3 = std::static_pointer_cast<S3Vault>(staged);
+        const auto before = std::static_pointer_cast<S3Vault>(existing);
+        rebound = s3->api_key_id != before->api_key_id || s3->bucket != before->bucket;
+        if (rebound)
+            probe = vault_capability::probeBinding(s3->api_key_id, s3->bucket,
+                                                   before->storage_layout == vault::model::StorageLayout::OpaqueV1);
+    }
+
     if (newPolicy) db::query::vault::Vault::updateVaultSync(newPolicy, existing->type);
     runtime::Deps::get().storageManager->updateVault(staged);
+    if (rebound) vault_capability::record(existing->id, probe);
     if (encryptionChanged) recordWaiver(actor, std::static_pointer_cast<S3Vault>(staged));
     if (newPolicy) pushSyncToEngine(existing->id, currentPolicy(existing->id));
     return requireVault(existing->id);

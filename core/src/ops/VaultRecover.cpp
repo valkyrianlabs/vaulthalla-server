@@ -16,6 +16,7 @@
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/Manager.hpp"
+#include "storage/BucketCapability.hpp"
 #include "storage/s3/Controller.hpp"
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Store.hpp"
@@ -364,6 +365,16 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
             log::Registry::crypto()->warn("[ops::vault_recover] vault {}: the fresh key's recovery envelopes were not "
                                           "written yet ({}); the next sync pass writes them", vaultId, e.what());
         }
+    }
+
+    // What the bucket can do for the manifest's writes (spec 06 §7), before the vault's first publish uses it. A probe
+    // that can't run leaves it to the first sync pass; a bucket without conditional writes still restores (the files
+    // are readable), and its first publish says why the manifest isn't written.
+    try {
+        (void)storage::bucket_capability::probeVault(vaultId);
+    } catch (const std::exception& e) {
+        log::Registry::cloud()->warn("[ops::vault_recover] vault {}: the bucket could not be probed ({}); the first "
+                                     "sync pass probes it", vaultId, e.what());
     }
 
     // Start the vault (cache strategy) and publish its first root on top of the loaded one.

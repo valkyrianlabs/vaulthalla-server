@@ -35,6 +35,14 @@ public:
     explicit PublishConflict(const std::string& message) : std::runtime_error(message) {}
 };
 
+// The bucket can't take this publish protocol: its stored capability (ObjectStore::mode()) is VersionLog or
+// Insufficient, and the root publish without preconditions (design/encryption/06-publish-without-preconditions.md
+// §5) is not implemented yet. Thrown before any request: nothing is written, never half a publish.
+class PublishUnsupported : public std::runtime_error {
+public:
+    explicit PublishUnsupported(const std::string& message) : std::runtime_error(message) {}
+};
+
 // What is in the bucket after a publish, as this writer knows it.
 struct Published {
     Known known;
@@ -76,7 +84,8 @@ struct PublishReport {
 // (remote_manifest_state), nullopt before its first publish. keys opens roots and segments other writers sealed.
 // Throws ChainRejected when the bucket's root is a rollback or fork against `known` (nothing is written then),
 // PublishConflict after max_attempts conflicts, NoUsableRoot when the bucket holds a root this vault can't read and
-// it has no state of its own to continue from.
+// it has no state of its own to continue from, PublishUnsupported (before any request) when the store's mode()
+// doesn't send preconditions, and ConditionsUnsupported when a bucket probed as conditional refuses a condition.
 [[nodiscard]] PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLookup& keys,
                                     const SealingKey& sealing, const Content& produced,
                                     const std::optional<Known>& known, PublisherCache& cache,

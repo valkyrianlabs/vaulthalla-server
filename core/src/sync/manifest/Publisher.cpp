@@ -83,6 +83,11 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
                       const SealingKey& sealing, const Content& produced, const std::optional<Known>& known,
                       PublisherCache& cache, const PublishOptions& options) {
     using namespace publisher_detail;
+    if (!storage::s3::sendsPreconditions(store.mode()))
+        throw PublishUnsupported(fmt::format(
+            "the bucket does not support conditional writes (capability {}): publishing the encrypted manifest on such "
+            "a bucket is not implemented yet (design/encryption/06-publish-without-preconditions.md)",
+            storage::s3::to_string(store.mode())));
     const auto vaultUidText = uidText(vaultUid);
     if (cache.base && (!known || cache.base->known != *known)) cache.base.reset();
 
@@ -141,7 +146,7 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
                 const auto bytes = sealDocument(Json::parse(p.plaintext), crypto::vhf1::Kind::ManifestSegment, vaultUid,
                                                 sid, sealing);
                 ref = {uidText(sid), p.doc.range, p.doc.entries.size(), sha256Hex(bytes), bytes.size()};
-                (void)store.putIfAbsent(segmentKey(ref.sid), bytes);  // a fresh 128-bit sid: never exists
+                (void)store.putOnce(segmentKey(ref.sid), bytes);  // a fresh 128-bit sid: never exists
                 writtenSegments.emplace(p.plaintext, ref);
                 ++report.segments_written;
             } else {
@@ -165,7 +170,7 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
                 const auto sid = crypto::id::newObjectUid();
                 const auto bytes = sealSnapshot(doc, vaultUid, sid, sealing);
                 ref = {uidText(sid), sha256Hex(bytes), bytes.size()};
-                (void)store.putIfAbsent(segmentKey(ref.sid), bytes);
+                (void)store.putOnce(segmentKey(ref.sid), bytes);
                 writtenSnapshots.emplace(plaintext, ref);
                 ++report.snapshots_written;
             }
@@ -177,7 +182,7 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
             // The cleartext layout hint, once (never trusted, §4.2): an existing one is left alone.
             const auto hint = layoutHint(vaultUid);
             try {
-                (void)store.putIfAbsent(std::string(kLayoutKey), std::vector<uint8_t>(hint.begin(), hint.end()));
+                (void)store.putOnce(std::string(kLayoutKey), std::vector<uint8_t>(hint.begin(), hint.end()));
             } catch (const PreconditionFailed&) {
             }
         }
