@@ -78,7 +78,7 @@ const char* tableOf(const Slot slot) { return slot == Slot::ApiKeyMaster ? "api_
 
 class MasterSecretRotationBase : public test::rewrap::Fixture {
 protected:
-    static void SetUpTestSuite() { (void)setUpRewrapSuite("secret_rotation", false, true); }
+    static void SetUpTestSuite() { (void)setUpRewrapSuite("secret_rotation", true); }
 
     static void TearDownTestSuite() {
         if (!skipTests) vh::device::setIdentityRotationHookForTesting(nullptr);

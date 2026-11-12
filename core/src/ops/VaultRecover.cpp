@@ -16,6 +16,7 @@
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/Manager.hpp"
+#include "storage/BucketCapability.hpp"
 #include "storage/s3/Controller.hpp"
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Store.hpp"
@@ -65,6 +66,8 @@ std::shared_ptr<mf::ObjectStore> storeFor(const unsigned int apiKeyId, const std
     auto controller = std::make_shared<storage::s3::Controller>(key, bucket);
     // The opaque_v1 request rules (spec 01 §4.3): a restore names nothing but o/, .vaulthalla/ and no metadata.
     controller->setOpaqueLayout(true);
+    // No probe here (a dry run writes nothing): a root published on a bucket without conditional writes says so
+    // (`publish: version_log`), and manifest::load then reads the canonical head by rule C1 (spec 06 §5.3).
     return std::make_shared<mf::S3Store>(std::move(controller));
 }
 
@@ -255,6 +258,7 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
     in.epoch = plan.epoch;
     in.root_sha256 = plan.root_sha256;
     in.root_etag = plan.root_etag;
+    in.root_version_id = plan.root_version_id;
 
     const vault::master::Writer writer(true);
     uint32_t freshVersion = 0;
@@ -317,7 +321,7 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
     }
     if (plan.epoch) {
         // The sids of the loaded root (garbage collection keeps them while it is one of the last three).
-        if (const auto root = store->get(std::string(mf::kRootKey), std::nullopt); root && plan.root_sha256)
+        if (const auto root = store->get(std::string(mf::kRootKey), plan.root_version_id); root && plan.root_sha256)
             if (mf::sha256Hex(root->bytes) == *plan.root_sha256) {
                 const crypto::vhf1::KeyLookup lookup = [&](const uint32_t v) -> crypto::SecretKeyPtr {
                     const auto* vp = plan.version(v);
@@ -364,6 +368,16 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
             log::Registry::crypto()->warn("[ops::vault_recover] vault {}: the fresh key's recovery envelopes were not "
                                           "written yet ({}); the next sync pass writes them", vaultId, e.what());
         }
+    }
+
+    // What the bucket can do for the manifest's writes (spec 06 §7), before the vault's first publish uses it. A probe
+    // that can't run leaves it to the first sync pass; a bucket without conditional writes still restores (the files
+    // are readable), and its first publish says why the manifest isn't written.
+    try {
+        (void)storage::bucket_capability::probeVault(vaultId);
+    } catch (const std::exception& e) {
+        log::Registry::cloud()->warn("[ops::vault_recover] vault {}: the bucket could not be probed ({}); the first "
+                                     "sync pass probes it", vaultId, e.what());
     }
 
     // Start the vault (cache strategy) and publish its first root on top of the loaded one.

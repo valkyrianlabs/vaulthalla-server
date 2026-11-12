@@ -19,8 +19,10 @@
 #include "db/query/recovery/Generation.hpp"
 #include "db/query/recovery/ObjectVersion.hpp"
 #include "db/query/recovery/Policy.hpp"
+#include "db/query/sync/Manifest.hpp"
 #include "db/query/sync/ObjectIdentity.hpp"
 #include "db/query/sync/RemoteObjectIndex.hpp"
+#include "db/query/vault/BucketCapability.hpp"
 #include "db/query/vault/LayoutMigration.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "fs/ops/file.hpp"
@@ -32,9 +34,12 @@
 #include "stats/model/SystemHealth.hpp"
 #include "storage/ObjectKeys.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "storage/s3/Capability.hpp"
 #include "storage/s3/provider/Registry.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "sync/Controller.hpp"
+#include "sync/manifest/Document.hpp"
+#include "sync/manifest/Objects.hpp"
 #include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/LayoutMigration.hpp"
@@ -64,7 +69,7 @@ struct Crash {
 class LayoutMigrationTest : public vh::test::db::Suite {
 protected:
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_layout_migration", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_layout_migration")) return;
         recovery::local::invalidateAllPolicies();
     }
     static void TearDownTestSuite() { tearDownDbSuite(); }
@@ -606,6 +611,34 @@ TEST_F(LayoutMigrationTest, LayoutMigrationUnversionedBucket) {
     const auto run = lm::runCleanup(*v.engine, {});
     EXPECT_EQ(run.state, lm::State::Complete);
     EXPECT_TRUE(legacyKeys(v).empty());
+}
+
+// A bucket without conditional writes that keeps versions (Backblaze B2; spec 06 §5): the migration is allowed onto it
+// and its verifying state publishes the manifest as versions of the root.
+TEST_F(LayoutMigrationTest, LayoutMigrationOntoABackblazeLikeBucketPublishesTheManifestAsVersions) {
+    auto v = legacyVault();
+    v.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+    v.bucket->md5Etags = true;
+    db::query::vault::BucketCapability::record(v.id(), storage::s3::probeBucket(*v.bucket));
+    write(v, "/a.txt", "a1");
+    write(v, "/b.txt", "b1");
+    (void)pass(v);   // the path_v0 index, written plainly
+    write(v, "/a.txt", "a2");
+    (void)pass(v);
+    ASSERT_EQ(migrate(v).state, lm::State::CutOver) << rowOf(v).last_error.value_or("");
+    EXPECT_EQ(db::query::vault::BucketCapability::get(v.id()).capability, storage::s3::WriteCapability::VersionLog);
+    const auto state = db::query::sync::Manifest::state(v.id());
+    ASSERT_TRUE(state.epoch);
+    ASSERT_TRUE(state.root_version_id) << "settled on a version of the root";
+    const auto current = v.bucket->current(std::string(sync::manifest::kRootKey));
+    ASSERT_TRUE(current);
+    EXPECT_EQ(current->version_id, *state.root_version_id);
+    const auto root = sync::manifest::openRoot(current->body, v.engine->encryptionManager->vaultUid(),
+                                               [&](const uint32_t k) { return v.engine->encryptionManager->historicalKeySnapshot(k); });
+    EXPECT_EQ(root.publish, std::string(sync::manifest::kPublishVersionLog));
+    EXPECT_EQ(readLocal(v, "/a.txt"), "a2");
+    EXPECT_EQ(readLocal(v, "/b.txt"), "b1");
+    EXPECT_EQ(transfers(pass(v)), 0u);
 }
 
 // The pending upstream backlog (local versioning): a generation never uploaded is replayed into o/<uid> between the

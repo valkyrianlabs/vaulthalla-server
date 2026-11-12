@@ -41,18 +41,31 @@ inline bool available() {
     return true;
 }
 
-// A fresh `public` schema (every migration), prepared statements and, with `seed`, the seeded install.
+// Every process-wide cache keyed by database ids, started over: the fs cache (entries by id, inode and path) and the
+// storage engines (by vault id). A schema reset restarts every id sequence, so an entry left from the dropped schema
+// would answer for whatever row of the new one takes its id: a File cached under an id that is a Directory now was
+// static-cast and written as one (fs::cache::Registry, the parent stats of cacheEntry), corrupting the heap of a later
+// suite (VaultRecoverDb under ASan, 2026-11-12). An unseeded schema has no root entry for a cache to start from, so
+// it gets none: its suites build one once they have written their rows (FsCacheDeleteTest) or need none.
+inline void resetIdKeyedState(const bool seeded = true) {
+    auto& deps = vh::runtime::Deps::get();
+    deps.fsCache = seeded ? std::make_shared<vh::fs::cache::Registry>() : nullptr;
+    if (deps.storageManager) deps.storageManager->initStorageEngines();
+}
+
+// A fresh `public` schema (every migration), prepared statements and, with `seed`, the seeded install; then the
+// id-keyed process state is reset to match it (resetIdKeyedState).
 inline void freshSchema(const bool seed = true) {
     vh::db::Transactions::init();
     vh::db::seed::nuke_and_recreate_schema_public();
     vh::db::Transactions::dbPool_->initPreparedStatements();
     if (seed) vh::seed::seed_database();
+    resetIdKeyedState(seed);
 }
 
 struct Options {
     bool seed = true;         // seed::seed_database()
     bool runtime = true;      // runtime::Deps + fs::Filesystem
-    bool freshEngines = true; // a new fs cache and storage engines (earlier suites' ids are reused by this schema)
 };
 
 class Suite : public ::testing::Test {
@@ -79,10 +92,7 @@ protected:
         if (options.runtime) {
             vh::runtime::Deps::init();
             vh::fs::Filesystem::init(vh::runtime::Deps::get().storageManager);
-            if (options.freshEngines) {
-                vh::runtime::Deps::get().fsCache = std::make_shared<vh::fs::cache::Registry>();
-                vh::runtime::Deps::get().storageManager->initStorageEngines();
-            }
+            resetIdKeyedState(options.seed);   // the first suite of a process has no storage manager before Deps::init
         }
         if (options.seed) superUser = vh::identities::manager().userByName("admin");
         return true;

@@ -176,6 +176,14 @@ void Controller::uploadBufferWithMetadataConditional(
         throw ConditionalRequestFailed(
             fmt::format("Conditional S3 PUT failed for {} (HTTP {}): {}", key.string(), resp.http, resp.body));
     }
+    // The provider can't evaluate the condition at all (Backblaze B2: 501 NotImplemented for If-Match and
+    // If-None-Match): nothing was written. Only a request that carried a condition can mean that.
+    if ((ifMatch || ifNoneMatch) && resp.curl == CURLE_OK &&
+        (resp.http == 501 || (resp.http == 400 && resp.body.find("<Code>NotImplemented</Code>") != std::string::npos))) {
+        throw PreconditionsUnsupported(
+            fmt::format("the bucket does not support conditional writes: PUT {} with {} answered HTTP {}", key.string(),
+                        ifMatch ? "If-Match" : "If-None-Match", resp.http));
+    }
 
     if (!resp.ok()) throw std::runtime_error(
         fmt::format("Failed to upload buffer to S3 (HTTP {}): {}", resp.http, resp.body));

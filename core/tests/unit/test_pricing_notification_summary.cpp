@@ -76,7 +76,7 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_pricing_notification_summary", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_pricing_notification_summary")) return;
         superUser = seedUser("pn_super", "super_admin");
     }
 

@@ -908,6 +908,26 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   `manifest_rollback` / `manifest_fork` operator notification per root. The root carries the vault's recovery grants
   and each key version's envelope kids (#370, below; since #371 grants carry their public key and recovered versions
   their `origin`).
+- **version_log publish** (spec `design/encryption/06-publish-without-preconditions.md` §5; migration 137): on a
+  bucket whose probe says VersionLog (Backblaze B2) the root is PUT plainly and the provider versions of
+  `.vaulthalla/root` are the log. `VersionLog.hpp` (`RootLog`: one ListObjectVersions, roots opened by version id and
+  cached in `RootCache`; `walk` = rule C1 from an anchor, `walkBlind` = highest head epoch, `successorOf`, `windowBroken`).
+  `publish`: segments, root PUT (a 5xx or transport error = `PutOutcomeUnknown`: found by hash), list (retries 1, 2,
+  4, 8 s, then `PublishUnsettled`), won when ours is succ(base) (record version id, base version id and settle
+  window), else delete ours by id, reload, merge, retry (max(3, writers + 1)); repair deletes versions newer than the
+  head, never an authentic root of a higher epoch nor one such a root builds on (`Walk::ahead`). A chain from the
+  anchor with such a root above it is incomplete: the read falls back to `walkBlind` (highest head epoch, then the
+  longer chain, then the earliest head) and the chain rules (gap, fork, rollback). `load` follows C1 whenever the store is VersionLog or the root declares `publish: version_log` (a restore
+  reads without a probe). Both modes: the root names `publish` and `writers` (the base's set while it names this
+  node; a node that never published here takes over with itself alone); a head newer than this node's
+  `own_epoch` that excludes it is `superseded`, a head of another node in the other mode `publish_mode_mismatch`, an
+  id inside a recorded settle window `order_violation` (each refused, alerted `manifest_<code>`). GC on VersionLog:
+  segments unreferenced 24 h (`remote_manifest_gc`) lose every version by id; the root janitor
+  (`collectRootVersions`, daily) keeps head + 2 canonical predecessors, deletes older canonical roots after 7 days and
+  non-canonical versions and markers after 24 h. `Service::verifyRemote` on VersionLog: HEAD while the ETag is the
+  settled one, else load from the settled anchor, record, repair. Tests: `ManifestPublishVersionLog*`,
+  `ManifestChainVersionLog*` (test_manifest.cpp), `ManifestVersionLog*` (test_manifest_interleavings.cpp: scheduler,
+  faults, broken order), DB `BucketCapabilityDbTest`, `VaultRecoverDb.OnABackblazeLike*`, live `LiveB2.*`.
 - **`vh vault recover`** (#371, spec 03 §6.4): `vault::recover` (plan: envelopes, export, `loadForRestore` with the
   kit's checkpoint or blind, D1 `prove` against the customer's pinned attestation keys, reconciliation, `MeteredStore`
   download budget), `db::query::vault::Recover` (one transaction: vault, tree with inodes, trash, index, provider
@@ -1312,7 +1332,10 @@ is deliberately ungated, see Stats below), `conflicts` (sync conflicts, #187: ws
 `vh resolve`, the HTTP `/download/conflict` lane's authorization), `upstream` (S3/R2 bucket administration and event
 sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`), `recovery` (file recovery: ws `recovery.*` / `vault.recovery.*`, `vh snapshot|recovery …`, `vh vault recovery …`; see `recovery.md`), `devices` (paired devices: ws `device.*`, `vh device …`; see "Device listener
 and pairing"), `vault_keys` (key backup and restoration: ws `vault.keys.status|export|export.confirm|import`, `vh vault keys
-status|export|import`; key material only through the CLI or a paired device, D4; see `key-backup.md`). Still per-surface: the ws-only
+status|export|import`; key material only through the CLI or a paired device, D4; see `key-backup.md`), `vault_storage`
+(the bucket write-capability probe, spec 06 §7: ws `vault.storage.probe`, `vh vault storage probe`; the vault's admin
+Edit permission; audited `vault.storage.probe`; agent-available (effect write: it writes and deletes only its own
+`.vaulthalla/probe/` versions, no key material); see `upstream-control-plane.md`). Still per-surface: the ws-only
 pricing preflight/override/notification endpoints, email test-send/history, `vh vault keys inspect|rotate`, sync
 diagnostics, and lifecycle commands (`setup`, `teardown`, `secrets`).
 

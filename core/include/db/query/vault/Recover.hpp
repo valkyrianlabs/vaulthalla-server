@@ -78,6 +78,7 @@ struct RecoverInput {
     std::optional<Salvage> salvage{};
     std::optional<uint64_t> epoch{};
     std::optional<std::string> root_sha256{}, root_etag{};
+    std::optional<std::string> root_version_id{};   // version_log buckets (migration 137)
     std::vector<std::string> root_sids{};
     std::optional<unsigned int> created_by{};
     // An inode for each restored entry (root excluded: reinstateVault gives it one), from the FS cache, as creating

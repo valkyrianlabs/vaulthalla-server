@@ -81,7 +81,7 @@ protected:
     AuthRuntime auth_;
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("mfa_policy", {.freshEngines = false})) return;
+        if (!setUpDbSuite("mfa_policy")) return;
         // Settings writes go to a private copy, never the tree's config.yaml.
         previousConfigPath = paths::configPath;
         if (std::filesystem::exists(previousConfigPath))

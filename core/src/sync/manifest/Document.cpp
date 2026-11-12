@@ -410,6 +410,8 @@ Json toJson(const RootDocument& r) {
         }
         j["vault"] = std::move(v);
     }
+    if (r.publish) j["publish"] = *r.publish;
+    if (r.writers) j["writers"] = *r.writers;
     if (r.recovery_policy) {
         Json grants = Json::array();
         for (const auto& g : r.recovery_policy->grants) {
@@ -559,6 +561,19 @@ RootDocument rootFromJson(const Json& j, const Uid& expectedVaultUid) {
 
     const Fields st(f.at("stats"), kBadRoot, "stats");
     r.stats = Stats{st.u64("files"), st.u64("dirs"), st.u64("bytes")};
+
+    if (f.present("publish")) {
+        r.publish = f.str("publish");
+        if (*r.publish != kPublishConditional && *r.publish != kPublishVersionLog) f.fail("names an unknown publish mode");
+    }
+    if (f.present("writers")) {
+        std::vector<std::string> writers;
+        for (const auto& w : f.array("writers")) {
+            if (!w.is_string() || w.get<std::string>().empty()) f.fail("has a writer that is not a node id");
+            writers.push_back(w.get<std::string>());
+        }
+        r.writers = std::move(writers);
+    }
     return r;
 }
 

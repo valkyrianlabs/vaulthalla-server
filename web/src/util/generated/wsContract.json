@@ -13245,6 +13245,51 @@
           ]
         },
         {
+          "description": "Vaults with the opaque_v1 layout whose encrypted manifest can't be published on their bucket (design/encryption/06-publish-without-preconditions.md §7): the bucket's probe found neither conditional writes nor object versions, or a bucket probed as conditional has refused a condition since. Their sync stalls. Any entry makes the node at least degraded.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "bucket_capability_insufficient",
+                "bucket_capability_changed"
+              ],
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Why, and what to do.",
+              "name": "detail",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "vaults_manifest_unpublishable",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
           "description": "Legacy-format content (#373/#376). null when the database could not be asked. Never degrades health by itself.",
           "fields": [
             {
@@ -19874,6 +19919,193 @@
       "name": "VaultStat"
     },
     {
+      "description": "ops::vault_storage::toJson(ProbeAnswer): what the vault's bucket supports for writes that must never overwrite (design/encryption/06-publish-without-preconditions.md §7), probed now and recorded.",
+      "fields": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "transparent",
+            "path_v0",
+            "opaque_v1"
+          ],
+          "name": "layout",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "What was recorded before this probe (unknown: never probed).",
+          "enum": [
+            "unknown",
+            "conditional",
+            "version_log",
+            "insufficient"
+          ],
+          "name": "previous",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The recorded verdict had been marked bucket_capability_changed.",
+          "name": "previously_changed",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Whether the vault's manifest can be published on the bucket (an opaque_v1 vault needs conditional writes or object versions: false only on an insufficient bucket).",
+          "name": "manifest_publishable",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "enum": [
+                "conditional",
+                "version_log",
+                "insufficient"
+              ],
+              "name": "capability",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "supported",
+                "rejected",
+                "ignored",
+                "inconsistent"
+              ],
+              "name": "conditional_put",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "versioning",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "get_if_match",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "md5_etags",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "step",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "enum": [
+                    "ok",
+                    "precondition_failed"
+                  ],
+                  "name": "expected",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "ok | precondition_failed | not_implemented | error | unversioned",
+                  "name": "got",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "steps",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "description": "Probe versions the bucket refused to delete.",
+              "minimum": 0,
+              "name": "leftover_versions",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "probed_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "probe",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "name": "VaultStorageProbe"
+    },
+    {
       "description": "A vault's sync health (core/src/stats/model/VaultSyncHealth.cpp to_json).",
       "fields": [
         {
@@ -20521,7 +20753,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "e150b9c0831c4974a8444a38c09d7e6adf54b6783972a337e2ede83f4f238003",
+  "models_hash": "1e308259e291aeb6610653468e0799d19a8539eca25796be9c51209f3d107471",
   "protocol": {
     "min": 1,
     "version": 1
@@ -42965,7 +43197,7 @@
           "description": "provision mode adopt (or an existing unmanaged bucket) needs consent to adopt the bucket: resend with provision.accept_adoption."
         }
       ],
-      "description": "Create a vault. owner_id, description and quota (bytes, 0 = unlimited) are optional; the daemon picks the backing directory. S3 vaults also need api_key_id and bucket. A refusal with data.code 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the person accepts. With provision (#237) the daemon creates a managed bucket or adopts an existing one; 'upstream_adoption' asks for provision.accept_adoption.",
+      "description": "Create a vault. owner_id, description and quota (bytes, 0 = unlimited) are optional; the daemon picks the backing directory. S3 vaults also need api_key_id and bucket. A refusal with data.code 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the person accepts. With provision (#237) the daemon creates a managed bucket or adopts an existing one; 'upstream_adoption' asks for provision.accept_adoption. The bucket's write capability is probed first (design/encryption/06-publish-without-preconditions.md §7): a vault that encrypts upstream is refused with 'bucket_capability_insufficient' on a bucket that has neither conditional writes nor object versions.",
       "input": "payload",
       "operation": "vaults.create",
       "payload": [
@@ -43406,6 +43638,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "bucket_capability_insufficient",
         "encryption_waiver",
         "upstream_adoption"
       ],
@@ -43414,7 +43647,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "bucket_capability_insufficient"
       ],
       "response": [
         {
@@ -43841,7 +44075,7 @@
           "description": "The bucket already holds data Vaulthalla did not write (or encryption is being switched on over it): resend with accept_encryption_waiver once the person accepts."
         }
       ],
-      "description": "Patch a vault (absent or null members are unchanged; a vault's type never changes). Owner reassignment also needs Create for the new owner, a key change needs Consume on the key, sync settings need vault sync.config.edit. A refusal with data.code 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the person accepts.",
+      "description": "Patch a vault (absent or null members are unchanged; a vault's type never changes). Owner reassignment also needs Create for the new owner, a key change needs Consume on the key, sync settings need vault sync.config.edit. A refusal with data.code 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the person accepts. A new bucket or key is probed first: an opaque_v1 vault is refused with 'bucket_capability_insufficient' as storage.vault.add says.",
       "input": "payload",
       "operation": null,
       "payload": [
@@ -44164,6 +44398,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "bucket_capability_insufficient",
         "encryption_waiver"
       ],
       "refusal_kinds": [
@@ -44171,7 +44406,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "bucket_capability_insufficient"
       ],
       "response": [
         {
@@ -48779,7 +49015,235 @@
       "response_model": null,
       "untyped_refusals": [],
       "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "vault.storage.probe",
+      "confirmations": [],
+      "description": "Probe what the vault's bucket supports for writes that must never overwrite another writer's object (design/encryption/06-publish-without-preconditions.md §7): conditional PUT honoured, rejected or ignored, object versions, GET If-Match. About ten requests under .vaulthalla/probe/, whose versions are deleted by id afterwards. Records the verdict, which replaces a bucket_capability_changed mark. The vault's admin Edit permission; refused (denied) on a protected bucket, bucket_probe_failed when the bucket can't be reached.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "bucket_probe_failed"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "bucket_probe_failed"
+      ],
+      "response": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "transparent",
+            "path_v0",
+            "opaque_v1"
+          ],
+          "name": "layout",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "What was recorded before this probe (unknown: never probed).",
+          "enum": [
+            "unknown",
+            "conditional",
+            "version_log",
+            "insufficient"
+          ],
+          "name": "previous",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The recorded verdict had been marked bucket_capability_changed.",
+          "name": "previously_changed",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Whether the vault's manifest can be published on the bucket (an opaque_v1 vault needs conditional writes or object versions: false only on an insufficient bucket).",
+          "name": "manifest_publishable",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "enum": [
+                "conditional",
+                "version_log",
+                "insufficient"
+              ],
+              "name": "capability",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "supported",
+                "rejected",
+                "ignored",
+                "inconsistent"
+              ],
+              "name": "conditional_put",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "versioning",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "get_if_match",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "md5_etags",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "step",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "enum": [
+                    "ok",
+                    "precondition_failed"
+                  ],
+                  "name": "expected",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "ok | precondition_failed | not_implemented | error | unversioned",
+                  "name": "got",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "steps",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "description": "Probe versions the bucket refused to delete.",
+              "minimum": 0,
+              "name": "leftover_versions",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "name": "probed_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "probe",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": "VaultStorageProbe",
+      "untyped_refusals": [],
+      "variants": []
     }
   ],
-  "ws_hash": "871cc02a52740f5112fff169444a8af57b04bbdeb647b5fcb7823b223a0a7969"
+  "ws_hash": "cbc6a9f43a2e10137e62105214ed6f5609e8c92155157148f08540603e5a6241"
 }

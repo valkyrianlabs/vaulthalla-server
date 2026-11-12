@@ -66,6 +66,9 @@ namespace vh::protocols::shell::commands::vault {
     CommandResult handle_vault_format(const CommandCall &call);
     CommandResult handle_vault_migrate_layout(const CommandCall &call);
 
+    // storage.cpp: `vh vault storage probe` (ops::vault_storage): what the vault's bucket supports for writes.
+    CommandResult handle_vault_storage(const CommandCall &call);
+
     // sync.cpp
     CommandResult handle_sync(const CommandCall &call);
 

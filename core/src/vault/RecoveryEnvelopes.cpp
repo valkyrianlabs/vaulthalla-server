@@ -5,6 +5,7 @@
 #include "db/query/vault/Vault.hpp"
 #include "log/Registry.hpp"
 #include "runtime/Deps.hpp"
+#include "storage/BucketCapability.hpp"
 #include "storage/s3/Controller.hpp"
 #include "sync/manifest/Store.hpp"
 #include "vault/APIKeyManager.hpp"
@@ -57,7 +58,14 @@ std::shared_ptr<sync::manifest::ObjectStore> storeFor(const uint32_t vaultId) {
     controller->setUsageVault(vaultId);
     // opaque_v1: the request rules hold for envelopes too (spec 01 §4.3; s3::Controller::enforceRequestPolicy).
     controller->setOpaqueLayout(s3->storage_layout == model::StorageLayout::OpaqueV1);
-    return std::make_shared<sync::manifest::S3Store>(std::move(controller));
+    // An envelope's name is its hash (kid): If-None-Match bought only idempotence, so a bucket without conditional
+    // writes takes a plain PUT (design/encryption/06-publish-without-preconditions.md §7). A bucket probed as
+    // conditional that started refusing conditions writes nothing until it is probed again.
+    const auto capability = storage::bucket_capability::resolve(vaultId, *controller);
+    if (capability.changed)
+        throw std::runtime_error("vault " + std::to_string(vaultId) + ": the bucket refused a conditional write since its "
+                                 "probe; run vh vault storage probe " + std::to_string(vaultId));
+    return std::make_shared<sync::manifest::S3Store>(std::move(controller), capability.capability);
 }
 
 Pending put(const uint32_t vaultId, const uint32_t version, const crypto::SecretKey& key) {
@@ -74,9 +82,11 @@ Pending put(const uint32_t vaultId, const uint32_t version, const crypto::Secret
             const auto env = vl::keykit::kev1::wrap(key.bytes(), vl::keykit::kev1::Suite::X25519, version, uid, g.public_key);
             const auto kid = vl::keykit::kev1::kid(env);
             try {
-                (void)out.store->putIfAbsent(vl::keykit::kev1::objectKey(kid), env);
+                (void)out.store->putOnce(vl::keykit::kev1::objectKey(kid), env);
             } catch (const sync::manifest::PreconditionFailed&) {
                 // kid is the envelope's hash: an object under it already holds these exact bytes.
+            } catch (const sync::manifest::ConditionsUnsupported& e) {
+                throw std::runtime_error(storage::bucket_capability::noteChanged(vaultId, e.what()));
             }
             out.envelopes.push_back({g.grant_id, version, kid});
         }

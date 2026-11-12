@@ -1,6 +1,7 @@
 #include "storage/CloudEngine.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "storage/s3/Controller.hpp"
+#include "storage/BucketCapability.hpp"
 #include "fs/model/Entry.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/file/Trashed.hpp"
@@ -472,12 +473,23 @@ CloudEngine::getGroupedFilesFromS3(const fs::path& prefix) const {
 
 bool CloudEngine::usesManifestV2() const { return opaqueLayout(); }
 
+s3::WriteCapability CloudEngine::writeCapability() const {
+    const auto resolved = bucket_capability::resolve(vault->id, *s3Provider_);
+    if (resolved.changed)
+        throw SyncStalled("the bucket refused a conditional write although its probe found support "
+                          "(bucket_capability_changed): check the vault's endpoint, then run vh vault storage probe " +
+                          std::to_string(vault->id));
+    return resolved.capability;
+}
+
 std::shared_ptr<vh::sync::manifest::Service> CloudEngine::manifestV2() const {
+    const auto mode = writeCapability();
     std::scoped_lock lock(manifestV2Mutex_);
-    if (!manifestV2_) {
+    if (!manifestV2_ || manifestV2Mode_ != mode) {
         if (!vault->uid) throw std::runtime_error("an opaque_v1 vault without a uid can't publish its manifest");
         manifestV2_ = std::make_shared<vh::sync::manifest::Service>(
-            vault->id, *vault->uid, std::make_shared<vh::sync::manifest::S3Store>(s3Provider_), encryptionManager);
+            vault->id, *vault->uid, std::make_shared<vh::sync::manifest::S3Store>(s3Provider_, mode), encryptionManager);
+        manifestV2Mode_ = mode;
     }
     return manifestV2_;
 }
@@ -491,6 +503,18 @@ void CloudEngine::publishManifestV2(const bool onlyIfChanged) const {
         throw SyncStalled(std::string("the bucket's manifest root was refused: ") + e.what());
     } catch (const vh::sync::manifest::PublishConflict& e) {
         throw SyncStalled(e.what());
+    } catch (const vh::sync::manifest::PublishUnsettled& e) {
+        throw SyncStalled(e.what());
+    } catch (const vh::sync::manifest::PublishUnsupported&) {
+        // Nothing was written: no segment, no root (spec 06 §7). The pass stalls with the reason; health lists the vault.
+        s3::WriteCapability mode{};
+        {
+            std::scoped_lock lock(manifestV2Mutex_);
+            mode = manifestV2Mode_;
+        }
+        throw SyncStalled("manifest_publish_unsupported: " + bucket_capability::unpublishableReason(mode));
+    } catch (const vh::sync::manifest::ConditionsUnsupported& e) {
+        throw SyncStalled(bucket_capability::noteChanged(vault->id, e.what()));
     }
     try {
         (void)manifestV2()->collectGarbageIfDue();
@@ -554,20 +578,27 @@ void CloudEngine::publishRemoteIndexManifest(const std::optional<std::string>& e
     const auto metadata = remote_manifest::inspectIndexV1Metadata(manifest, vault->id);
     const std::vector<uint8_t> payload(manifest.begin(), manifest.end());
 
-    const auto ifMatch = expectedETag;
-    const auto ifNoneMatch = ifMatch
+    // The index is a sync cache one server writes and a full LIST rebuilds: on a bucket without conditional writes
+    // (spec 06 §7) it is PUT plainly; elsewhere If-Match / If-None-Match keep a concurrent publish from being lost.
+    const bool conditions = s3::sendsPreconditions(writeCapability());
+    const auto ifMatch = conditions ? expectedETag : std::optional<std::string>{};
+    const auto ifNoneMatch = !conditions || ifMatch
         ? std::optional<std::string>{}
         : std::make_optional<std::string>("*");
 
     auto options = requestOptionsFor(s3::provider::RequestOperation::PutObject);
     options.metadata = {{"vh-manifest-version", std::to_string(remote_manifest::INDEX_V1_VERSION)}};
 
-    s3Provider_->uploadBufferWithMetadataConditional(
-        remote_manifest::INDEX_V1_KEY,
-        payload,
-        options,
-        ifMatch,
-        ifNoneMatch);
+    try {
+        s3Provider_->uploadBufferWithMetadataConditional(
+            remote_manifest::INDEX_V1_KEY,
+            payload,
+            options,
+            ifMatch,
+            ifNoneMatch);
+    } catch (const s3::PreconditionsUnsupported& e) {
+        throw SyncStalled(bucket_capability::noteChanged(vault->id, e.what()));
+    }
 
     remoteIndexPublishPending_ = false;   // the manifest now carries the whole index
 

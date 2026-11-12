@@ -4,6 +4,7 @@
 #include "sync/manifest/Chain.hpp"
 #include "sync/manifest/Content.hpp"
 #include "sync/manifest/Store.hpp"
+#include "sync/manifest/VersionLog.hpp"
 
 #include <cstdint>
 #include <map>
@@ -64,14 +65,34 @@ struct Loaded {
     std::vector<Range> blind_ranges;  // uid ranges no intact segment covers
     std::map<Range, LoadedSegment> segments;          // the pinned segments that loaded as pinned
     std::map<uint64_t, LoadedSnapshot> snapshots;     // by snapshot id
+    // version_log buckets (spec 06 §5.3): the canonical head's provider version, the version of the root before it on
+    // the chain with the ids listed between the two (its settle window), the versions newer than the head that are
+    // not on the chain (repair deletes them), and how many root versions this read fetched.
+    std::optional<std::string> version_id;
+    std::optional<std::string> base_version_id;
+    std::vector<std::string> settle_window;
+    std::vector<std::string> strays;
+    unsigned root_gets{};
 
-    [[nodiscard]] Known known() const { return {acceptance.epoch, acceptance.root_sha256}; }
+    [[nodiscard]] Known known() const { return {acceptance.epoch, acceptance.root_sha256, version_id}; }
+};
+
+// The settled root's window (spec 06 §5.3), checked before the anchor is trusted.
+struct SettledWindow {
+    std::string base_version_id;
+    std::string version_id;
+    std::vector<std::string> window;
 };
 
 struct LoadOptions {
     std::optional<Known> known;
     bool use_provider_versions{true};  // false: no ListObjectVersions / versioned GETs (no fallbacks, no gap walk)
     std::optional<StoredObject> root_object;  // the current root, when the caller already fetched it (saves a GET)
+    // version_log buckets (store.mode()): the cache of opened root versions (kept across reads by the caller; a local
+    // one otherwise) and the settled root's window. root_object and use_provider_versions don't apply there: the
+    // listing is the log.
+    RootCache* root_cache{nullptr};
+    std::optional<SettledWindow> settled{};
 };
 
 // Throws ChainRejected (rollback, fork), NoUsableRoot, or the store's errors (transport, budget).

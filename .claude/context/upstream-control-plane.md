@@ -86,7 +86,48 @@ buckets it created. Other providers: plain storage, but protection locks still a
   in `upsertVault`/`File::upsertFile` (a rewritten inode keeps its uid; copies clear it first), existing rows by the
   deployer data step for 122 (`SqlDeployer` `kMigrationDataSteps`). Nothing in the data plane reads them yet (#369).
 
+## Bucket write capability (design/encryption/06-publish-without-preconditions.md §7, migration 136)
+
+- **What:** `storage::s3::probeBucket` (`storage/s3/Capability.hpp`, `capability.cpp`) answers, on one key
+  `.vaulthalla/probe/<uid>` (allowlisted under opaque_v1, `ObjectKeys`): PUT If-None-Match absent/present, If-Match
+  wrong/right; versions newest first and readable by id; GET If-Match wrong/right; then deletes every version it wrote
+  by id (`leftover_versions` counts refusals). Verdict (`WriteCapability`): `Conditional` (conditions honoured; versions
+  not needed: R2 has none), `VersionLog` (rejected with 501/400 NotImplemented, or silently ignored, and versions
+  kept), `Insufficient` (neither, or GET If-Match not honoured), `Unknown` (never probed: behaves as Conditional).
+- **Where it's stored:** `s3.manifest_publish` (`conditional|version_log`, NULL) + `s3.bucket_probe` JSONB (the
+  result; `changed_at`/`changed_detail` once a conditional bucket refuses a condition). `db::query::vault::
+  BucketCapability`. The `upsert_s3_vault` statement nulls both when the bucket or key changes; `ops::api_keys::update`
+  clears them for every vault of a key whose provider or endpoint changed.
+- **When it's probed** (`storage::bucket_capability`, `storage/BucketCapability.hpp`): `ops::vaults::create` (before
+  `addVault`: an encrypting = opaque_v1 vault is refused with `ops::Refused` `bucket_capability_insufficient` on an
+  Insufficient bucket only), `ops::vaults::update` on a bucket/key change (same refusal), `ops::vault_recover` after
+  the write (never refuses: a rescue path), `ops::vault_layout::start` (fresh probe; refuses an Insufficient bucket,
+  spec 01 §6.1 step 5), `vh vault storage probe`, and lazily on first use for rows from
+  before 136 (`resolve`, at most one failed attempt per vault an hour). **Test mode never probes on its own**
+  (`setLazyProbingForTesting`, `setControllerFactoryForTesting`): existing suites see Unknown and unchanged requests.
+- **What it changes:** `sync::manifest::ObjectStore::mode()` / `putOnce` (If-None-Match only where
+  `sendsPreconditions`), `S3Store(controller, mode)`; segments, snapshots, the layout hint and KEV1 envelopes go through
+  `putOnce`; the `path_v0` index-v1 is PUT plainly on a non-conditional bucket. On VersionLog the manifest root is
+  published as provider versions (spec 06 §5; architecture.md "version_log publish"). `manifest::publish` throws
+  `PublishUnsupported` **before any request** on Insufficient only, which `CloudEngine::publishManifestV2` turns into
+  `SyncStalled("manifest_publish_unsupported: …")`; health lists those opaque_v1 vaults and any with a changed
+  conditional bucket (`vaults_manifest_unpublishable`, reasons `bucket_capability_insufficient` /
+  `bucket_capability_changed`, degraded; `vh status`).
+- **Never silently downgraded:** a 501/400 NotImplemented on a conditional PUT is `s3::PreconditionsUnsupported`
+  (`buffer.cpp`; manifest-level `ConditionsUnsupported`), never retried without the condition. Stored Conditional:
+  `noteChanged` marks `changed_at`, alerts once (`bucket_capability_changed`, operator notification), and
+  `CloudEngine::writeCapability()` stalls every later use until a re-probe. Unknown: logged, the next use probes.
+
 ## Provider facts (verified live 2026-10-15)
+
+- Backblaze B2 (2026-11-12, `s3.us-west-004.backblazeb2.com`, coordinator's probe): PutObject with `If-None-Match: *`
+  or `If-Match` → `501 NotImplemented`, nothing written. Versions always on: every PUT returns `x-amz-version-id`;
+  ListObjectVersions newest first with id/ETag/IsLatest, pages with max-keys; GET/DELETE by version id; deleting the
+  newest makes the previous current; delete by name = a delete marker; single-PUT ETag = MD5; GET If-Match and
+  `x-amz-copy-source-if-match` honoured (412/200). Listings read-after-write and concurrent ordering held in the
+  trials of spec 06 §4; a stalled-body PUT got 500 (the publisher treats a 5xx on the root PUT as an unknown
+  outcome and looks for its version by hash), lifecycle prefix rules unverified. Live suite `LiveB2.*`
+  (testing.md): run once, 2026-11-12, provider behaviour as expected.
 
 - AWS test identity `vaulthalla-test-admin`: S3 admin works; **no SQS permissions** and no
   `s3:GetBucketObjectLockConfiguration` → AWS event delivery untested live. Needed statement: docs/vaults/upstream-buckets.md.

@@ -15,10 +15,16 @@ void vh::db::Connection::initPreparedVaults() const {
                    // layout under this transaction's row lock), never from a request; s3_storage_layout_check backs it.
                    "INSERT INTO s3 (vault_id, api_key_id, bucket, encrypt_upstream, storage_tier_id, storage_layout) "
                    "VALUES ($1, $2, $3, $4, $5, $6) "
+                   // A new bucket or key is another bucket's capability: both probe columns go, and the next use
+                   // probes it (design/encryption/06-publish-without-preconditions.md §7, migration 136).
                    "ON CONFLICT (vault_id) DO UPDATE "
                    "SET bucket = EXCLUDED.bucket, api_key_id = EXCLUDED.api_key_id, "
                    "encrypt_upstream = EXCLUDED.encrypt_upstream, storage_tier_id = EXCLUDED.storage_tier_id, "
-                   "storage_layout = EXCLUDED.storage_layout "
+                   "storage_layout = EXCLUDED.storage_layout, "
+                   "manifest_publish = CASE WHEN s3.bucket = EXCLUDED.bucket AND s3.api_key_id = EXCLUDED.api_key_id "
+                   "  THEN s3.manifest_publish END, "
+                   "bucket_probe = CASE WHEN s3.bucket = EXCLUDED.bucket AND s3.api_key_id = EXCLUDED.api_key_id "
+                   "  THEN s3.bucket_probe END "
                    "RETURNING vault_id");
 
     conn_->prepare("vault_root_exists",

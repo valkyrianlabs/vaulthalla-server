@@ -79,7 +79,7 @@ protected:
     inline static std::vector<uint8_t> blob;
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_device_http", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_device_http")) return;
         admin = superUser;
 
         owner = seedUser("dh_owner");

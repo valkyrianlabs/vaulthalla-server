@@ -19,7 +19,10 @@ turned on, Vaulthalla lists the account's buckets, creates new buckets for vault
 lifecycle and event rules, and cleans up buckets it created. You choose the vault configuration; Vaulthalla runs the
 bucket machinery.
 
-Other S3-compatible providers (MinIO, Wasabi, Backblaze B2, ...) keep working as plain vault storage. Bucket protection
+Other S3-compatible providers (MinIO, Wasabi, Backblaze B2, ...) keep working as plain vault storage, within what each
+bucket supports: Backblaze B2 doesn't support conditional writes, so a vault with opaque storage there publishes its
+encrypted manifest as object versions, at one listing more per publish (see
+[Providers Without Conditional Writes](/vaults/s3-r2-vaults#providers-without-conditional-writes)). Bucket protection
 locks apply to them too; the rest of this page is AWS S3 and Cloudflare R2 only.
 
 :::callout{theme="warning" title="Nothing here deletes data by default"}

@@ -162,7 +162,7 @@ protected:
     inline static uint32_t noteId = 0, otherId = 0;
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_http_access", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_http_access")) return;
         pdfium.emplace();
         admin = superUser;
 

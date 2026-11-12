@@ -29,7 +29,8 @@ bool isMetadataKey(std::string_view key) {
     if (!key.starts_with(kMetadataPrefix)) return false;
     const auto rest = key.substr(kMetadataPrefix.size());
     if (rest == "layout.json" || rest == "root") return true;
-    for (const std::string_view sub : {std::string_view("seg/"), std::string_view("key/")})
+    // probe/<uid>: the bucket capability probe's own short-lived object (storage/s3/Capability.hpp).
+    for (const std::string_view sub : {std::string_view("seg/"), std::string_view("key/"), std::string_view("probe/")})
         if (rest.starts_with(sub)) return object_keys_detail::isUidText(rest.substr(sub.size()));
     return false;
 }

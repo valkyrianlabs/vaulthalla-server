@@ -42,7 +42,7 @@ protected:
     inline static sfs::path scratch;
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_recovery_store", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_recovery_store")) return;
         scratch = root / "scratch";
         sfs::create_directories(scratch);
         const auto user = vh::test::identities::createUser("rst_super_" + recoveryStoreTag(),

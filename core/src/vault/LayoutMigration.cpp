@@ -1344,6 +1344,11 @@ void requirePreconditions(const storage::CloudEngine& engine) {
     if (const auto m = envelopes::material(s3->id); m.state == envelopes::kMaterialMissing)
         throw std::runtime_error("the vault has no recovery material independent of this host (" + m.detail +
                                  "); add a recovery recipient or export the key first");
+    // Spec 01 §6.1 step 5: the migration publishes the encrypted manifest, which needs conditional writes (spec 03
+    // §3.4) or object versions (spec 06 §5) to arbitrate its root. A bucket never probed is probed here.
+    if (const auto capability = engine.writeCapability(); capability == storage::s3::WriteCapability::Insufficient)
+        throw std::runtime_error("the bucket neither honours conditional writes nor keeps object versions (or not "
+                                 "If-Match on GET): the opaque_v1 manifest can't be published on it");
 }
 
 // ---- the run -----------------------------------------------------------------------------------------------------------

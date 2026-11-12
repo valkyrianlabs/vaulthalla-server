@@ -25,6 +25,8 @@
 #include "protocols/device/Endpoints.hpp"
 #include "protocols/ws/Handler.hpp"
 #include "protocols/ws/handler/Devices.hpp"
+#include "runtime/Deps.hpp"
+#include "sync/Controller.hpp"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -51,14 +53,23 @@ class DeviceApprovalsDb : public vh::test::db::Suite {
 protected:
     AuthRuntime auth_{{.level = mfa::policy::Level::Optional}};
     std::shared_ptr<const vh::device::ServerIdentity> previousIdentity;
+    inline static std::shared_ptr<sync::Controller> previousController;
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("device_approvals", {.freshEngines = false})) return;
+        if (!setUpDbSuite("device_approvals")) return;
         protocols::device::endpoints::clearNodeIdForTesting();
         audit::Trail::instance()->resetForTesting();
+        // Every ws command runs against the suite's real engines: fs writes ask the sync controller for an early pass
+        // (an unstarted one just queues it).
+        previousController = runtime::Deps::get().syncController;
+        runtime::Deps::setSyncController(std::make_shared<sync::Controller>());
     }
 
-    static void TearDownTestSuite() { tearDownDbSuite(); }
+    static void TearDownTestSuite() {
+        if (skipTests) return;
+        runtime::Deps::setSyncController(previousController);
+        tearDownDbSuite();
+    }
 
     void SetUp() override {
         Suite::SetUp();

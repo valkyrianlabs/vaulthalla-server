@@ -68,7 +68,10 @@ process's. Test-only speedups, all refused outside test mode and never set by th
 minimum cost (`hash::setMinimalPasswordCostForTesting`, set in `gtest_main.cpp`), a TOTP clock tests advance instead
 of sleeping for the next 30 s step (`totp::advanceClockForTesting`, reset in TearDown), a shorter shell-server request
 timeout per test (`shell::Server::setTimingForTesting`). Shared fixtures: `tests/helpers/db_suite.hpp`
-(`vh::test::db::Suite`: env check, fresh schema, seed, runtime, scratch root), `web_session.hpp` (ws sign-in, TOTP,
+(`vh::test::db::Suite`: env check, fresh schema, seed, runtime, scratch root; every schema reset also starts the fs cache and
+the storage engines over, `resetIdKeyedState`: they are keyed by ids the new schema reuses, and a stale File cached under
+a new Directory's id corrupted the heap of a later suite under ASan, `DbSuiteIsolation.*`; an unseeded schema gets no fs
+cache, since there is no root entry to start one from), `web_session.hpp` (ws sign-in, TOTP,
 passkey, device approval helpers, `AuthRuntime`), `share_fakes.hpp`, `s3_gateway.hpp`, `bytes.hpp`,
 `rewrap_fixture.hpp`, `http_upload.hpp`, `parity.hpp`. 2026-11-06 on the dev box: the DB run went from 1,072 s (one
 process) to ~2 min, CI's DB-free run from ~121 s to ~16 s.
@@ -439,6 +442,28 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   that every chain error/warning is one `sync::manifest` knows). `ManifestDbTest.*` (`test_manifest_db.cpp`,
   db-only) compares DB → collect → publish → load → a scratch schema with an independent SQL projection of the live
   tables, and covers `remote_manifest_state`, the refused-root alert and the opaque_v1 `CloudEngine` path.
+- version_log publish (spec 06 §5, §8.1-8.2): `ManifestPublishVersionLog*` / `ManifestChainVersionLog*`
+  (`test_manifest.cpp`, DB-free) on a Reject501 fake (plain PUTs, one LIST more than conditional, loser deletes and
+  merges, repair, GC of every version, janitor, lost reply, 5xx before commit, failed delete, writers and mode,
+  listing lag, settle-window order violation, rollback/fork/gap, a lifecycle-expired head). The fake's knobs
+  `listingLag(s)`, `orderBy(Start)` + `holdPut(key)` (per thread), `expireNoncurrent(prefix, days)` break A3, A4, A6.
+  `tests/helpers/hooked_store.hpp` (`HookedStore`) wraps any `ObjectStore` with before/after hooks: a version landed
+  mid-publish, the scheduler's parking. `ManifestVersionLog*` (`test_manifest_interleavings.cpp`, DB-free, ~35 s):
+  actors on threads parked at every root PUT, ListObjectVersions and DELETE (other requests ride in the slot; the
+  file header argues why that bound is sound), exhaustive DFS for 2 writers + reader (800 runs) and root-PUT-level 3
+  writers, 200 seeded 3-writer + reader schedules, crash before/after every step with restart from the "database"
+  only, lost replies / 5xx / failed deletes at every step, listing lag and start ordering (I3 or a refusal). A crash
+  restart may revert another writer's change its database lacks (spec 06 §5.5; counted, expected only there).
+- Bucket write capability (spec 06 §7, `test_bucket_capability.cpp`): `BucketProbe.*` (DB-free, every verdict row on
+  the versioned fake: `conditionalPuts` Supported/Reject501/Ignore, `ignoreGetIfMatch`, versioning modes, the opaque
+  request rules, refused cleanup, a failed probe) and `BucketCapabilityDbTest.*` (db: stored verdict, bucket change,
+  the path_v0 index on a Reject501 bucket (regression), an opaque_v1 vault publishing on a version_log bucket with
+  exact request counts and a restart, its stall and health entry on an insufficient one, a conditional bucket that
+  starts refusing, lazy probing, envelopes, create on version_log / refusal on insufficient). `VaultRecoverDb.
+  OnABackblazeLike*` restores over a bucket with a losing sibling and a marker above the head, publishes, rotates and
+  enrolls there. `ManifestStore.*` and `ManifestPublish.*Refuses*|*RejectsConditions*` (`test_manifest.cpp`) cover
+  the Store seam; CLI ↔ ws:
+  `VaultStorageParityTest.*` (`test_ops_parity_vault_storage.cpp`, db-only).
 - opaque_v1 data plane (#369, `test_opaque_layout.cpp`): `OpaqueObjectKeys.*`, `OpaqueRequestPolicy.*` and
   `OpaqueMultipart.*` are DB-free (the 60 GiB object is a sparse file behind a part-counting controller: ~20 s);
   `OpaqueLayoutTest.*` (db) makes a vault opaque_v1 before it holds anything (test mode; `UPDATE s3 SET
@@ -478,7 +503,7 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
 - The full `vh_unit_tests` binary against a real DB runs about 230s (S3CostSafety plus S3GatewayDb take about 185s),
   so `meson test` hits its 120s timeout. Run `./build/core/vh_unit_tests` directly for the DB-backed run.
 
-## Live provider tests (`LiveR2.*`, opt-in, never CI)
+## Live provider tests (`LiveR2.*`, `LiveB2.*`, opt-in, never CI)
 
 Two hard rules, enforced by `tests/helpers/live_bucket.hpp` (the only way a test reaches a real provider):
 
@@ -518,6 +543,19 @@ Two hard rules, enforced by `tests/helpers/live_bucket.hpp` (the only way a test
   events through the real adapters over the `curl::http` transport seam (`UpstreamProviderTest`), the admin and event
   fakes (`UpstreamOps*`, `UpstreamEvent*`, `UpstreamParity*`, `RecoveryPolicyTest`), recovery (`RecoverySmartCacheTest`,
   `RecoveryProviderTest`), listing edge cases (`S3ListObjects*`, `S3VersionedOps*`).
+- **Backblaze B2** (`test_live_b2.cpp`, `LiveB2.*`; spec 06 §8.3): credential `VH_B2_TEST_KEY_ID` /
+  `VH_B2_TEST_APP_KEY` (an account-wide application key: buckets created and deleted, files listed, written,
+  deleted); the S3 endpoint and region come from `b2_authorize_account` (`apiInfo.storageApi.s3ApiUrl`). The product
+  has no B2 admin adapter, so `GuardedB2` (same helper) drives B2's native API for the run bucket (`b2_create_bucket`,
+  `b2_list_file_versions`, `b2_delete_file_version`, `b2_cancel_large_file`, `b2_delete_bucket`), name-checked
+  before any request; `RunB2Bucket` sweeps orphans, creates one `vh-test-<host>-<pid>-<start>` bucket and
+  `RunB2BucketEnvironment` deletes every version and the bucket after the last test, also on failure. One
+  consolidated test, `TheManifestPublishesAsVersionsOfItsRoot` (probe says version_log; four publishes through the
+  real `S3Store` with their request counts; a blind reload; a sibling landed after our PUT and repaired; GC of every
+  version of a collected segment; an envelope written and read back). `LiveB2Guard.*` runs in CI. **Run once**
+  (2026-11-12, us-west-004): every provider behaviour as expected, one wrong test assertion (GC reports keys, not sids),
+  fixed and not rerun since. Run: `(eval "$(grep -E '^export VH_B2_TEST_' .bashrc)"; VH_LIVE_TESTS=1 build/core/vh_unit_tests
+  --gtest_filter='LiveB2*')`.
 - **Guard:** `LiveBucketGuard.*` (no credentials, no DB; runs in CI) proves the name checks, the orphan selection and
   the guarded provider factory. A violation fails the test even if the code under test swallows the exception.
   `tools/contracts/test_live_bucket_contract.py`: the old shared-bucket variables appear nowhere but published history; only the

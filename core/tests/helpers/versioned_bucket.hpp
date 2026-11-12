@@ -41,6 +41,11 @@
 //                                  unversioned DELETE of the key) is refused with 403 AccessDenied until the retain-until
 //                                  date (bucket clock) passes or the hold is released. Governance bypass doesn't exist.
 //   refuseDeletes                  every DELETE is refused (403 AccessDenied), as a key without s3:DeleteObjectVersion.
+//   conditionalPuts                Supported (default), Reject501 (Backblaze B2: a PUT with If-Match / If-None-Match
+//                                  throws PreconditionsUnsupported and writes nothing) or Ignore (the conditions are
+//                                  silently dropped).
+//   ignoreGetIfMatch               a GET's If-Match is not enforced.
+//   listingLag / orderBy+holdPut / expireNoncurrent   spec 06 §4's A3, A4 and A6, broken on purpose (see there).
 //   setNow(t) / advance(s)         the clock writes stamp LastModified with; every mutation then ticks it by 1 s
 //                                  (autoTick) so versions have strictly increasing timestamps.
 // Seeding and inspection never meter: seed(), seedDeleteMarker(), purgeVersion(), history(), current(), version().
@@ -143,6 +148,18 @@ public:
     void advance(const std::time_t seconds) {
         std::scoped_lock lock(mutex_);
         now_ += seconds;
+        if (!expirePrefix_) return;
+        const auto maxAge = static_cast<std::time_t>(expireDays_) * 24 * 60 * 60;
+        for (auto& [key, stack] : objects_) {
+            if (!key.starts_with(*expirePrefix_)) continue;
+            // A version became noncurrent when the next one was written.
+            std::vector<std::string> expired;
+            for (std::size_t i = 0; i + 1 < stack.size(); ++i)
+                if (now_ - stack[i + 1].last_modified > maxAge) expired.push_back(stack[i].version_id);
+            std::erase_if(stack, [&](const Version& v) {
+                return std::ranges::find(expired, v.version_id) != expired.end();
+            });
+        }
     }
 
     [[nodiscard]] std::time_t now() const {
@@ -175,6 +192,41 @@ public:
     std::atomic<bool> failPuts{false};     // uploads throw before metering
     std::atomic<bool> md5Etags{false};     // S3 MD5 ETags (see the header comment)
     std::atomic<bool> refuseDeletes{false};  // every DELETE answers 403 AccessDenied
+    // How a PUT carrying If-Match / If-None-Match is answered (design/encryption/06-publish-without-preconditions.md):
+    // Supported evaluates it (412 when it doesn't hold, as S3), Reject501 refuses to evaluate it and writes nothing
+    // (Backblaze B2: 501 NotImplemented, storage::s3::PreconditionsUnsupported), Ignore writes as if it weren't there.
+    enum class ConditionalPuts { Supported, Reject501, Ignore };
+    std::atomic<ConditionalPuts> conditionalPuts{ConditionalPuts::Supported};
+    std::atomic<bool> ignoreGetIfMatch{false};  // GET If-Match is not enforced (a provider that drops the header)
+    std::atomic<unsigned> versionPageSize{1000};  // ListObjectVersions pages at most this many entries
+
+    // ---- the provider assumptions of design/encryption/06-publish-without-preconditions.md §4, broken on purpose ----
+    // listingLag(s): ListObjectVersions omits versions written less than s seconds ago (bucket clock): breaks A3.
+    void listingLag(const std::time_t seconds) {
+        std::scoped_lock lock(mutex_);
+        listingLag_ = seconds;
+    }
+    // orderBy(Start) + holdPut(key): the next PUT of `key` from this thread is ordered as if it had started now
+    // (holdPut) although it commits later: its version is inserted below every version of that key written in
+    // between (by other threads: the interleaving suite runs each writer on its own). Breaks A4.
+    enum class Order { Commit, Start };
+    void orderBy(const Order order) {
+        std::scoped_lock lock(mutex_);
+        order_ = order;
+    }
+    void holdPut(const std::string& key) {
+        std::scoped_lock lock(mutex_);
+        const auto it = objects_.find(key);
+        heldAt_[{key, std::this_thread::get_id()}] = it == objects_.end() ? 0 : it->second.size();
+    }
+    // expireNoncurrent(prefix, days): a lifecycle rule; advance() then purges versions of keys under prefix that have
+    // been noncurrent (superseded by a newer version or a marker) for more than `days`. A6 broken when it covers the
+    // root.
+    void expireNoncurrent(std::string prefix, const unsigned days) {
+        std::scoped_lock lock(mutex_);
+        expirePrefix_ = std::move(prefix);
+        expireDays_ = days;
+    }
 
     // Object Lock retention of one version (mode GOVERNANCE or COMPLIANCE) until `until` (bucket clock).
     void lockVersion(const std::string& key, const std::string& versionId, const std::string& mode,
@@ -584,7 +636,7 @@ public:
         ++counters_.list;
 
         storage::s3::ObjectVersionPage page;
-        const auto limit = std::clamp(maxKeys, 1u, 1000u);
+        const auto limit = std::clamp(std::min(maxKeys, versionPageSize.load()), 1u, 1000u);
         // Without a version-id-marker the listing starts after every version of keyMarker; with one, after that
         // version of keyMarker (S3 semantics).
         auto it = keyMarker.empty() ? objects_.begin()
@@ -595,6 +647,7 @@ public:
             if (!it->first.starts_with(prefix)) continue;
             const auto& stack = it->second;
             for (auto v = stack.rbegin(); v != stack.rend(); ++v) {
+                if (listingLag_ && now_ - v->last_modified < listingLag_) continue;   // A3 broken on purpose
                 if (skipping) {
                     if (it->first != keyMarker) skipping = false;
                     else {
@@ -730,7 +783,8 @@ protected:
                 response.headers += "x-amz-delete-marker: true\r\n";
                 return response;
             }
-            if (const auto it = extraHeaders.find("if-match"); it != extraHeaders.end() && it->second != v->etag)
+            if (const auto it = extraHeaders.find("if-match");
+                it != extraHeaders.end() && it->second != v->etag && !ignoreGetIfMatch.load())
                 return deliver(412, "<Error><Code>PreconditionFailed</Code></Error>", onBody);
             etag = v->etag;
             bytes = v->body;
@@ -948,6 +1002,12 @@ private:
             v.version_id = newVersionIdLocked();
             break;
         }
+        if (order_ == Order::Start)
+            if (const auto held = heldAt_.find({key, std::this_thread::get_id()}); held != heldAt_.end()) {
+                const auto at = std::min(held->second, stack.size());
+                heldAt_.erase(held);
+                return *stack.insert(stack.begin() + static_cast<std::ptrdiff_t>(at), std::move(v));
+            }
         stack.push_back(std::move(v));
         return stack.back();
     }
@@ -986,10 +1046,16 @@ private:
         ++counters_.put;
         const auto* latest = latestLocked(key);
         const bool exists = latest && !latest->delete_marker;
-        if (ifMatch && (!exists || latest->etag != *ifMatch))
-            throw storage::s3::ConditionalRequestFailed("Conditional S3 PUT failed (HTTP 412)");
-        if (ifNoneMatch && *ifNoneMatch == "*" && exists)
-            throw storage::s3::ConditionalRequestFailed("Conditional S3 PUT failed (HTTP 412)");
+        const auto conditional = conditionalPuts.load();
+        if ((ifMatch || ifNoneMatch) && conditional == ConditionalPuts::Reject501)
+            throw storage::s3::PreconditionsUnsupported("the bucket does not support conditional writes (HTTP 501 "
+                                                        "NotImplemented, test)");
+        if (conditional == ConditionalPuts::Supported) {
+            if (ifMatch && (!exists || latest->etag != *ifMatch))
+                throw storage::s3::ConditionalRequestFailed("Conditional S3 PUT failed (HTTP 412)");
+            if (ifNoneMatch && *ifNoneMatch == "*" && exists)
+                throw storage::s3::ConditionalRequestFailed("Conditional S3 PUT failed (HTTP 412)");
+        }
         Version v;
         v.body = std::move(body);
         v.etag = etagOf(v.body);
@@ -1052,6 +1118,11 @@ private:
 
     mutable std::mutex mutex_;
     Versioning mode_;
+    std::time_t listingLag_{0};
+    Order order_{Order::Commit};
+    mutable std::map<std::pair<std::string, std::thread::id>, std::size_t> heldAt_;
+    std::optional<std::string> expirePrefix_;
+    unsigned expireDays_{0};
     mutable std::map<std::string, std::vector<Version>> objects_;   // oldest → newest per key
     mutable std::map<std::string, Upload> uploads_;
     mutable std::vector<InjectedFailure> failures_;

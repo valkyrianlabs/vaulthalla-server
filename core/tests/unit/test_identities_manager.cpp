@@ -111,7 +111,7 @@ protected:
     inline static uint32_t vaultId = 0;
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_identities_manager", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_identities_manager")) return;
         runtime::Deps::get().storageManager->initStorageEngines();  // fresh engines, but the cache stays
         superAdmin = superUser;
         ASSERT_TRUE(superAdmin);

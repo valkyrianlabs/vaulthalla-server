@@ -829,6 +829,42 @@ static std::shared_ptr<CommandUsage> vault_format(const std::weak_ptr<CommandUsa
     return cmd;
 }
 
+static std::shared_ptr<CommandUsage> storage_probe(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"probe"};
+    cmd->effect = CommandEffect::Write;
+    cmd->description =
+        "Find out what the vault's bucket supports for writes that must never overwrite another writer's object, and "
+        "record it. The probe writes a few bytes under .vaulthalla/probe/ (about ten requests): it checks that a "
+        "conditional PUT (If-None-Match, If-Match) is honoured, rejected or silently ignored, that the bucket keeps "
+        "object versions, and that a GET with If-Match is honoured, then deletes exactly the versions it wrote. "
+        "Buckets that support conditional writes (AWS S3, Cloudflare R2) keep publishing as before. On a bucket "
+        "without them that keeps object versions (Backblaze B2), every manifest object is written without "
+        "conditions and the encrypted manifest's root is published as a new version of .vaulthalla/root, which "
+        "costs one version listing more per publish; keep every version under .vaulthalla/ there (no lifecycle "
+        "rule that removes old versions). On a bucket with neither, a vault with opaque storage can't publish its "
+        "manifest and its sync stalls with that reason. Every bucket is probed when a vault is created on it or "
+        "moved to it, and an older binding on its first use; run this after the endpoint or the provider changed, "
+        "or when a vault reports bucket_capability_changed. Refused on a protected bucket.";
+    cmd->positionals = {vaultPos};
+    cmd->optional = {owner};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {
+        {"vh vault storage probe finance", "Probe the bucket of vault 'finance' and show what it supports."},
+        {"vh vault storage probe 42 --json", "The same for the vault with ID 42, as JSON."}
+    };
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> vault_storage(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"storage"};
+    cmd->description = "What the vault's bucket supports (conditional writes, object versions).";
+    cmd->examples = {{"vh vault storage probe finance", "Probe the bucket of vault 'finance'."}};
+    cmd->subcommands = {storage_probe(cmd->weak_from_this())};
+    return cmd;
+}
+
 static std::shared_ptr<CommandUsage> migrate_layout(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"migrate-layout"};
@@ -1031,6 +1067,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
     const auto keyCmd = key(cmd->weak_from_this());
     const auto formatCmd = vault_format(cmd->weak_from_this());
     const auto migrateLayoutCmd = migrate_layout(cmd->weak_from_this());
+    const auto storageCmd = vault_storage(cmd->weak_from_this());
     const auto syncCmd = sync(cmd->weak_from_this()); // executable (manual sync) + has subcommands
     const auto recoveryCmd = recovery_book::vaultRecovery(cmd->weak_from_this());
 
@@ -1183,6 +1220,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
         keyCmd,
         formatCmd,
         migrateLayoutCmd,
+        storageCmd,
         syncCmd,
         recoveryCmd
     };

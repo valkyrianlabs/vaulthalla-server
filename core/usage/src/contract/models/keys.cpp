@@ -183,6 +183,26 @@ std::vector<WsModel> vaultKeyModels() {
                              objectArray("kept", "VaultLayoutEntry"),
                              objectArray("deletable_entries", "VaultLayoutEntry")})}));
 
+    out.push_back(model("VaultStorageProbe",
+        "ops::vault_storage::toJson(ProbeAnswer): what the vault's bucket supports for writes that must never overwrite "
+        "(design/encryption/06-publish-without-preconditions.md §7), probed now and recorded.",
+        {vaultId(), str("vault_name"), str("layout").oneOf({"transparent", "path_v0", "opaque_v1"}),
+         str("previous").oneOf({"unknown", "conditional", "version_log", "insufficient"})
+             .desc("What was recorded before this probe (unknown: never probed)."),
+         boolean("previously_changed").desc("The recorded verdict had been marked bucket_capability_changed."),
+         boolean("manifest_publishable")
+             .desc("Whether the vault's manifest can be published on the bucket (an opaque_v1 vault needs conditional "
+                   "writes or object versions: false only on an insufficient bucket)."),
+         object("probe", "",
+                {str("capability").oneOf({"conditional", "version_log", "insufficient"}),
+                 str("conditional_put").oneOf({"supported", "rejected", "ignored", "inconsistent"}),
+                 boolean("versioning"), boolean("get_if_match"), boolean("md5_etags"), str("reason"),
+                 objectArray("steps", "",
+                             {str("step"), str("expected").oneOf({"ok", "precondition_failed"}),
+                              str("got").desc("ok | precondition_failed | not_implemented | error | unversioned")}),
+                 uinteger("leftover_versions").desc("Probe versions the bucket refused to delete."),
+                 integer("probed_at").desc("Unix seconds.")})}));
+
     out.push_back(model("VaultKeySalvageFailure",
         "One file a key salvage could not re-encrypt.",
         {str("path").desc("Vault path."), uinteger("version").desc("The key version it is sealed under."),

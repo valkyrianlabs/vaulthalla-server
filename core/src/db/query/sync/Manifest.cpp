@@ -9,6 +9,7 @@
 #include "vault/Content.hpp"
 
 #include <fmt/format.h>
+#include <nlohmann/json.hpp>
 #include <version.h>
 
 #include <map>
@@ -96,7 +97,8 @@ Manifest::State Manifest::state(const uint32_t vaultId) {
         State s;
         const auto res = txn.exec(
             "SELECT epoch, root_sha256, etag, refused_reason, refused_epoch, refused_root_sha256, "
-            "       EXTRACT(EPOCH FROM refused_at)::bigint AS refused_at, EXTRACT(EPOCH FROM gc_at)::bigint AS gc_at "
+            "       EXTRACT(EPOCH FROM refused_at)::bigint AS refused_at, EXTRACT(EPOCH FROM gc_at)::bigint AS gc_at, "
+            "       root_version_id, base_version_id, array_to_json(settle_window)::text AS settle_window, own_epoch "
             "FROM remote_manifest_state WHERE vault_id = $1 AND manifest_key = $2",
             pqxx::params{vaultId, kRootStateKey});
         if (res.empty()) return s;
@@ -109,20 +111,43 @@ Manifest::State Manifest::state(const uint32_t vaultId) {
         s.refused_root_sha256 = optText(row["refused_root_sha256"]);
         s.refused_at = optNum<std::time_t>(row["refused_at"]);
         s.gc_at = optNum<std::time_t>(row["gc_at"]);
+        s.root_version_id = optText(row["root_version_id"]);
+        s.base_version_id = optText(row["base_version_id"]);
+        if (const auto w = optText(row["settle_window"]))
+            for (const auto& id : nlohmann::json::parse(*w)) s.settle_window.push_back(id.get<std::string>());
+        s.own_epoch = optNum<uint64_t>(row["own_epoch"]);
         return s;
     });
 }
 
 void Manifest::recordRoot(const uint32_t vaultId, const uint64_t epoch, const std::string& rootSha256,
                           const std::optional<std::string>& etag, const std::vector<std::string>& sids) {
+    recordRoot(vaultId, RootRecord{.epoch = epoch, .root_sha256 = rootSha256, .etag = etag, .sids = sids,
+                                   .version_id = std::nullopt, .base_version_id = std::nullopt, .settle_window = {},
+                                   .own = false});
+}
+
+void Manifest::recordRoot(const uint32_t vaultId, const RootRecord& rec) {
     using namespace manifest_query_detail;
+    const auto epoch = rec.epoch;
+    const auto& rootSha256 = rec.root_sha256;
+    const auto& sids = rec.sids;
     Transactions::exec("Manifest::recordRoot", [&](pqxx::work& txn) {
-        txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, etag, epoch, root_sha256, updated_at) "
-                 "VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP) "
+        // The window travels as JSON: version ids may hold '+', '/' and '='.
+        txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, etag, epoch, root_sha256, root_version_id, "
+                 "  base_version_id, settle_window, own_epoch, updated_at) "
+                 "VALUES ($1, $2, $3, $4::bigint, $5, $6, $7, ARRAY(SELECT json_array_elements_text($8::json)), "
+                 "  CASE WHEN $9::boolean THEN $4::bigint END, "
+                 "  CURRENT_TIMESTAMP) "
                  "ON CONFLICT (vault_id, manifest_key) DO UPDATE SET etag = EXCLUDED.etag, epoch = EXCLUDED.epoch, "
-                 "  root_sha256 = EXCLUDED.root_sha256, refused_reason = NULL, refused_epoch = NULL, "
+                 "  root_sha256 = EXCLUDED.root_sha256, root_version_id = EXCLUDED.root_version_id, "
+                 "  base_version_id = EXCLUDED.base_version_id, settle_window = EXCLUDED.settle_window, "
+                 "  own_epoch = COALESCE(EXCLUDED.own_epoch, remote_manifest_state.own_epoch), "
+                 "  refused_reason = NULL, refused_epoch = NULL, "
                  "  refused_root_sha256 = NULL, refused_at = NULL, updated_at = CURRENT_TIMESTAMP",
-                 pqxx::params{vaultId, kRootStateKey, etag, static_cast<int64_t>(epoch), rootSha256});
+                 pqxx::params{vaultId, kRootStateKey, rec.etag, static_cast<int64_t>(epoch), rootSha256,
+                              rec.version_id, rec.base_version_id,
+                              nlohmann::json(rec.settle_window).dump(), rec.own});
         std::string array = "{";
         for (std::size_t i = 0; i < sids.size(); ++i) {
             if (i) array += ',';
@@ -165,6 +190,21 @@ std::set<std::string> Manifest::retainedSids(const uint32_t vaultId) {
                                        pqxx::params{vaultId}))
             out.insert(row[0].as<std::string>());
         return out;
+    });
+}
+
+std::time_t Manifest::firstUnreferenced(const uint32_t vaultId, const std::string& sid) {
+    return Transactions::exec("Manifest::firstUnreferenced", [&](pqxx::work& txn) {
+        return txn.exec("INSERT INTO remote_manifest_gc (vault_id, sid) VALUES ($1, $2) "
+                        "ON CONFLICT (vault_id, sid) DO UPDATE SET sid = EXCLUDED.sid "
+                        "RETURNING EXTRACT(EPOCH FROM first_unreferenced_at)::bigint",
+                        pqxx::params{vaultId, sid}).one_field_ref().as<std::time_t>();
+    });
+}
+
+void Manifest::forgetUnreferenced(const uint32_t vaultId, const std::string& sid) {
+    Transactions::exec("Manifest::forgetUnreferenced", [&](pqxx::work& txn) {
+        txn.exec("DELETE FROM remote_manifest_gc WHERE vault_id = $1 AND sid = $2", pqxx::params{vaultId, sid});
     });
 }
 
