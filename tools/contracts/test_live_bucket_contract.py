@@ -38,6 +38,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TESTS = REPO_ROOT / "core" / "tests"
 HELPER = TESTS / "helpers" / "live_bucket.hpp"
 LIVE_TESTS = TESTS / "unit" / "test_live_r2.cpp"
+LIVE_B2_TESTS = TESTS / "unit" / "test_live_b2.cpp"
 RUN_UNIT = REPO_ROOT / "bin" / "tests" / "run_unit.sh"
 THIS = Path(__file__).resolve()
 
@@ -54,9 +55,10 @@ OLD_VARS_HISTORY = {
 }
 
 RETIRED = re.compile(r"\b(VH_LIVE_UPSTREAM|VH_R2_EVENTS_\w*|VH_AWS_ADMIN_\w*)\b")
-LIVE_CREDENTIALS = re.compile(r"\b(VH_R2_ADMIN_\w+|VH_CF_API_TOKEN|VH_LIVE_TESTS)\b")
+LIVE_CREDENTIALS = re.compile(r"\b(VH_R2_ADMIN_\w+|VH_CF_API_TOKEN|VH_B2_TEST_\w+|VH_LIVE_TESTS)\b")
 LIVE_CREDENTIAL_READERS = {
-    "core/tests/helpers/live_bucket.hpp", "core/tests/unit/test_live_r2.cpp", "bin/tests/run_unit.sh",
+    "core/tests/helpers/live_bucket.hpp", "core/tests/unit/test_live_r2.cpp", "core/tests/unit/test_live_b2.cpp",
+    "bin/tests/run_unit.sh",
     "tools/lab/providers.env.example", "tools/lab/test_providers.sh",
     # The remote gateway smoke hands the key to the daemon under test as its upstream API key; its bucket is created
     # and deleted by vh_live_bucket (the helper), never by the script itself.
@@ -75,6 +77,8 @@ GUARDED_ADMIN_METHODS = ("headBucket", "createBucket", "deleteBucket", "inspect"
                          "uploadsUnder")
 GUARDED_EVENTS_METHODS = ("ensureChannel", "subscribe", "unsubscribe", "rules", "removeChannel", "poll", "ack",
                           "retry", "backlog")
+# Backblaze B2 through its native API (the product has no B2 admin adapter): every bucket-scoped call name-checked.
+GUARDED_B2_METHODS = ("bucketId", "createBucket", "versionsUnder", "deleteVersion", "removeBucket")
 
 # What a file using the helper may not do itself.
 LIVE_FILE_FORBIDDEN: dict[str, re.Pattern[str]] = {
@@ -91,6 +95,8 @@ LIVE_FILE_EXCEPTIONS: dict[tuple[str, str], tuple[int, str]] = {
         3, "RecordingAdmin's override; the guard self-tests (refused names, a forwarded vh-test-* name)"),
     ("core/tests/unit/test_live_r2.cpp", "createBucket"): (
         6, "RecordingAdmin's override; guard self-tests; the 409 collision check on the run's existing bucket"),
+    ("core/tests/unit/test_live_b2.cpp", "createBucket"): (
+        2, "LiveB2Guard over a recording transport: a refused name, and a forwarded run bucket name (nothing sent)"),
     ("core/tests/helpers/live_bucket_tool.cpp", "createBucket"): (
         1, "vh_live_bucket creates a fixed tooling bucket after isFixedTestBucket() accepted the name"),
 }
@@ -101,7 +107,7 @@ TOOLING_FORBIDDEN = re.compile(
 )
 
 LIVE_ENV_VARS = {"VH_LIVE_TESTS", "VH_R2_ADMIN_ACCESS_KEY", "VH_R2_ADMIN_SECRET_KEY", "VH_R2_ADMIN_ENDPOINT",
-                 "VH_R2_ADMIN_REGION", "VH_CF_API_TOKEN"}
+                 "VH_R2_ADMIN_REGION", "VH_CF_API_TOKEN", "VH_B2_TEST_KEY_ID", "VH_B2_TEST_APP_KEY"}
 
 NOT_TEST_BUCKETS = ["vh-test", "vh-test-", "vaulthalla", "vaulthalla-database-backups", "portfolio",
                     "docs-valkyrian-labs", "vh-test-foo", "vh-test-host-1-170000000", "VH-TEST-host-1-1700000000",
@@ -218,6 +224,11 @@ class LiveBucketContract(unittest.TestCase):
             body = method_body("GuardedEvents", method)
             self.assertIn("requireTestBucket(", body, f"GuardedEvents::{method}")
             self.assertLess(body.index("requireTestBucket("), body.index("in_->"), f"GuardedEvents::{method} checks first")
+        for method in GUARDED_B2_METHODS:
+            body = method_body("GuardedB2", method)
+            self.assertIn("requireTestBucket(", body, f"GuardedB2::{method}")
+            first = min(i for i in (body.find("api("), body.find("bucketId("), len(body)) if i >= 0)
+            self.assertLess(body.index("requireTestBucket("), first, f"GuardedB2::{method} checks first")
 
     def test_the_name_pattern_admits_only_generated_test_buckets(self):
         text = HELPER.read_text()
@@ -263,10 +274,25 @@ class LiveBucketContract(unittest.TestCase):
         self.assertRegex(LIVE_TESTS.read_text(), r"AddGlobalTestEnvironment\(new live::RunBucketEnvironment\)")
         teardown = text.split("void TearDown() override {", 2)[2] if text.count("void TearDown() override {") > 1 else ""
         self.assertIn("emptyUnder(", teardown, "each test's prefix is emptied in TearDown")
+        # Backblaze: the only bucket deletion is emptyAndDeleteB2Bucket (every version, then the bucket, then gone).
+        self.assertEqual(len(re.findall(r"\bremoveBucket\s*\(", text)), 2, "GuardedB2::removeBucket and its one caller")
+        b2 = text.split("inline void emptyAndDeleteB2Bucket(", 1)[1].split("\n}\n", 1)[0]
+        for needle in ("emptyB2Under(", "removeBucket(", "still exists after b2_delete_bucket"):
+            self.assertIn(needle, b2)
+        empty = text.split("inline std::size_t emptyB2Under(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("versionsUnder(", empty)
+        self.assertIn("deleteVersion(", empty)
+        ensure = text.split("class RunB2Bucket", 1)[1].split("const std::string& ensure()", 1)[1].split("\n    }\n", 1)[0]
+        self.assertLess(ensure.index("isOrphan("), ensure.index("createBucket("), "sweep before creating")
+        self.assertIn("RunB2Bucket::get().finish()", text.split("class RunB2BucketEnvironment", 1)[1])
+        self.assertRegex(LIVE_B2_TESTS.read_text(), r"AddGlobalTestEnvironment\(new live::RunB2BucketEnvironment\)")
+        b2teardown = text.split("class LiveB2Test", 1)[1].split("void TearDown() override {", 1)[1]
+        self.assertIn("emptyB2Under(", b2teardown.split("\n    }\n", 1)[0], "each B2 test's prefix is emptied")
 
     def test_live_test_files_reach_the_provider_only_through_the_helper(self):
         users = [p for p in code_files(TESTS) if p != HELPER and "live_bucket.hpp" in p.read_text(errors="ignore")]
         self.assertIn(LIVE_TESTS, users)
+        self.assertIn(LIVE_B2_TESTS, users)
         problems, seen = [], set()
         for path in users:
             text = re.sub(r"#include[^\n]*", "", strip_comments(path.read_text(errors="ignore")))
@@ -284,6 +310,8 @@ class LiveBucketContract(unittest.TestCase):
         for name in ("RefusesEveryBucketThatIsNotATestBucket", "EventsTouchOnlyTestBucketsAndTestQueues",
                      "NamesAndTheOrphanSweep", "TheFactoryHandsOutGuardedClientsForTheLiveCredentialOnly"):
             self.assertIn(f"TEST_F(LiveBucketGuard, {name})", text)
+        self.assertIn("TEST_F(LiveB2Guard, RefusesEveryBucketThatIsNotATestBucketBeforeAnyRequest)",
+                      LIVE_B2_TESTS.read_text())
 
     def test_tooling_never_provisions_buckets(self):
         roots = [REPO_ROOT / "tools", REPO_ROOT / "bin", REPO_ROOT / ".github", REPO_ROOT / "Makefile"]
