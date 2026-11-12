@@ -21,11 +21,28 @@ public:
         std::optional<uint64_t> epoch;
         std::optional<std::string> root_sha256;
         std::optional<std::string> etag;
-        std::optional<std::string> refused_reason;   // rollback | fork
+        std::optional<std::string> refused_reason;   // rollback | fork | order_violation | superseded | publish_mode_mismatch
         std::optional<uint64_t> refused_epoch;
         std::optional<std::string> refused_root_sha256;
         std::optional<std::time_t> refused_at;
         std::optional<std::time_t> gc_at;
+        // version_log buckets (design/encryption/06-publish-without-preconditions.md §5; migration 137).
+        std::optional<std::string> root_version_id;
+        std::optional<std::string> base_version_id;
+        std::vector<std::string> settle_window;
+        std::optional<uint64_t> own_epoch;   // the last root this server published itself
+    };
+
+    // One recorded root. version_id, base_version_id and window on version_log buckets; own when this server wrote it.
+    struct RootRecord {
+        uint64_t epoch{};
+        std::string root_sha256;
+        std::optional<std::string> etag;
+        std::vector<std::string> sids;
+        std::optional<std::string> version_id;
+        std::optional<std::string> base_version_id;
+        std::vector<std::string> settle_window;
+        bool own{false};
     };
 
     // The roots this vault keeps the segments of, and how many.
@@ -37,6 +54,7 @@ public:
     // root history, which keeps the newest kRetainedRoots. Clears a recorded refusal (the chain moved on).
     static void recordRoot(uint32_t vaultId, uint64_t epoch, const std::string& rootSha256,
                            const std::optional<std::string>& etag, const std::vector<std::string>& sids);
+    static void recordRoot(uint32_t vaultId, const RootRecord& record);
 
     // A root the chain rules refused. True when it is not the root already recorded as refused: the caller alerts
     // the operator once per root, not once per pass.
@@ -47,6 +65,11 @@ public:
     [[nodiscard]] static std::set<std::string> retainedSids(uint32_t vaultId);
 
     static void markCollected(uint32_t vaultId);
+
+    // version_log GC (spec 06 §5.4): when a segment became unreferenced by the canonical chain. first sets it (now) once
+    // and returns it; forget drops it (referenced again, or collected).
+    [[nodiscard]] static std::time_t firstUnreferenced(uint32_t vaultId, const std::string& sid);
+    static void forgetUnreferenced(uint32_t vaultId, const std::string& sid);
 
     // The vault as a manifest says it: the tree (directories, files, symlinks; files_trashed as trash entries; o/<uid>
     // provider versions as each file's versions, and as tombstones once the file is gone), the ready snapshots and

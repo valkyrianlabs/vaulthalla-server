@@ -88,3 +88,4 @@ current    75fbfd2ea2ea4d9d17f237151d42c752b32f1216950ff75fdc22f8d6f9691c1b  133
 current    e47ab0b7b7d370963097c18e48d59aa2e3ce9eb0400d3ce5321958196a1d54f2  134_cloud_link.sql  unreleased
 current    330f60414b862dac8b456255cb09bdb26d40f8fe889c001e78f1d8bdfc5238bd  135_cloud_recovery.sql  unreleased
 current    2780d19a36e105cbc0dbd56c28d7065249089ef73bc7b109ca890655a6bfc00a  136_bucket_capability.sql  unreleased
+current    a1c7b1665fe4254bf88c881966f05b755d3ad37f0ffe34e37e1aa89b5eae28ea  137_manifest_version_log.sql  unreleased

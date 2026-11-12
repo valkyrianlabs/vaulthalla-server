@@ -29,6 +29,7 @@
 #include "sync/manifest/Publisher.hpp"
 #include "sync/manifest/Reader.hpp"
 #include "sync/manifest/Store.hpp"
+#include "../helpers/hooked_store.hpp"
 #include "../helpers/versioned_bucket.hpp"
 
 #include <functional>
@@ -175,7 +176,7 @@ Content richContent() {
 // The publish protocol against the versioned fake bucket, through the production S3 adapter.
 struct Writer {
     std::shared_ptr<VersionedBucket> bucket;
-    std::shared_ptr<S3Store> store;
+    std::shared_ptr<ObjectStore> store;
     Uid vault = uidOf(0x56, 0x48);
     std::map<uint32_t, SecretKeyPtr> keys{{1, keyOf(1)}, {2, keyOf(40)}};
     uint32_t current = 2;
@@ -183,7 +184,14 @@ struct Writer {
     std::optional<Known> known;
     int clock = 0;
 
-    explicit Writer(std::shared_ptr<VersionedBucket> b) : bucket(std::move(b)), store(std::make_shared<S3Store>(bucket)) {}
+    // version_log (spec 06): this writer's node id, its last own epoch and the settled window, as Service keeps them.
+    std::string node;
+    std::optional<uint64_t> ownEpoch;
+    std::optional<SettledWindow> settled;
+
+    explicit Writer(std::shared_ptr<VersionedBucket> b,
+                    const storage::s3::WriteCapability mode = storage::s3::WriteCapability::Unknown)
+        : bucket(std::move(b)), store(std::make_shared<S3Store>(bucket, mode)) {}
     explicit Writer(const Versioning v = Versioning::Enabled) : Writer(std::make_shared<VersionedBucket>(v)) {}
 
     [[nodiscard]] crypto::vhf1::KeyLookup lookup() const { return lookupOf(keys); }
@@ -192,14 +200,23 @@ struct Writer {
         PublishOptions o;
         o.now = isoTime(1793880000 + 60 * (++clock));
         o.limits = limits;
+        o.self_node = node;
+        o.own_epoch = ownEpoch;
+        o.settled = settled;
+        o.sleep = [b = bucket](const std::chrono::milliseconds d) { b->advance(std::max<std::time_t>(1, d.count() / 1000)); };
         auto r = manifest::publish(*store, vault, lookup(), {current, keys.at(current)}, c, known, cache, o);
         known = r.published.known;
+        ownEpoch = r.published.known.epoch;
+        if (r.settled.version_id && r.settled.base_version_id)
+            settled = SettledWindow{*r.settled.base_version_id, *r.settled.version_id, r.settled.window};
+        else settled.reset();
         return r;
     }
 
     Loaded loadKnown() {
         LoadOptions o;
         o.known = known;
+        o.settled = settled;
         return load(*store, vault, lookup(), o);
     }
 };
@@ -697,6 +714,27 @@ TEST(ManifestStore, PutOnceSendsAConditionOnlyWhereTheBucketHonoursIt) {
     EXPECT_EQ(bucket->current(key)->body, body);
 }
 
+TEST(ManifestStore, AVersionListingStopsAtTheVersionItNeeds) {
+    // spec 06 §7: the publish lists down to its base, the anchored read down to its anchor, not the whole history.
+    const auto bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
+    bucket->versionPageSize = 2;
+    std::vector<std::string> ids;   // oldest first
+    for (int i = 0; i < 7; ++i) ids.push_back(bucket->seed("k", "v" + std::to_string(i)));
+    S3Store store(bucket, storage::s3::WriteCapability::VersionLog);
+    bucket->resetCounters();
+    EXPECT_EQ(store.versions("k").size(), 7u);
+    EXPECT_EQ(bucket->counters().list, 4u) << "pages of 2";
+    bucket->resetCounters();
+    const auto since = store.versionsSince("k", ids[4]);
+    ASSERT_EQ(since.size(), 3u) << "ids 6, 5, 4: newest first, down to and including the stop";
+    EXPECT_EQ(since.back().version_id, ids[4]);
+    EXPECT_EQ(bucket->counters().list, 2u) << "the page holding the stop is the last one read";
+    EXPECT_EQ(store.versionsSince("k", std::string("not-a-version")).size(), 7u) << "a stop that isn't there: all";
+    // The base store's default cuts a full listing the same way.
+    RecordingStore wrapped(store);
+    EXPECT_EQ(wrapped.versionsSince("k", ids[4]).size(), 3u);
+}
+
 TEST(ManifestStore, TheBaseStoreRefusesPlainWritesItCannotMake) {
     Writer w;
     RecordingStore rec(*w.store);
@@ -705,18 +743,16 @@ TEST(ManifestStore, TheBaseStoreRefusesPlainWritesItCannotMake) {
     EXPECT_EQ(rec.mode(), storage::s3::WriteCapability::Unknown);
 }
 
-TEST(ManifestPublish, OnABucketWithoutConditionalWritesTheRootPublishRefusesBeforeAnyRequest) {
-    // Spec 06 §5 is not implemented yet: never half a publish (no segment, no hint, no root).
-    for (const auto mode : {storage::s3::WriteCapability::VersionLog, storage::s3::WriteCapability::Insufficient}) {
-        Writer w;
-        w.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
-        w.store = std::make_shared<S3Store>(w.bucket, mode);
-        w.bucket->resetCounters();
-        EXPECT_THROW((void)w.publish(smallVault(3)), PublishUnsupported) << storage::s3::to_string(mode);
-        const auto c = w.bucket->counters();
-        EXPECT_EQ(c.put + c.get + c.head + c.list + c.del, 0u) << "no request at all";
-        EXPECT_TRUE(w.bucket->keys().empty());
-    }
+TEST(ManifestPublish, ABucketThatCanArbitrateNothingRefusesBeforeAnyRequest) {
+    // Neither conditional writes nor versions (spec 06 §7, Insufficient): never half a publish.
+    Writer w;
+    w.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+    w.store = std::make_shared<S3Store>(w.bucket, storage::s3::WriteCapability::Insufficient);
+    w.bucket->resetCounters();
+    EXPECT_THROW((void)w.publish(smallVault(3)), PublishUnsupported);
+    const auto c = w.bucket->counters();
+    EXPECT_EQ(c.put + c.get + c.head + c.list + c.del, 0u) << "no request at all";
+    EXPECT_TRUE(w.bucket->keys().empty());
 }
 
 TEST(ManifestPublish, ABucketThatRejectsConditionsFailsTypedWithoutAPartialPublish) {
@@ -1089,6 +1125,483 @@ TEST(ManifestReplay, AnOlderCompleteStateAuthenticatesAndOnlyACheckpointCatchesI
     // A fork against the checkpoint is never accepted.
     EXPECT_THROW((void)loadForRestore(*w.store, w.vault, w.lookup(), Checkpoint{2, std::string(64, '7'), std::nullopt}, true),
                  ChainRejected);
+}
+
+
+// ── ManifestPublishVersionLog / ManifestChainVersionLog: buckets without conditional writes (spec 06 §5) ────────
+
+namespace version_log_fixture {
+
+std::shared_ptr<VersionedBucket> b2Bucket() {
+    auto b = std::make_shared<VersionedBucket>(Versioning::Enabled);
+    b->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;   // as Backblaze B2 answers them
+    b->md5Etags = true;
+    return b;
+}
+
+Writer vlWriter(std::shared_ptr<VersionedBucket> b, std::string node) {
+    Writer w(std::move(b), storage::s3::WriteCapability::VersionLog);
+    w.node = std::move(node);
+    return w;
+}
+
+Content ofNode(Content c, const std::string& node) {
+    c.producer.node_id = node;
+    return c;
+}
+
+Content withFile(Content c, const std::string& uid, const std::string& name) {
+    c.entries.push_back(fileEntry(uid, kRootUid, name, 7));
+    normalize(c);
+    return c;
+}
+
+std::set<std::string> namesOf(const Content& c) {
+    std::set<std::string> out;
+    for (const auto& e : c.entries) out.insert(e.name);
+    return out;
+}
+
+// A root as another writer would publish it: a copy of `like` at another epoch / prev, sealed under the same key.
+std::vector<uint8_t> rootLike(const Writer& w, RootDocument like, const uint64_t epoch, const std::optional<std::string>& prev,
+                              const std::string& node, std::optional<std::vector<std::string>> writers = std::nullopt) {
+    like.epoch = epoch;
+    like.prev = prev;
+    like.producer.node_id = node;
+    like.writers = writers ? std::move(writers) : std::vector<std::string>{node};
+    return sealRoot(like, w.vault, {w.current, w.keys.at(w.current)});
+}
+
+// Another key holder sets the vault's writers (the mirror join does that; this branch doesn't build it): a root on
+// w's head that names `nodes`. w's cache is dropped, so its next publish loads that root.
+void setWriters(Writer& w, const std::vector<std::string>& nodes) {
+    const auto& head = w.cache.base->root;
+    (void)w.bucket->seed(std::string(kRootKey), rootLike(w, head, head.epoch + 1, w.known->root_sha256, w.node, nodes));
+    w.cache = {};
+}
+
+// Two writers of one vault, both in its writers: a has published the base and built on the root naming both.
+std::pair<Writer, Writer> twoWriters(const std::shared_ptr<VersionedBucket>& bucket, const Content& base) {
+    auto a = vlWriter(bucket, "node-a");
+    auto b = vlWriter(bucket, "node-b");
+    (void)a.publish(base);                     // epoch 1
+    setWriters(a, {"node-a", "node-b"});       // epoch 2
+    auto touched = base;
+    nthFile(touched, 0).size = 77;
+    (void)a.publish(touched);                  // epoch 3, on 2: writers carried
+    return {std::move(a), std::move(b)};
+}
+
+std::vector<std::string> rootIds(const VersionedBucket& b) {
+    std::vector<std::string> out;
+    for (const auto& v : b.history(std::string(kRootKey))) out.push_back(v.version_id);   // newest first
+    return out;
+}
+
+}
+
+TEST(ManifestPublishVersionLog, EveryPutIsPlainAndTheRootNamesItsModeWritersAndVersion) {
+    namespace f = version_log_fixture;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    const auto r = w.publish(f::ofNode(smallVault(3), "node-a"));   // a condition would throw: Reject501
+    EXPECT_EQ(r.published.known.epoch, 1u);
+    ASSERT_TRUE(r.settled.version_id);
+    EXPECT_EQ(*r.settled.version_id, w.bucket->current(std::string(kRootKey))->version_id);
+    EXPECT_EQ(r.published.known.version_id, r.settled.version_id);
+    EXPECT_FALSE(r.settled.base_version_id) << "a first root has no base";
+    EXPECT_EQ(r.published.root.publish, std::string(kPublishVersionLog));
+    EXPECT_EQ(r.published.root.writers, std::vector<std::string>{"node-a"});
+    EXPECT_TRUE(w.bucket->current(std::string(kLayoutKey)));
+    // The root is what the bucket holds; a reader with nothing known finds it.
+    const auto loaded = load(*w.store, w.vault, w.lookup(), {});
+    EXPECT_EQ(loaded.known(), r.published.known);
+    EXPECT_EQ(loaded.version_id, r.settled.version_id);
+}
+
+TEST(ManifestPublishVersionLog, ASoloPublishCostsExactlyOneListMoreThanAConditionalOne) {
+    namespace f = version_log_fixture;
+    VersionedBucket::Counters cost[2];
+    for (const int vl : {0, 1}) {
+        auto w = vl ? f::vlWriter(f::b2Bucket(), "node-a") : Writer(std::make_shared<VersionedBucket>(Versioning::Enabled));
+        w.node = "node-a";
+        auto c = f::ofNode(smallVault(3), "node-a");
+        (void)w.publish(c);
+        nthFile(c, 1).size = 4242;
+        w.bucket->resetCounters();
+        (void)w.publish(c);
+        cost[vl] = w.bucket->counters();
+    }
+    EXPECT_EQ(cost[0].put, 2u) << "one segment, one root";
+    EXPECT_EQ(cost[1].put, cost[0].put);
+    EXPECT_EQ(cost[1].list, cost[0].list + 1) << "the listing that settles the root";
+    EXPECT_EQ(cost[1].get, cost[0].get) << "our own version is known without a GET";
+    EXPECT_EQ(cost[1].head, cost[0].head);
+    EXPECT_EQ(cost[1].del, cost[0].del);
+}
+
+TEST(ManifestPublishVersionLog, ALosingWriterDeletesItsVersionAndMergesOntoTheWinner) {
+    namespace f = version_log_fixture;
+    const auto bucket = f::b2Bucket();
+    auto base = f::ofNode(smallVault(4), "node-a");
+    auto [a, b] = f::twoWriters(bucket, base);
+    nthFile(base, 0).size = 77;
+    (void)b.publish(f::withFile(f::ofNode(base, "node-b"), uidT(0x90, 2), "from-b"));   // epoch 4, on 3
+    EXPECT_EQ(b.known->epoch, 4u);
+    EXPECT_EQ(b.cache.base->root.writers, (std::vector<std::string>{"node-a", "node-b"}));
+    // A still builds on epoch 3 (its cache): its root is a sibling of B's, later in provider order, and loses.
+    const auto r = a.publish(f::withFile(base, uidT(0x91, 3), "from-a"));
+    EXPECT_EQ(r.lost, 1u);
+    EXPECT_EQ(r.attempts, 2u);
+    EXPECT_EQ(r.published.known.epoch, 5u);
+    EXPECT_EQ(r.published.root.prev, b.known->root_sha256);
+    EXPECT_EQ(f::rootIds(*bucket).size(), 5u) << "epochs 1 to 5: the losing sibling was deleted by id";
+    const auto names = f::namesOf(a.loadKnown().content);
+    EXPECT_TRUE(names.contains("from-a"));
+    EXPECT_TRUE(names.contains("from-b")) << "the winner's change survives the merge";
+    // B reads A's root as the next one of its chain.
+    EXPECT_EQ(b.loadKnown().acceptance.epoch, 5u);
+}
+
+TEST(ManifestPublishVersionLog, AStrayVersionAboveTheHeadIsIgnoredByReadersAndRepairedByThePublishThatSeesIt) {
+    namespace f = version_log_fixture;
+    namespace ms = vh::test_support::manifest_store;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    auto c = f::ofNode(smallVault(3), "node-a");
+    (void)w.publish(c);
+    const auto e1 = *w.known;
+    nthFile(c, 0).size = 1;
+    (void)w.publish(c);
+    const auto e2 = *w.known;
+    // A crashed writer's sibling of epoch 2 (prev epoch 1) and a delete marker land above the head.
+    const auto strayBytes = f::rootLike(w, w.cache.base->root, 2, e1.root_sha256, "node-x");
+    const auto stray = w.bucket->seed(std::string(kRootKey), strayBytes);
+    const auto marker = w.bucket->seedDeleteMarker(std::string(kRootKey));
+    const auto read = w.loadKnown();
+    EXPECT_EQ(read.known(), e2) << "the canonical head, not the current object";
+    EXPECT_EQ(read.strays, (std::vector<std::string>{stray, marker}));
+
+    // The next publish lands above them: below its root they are non-canonical history, the janitor's after a day
+    // (spec 06 §5.4); a stray that lands after its PUT and before its listing is above the new head and repaired.
+    auto hooked = std::make_shared<ms::HookedStore>(w.store);
+    std::vector<std::string> late;
+    hooked->after = [&](const ms::StoreOp op, const std::string& key, const std::string&, const bool failed) {
+        if (op != ms::StoreOp::Put || key != kRootKey || failed || !late.empty()) return;
+        late.push_back(w.bucket->seed(std::string(kRootKey), strayBytes));
+        late.push_back(w.bucket->seedDeleteMarker(std::string(kRootKey)));
+    };
+    w.store = hooked;
+    nthFile(c, 0).size = 2;
+    const auto r = w.publish(c);
+    EXPECT_EQ(r.published.known.epoch, 3u);
+    EXPECT_EQ(r.repaired, late);
+    EXPECT_EQ(f::rootIds(*w.bucket).front(), *r.settled.version_id) << "the head is the current version again";
+    EXPECT_EQ(r.settled.window, (std::vector<std::string>{stray, marker})) << "listed between its base and itself";
+    EXPECT_EQ(f::rootIds(*w.bucket).size(), 5u) << "epochs 1-3 and the two older strays";
+    w.bucket->advance(25 * 60 * 60);
+    const auto j = collectRootVersions(*w.store, w.vault, w.lookup(), w.cache.roots, *r.settled.version_id, w.bucket->now());
+    EXPECT_EQ(j.deleted, (std::vector<std::string>{stray, marker}));
+    EXPECT_EQ(w.loadKnown().known(), *w.known);
+}
+
+TEST(ManifestPublishVersionLog, GcDeletesEveryVersionOfASegmentUnreferencedForADay) {
+    namespace f = version_log_fixture;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    auto c = f::ofNode(smallVault(5), "node-a");
+    std::vector<std::vector<std::string>> rootSids;
+    for (int i = 0; i < 5; ++i) {
+        nthFile(c, 1).size = 1000 + i;
+        rootSids.push_back(w.publish(c).published.sids());
+    }
+    std::set<std::string> retained;
+    for (std::size_t i = rootSids.size() - 3; i < rootSids.size(); ++i) retained.insert(rootSids[i].begin(), rootSids[i].end());
+    const auto oldKey = segmentKey(rootSids[0].front());
+    (void)w.bucket->seed(oldKey, Bytes{1, 2, 3});   // a second version of a superseded segment
+    std::map<std::string, std::time_t> marked;
+    const UnreferencedClock clock{
+        .first = [&](const std::string& sid) { return marked.try_emplace(sid, w.bucket->now()).first->second; },
+        .forget = [&](const std::string& sid) { marked.erase(sid); }};
+
+    // Unreferenced since now: nothing goes for a day, however old the objects are.
+    w.bucket->advance(30 * 24 * 60 * 60);
+    auto early = collectGarbageVersionLog(*w.store, retained, w.bucket->now(), clock);
+    EXPECT_TRUE(early.deleted.empty());
+    EXPECT_EQ(early.young, 2u);
+
+    w.bucket->advance(25 * 60 * 60);
+    const auto report = collectGarbageVersionLog(*w.store, retained, w.bucket->now(), clock);
+    EXPECT_EQ(report.deleted.size(), 2u) << "the first two roots' segments";
+    EXPECT_TRUE(w.bucket->history(oldKey).empty()) << "every version deleted by id, no delete marker left";
+    for (const auto& sid : retained) { EXPECT_TRUE(w.bucket->current(segmentKey(sid))) << sid; }
+    EXPECT_TRUE(marked.empty());
+    EXPECT_TRUE(w.loadKnown().issues.empty());
+}
+
+TEST(ManifestPublishVersionLog, TheJanitorKeepsTheHeadItsTwoPredecessorsAndAWeekOfHistory) {
+    namespace f = version_log_fixture;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    auto c = f::ofNode(smallVault(3), "node-a");
+    std::vector<std::string> ids;
+    std::vector<uint8_t> epoch2;
+    for (int i = 0; i < 5; ++i) {
+        nthFile(c, 0).size = 100 + i;
+        ids.push_back(*w.publish(c).settled.version_id);
+        if (i == 1) epoch2 = w.bucket->current(std::string(kRootKey))->body;
+    }
+    // A non-canonical version between the second predecessor and the head (a replay of epoch 2's bytes).
+    const auto replay = w.bucket->seed(std::string(kRootKey), epoch2);
+    nthFile(c, 0).size = 200;
+    ids.push_back(*w.publish(c).settled.version_id);   // epoch 6: the replay stays below the head
+    ASSERT_EQ(f::rootIds(*w.bucket).size(), 7u);
+
+    w.bucket->advance(25 * 60 * 60);
+    auto day = collectRootVersions(*w.store, w.vault, w.lookup(), w.cache.roots, ids.back(), w.bucket->now());
+    EXPECT_EQ(day.deleted, std::vector<std::string>{replay}) << "only the non-canonical one, after a day";
+
+    w.bucket->advance(7 * 24 * 60 * 60);
+    auto week = collectRootVersions(*w.store, w.vault, w.lookup(), w.cache.roots, ids.back(), w.bucket->now());
+    EXPECT_EQ(week.deleted, (std::vector<std::string>{ids[0], ids[1], ids[2]}));
+    EXPECT_EQ(f::rootIds(*w.bucket), (std::vector<std::string>{ids[5], ids[4], ids[3]}));
+    EXPECT_EQ(w.loadKnown().acceptance.epoch, 6u);
+}
+
+TEST(ManifestPublishVersionLog, ALostResponseIsFoundByHashAndSettlesWithoutADuplicate) {
+    namespace f = version_log_fixture;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    auto c = f::ofNode(smallVault(3), "node-a");
+    (void)w.publish(c);
+    c.vault = VaultInfo{"renamed", std::nullopt, std::nullopt, std::nullopt, std::nullopt};   // the root alone changes
+    w.bucket->loseResponses = 1;   // the PUT is applied, its answer lost (as B2's 500 on a stalled body may be)
+    const auto r = w.publish(c);
+    EXPECT_EQ(r.published.known.epoch, 2u);
+    EXPECT_EQ(f::rootIds(*w.bucket).size(), 2u) << "no second PUT of the same publish";
+    EXPECT_EQ(r.settled.version_id, w.bucket->current(std::string(kRootKey))->version_id);
+}
+
+TEST(ManifestPublishVersionLog, A5xxBeforeTheCommitFailsThePublishAndTheNextOneSettles) {
+    namespace f = version_log_fixture;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    auto c = f::ofNode(smallVault(3), "node-a");
+    (void)w.publish(c);
+    c.vault = VaultInfo{"renamed", std::nullopt, std::nullopt, std::nullopt, std::nullopt};
+    w.bucket->failNext(VersionedBucket::Op::Put, VersionedBucket::Failure::Http503);
+    EXPECT_THROW((void)w.publish(c), std::runtime_error);
+    EXPECT_EQ(f::rootIds(*w.bucket).size(), 1u);
+    EXPECT_EQ(w.known->epoch, 1u) << "nothing recorded";
+    EXPECT_EQ(w.publish(c).published.known.epoch, 2u);
+}
+
+TEST(ManifestPublishVersionLog, AFailedDeleteOfALosingVersionIsIgnoredByReadersAndLeftToTheJanitor) {
+    namespace f = version_log_fixture;
+    const auto bucket = f::b2Bucket();
+    auto base = f::ofNode(smallVault(4), "node-a");
+    auto [a, b] = f::twoWriters(bucket, base);
+    nthFile(base, 0).size = 77;
+    (void)b.publish(f::withFile(f::ofNode(base, "node-b"), uidT(0x90, 2), "from-b"));
+    bucket->refuseDeletes = true;
+    const auto r = a.publish(f::withFile(base, uidT(0x91, 3), "from-a"));
+    EXPECT_EQ(r.lost, 1u);
+    EXPECT_EQ(r.published.known.epoch, 5u);
+    EXPECT_EQ(f::rootIds(*bucket).size(), 6u) << "the losing sibling stays: its DELETE was refused";
+    // A reader with nothing known takes the longest chain, never the sibling.
+    const auto blind = load(*a.store, a.vault, a.lookup(), {});
+    EXPECT_EQ(blind.known(), *a.known);
+    bucket->refuseDeletes = false;
+    bucket->advance(25 * 60 * 60);
+    const auto j = collectRootVersions(*a.store, a.vault, a.lookup(), a.cache.roots, *r.settled.version_id, bucket->now());
+    EXPECT_EQ(j.deleted.size(), 1u);
+    EXPECT_EQ(f::rootIds(*bucket).size(), 5u);
+}
+
+TEST(ManifestPublishVersionLog, AServerTheHeadNoLongerNamesStopsAndANewcomerDoesNot) {
+    namespace f = version_log_fixture;
+    const auto bucket = f::b2Bucket();
+    auto a = f::vlWriter(bucket, "node-a");
+    const auto base = f::ofNode(smallVault(3), "node-a");
+    (void)a.publish(base);   // own epoch 1
+    // A restore elsewhere publishes epoch 2 naming only itself.
+    auto restored = f::vlWriter(bucket, "node-r");
+    (void)restored.publish(f::ofNode(base, "node-r"));
+    ASSERT_EQ(restored.known->epoch, 2u);
+    a.cache = {};   // a cold cache: it loads the head
+    try {
+        (void)a.publish(f::withFile(base, uidT(0x92, 4), "late"));
+        ADD_FAILURE() << "a server the head excludes published over it";
+    } catch (const ChainRejected& e) {
+        EXPECT_EQ(e.code(), ChainError::Superseded);
+        EXPECT_EQ(e.epoch(), 2u);
+    }
+    EXPECT_EQ(f::rootIds(*bucket).size(), 2u);
+    // A server that never published here (no own epoch: a fresh restore) builds on it.
+    auto fresh = f::vlWriter(bucket, "node-f");
+    EXPECT_EQ(fresh.publish(f::ofNode(base, "node-f")).published.known.epoch, 3u);
+}
+
+TEST(ManifestPublishVersionLog, AnotherWritersRootInAnotherModeIsRefusedOurOwnModeSwitchIsNot) {
+    namespace f = version_log_fixture;
+    // A conditional bucket whose head another server published as version_log.
+    Writer cond(std::make_shared<VersionedBucket>(Versioning::Enabled), storage::s3::WriteCapability::Conditional);
+    cond.node = "node-c";
+    auto other = f::vlWriter(cond.bucket, "node-o");
+    other.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Ignore;   // so its plain PUTs land
+    (void)other.publish(f::ofNode(smallVault(2), "node-o"));
+    try {
+        (void)cond.publish(f::ofNode(smallVault(2), "node-c"));
+        ADD_FAILURE() << "built on a root of another publish mode";
+    } catch (const ChainRejected& e) {
+        EXPECT_EQ(e.code(), ChainError::PublishModeMismatch);
+    }
+    // One writer that re-probed its bucket switches mode on top of its own roots.
+    auto solo = Writer(std::make_shared<VersionedBucket>(Versioning::Enabled), storage::s3::WriteCapability::Conditional);
+    solo.node = "node-s";
+    auto c = f::ofNode(smallVault(2), "node-s");
+    (void)solo.publish(c);
+    solo.store = std::make_shared<S3Store>(solo.bucket, storage::s3::WriteCapability::VersionLog);
+    nthFile(c, 0).size = 5;
+    const auto r = solo.publish(c);
+    EXPECT_EQ(r.published.known.epoch, 2u);
+    EXPECT_EQ(r.published.root.publish, std::string(kPublishVersionLog));
+}
+
+TEST(ManifestPublishVersionLog, AListingThatLagsIsWaitedForOrLeavesThePublishUnsettled) {
+    namespace f = version_log_fixture;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    auto c = f::ofNode(smallVault(3), "node-a");
+    (void)w.publish(c);
+    // Listings omit versions younger than 5 s: the retries (1, 2, 4 s on the bucket clock) see it.
+    w.bucket->listingLag(5);
+    nthFile(c, 0).size = 1;
+    EXPECT_EQ(w.publish(c).published.known.epoch, 2u);
+    // Longer than every retry: unsettled, nothing recorded.
+    w.bucket->listingLag(1000);
+    nthFile(c, 0).size = 2;
+    EXPECT_THROW((void)w.publish(c), PublishUnsettled);
+    EXPECT_EQ(w.known->epoch, 2u);
+    // Once it is listed, the next publish finds that root already succeeding its base: its own new root loses to it,
+    // and the publish merges onto it (the same changes) and settles on top.
+    w.bucket->listingLag(0);
+    nthFile(c, 0).size = 3;
+    const auto r = w.publish(c);
+    EXPECT_EQ(r.lost, 1u);
+    EXPECT_EQ(r.published.known.epoch, 4u);
+    auto landed = w.loadKnown().content;
+    EXPECT_EQ(nthFile(landed, 0).size, 3u);
+}
+
+TEST(ManifestPublishVersionLog, AVersionInsertedBelowASettledRootIsAnOrderViolation) {
+    namespace f = version_log_fixture;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    auto c = f::ofNode(smallVault(3), "node-a");
+    (void)w.publish(c);
+    const auto e1 = *w.known;
+    w.bucket->holdPut(std::string(kRootKey));   // a PUT that started now...
+    nthFile(c, 0).size = 1;
+    (void)w.publish(c);                          // (epoch 2 settles while the order is still commit order)
+    ASSERT_TRUE(w.settled);
+    // ...commits later and is ordered by its start: below epoch 2, as succ(epoch 1). The provider broke A4.
+    w.bucket->orderBy(VersionedBucket::Order::Start);
+    (void)w.bucket->seed(std::string(kRootKey), f::rootLike(w, w.cache.base->root, 2, e1.root_sha256, "node-x"));
+    try {
+        (void)w.loadKnown();
+        ADD_FAILURE() << "a displaced settled root went unnoticed";
+    } catch (const ChainRejected& e) {
+        EXPECT_EQ(e.code(), ChainError::OrderViolation);
+    }
+    nthFile(c, 0).size = 2;
+    EXPECT_THROW((void)w.publish(c), ChainRejected) << "and the publish refuses too";
+}
+
+TEST(ManifestChainVersionLog, ReadersTakeTheCanonicalHeadWhateverTheyKnowOrTheBucketsMode) {
+    namespace f = version_log_fixture;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    auto c = f::ofNode(smallVault(3), "node-a");
+    (void)w.publish(c);
+    const auto e1 = *w.known;
+    nthFile(c, 0).size = 9;
+    (void)w.publish(c);
+    const auto e2 = *w.known;
+    // A later sibling of epoch 2 is the current object.
+    (void)w.bucket->seed(std::string(kRootKey), f::rootLike(w, w.cache.base->root, 2, e1.root_sha256, "node-x"));
+    LoadOptions fromE1;
+    fromE1.known = e1;
+    EXPECT_EQ(load(*w.store, w.vault, w.lookup(), fromE1).known(), e2) << "rule C1 from the anchor";
+    EXPECT_EQ(load(*w.store, w.vault, w.lookup(), {}).known(), e2) << "blind: equal chains, the earliest end";
+    // A reader that doesn't know the bucket's capability (a restore) follows the root's declared mode.
+    S3Store unknown(w.bucket);
+    EXPECT_EQ(load(unknown, w.vault, w.lookup(), {}).known(), e2);
+    EXPECT_EQ(loadForRestore(unknown, w.vault, w.lookup(), Checkpoint{1, e1.root_sha256, std::nullopt}).loaded.known(), e2);
+    // Also when the current object is no root at all (a delete marker above the sibling): the newest authentic version
+    // names the mode. Before, such a reader took that sibling as the root and refused it as a fork.
+    (void)w.bucket->seedDeleteMarker(std::string(kRootKey));
+    EXPECT_EQ(load(unknown, w.vault, w.lookup(), {}).known(), e2);
+    EXPECT_EQ(loadForRestore(unknown, w.vault, w.lookup(), Checkpoint{2, e2.root_sha256, std::nullopt}).loaded.known(), e2);
+}
+
+TEST(ManifestChainVersionLog, WithoutItsAnchorTheChainRulesStillRefuseRollbackAndForkAndWarnOfAGap) {
+    namespace f = version_log_fixture;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    auto c = f::ofNode(smallVault(3), "node-a");
+    std::vector<Known> k;
+    for (int i = 0; i < 3; ++i) {
+        nthFile(c, 0).size = 10 + i;
+        (void)w.publish(c);
+        k.push_back(*w.known);
+    }
+    LoadOptions o;
+    // A known epoch 4 the bucket never shows: the bucket's best is older.
+    o.known = Known{4, std::string(64, 'a'), std::nullopt};
+    try {
+        (void)load(*w.store, w.vault, w.lookup(), o);
+        ADD_FAILURE();
+    } catch (const ChainRejected& e) {
+        EXPECT_EQ(e.code(), ChainError::Rollback);
+    }
+    // Another root at the known epoch.
+    o.known = Known{3, std::string(64, 'b'), std::nullopt};
+    try {
+        (void)load(*w.store, w.vault, w.lookup(), o);
+        ADD_FAILURE();
+    } catch (const ChainRejected& e) {
+        EXPECT_EQ(e.code(), ChainError::Fork);
+    }
+    // Epochs 1 and 2 gone from the bucket: from epoch 1 the head of epoch 3 can't be linked, a gap.
+    for (const auto& v : w.bucket->history(std::string(kRootKey)))
+        if (v.version_id != *k[2].version_id) (void)w.bucket->purgeVersion(std::string(kRootKey), v.version_id);
+    o.known = k[0];
+    const auto gap = load(*w.store, w.vault, w.lookup(), o);
+    EXPECT_TRUE(gap.acceptance.gap);
+    EXPECT_EQ(gap.known(), k[2]);
+}
+
+TEST(ManifestChainVersionLog, AVersionThatDoesNotAuthenticateIsSkipped) {
+    namespace f = version_log_fixture;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    auto c = f::ofNode(smallVault(3), "node-a");
+    (void)w.publish(c);
+    const auto e1 = *w.known;
+    nthFile(c, 0).size = 3;
+    (void)w.publish(c);
+    w.bucket->tamper(std::string(kRootKey), *w.known->version_id);
+    EXPECT_EQ(load(*w.store, w.vault, w.lookup(), {}).known(), e1);
+}
+
+TEST(ManifestChainVersionLog, AHeadThatALifecycleRuleExpiresUnderACrashedLoserFailsLoudly) {
+    namespace f = version_log_fixture;
+    auto w = f::vlWriter(f::b2Bucket(), "node-a");
+    w.bucket->expireNoncurrent(".vaulthalla/", 1);   // A6 broken on purpose
+    auto c = f::ofNode(smallVault(3), "node-a");
+    (void)w.publish(c);
+    const auto e1 = *w.known;
+    nthFile(c, 0).size = 3;
+    (void)w.publish(c);
+    // A crashed writer's sibling sits above the head; nobody repairs it for two days.
+    (void)w.bucket->seed(std::string(kRootKey), f::rootLike(w, w.cache.base->root, 2, e1.root_sha256, "node-x"));
+    w.bucket->advance(2 * 24 * 60 * 60);
+    try {
+        (void)w.loadKnown();
+        ADD_FAILURE() << "the loser was taken for the expired head";
+    } catch (const ChainRejected& e) {
+        EXPECT_EQ(e.code(), ChainError::Fork);
+    }
 }
 
 }

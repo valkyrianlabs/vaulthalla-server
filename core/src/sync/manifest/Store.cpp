@@ -2,6 +2,7 @@
 
 #include "storage/s3/Controller.hpp"
 
+#include <algorithm>
 #include <pugixml.hpp>
 
 #include <cstdio>
@@ -29,6 +30,18 @@ std::optional<std::time_t> parseListTime(const std::string& value) {
 
 PutResult ObjectStore::put(const std::string& key, const std::vector<uint8_t>&) {
     throw std::logic_error("this store can't write " + key + " without a precondition");
+}
+
+std::vector<StoredVersion> ObjectStore::versionsSince(const std::string& key, const std::optional<std::string>& stopAt) {
+    auto all = versions(key);
+    if (!stopAt) return all;
+    const auto it = std::ranges::find_if(all, [&](const StoredVersion& v) { return v.version_id == *stopAt; });
+    if (it != all.end()) all.erase(std::next(it), all.end());
+    return all;
+}
+
+std::vector<StoredVersion> ObjectStore::versionsUnder(const std::string& prefix) {
+    throw std::logic_error("this store can't list the versions under " + prefix);
 }
 
 void ObjectStore::removeVersion(const std::string& key, const std::string& versionId) {
@@ -102,7 +115,16 @@ std::string S3Store::put(const std::string& key, const std::vector<uint8_t>& byt
 }
 
 PutResult S3Store::put(const std::string& key, const std::vector<uint8_t>& bytes) {
-    s3_->uploadBufferWithMetadataConditional(key, bytes, storage::s3::RequestOptions{}, std::nullopt, std::nullopt);
+    try {
+        s3_->uploadBufferWithMetadataConditional(key, bytes, storage::s3::RequestOptions{}, std::nullopt, std::nullopt);
+    } catch (const storage::s3::RequestBudgetExceeded&) {
+        throw;  // refused before anything was sent
+    } catch (const storage::upstream::BucketProtected&) {
+        throw;
+    } catch (const std::runtime_error& e) {
+        // A transport failure or a non-2xx answer: the provider may have applied the PUT all the same.
+        throw PutOutcomeUnknown(e.what());
+    }
     const auto outcome = storage::s3::Controller::lastPutOutcome();
     return {outcome.etag, outcome.version_id};
 }
@@ -139,19 +161,39 @@ std::vector<ListedObject> S3Store::list(const std::string& prefix) {
     return out;
 }
 
-std::vector<StoredVersion> S3Store::versions(const std::string& key) {
+std::vector<StoredVersion> S3Store::versions(const std::string& key) { return versionsSince(key, std::nullopt); }
+
+std::vector<StoredVersion> S3Store::versionsSince(const std::string& key, const std::optional<std::string>& stopAt) {
     std::vector<StoredVersion> out;
     std::string keyMarker, versionMarker;
     for (;;) {
         const auto page = s3_->listObjectVersionsPage(key, keyMarker, versionMarker);
+        bool reached = false;
         for (const auto& v : page.versions) {
-            if (v.key != key) continue;
-            out.push_back({v.version_id, v.size, v.last_modified, v.delete_marker, v.etag, v.is_latest});
+            if (v.key != key || reached) continue;
+            out.push_back({v.key, v.version_id, v.size, v.last_modified, v.delete_marker, v.etag, v.is_latest});
+            reached = stopAt && v.version_id == *stopAt;
+        }
+        if (reached || !page.truncated) break;
+        keyMarker = page.next_key_marker;
+        versionMarker = page.next_version_id_marker;
+        if (keyMarker > key) break;  // past every version of this key
+    }
+    return out;
+}
+
+std::vector<StoredVersion> S3Store::versionsUnder(const std::string& prefix) {
+    std::vector<StoredVersion> out;
+    std::string keyMarker, versionMarker;
+    for (;;) {
+        const auto page = s3_->listObjectVersionsPage(prefix, keyMarker, versionMarker);
+        for (const auto& v : page.versions) {
+            if (!v.key.starts_with(prefix)) continue;
+            out.push_back({v.key, v.version_id, v.size, v.last_modified, v.delete_marker, v.etag, v.is_latest});
         }
         if (!page.truncated) break;
         keyMarker = page.next_key_marker;
         versionMarker = page.next_version_id_marker;
-        if (keyMarker > key) break;  // past every version of this key
     }
     return out;
 }

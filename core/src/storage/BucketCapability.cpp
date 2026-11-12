@@ -168,13 +168,9 @@ std::string noteChanged(const uint32_t vaultId, const std::string& detail) {
     return stalled;
 }
 
-std::string unpublishableReason(const s3::WriteCapability capability) {
-    return capability == s3::WriteCapability::VersionLog
-        ? std::string("the bucket does not support conditional writes (it rejects If-None-Match and If-Match): this "
-                      "server version can't publish the vault's encrypted manifest on it yet. Content uploads continue; "
-                      "the manifest that names them is not written (design/encryption/06-publish-without-preconditions.md)")
-        : std::string("the bucket supports neither conditional writes nor object versions (or not If-Match on GET): "
-                      "the vault's encrypted manifest can't be published on it");
+std::string unpublishableReason(const s3::WriteCapability) {
+    return "the bucket supports neither conditional writes nor object versions (or not If-Match on GET): nothing can "
+           "arbitrate the vault's encrypted manifest on it, so it isn't published; content uploads continue";
 }
 
 void setLazyProbingForTesting(const std::optional<bool> enabled) {

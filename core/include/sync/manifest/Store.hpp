@@ -34,6 +34,15 @@ public:
     explicit ConditionsUnsupported(const std::string& message) : std::runtime_error(message) {}
 };
 
+// An unconditional PUT whose outcome is unknown: the request may or may not have been applied (a transport error after
+// sending, a 5xx; Backblaze answered a PUT whose body stalled with 500 InternalError). The writer looks for its own
+// version before deciding anything (spec 06 §5.2 step 2). Refusals before sending (budget, protection lock, the opaque
+// request rules) are not this: nothing was sent.
+class PutOutcomeUnknown : public std::runtime_error {
+public:
+    explicit PutOutcomeUnknown(const std::string& message) : std::runtime_error(message) {}
+};
+
 struct StoredObject {
     std::vector<uint8_t> bytes;
     std::optional<std::string> etag;
@@ -48,6 +57,7 @@ struct ListedObject {
 };
 
 struct StoredVersion {
+    std::string key;         // set by versionsUnder()
     std::string version_id;
     uint64_t size{};
     std::optional<std::time_t> last_modified;
@@ -99,6 +109,13 @@ public:
     // The provider versions of exactly `key` in provider order, newest first: empty on an unversioned bucket. Throws
     // when the provider can't list versions (the caller treats that as "none retained").
     [[nodiscard]] virtual std::vector<StoredVersion> versions(const std::string& key) = 0;
+    // The same, newest first, down to and including the version `stopAt` (spec 06 §7: a listing stops at the base it
+    // needs); every version when stopAt is nullopt or not among them. The default lists everything and cuts.
+    [[nodiscard]] virtual std::vector<StoredVersion> versionsSince(const std::string& key,
+                                                                   const std::optional<std::string>& stopAt);
+    // Every version and delete marker of every key under `prefix`, keys ascending, each key's newest first. The default
+    // refuses.
+    [[nodiscard]] virtual std::vector<StoredVersion> versionsUnder(const std::string& prefix);
     virtual void remove(const std::string& key) = 0;
     // DELETE ?versionId=: permanently removes exactly that version or delete marker (never adds a marker). The default
     // refuses.
@@ -121,6 +138,10 @@ public:
     std::string putIfMatch(const std::string& key, const std::vector<uint8_t>& bytes, const std::string& etag) override;
     [[nodiscard]] std::vector<ListedObject> list(const std::string& prefix) override;
     [[nodiscard]] std::vector<StoredVersion> versions(const std::string& key) override;
+    // Stops paging after the page that holds stopAt.
+    [[nodiscard]] std::vector<StoredVersion> versionsSince(const std::string& key,
+                                                           const std::optional<std::string>& stopAt) override;
+    [[nodiscard]] std::vector<StoredVersion> versionsUnder(const std::string& prefix) override;
     void remove(const std::string& key) override;
     PutResult put(const std::string& key, const std::vector<uint8_t>& bytes) override;
     void removeVersion(const std::string& key, const std::string& versionId) override;

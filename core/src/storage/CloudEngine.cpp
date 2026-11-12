@@ -503,6 +503,8 @@ void CloudEngine::publishManifestV2(const bool onlyIfChanged) const {
         throw SyncStalled(std::string("the bucket's manifest root was refused: ") + e.what());
     } catch (const vh::sync::manifest::PublishConflict& e) {
         throw SyncStalled(e.what());
+    } catch (const vh::sync::manifest::PublishUnsettled& e) {
+        throw SyncStalled(e.what());
     } catch (const vh::sync::manifest::PublishUnsupported&) {
         // Nothing was written: no segment, no root (spec 06 §7). The pass stalls with the reason; health lists the vault.
         s3::WriteCapability mode{};

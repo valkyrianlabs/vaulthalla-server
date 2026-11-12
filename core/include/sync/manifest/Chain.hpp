@@ -30,10 +30,17 @@ namespace vh::sync::manifest {
 struct Known {
     uint64_t epoch{};
     std::string root_sha256;
-    [[nodiscard]] bool operator==(const Known&) const = default;
+    // version_log buckets (spec 06 §5.2): the provider version id of that root, when known. Not part of identity: a
+    // root is its epoch and hash, whichever version holds it.
+    std::optional<std::string> version_id{};
+    [[nodiscard]] bool operator==(const Known& o) const { return epoch == o.epoch && root_sha256 == o.root_sha256; }
 };
 
-enum class ChainError { BadRoot, Rollback, Fork, SegmentMissing, SegmentMismatch };
+// OrderViolation, Superseded and PublishModeMismatch are refusals of design/encryption/06-publish-without-preconditions.md
+// (§5.3, §5.5, I9): a settled root displaced (the provider broke its ordering assumptions), a head whose `writers` no
+// longer names this server, a head published in another mode than the bucket's.
+enum class ChainError { BadRoot, Rollback, Fork, SegmentMissing, SegmentMismatch, OrderViolation, Superseded,
+                        PublishModeMismatch };
 
 [[nodiscard]] std::string_view chainErrorName(ChainError error);
 [[nodiscard]] std::optional<ChainError> chainErrorFromName(std::string_view name);

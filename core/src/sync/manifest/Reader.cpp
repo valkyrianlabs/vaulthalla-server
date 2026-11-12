@@ -1,6 +1,7 @@
 #include "sync/manifest/Reader.hpp"
 
 #include "sync/manifest/Objects.hpp"
+#include "sync/manifest/VersionLog.hpp"
 
 #include <fmt/format.h>
 
@@ -163,32 +164,114 @@ Content contentOf(const RootDocument& root, const std::vector<SegmentDocument>& 
     return c;
 }
 
+namespace reader_detail {
+
+// version_log (spec 06 §5.3): the canonical head by rule C1, not the current object.
+void chooseVersionLogRoot(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLookup& keys,
+                          const LoadOptions& options, Loaded& out) {
+    RootCache local;
+    RootLog log(store, vaultUid, keys, options.root_cache ? *options.root_cache : local);
+    // From a settled anchor the listing stops at the oldest version it needs (the settled window's base, else the
+    // anchor); an anchor missing from that listing gets the whole log (the fallbacks below need it).
+    std::optional<std::string> stopAt;
+    if (options.known && options.settled) stopAt = options.settled->base_version_id;
+    else if (options.known && options.known->version_id) stopAt = options.known->version_id;
+    log.list(stopAt);
+    if (stopAt && options.known->version_id && !log.indexOf(*options.known->version_id)) log.list();
+    if (options.known && options.settled &&
+        windowBroken(log, options.settled->base_version_id, options.settled->version_id, options.settled->window))
+        throw ChainRejected(ChainError::OrderViolation,
+                            "a version appeared between the settled root and its base: the provider's listing order "
+                            "changed under a root this server had settled",
+                            options.known->epoch, options.known->root_sha256);
+
+    std::optional<Walk> w;
+    if (options.known) {
+        std::optional<std::size_t> anchor;
+        if (options.known->version_id)
+            if (const auto i = log.indexOf(*options.known->version_id))
+                if (const auto* r = log.open(*i); r && r->sha256 == options.known->root_sha256) anchor = i;
+        if (!anchor) anchor = log.findBySha(options.known->root_sha256);
+        if (anchor) w = walk(log, *anchor);
+    }
+    if (w) {
+        const auto* head = log.open(w->head);
+        out.acceptance = Acceptance{head->root.epoch, head->sha256, false};
+    } else {
+        // No anchor (a blind read), or the anchor is gone from the bucket: the longest chain, then the chain rules
+        // against what the reader knows (rollback, fork, gap), as on a conditional bucket.
+        w = walkBlind(log);
+        if (!w)
+            throw NoUsableRoot(log.versions().empty() ? "the bucket has no manifest root"
+                                                      : "no version of the manifest root authenticates");
+        const auto* head = log.open(w->head);
+        out.acceptance = checkChain(head->root, head->sha256, options.known, [&](const std::string& sha) {
+            const auto i = log.findBySha(sha);
+            return i ? std::optional<RootDocument>(log.open(*i)->root) : std::nullopt;
+        });
+    }
+    const auto& versions = log.versions();
+    const auto* head = log.open(w->head);
+    out.root = head->root;
+    out.etag = versions[w->head].etag;
+    out.source = RootSource::Current;
+    out.version_id = versions[w->head].version_id;
+    if (w->chain.size() > 1) {
+        const auto base = w->chain[w->chain.size() - 2];
+        out.base_version_id = versions[base].version_id;
+        out.settle_window = idsBetween(log, base, w->head);
+    }
+    for (const auto i : w->strays) out.strays.push_back(versions[i].version_id);
+    out.root_gets = log.gets();
+}
+
+}
+
 Loaded load(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLookup& keys, const LoadOptions& options) {
     using namespace reader_detail;
     RetainedRoots retained(store, vaultUid, keys, options.use_provider_versions);
 
-    std::optional<RootCandidate> cand;
-    RootSource source = RootSource::Current;
-    const auto current = options.root_object ? options.root_object : store.get(std::string(kRootKey));
-    if (current)
-        if (auto root = tryOpenRoot(current->bytes, vaultUid, keys))
-            cand = RootCandidate{std::move(*root), sha256Hex(current->bytes), current->etag};
-    if (!cand) {
-        if (const auto& all = retained.all(); !all.empty()) {
-            cand = all.front();
-            source = RootSource::ProviderVersion;
+    Loaded out;
+    bool versionLog = store.mode() == storage::s3::WriteCapability::VersionLog;
+    std::optional<StoredObject> current;
+    if (!versionLog && store.mode() != storage::s3::WriteCapability::Insufficient) {
+        // A root published without conditional writes names its mode: a reader that doesn't know the bucket's
+        // capability (a restore) follows it, and reads the canonical head rather than the current object.
+        // When the current object is no root (a delete marker or a stray from a crashed write above the head), the
+        // newest authentic version says it, as the conditional fallback below would read it anyway.
+        current = options.root_object ? options.root_object : store.get(std::string(kRootKey));
+        const auto declares = [](const RootDocument& r) { return r.publish == std::string(kPublishVersionLog); };
+        if (options.use_provider_versions) {
+            std::optional<RootDocument> currentRoot;
+            if (current) currentRoot = tryOpenRoot(current->bytes, vaultUid, keys);
+            if (currentRoot) versionLog = declares(*currentRoot);
+            else if (const auto& all = retained.all(); !all.empty()) versionLog = declares(all.front().root);
         }
     }
-    if (!cand)
-        throw NoUsableRoot(current ? "the manifest root does not authenticate, and no retained version does"
-                                   : "the bucket has no manifest root");
-
-    Loaded out;
-    out.acceptance = checkChain(cand->root, cand->sha, options.known,
-                                [&](const std::string& sha) { return retained.bySha(sha); });
-    out.root = cand->root;
-    out.etag = source == RootSource::Current ? cand->etag : std::nullopt;
-    out.source = source;
+    if (versionLog) {
+        chooseVersionLogRoot(store, vaultUid, keys, options, out);
+    } else {
+        std::optional<RootCandidate> cand;
+        RootSource source = RootSource::Current;
+        if (!current) current = options.root_object ? options.root_object : store.get(std::string(kRootKey));
+        if (current)
+            if (auto root = tryOpenRoot(current->bytes, vaultUid, keys))
+                cand = RootCandidate{std::move(*root), sha256Hex(current->bytes), current->etag};
+        if (!cand) {
+            if (const auto& all = retained.all(); !all.empty()) {
+                cand = all.front();
+                source = RootSource::ProviderVersion;
+            }
+        }
+        if (!cand)
+            throw NoUsableRoot(current ? "the manifest root does not authenticate, and no retained version does"
+                                       : "the bucket has no manifest root");
+        out.acceptance = checkChain(cand->root, cand->sha, options.known,
+                                    [&](const std::string& sha) { return retained.bySha(sha); });
+        out.root = cand->root;
+        out.etag = source == RootSource::Current ? cand->etag : std::nullopt;
+        out.source = source;
+    }
 
     std::vector<SegmentDocument> docs;
     for (const auto& ref : out.root.segments) {
