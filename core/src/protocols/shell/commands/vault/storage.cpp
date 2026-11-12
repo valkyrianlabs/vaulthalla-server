@@ -47,10 +47,13 @@ std::string probeText(const vsops::ProbeAnswer& a) {
         out += fmt::format("  left in the bucket: {} probe version(s) under .vaulthalla/probe/ (deletion refused)\n",
                            p.leftover_versions);
     out += "  " + p.reason + "\n";
-    out += a.manifest_publishable
-        ? std::string("  the vault's manifest can be published on this bucket\n")
-        : std::string("  the vault's encrypted manifest can't be published on this bucket by this server version: its "
-                      "sync stalls (manifest_publish_unsupported)\n");
+    if (!a.manifest_publishable)
+        out += "  the vault's encrypted manifest can't be published on this bucket (neither conditional writes nor "
+               "object versions): its sync stalls (manifest_publish_unsupported)\n";
+    else if (p.capability == s3cap::WriteCapability::VersionLog)
+        out += "  the vault's manifest is published as versions of its root (one listing more per publish); keep "
+               "every version under .vaulthalla/ (no lifecycle rule there)\n";
+    else out += "  the vault's manifest can be published on this bucket\n";
     return out;
 }
 

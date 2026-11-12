@@ -27,9 +27,10 @@ using VaultPerm = rbac::permission::admin::VaultPermissions;
 using storage::s3::WriteCapability;
 
 bool publishable(const vault::model::StorageLayout layout, const WriteCapability capability) {
-    // opaque_v1 needs conditional writes until spec 06 §5 exists; the path_v0 / transparent index is PUT plainly on
-    // a bucket without them (one writer, rebuilt from a listing).
-    if (layout == vault::model::StorageLayout::OpaqueV1) return storage::s3::sendsPreconditions(capability);
+    // opaque_v1's manifest root is arbitrated by conditional writes or by the root's provider versions
+    // (design/encryption/06-publish-without-preconditions.md §5); a bucket with neither can't carry it. The path_v0 /
+    // transparent index is PUT plainly anywhere (one writer, rebuilt from a listing).
+    if (layout == vault::model::StorageLayout::OpaqueV1) return capability != WriteCapability::Insufficient;
     return true;
 }
 

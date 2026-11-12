@@ -403,14 +403,13 @@ std::vector<WsModel> statsSystemModels() {
                    "of the current key version. Any entry makes the node at least degraded."),
          objectArray("vaults_manifest_unpublishable", "",
                      {uinteger("vault_id"), str("vault_name"),
-                      str("reason").oneOf({"conditional_writes_unsupported", "bucket_capability_insufficient",
-                                           "bucket_capability_changed"}),
+                      str("reason").oneOf({"bucket_capability_insufficient", "bucket_capability_changed"}),
                       str("detail").desc("Why, and what to do.")})
              .opt()
              .desc("Vaults with the opaque_v1 layout whose encrypted manifest can't be published on their bucket "
-                   "(design/encryption/06-publish-without-preconditions.md §7): the bucket's probe found no conditional "
-                   "writes (e.g. Backblaze B2), found it insufficient, or a bucket probed as conditional has refused a "
-                   "condition since. Their sync stalls. Any entry makes the node at least degraded."),
+                   "(design/encryption/06-publish-without-preconditions.md §7): the bucket's probe found neither "
+                   "conditional writes nor object versions, or a bucket probed as conditional has refused a condition "
+                   "since. Their sync stalls. Any entry makes the node at least degraded."),
          object("legacy_content", "",
                 {boolean("remaining").desc("Any legacy-format content left on this host: the next release's install "
                                            "floor refuses an upgrade while true."),

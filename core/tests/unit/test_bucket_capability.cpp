@@ -276,9 +276,74 @@ TEST_F(BucketCapabilityDbTest, APathV0IndexPublishesPlainlyOnABucketWithoutCondi
     EXPECT_EQ(bucket->history(sync::model::remote_manifest::INDEX_V1_KEY).size(), 2u) << "plain PUTs, one per publish";
 }
 
-TEST_F(BucketCapabilityDbTest, AnOpaqueVaultOnSuchABucketStallsWithOneReasonAndWritesNoManifest) {
+TEST_F(BucketCapabilityDbTest, AnOpaqueVaultOnABackblazeLikeBucketPublishesAndARestartFindsItsRoot) {
+    // Spec 06 §5: on a bucket without conditional writes that keeps versions, the root's provider versions arbitrate.
     const auto v = s3Vault(vault::model::StorageLayout::OpaqueV1);
     const auto bucket = bucket_capability_test::bucketWith(Versioning::Enabled, Puts::Reject501);
+    record(v->id, *bucket);
+    const std::string rootKey(sync::manifest::kRootKey);
+    {
+        const auto cloud = std::make_shared<storage::CloudEngine>(v, bucket);
+        cloud->encryptionManager->load_key();
+        cloud->publishRemoteIndexManifestWithRetry();
+        const auto state = db::query::sync::Manifest::state(v->id);
+        ASSERT_EQ(state.epoch, 1u);
+        ASSERT_TRUE(state.root_version_id);
+        EXPECT_EQ(*state.root_version_id, bucket->current(rootKey)->version_id);
+        EXPECT_EQ(state.own_epoch, 1u);
+        EXPECT_FALSE(state.base_version_id) << "a first root has no base";
+
+        // Every later publish: the changed segments (none here), one root PUT and one ListObjectVersions.
+        bucket->resetCounters();
+        cloud->publishRemoteIndexManifestWithRetry();
+        auto c = bucket->counters();
+        EXPECT_EQ(c.put, 1u);
+        EXPECT_EQ(c.list, 1u);
+        EXPECT_EQ(c.get + c.head + c.del, 0u);
+        const auto second = db::query::sync::Manifest::state(v->id);
+        EXPECT_EQ(second.epoch, 2u);
+        EXPECT_EQ(second.base_version_id, state.root_version_id);
+        EXPECT_TRUE(second.settle_window.empty());
+
+        // A pass that changed nothing: one HEAD.
+        bucket->resetCounters();
+        cloud->applyRemoteIndexMutation({});
+        EXPECT_FALSE(cloud->refreshRemoteIndexFromManifestIfChanged());
+        c = bucket->counters();
+        EXPECT_EQ(c.head, 1u);
+        EXPECT_EQ(c.put + c.get + c.list + c.del, 0u);
+    }
+
+    // A restart: another engine with the database only. Its first pass costs one HEAD; its first publish loads the
+    // settled root by version id (one LIST, the root and its segments) and settles on it (a PUT, a LIST).
+    const auto cloud = std::make_shared<storage::CloudEngine>(v, bucket);
+    cloud->encryptionManager->load_key();
+    bucket->resetCounters();
+    EXPECT_FALSE(cloud->refreshRemoteIndexFromManifestIfChanged());
+    EXPECT_EQ(bucket->counters().head, 1u);
+    EXPECT_EQ(bucket->counters().list, 0u);
+    bucket->resetCounters();
+    cloud->publishRemoteIndexManifestWithRetry();
+    const auto c = bucket->counters();
+    const auto third = db::query::sync::Manifest::state(v->id);
+    EXPECT_EQ(third.epoch, 3u);
+    EXPECT_EQ(*third.root_version_id, bucket->current(rootKey)->version_id);
+    EXPECT_EQ(c.list, 2u);
+    EXPECT_EQ(c.put, 1u);
+    EXPECT_EQ(c.del, 0u);
+    RecordProperty("restart_publish_gets", static_cast<int>(c.get));
+    EXPECT_GE(c.get, 1u) << "the settled root, by version id";
+    EXPECT_EQ(bucket->history(rootKey).size(), 3u) << "one version per publish, nothing deleted";
+
+    const auto health = stats::model::SystemHealth::snapshot();
+    EXPECT_TRUE(std::ranges::none_of(health.vaultsManifestUnpublishable,
+                                     [&](const auto& u) { return u.vaultId == v->id; }))
+        << "a version_log bucket publishes: health has nothing to say";
+}
+
+TEST_F(BucketCapabilityDbTest, AnOpaqueVaultOnABucketWithNeitherStallsWithOneReasonAndWritesNoManifest) {
+    const auto v = s3Vault(vault::model::StorageLayout::OpaqueV1);
+    const auto bucket = bucket_capability_test::bucketWith(Versioning::Unversioned, Puts::Reject501);
     record(v->id, *bucket);
     const auto cloud = std::make_shared<storage::CloudEngine>(v, bucket);
     cloud->encryptionManager->load_key();
@@ -298,7 +363,7 @@ TEST_F(BucketCapabilityDbTest, AnOpaqueVaultOnSuchABucketStallsWithOneReasonAndW
     const auto it = std::ranges::find_if(health.vaultsManifestUnpublishable,
                                          [&](const auto& u) { return u.vaultId == v->id; });
     ASSERT_NE(it, health.vaultsManifestUnpublishable.end());
-    EXPECT_EQ(it->reason, "conditional_writes_unsupported");
+    EXPECT_EQ(it->reason, "bucket_capability_insufficient");
     EXPECT_EQ(health.overallStatus, stats::model::SystemHealthStatus::Degraded);
     EXPECT_TRUE(nlohmann::json(health).at("vaults_manifest_unpublishable").is_array());
 }
@@ -351,27 +416,37 @@ TEST_F(BucketCapabilityDbTest, LazyProbingRecordsAnOlderBindingOnFirstUse) {
     EXPECT_TRUE(bucket->current(sync::model::remote_manifest::INDEX_V1_KEY));
 }
 
-TEST_F(BucketCapabilityDbTest, AnEncryptingVaultIsRefusedOnABucketWithoutConditionalWrites) {
-    // New encrypting vaults are opaque_v1, whose manifest needs conditional writes until spec 06 §5 exists: refused
-    // before anything is created. A vault without upstream encryption is created there and its verdict recorded.
-    const auto bucket = bucket_capability_test::bucketWith(Versioning::Enabled, Puts::Reject501);
-    storage::bucket_capability::setControllerFactoryForTesting(
-        [bucket](unsigned int, const std::string&) -> std::shared_ptr<storage::s3::Controller> { return bucket; });
+TEST_F(BucketCapabilityDbTest, AnEncryptingVaultIsCreatedOnAVersionLogBucketAndRefusedOnOneWithNeither) {
+    // New encrypting vaults are opaque_v1: their manifest needs conditional writes or object versions (spec 06 §7).
     if (!keyId) keyId = addKey();
     // gtest_main makes new encrypting vaults path_v0 for the older suites; the product creates them opaque_v1.
     vault::model::setNewEncryptingLayoutForTesting(std::nullopt);
     struct RestoreLayout {
         ~RestoreLayout() { vault::model::setNewEncryptingLayoutForTesting(vault::model::StorageLayout::PathV0); }
     } restore;
+    const auto createOn = [&](const std::shared_ptr<VersionedBucket>& bucket, const std::string& name) {
+        storage::bucket_capability::setControllerFactoryForTesting(
+            [bucket](unsigned int, const std::string&) -> std::shared_ptr<storage::s3::Controller> { return bucket; });
+        return ops::vaults::create(superUser, {.name = name, .type = vault::model::VaultType::S3,
+                                               .s3 = ops::vaults::S3Spec{.api_key_id = keyId,
+                                                                         .bucket = "cap-enc-" + test::uniqueTag('b'),
+                                                                         .encrypt_upstream = true}});
+    };
+
+    const auto b2 = createOn(bucket_capability_test::bucketWith(Versioning::Enabled, Puts::Reject501),
+                             "cap_enc_" + test::uniqueTag('e'));
+    ASSERT_TRUE(b2);
+    const auto created = std::dynamic_pointer_cast<vault::model::S3Vault>(db::query::vault::Vault::getVault(b2->id));
+    ASSERT_TRUE(created);
+    EXPECT_EQ(created->storage_layout, vault::model::StorageLayout::OpaqueV1);
+    EXPECT_EQ(db::query::vault::BucketCapability::get(b2->id).capability, WriteCapability::VersionLog);
+
     const auto name = "cap_enc_" + test::uniqueTag('e');
     try {
-        (void)ops::vaults::create(superUser, {.name = name, .type = vault::model::VaultType::S3,
-                                              .s3 = ops::vaults::S3Spec{.api_key_id = keyId,
-                                                                        .bucket = "cap-enc-" + test::uniqueTag('b'),
-                                                                        .encrypt_upstream = true}});
-        FAIL() << "an encrypting vault must be refused on this bucket";
+        (void)createOn(bucket_capability_test::bucketWith(Versioning::Unversioned, Puts::Reject501), name);
+        FAIL() << "an encrypting vault must be refused on a bucket with neither";
     } catch (const ops::Refused& e) {
-        EXPECT_EQ(e.code, "conditional_writes_unsupported");
+        EXPECT_EQ(e.code, "bucket_capability_insufficient");
     }
     EXPECT_FALSE(db::query::vault::Vault::vaultExists(name, superUser->id));
 }

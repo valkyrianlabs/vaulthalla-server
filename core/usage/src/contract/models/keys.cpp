@@ -191,8 +191,8 @@ std::vector<WsModel> vaultKeyModels() {
              .desc("What was recorded before this probe (unknown: never probed)."),
          boolean("previously_changed").desc("The recorded verdict had been marked bucket_capability_changed."),
          boolean("manifest_publishable")
-             .desc("Whether this server version can publish the vault's manifest on the bucket (an opaque_v1 vault "
-                   "needs conditional writes)."),
+             .desc("Whether the vault's manifest can be published on the bucket (an opaque_v1 vault needs conditional "
+                   "writes or object versions: false only on an insufficient bucket)."),
          object("probe", "",
                 {str("capability").oneOf({"conditional", "version_log", "insufficient"}),
                  str("conditional_put").oneOf({"supported", "rejected", "ignored", "inconsistent"}),

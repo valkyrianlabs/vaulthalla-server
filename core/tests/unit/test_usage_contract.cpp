@@ -358,7 +358,6 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         {"no_key_material", {"vault.recover"}}, {"vault_unknown", {"vault.recover"}},
         {"protocol_unsupported", {"meta.hello"}},
         // Spec 06 §7: a bucket that can't hold an encrypting (opaque_v1) vault, and a probe without a verdict.
-        {"conditional_writes_unsupported", {"storage.vault.add", "storage.vault.update"}},
         {"bucket_capability_insufficient", {"storage.vault.add", "storage.vault.update"}},
         {"bucket_probe_failed", {"vault.storage.probe"}},
         {"already_signed_in", {"auth.login", "auth.passkey.options", "auth.passkey.login"}},

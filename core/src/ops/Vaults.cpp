@@ -181,9 +181,9 @@ bool bucketHoldsData(const S3Vault& s3) {
 }
 
 // The bucket a vault is about to be bound to, probed (design/encryption/06-publish-without-preconditions.md §7). An
-// opaque_v1 vault needs conditional writes until the manifest publish without them exists (spec 06 §5): refused
-// otherwise, before anything is created. A probe that can't run refuses nothing: the binding stays unprobed and the
-// first use probes it.
+// opaque_v1 vault's manifest needs conditional writes or object versions to arbitrate its root (spec 06 §5): a bucket
+// with neither is refused before anything is created. A probe that can't run refuses nothing: the binding stays
+// unprobed and the first use probes it.
 namespace vault_capability {
 
 std::optional<storage::s3::ProbeResult> probeBinding(const unsigned int apiKeyId, const std::string& bucket,
@@ -196,15 +196,11 @@ std::optional<storage::s3::ProbeResult> probeBinding(const unsigned int apiKeyId
                                      "is probed again on first use", e.what());
         return std::nullopt;
     }
-    if (!probe || !opaque || storage::s3::sendsPreconditions(probe->capability)) return probe;
-    if (probe->capability == storage::s3::WriteCapability::VersionLog)
-        throw Refused("conditional_writes_unsupported",
-                      "this bucket does not support conditional writes (" + probe->reason + "). A vault that encrypts "
-                      "upstream keeps its file names and folders in an encrypted manifest, which this server version "
-                      "can only publish with conditional writes; create it on a bucket that supports them, or without "
-                      "upstream encryption (the provider then reads its objects and names)");
+    if (!probe || !opaque || probe->capability != storage::s3::WriteCapability::Insufficient) return probe;
     throw Refused("bucket_capability_insufficient",
-                  "this bucket can't hold an encrypting vault: " + probe->reason);
+                  "this bucket can't hold an encrypting vault: " + probe->reason + ". A vault that encrypts upstream "
+                  "keeps its names and folders in an encrypted manifest, whose root needs conditional writes or object "
+                  "versions to be published safely");
 }
 
 void record(const unsigned int vaultId, const std::optional<storage::s3::ProbeResult>& probe) {

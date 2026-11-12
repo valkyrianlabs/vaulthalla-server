@@ -839,12 +839,13 @@ static std::shared_ptr<CommandUsage> storage_probe(const std::weak_ptr<CommandUs
         "conditional PUT (If-None-Match, If-Match) is honoured, rejected or silently ignored, that the bucket keeps "
         "object versions, and that a GET with If-Match is honoured, then deletes exactly the versions it wrote. "
         "Buckets that support conditional writes (AWS S3, Cloudflare R2) keep publishing as before. On a bucket "
-        "without them (Backblaze B2), objects that are written once under a unique name, recovery envelopes and the "
-        "index of a vault that doesn't encrypt upstream are written without conditions; the encrypted manifest of a "
-        "vault with opaque storage can't be published there by this version, and such a vault's sync stalls with "
-        "that reason. Every bucket is probed when a vault is created on it or moved to it, and an older binding on "
-        "its first use; run this after the endpoint or the provider changed, or when a vault reports "
-        "bucket_capability_changed. Refused on a protected bucket.";
+        "without them that keeps object versions (Backblaze B2), every manifest object is written without "
+        "conditions and the encrypted manifest's root is published as a new version of .vaulthalla/root, which "
+        "costs one version listing more per publish; keep every version under .vaulthalla/ there (no lifecycle "
+        "rule that removes old versions). On a bucket with neither, a vault with opaque storage can't publish its "
+        "manifest and its sync stalls with that reason. Every bucket is probed when a vault is created on it or "
+        "moved to it, and an older binding on its first use; run this after the endpoint or the provider changed, "
+        "or when a vault reports bucket_capability_changed. Refused on a protected bucket.";
     cmd->positionals = {vaultPos};
     cmd->optional = {owner};
     cmd->optional_flags = {jsonFlag};

@@ -78,7 +78,7 @@ std::vector<BucketCapability::Unpublishable> BucketCapability::unpublishable() {
             "SELECT v.id, v.name, s.manifest_publish, s.bucket_probe::text AS bucket_probe "
             "FROM vault v JOIN s3 s ON s.vault_id = v.id "
             "WHERE v.deleted_at IS NULL AND s.storage_layout = 'opaque_v1' AND s.bucket_probe IS NOT NULL "
-            "  AND (s.manifest_publish IS DISTINCT FROM 'conditional' OR s.bucket_probe ? 'changed_at') "
+            "  AND (s.manifest_publish IS NULL OR s.bucket_probe ? 'changed_at') "
             "ORDER BY v.id");
         for (const auto row : res) {
             const auto stored = bucket_capability_query::storedFrom(row);
@@ -89,10 +89,6 @@ std::vector<BucketCapability::Unpublishable> BucketCapability::unpublishable() {
                 u.detail = "the bucket refused a conditional write although its probe found support (" +
                            stored.changed_detail.value_or("") + "); check the endpoint, then run vh vault storage probe " +
                            std::to_string(u.vault_id);
-            } else if (stored.capability == storage::s3::WriteCapability::VersionLog) {
-                u.reason = "conditional_writes_unsupported";
-                u.detail = "the bucket does not support conditional writes; the vault's encrypted manifest can't be "
-                           "published on it until this server version supports such buckets";
             } else {
                 u.reason = "bucket_capability_insufficient";
                 u.detail = stored.probe ? stored.probe->reason : std::string("the bucket probe found it insufficient");

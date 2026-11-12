@@ -13245,7 +13245,7 @@
           ]
         },
         {
-          "description": "Vaults with the opaque_v1 layout whose encrypted manifest can't be published on their bucket (design/encryption/06-publish-without-preconditions.md §7): the bucket's probe found no conditional writes (e.g. Backblaze B2), found it insufficient, or a bucket probed as conditional has refused a condition since. Their sync stalls. Any entry makes the node at least degraded.",
+          "description": "Vaults with the opaque_v1 layout whose encrypted manifest can't be published on their bucket (design/encryption/06-publish-without-preconditions.md §7): the bucket's probe found neither conditional writes nor object versions, or a bucket probed as conditional has refused a condition since. Their sync stalls. Any entry makes the node at least degraded.",
           "fields": [
             {
               "minimum": 0,
@@ -13264,7 +13264,6 @@
             },
             {
               "enum": [
-                "conditional_writes_unsupported",
                 "bucket_capability_insufficient",
                 "bucket_capability_changed"
               ],
@@ -19981,7 +19980,7 @@
           ]
         },
         {
-          "description": "Whether this server version can publish the vault's manifest on the bucket (an opaque_v1 vault needs conditional writes).",
+          "description": "Whether the vault's manifest can be published on the bucket (an opaque_v1 vault needs conditional writes or object versions: false only on an insufficient bucket).",
           "name": "manifest_publishable",
           "required": true,
           "types": [
@@ -20754,7 +20753,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "4c37c5aad2c8dbf96a9172dbdd9c7a5b2ac1cbb4a029c6fb5c78b505903dae83",
+  "models_hash": "1e308259e291aeb6610653468e0799d19a8539eca25796be9c51209f3d107471",
   "protocol": {
     "min": 1,
     "version": 1
@@ -43198,7 +43197,7 @@
           "description": "provision mode adopt (or an existing unmanaged bucket) needs consent to adopt the bucket: resend with provision.accept_adoption."
         }
       ],
-      "description": "Create a vault. owner_id, description and quota (bytes, 0 = unlimited) are optional; the daemon picks the backing directory. S3 vaults also need api_key_id and bucket. A refusal with data.code 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the person accepts. With provision (#237) the daemon creates a managed bucket or adopts an existing one; 'upstream_adoption' asks for provision.accept_adoption. The bucket's write capability is probed first (design/encryption/06-publish-without-preconditions.md §7): a vault that encrypts upstream is refused with 'conditional_writes_unsupported' on a bucket without conditional writes (e.g. Backblaze B2) and 'bucket_capability_insufficient' on one that keeps no versions either.",
+      "description": "Create a vault. owner_id, description and quota (bytes, 0 = unlimited) are optional; the daemon picks the backing directory. S3 vaults also need api_key_id and bucket. A refusal with data.code 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the person accepts. With provision (#237) the daemon creates a managed bucket or adopts an existing one; 'upstream_adoption' asks for provision.accept_adoption. The bucket's write capability is probed first (design/encryption/06-publish-without-preconditions.md §7): a vault that encrypts upstream is refused with 'bucket_capability_insufficient' on a bucket that has neither conditional writes nor object versions.",
       "input": "payload",
       "operation": "vaults.create",
       "payload": [
@@ -43639,7 +43638,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "conditional_writes_unsupported",
         "bucket_capability_insufficient",
         "encryption_waiver",
         "upstream_adoption"
@@ -43650,7 +43648,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "conditional_writes_unsupported",
         "bucket_capability_insufficient"
       ],
       "response": [
@@ -44078,7 +44075,7 @@
           "description": "The bucket already holds data Vaulthalla did not write (or encryption is being switched on over it): resend with accept_encryption_waiver once the person accepts."
         }
       ],
-      "description": "Patch a vault (absent or null members are unchanged; a vault's type never changes). Owner reassignment also needs Create for the new owner, a key change needs Consume on the key, sync settings need vault sync.config.edit. A refusal with data.code 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the person accepts. A new bucket or key is probed first: an opaque_v1 vault is refused with 'conditional_writes_unsupported' or 'bucket_capability_insufficient' as storage.vault.add says.",
+      "description": "Patch a vault (absent or null members are unchanged; a vault's type never changes). Owner reassignment also needs Create for the new owner, a key change needs Consume on the key, sync settings need vault sync.config.edit. A refusal with data.code 'encryption_waiver' means the bucket already holds data: resend with accept_encryption_waiver once the person accepts. A new bucket or key is probed first: an opaque_v1 vault is refused with 'bucket_capability_insufficient' as storage.vault.add says.",
       "input": "payload",
       "operation": null,
       "payload": [
@@ -44401,7 +44398,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "conditional_writes_unsupported",
         "bucket_capability_insufficient",
         "encryption_waiver"
       ],
@@ -44411,7 +44407,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "conditional_writes_unsupported",
         "bucket_capability_insufficient"
       ],
       "response": [
@@ -49122,7 +49117,7 @@
           ]
         },
         {
-          "description": "Whether this server version can publish the vault's manifest on the bucket (an opaque_v1 vault needs conditional writes).",
+          "description": "Whether the vault's manifest can be published on the bucket (an opaque_v1 vault needs conditional writes or object versions: false only on an insufficient bucket).",
           "name": "manifest_publishable",
           "required": true,
           "types": [
@@ -49250,5 +49245,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "76118089af9b2047f60ce62924de694bbd47965b6a52ad314e319473b828c36b"
+  "ws_hash": "cbc6a9f43a2e10137e62105214ed6f5609e8c92155157148f08540603e5a6241"
 }

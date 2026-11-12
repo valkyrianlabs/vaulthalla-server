@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '76118089af9b2047f60ce62924de694bbd47965b6a52ad314e319473b828c36b'
+export const WS_CONTRACT_HASH = 'cbc6a9f43a2e10137e62105214ed6f5609e8c92155157148f08540603e5a6241'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '4c37c5aad2c8dbf96a9172dbdd9c7a5b2ac1cbb4a029c6fb5c78b505903dae83'
+export const WS_MODELS_HASH = '1e308259e291aeb6610653468e0799d19a8539eca25796be9c51209f3d107471'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -2064,7 +2064,7 @@ export interface WsModels {
     vaults_manifest_unpublishable?: {
       vault_id: number
       vault_name: string
-      reason: 'conditional_writes_unsupported' | 'bucket_capability_insufficient' | 'bucket_capability_changed'
+      reason: 'bucket_capability_insufficient' | 'bucket_capability_changed'
       detail: string
     }[]
     legacy_content?: {
@@ -6132,8 +6132,8 @@ export interface WsContract {
    * person accepts. With provision (#237) the daemon creates a managed bucket or adopts an existing one;
    * 'upstream_adoption' asks for provision.accept_adoption. The bucket's write capability is probed first
    * (design/encryption/06-publish-without-preconditions.md §7): a vault that encrypts upstream is refused
-   * with 'conditional_writes_unsupported' on a bucket without conditional writes (e.g. Backblaze B2) and
-   * 'bucket_capability_insufficient' on one that keeps no versions either.
+   * with 'bucket_capability_insufficient' on a bucket that has neither conditional writes nor object
+   * versions.
    */
   'storage.vault.add': {
     payload: {
@@ -6247,8 +6247,7 @@ export interface WsContract {
    * also needs Create for the new owner, a key change needs Consume on the key, sync settings need vault
    * sync.config.edit. A refusal with data.code 'encryption_waiver' means the bucket already holds data:
    * resend with accept_encryption_waiver once the person accepts. A new bucket or key is probed first: an
-   * opaque_v1 vault is refused with 'conditional_writes_unsupported' or 'bucket_capability_insufficient' as
-   * storage.vault.add says.
+   * opaque_v1 vault is refused with 'bucket_capability_insufficient' as storage.vault.add says.
    */
   'storage.vault.update': {
     payload: {

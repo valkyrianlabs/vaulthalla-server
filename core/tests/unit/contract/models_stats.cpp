@@ -336,9 +336,9 @@ void checkSystemStats(vh::test::contract_models::Checker& c) {
                                                          "not of the current key version"});
     c.check(json(health), "SystemHealth", "a vault without recovery material");
     health.vaultsManifestUnpublishable.push_back(
-        {.vaultId = 16, .vaultName = "b2-photos", .reason = "conditional_writes_unsupported",
-         .detail = "the bucket does not support conditional writes"});
-    c.check(json(health), "SystemHealth", "an opaque_v1 vault on a bucket without conditional writes (spec 06)");
+        {.vaultId = 16, .vaultName = "minio-photos", .reason = "bucket_capability_insufficient",
+         .detail = "the bucket neither honours conditional writes nor keeps object versions"});
+    c.check(json(health), "SystemHealth", "an opaque_v1 vault on a bucket that can't arbitrate its root (spec 06)");
     health.legacyContent = sm::LegacyContentHealth{.remaining = true, .pathV0Vaults = {14},
                                                    .layoutMigrationsUnfinished = {15}, .legacyFiles = 3,
                                                    .legacyBlobs = 2, .legacyUploadFiles = 0};

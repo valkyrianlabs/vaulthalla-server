@@ -36,12 +36,12 @@ public:
     // now). Their next use probes again.
     static void clearForKey(uint32_t apiKeyId);
 
-    // Vaults on the opaque_v1 layout whose manifest can't be published on their bucket: probed version_log or
-    // insufficient, or marked changed. For health (stats::model::SystemHealth).
+    // Vaults on the opaque_v1 layout whose manifest can't be published on their bucket: probed insufficient, or a
+    // conditional bucket marked changed. For health (stats::model::SystemHealth).
     struct Unpublishable {
         uint32_t vault_id{};
         std::string vault_name;
-        std::string reason;   // conditional_writes_unsupported | bucket_capability_insufficient | bucket_capability_changed
+        std::string reason;   // bucket_capability_insufficient | bucket_capability_changed
         std::string detail;
     };
     [[nodiscard]] static std::vector<Unpublishable> unpublishable();

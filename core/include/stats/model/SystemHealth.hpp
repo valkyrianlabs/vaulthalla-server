@@ -126,12 +126,12 @@ struct VaultRecoveryMaterialHealth {
 };
 
 // An opaque_v1 vault whose encrypted manifest can't be published on its bucket (design/encryption/
-// 06-publish-without-preconditions.md §7): the bucket was probed without conditional writes (version_log, e.g.
-// Backblaze B2), as insufficient, or as conditional and has refused a condition since. The vault's sync stalls.
+// 06-publish-without-preconditions.md §7): the bucket was probed as insufficient (neither conditional writes nor
+// object versions), or as conditional and has refused a condition since. The vault's sync stalls.
 struct VaultManifestUnpublishableHealth {
     unsigned int vaultId = 0;
     std::string vaultName;
-    std::string reason;   // conditional_writes_unsupported | bucket_capability_insufficient | bucket_capability_changed
+    std::string reason;   // bucket_capability_insufficient | bucket_capability_changed
     std::string detail;
 };
 
