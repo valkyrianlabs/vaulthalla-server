@@ -69,7 +69,11 @@ provider order wins; the loser removes its version and republishes merged; reade
 ## 4. Assumptions about the provider
 
 B2 documents always-on versioning, `ListObjectVersions`, delete-by-name hiding only the newest version, and delete by
-version id; not listing consistency or the order of near-simultaneous versions. Each is **to verify live on Backblaze**:
+version id; not listing consistency or the order of near-simultaneous versions. **Checked live on 2026-11-12**
+(`s3.us-west-004`, one run, `misc/s3_version_checks.py`): A1, A2, A5, A7 and A8 held in every check. A3 held in 200
+sequential PUT-then-list trials and A4 with six concurrent writers on one key (72 versions, 72 listings, none out of
+order): evidence, not proof. **Not verified:** a writer whose body stalls while others commit (B2 answered the
+stalled PUT with `500 InternalError`), and A6 (the run stopped before the lifecycle check).
 
 | | Assumption | Needed by |
 |---|---|---|
