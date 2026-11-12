@@ -68,7 +68,9 @@ process's. Test-only speedups, all refused outside test mode and never set by th
 minimum cost (`hash::setMinimalPasswordCostForTesting`, set in `gtest_main.cpp`), a TOTP clock tests advance instead
 of sleeping for the next 30 s step (`totp::advanceClockForTesting`, reset in TearDown), a shorter shell-server request
 timeout per test (`shell::Server::setTimingForTesting`). Shared fixtures: `tests/helpers/db_suite.hpp`
-(`vh::test::db::Suite`: env check, fresh schema, seed, runtime, scratch root), `web_session.hpp` (ws sign-in, TOTP,
+(`vh::test::db::Suite`: env check, fresh schema, seed, runtime, scratch root; every schema reset also starts the fs cache and
+the storage engines over, `resetIdKeyedState`: they are keyed by ids the new schema reuses, and a stale File cached under
+a new Directory's id corrupted the heap of a later suite under ASan, `DbSuiteIsolation.*`), `web_session.hpp` (ws sign-in, TOTP,
 passkey, device approval helpers, `AuthRuntime`), `share_fakes.hpp`, `s3_gateway.hpp`, `bytes.hpp`,
 `rewrap_fixture.hpp`, `http_upload.hpp`, `parity.hpp`. 2026-11-06 on the dev box: the DB run went from 1,072 s (one
 process) to ~2 min, CI's DB-free run from ~121 s to ~16 s.

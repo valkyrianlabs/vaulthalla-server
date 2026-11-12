@@ -72,7 +72,7 @@ TEST(GlobalVaultPolicy, BuiltinPresetIsBoundToTheUser) {
 
 class GlobalVaultPolicyDbTest : public vh::test::db::Suite {
 protected:
-    static void SetUpTestSuite() { setUpDbSuite("test_global_vault_policy", {.freshEngines = false}); }
+    static void SetUpTestSuite() { setUpDbSuite("test_global_vault_policy"); }
     static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static UserPtr create(const std::string& prefix, const std::string& role) {

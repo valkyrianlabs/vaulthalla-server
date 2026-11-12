@@ -260,7 +260,7 @@ TEST(OpaqueMultipart, ASixtyGiBObjectUploadsInAtMost10000Parts) {
 class OpaqueLayoutTest : public vh::test::db::Suite {
 protected:
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_opaque_layout", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_opaque_layout")) return;
         recovery::local::invalidateAllPolicies();
     }
     static void TearDownTestSuite() { tearDownDbSuite(); }

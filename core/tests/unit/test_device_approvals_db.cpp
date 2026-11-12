@@ -53,7 +53,7 @@ protected:
     std::shared_ptr<const vh::device::ServerIdentity> previousIdentity;
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("device_approvals", {.freshEngines = false})) return;
+        if (!setUpDbSuite("device_approvals")) return;
         protocols::device::endpoints::clearNodeIdForTesting();
         audit::Trail::instance()->resetForTesting();
     }

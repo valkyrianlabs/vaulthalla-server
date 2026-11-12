@@ -57,7 +57,7 @@ protected:
     inline static std::shared_ptr<crypto::secrets::Manager> originalSecrets;  // Deps outlive this suite
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("mfa_key_import", {.freshEngines = false})) return;
+        if (!setUpDbSuite("mfa_key_import")) return;
         originalSecrets = runtime::Deps::get().secretsManager;
         runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
         audit::Trail::instance()->resetForTesting();

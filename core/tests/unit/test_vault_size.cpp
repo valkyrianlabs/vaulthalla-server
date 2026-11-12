@@ -29,7 +29,7 @@ std::string vsTag() { return test::uniqueTag('x'); }
 
 class VaultSizeDbTest : public vh::test::db::Suite {
 protected:
-    static void SetUpTestSuite() { (void)setUpDbSuite("test_vault_size", {.freshEngines = false}); }
+    static void SetUpTestSuite() { (void)setUpDbSuite("test_vault_size"); }
     static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static std::shared_ptr<storage::Engine> newLocalVault(const std::string& prefix, const uintmax_t quota = 0) {

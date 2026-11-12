@@ -260,7 +260,7 @@ TEST_F(RecoveryKeysTest, IdleHistoricalKeysAreEvictedWithoutAnotherAccess) {
 class RecoveryKeysDbTest : public vh::test::db::Suite {
 protected:
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_recovery_keys", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_recovery_keys")) return;
         const auto user = vh::test::identities::createUser("rk_super_" + rkTag(),
                                                            db::query::rbac::role::Admin::get("super_admin"),
                                                            "rk@vaulthalla.test", "x", std::nullopt);

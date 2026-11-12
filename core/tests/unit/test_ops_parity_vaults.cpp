@@ -66,7 +66,7 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_ops_parity_vaults", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_ops_parity_vaults")) return;
         router = test::parity::shellRouter();
         protocols::shell::commands::vault::registerCommands(router);
 

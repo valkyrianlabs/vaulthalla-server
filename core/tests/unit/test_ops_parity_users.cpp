@@ -79,7 +79,7 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_ops_parity_users", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_ops_parity_users")) return;
         auth::session::Issuer::setJwtSecretForTesting("user-parity-test-secret");
 
         router = test::parity::shellRouter();

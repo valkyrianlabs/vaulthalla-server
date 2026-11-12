@@ -204,7 +204,7 @@ protected:
     static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_audit_trail", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_audit_trail")) return;
         admin = superUser;
         const auto created = vh::ops::users::create(
             admin, {.name = "audit_plain_" + std::to_string(::getpid()), .role = "unprivileged",

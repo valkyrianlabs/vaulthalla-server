@@ -237,7 +237,7 @@ TEST_F(VaultRecoverTrustAnchor, PinsComeFromTheKitEntryAndExportsOfThisVault) {
 class VaultRecoverDb : public vh::test::db::Suite {
 protected:
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_vault_recover", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_vault_recover")) return;
         if (!runtime::Deps::get().fsCache) runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
     }
 

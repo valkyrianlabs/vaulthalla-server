@@ -64,7 +64,7 @@ struct Crash {
 class LayoutMigrationTest : public vh::test::db::Suite {
 protected:
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_layout_migration", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_layout_migration")) return;
         recovery::local::invalidateAllPolicies();
     }
     static void TearDownTestSuite() { tearDownDbSuite(); }

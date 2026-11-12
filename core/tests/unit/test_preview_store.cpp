@@ -59,7 +59,7 @@ protected:
     std::shared_ptr<fs::model::File> file;
 
     static void SetUpTestSuite() {
-        if (setUpDbSuite("test_preview_store", {.freshEngines = false})) admin = superUser;
+        if (setUpDbSuite("test_preview_store")) admin = superUser;
     }
 
     void SetUp() override {

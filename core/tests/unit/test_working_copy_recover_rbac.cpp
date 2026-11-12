@@ -51,7 +51,7 @@ protected:
     inline static std::shared_ptr<vh::storage::Engine> vault;
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_working_copy_recover_rbac", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_working_copy_recover_rbac")) return;
         admin = superUser;
         const auto v = vh::ops::vaults::create(admin, {.name = "wcr_" + wcrbac::tag(), .type = vh::vault::model::VaultType::Local});
         vault = vh::runtime::Deps::get().storageManager->getEngine(v->id);

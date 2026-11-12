@@ -55,7 +55,7 @@ protected:
     inline static UserPtr superUser;
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_upstream_store", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_upstream_store")) return;
 
         auto user = vh::test::identities::createUser("us_super_" + tag(), db::query::rbac::role::Admin::get("super_admin"),
                                                      "us_super@vaulthalla.test", "x", std::nullopt);
