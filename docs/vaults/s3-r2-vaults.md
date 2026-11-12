@@ -140,17 +140,38 @@ The probe writes a few bytes under `.vaulthalla/probe/` (about ten requests) and
 wrote. It reports whether conditional writes are honoured, rejected or silently ignored, whether the bucket keeps object
 versions, and whether a read pinned to an ETag (`If-Match` on GET) is honoured.
 
-On a bucket without conditional writes (Backblaze B2):
+On a bucket without conditional writes that keeps object versions (Backblaze B2, whose buckets keep every version by
+default), the probe reports `version_log`:
 
 | Vault | What happens |
 |---|---|
 | Without upstream encryption (`--no-encrypt`) | Works. Its index is written without conditions; one server writes it. |
-| Encrypting, created before release 1.22 (`path_v0`) | Works, as before: its index is written without conditions. Moving it to opaque storage (`vh vault migrate-layout`) is refused on this bucket for now. |
-| Encrypting, opaque storage (`opaque_v1`), new | Not supported yet: `vh vault create` refuses it with `conditional_writes_unsupported`. |
-| Encrypting, opaque storage, existing | Files keep uploading, but the encrypted manifest that holds their names and folders can't be written there yet: the vault's sync stops with `manifest_publish_unsupported` and `vh status` lists it as degraded. Its bucket holds only encrypted file contents, so a restore from it recovers contents without names. |
+| Encrypting, created before release 1.22 (`path_v0`) | Works, as before: its index is written without conditions. It can be moved to opaque storage there (`vh vault migrate-layout`). |
+| Encrypting, opaque storage (`opaque_v1`) | Works. The encrypted manifest's root is written as a new version of `.vaulthalla/root` on each publish, and the server lists the root's versions once to confirm its own version is the one that counts. Restarts, `vh vault recover`, recovery recipients and key rotation work as on any other bucket. |
 
-Recovery recipients can be enrolled on any of them: envelopes are named by their own hash, so they are written without
-conditions.
+What changes for an opaque vault on such a bucket:
+
+- **One request more per publish:** a pass that changes the vault costs one version listing of `.vaulthalla/root` on
+  top of the changed manifest segments and the root (Backblaze bills listings as class C transactions). A pass that
+  changes nothing still costs one HEAD.
+- **Keep every version under `.vaulthalla/`.** The server deletes the root versions it no longer needs itself (it keeps
+  the current root, its two predecessors and a week of history) and every version of a manifest segment once no
+  recent root uses it. Don't set a lifecycle rule that removes old versions under `.vaulthalla/` (in Backblaze, "Keep
+  only the last version of the file" or a rule with `daysFromHidingToDeleting`): it could remove the current root
+  while a stray version from a crashed write sits above it, and the vault then refuses its manifest (`fork`) instead
+  of reading the wrong one.
+- **One server per vault.** A vault restored elsewhere with `vh vault recover` takes the vault over: the old server,
+  if it still runs, stops publishing the vault's manifest and alerts its operators (`manifest_superseded`).
+- **New alerts** (operator notifications, and the vault's sync stalls until someone looks):
+  `manifest_order_violation` (the provider listed the root's versions in a different order than before, so the server
+  can no longer tell which root counts), `manifest_superseded` (above), `manifest_publish_mode_mismatch` (another
+  server published the vault's root in the other mode). A publish whose own root version doesn't appear in the
+  listing within about 15 seconds stays pending (`listing_lag` in the stall reason) and the next pass completes it.
+
+A bucket that neither honours conditional writes nor keeps versions is `insufficient`: creating an encrypting vault on
+it is refused (`bucket_capability_insufficient`), as are moving one there and a layout migration onto it. An existing
+opaque vault there keeps uploading files, but its sync stops with `manifest_publish_unsupported` and `vh status` lists
+it as degraded. Turn versioning on for the bucket, then run `vh vault storage probe <vault>`.
 
 If a bucket that was probed as supporting conditional writes later refuses one (the endpoint, a proxy in front of
 it or the provider changed), Vaulthalla never falls back to writing without the condition: the vault's sync stops with

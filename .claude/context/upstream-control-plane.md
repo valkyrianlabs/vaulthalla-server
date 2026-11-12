@@ -99,18 +99,20 @@ buckets it created. Other providers: plain storage, but protection locks still a
   BucketCapability`. The `upsert_s3_vault` statement nulls both when the bucket or key changes; `ops::api_keys::update`
   clears them for every vault of a key whose provider or endpoint changed.
 - **When it's probed** (`storage::bucket_capability`, `storage/BucketCapability.hpp`): `ops::vaults::create` (before
-  `addVault`: an encrypting = opaque_v1 vault is refused with `ops::Refused` `conditional_writes_unsupported` /
-  `bucket_capability_insufficient`), `ops::vaults::update` on a bucket/key change, `ops::vault_recover` after the
-  write (never refuses: a rescue path), `ops::vault_layout::start` (fresh probe; `requirePreconditions` then refuses
-  a non-conditional bucket, spec 01 §6.1 step 5), `vh vault storage probe`, and lazily on first use for rows from
+  `addVault`: an encrypting = opaque_v1 vault is refused with `ops::Refused` `bucket_capability_insufficient` on an
+  Insufficient bucket only), `ops::vaults::update` on a bucket/key change (same refusal), `ops::vault_recover` after
+  the write (never refuses: a rescue path), `ops::vault_layout::start` (fresh probe; refuses an Insufficient bucket,
+  spec 01 §6.1 step 5), `vh vault storage probe`, and lazily on first use for rows from
   before 136 (`resolve`, at most one failed attempt per vault an hour). **Test mode never probes on its own**
   (`setLazyProbingForTesting`, `setControllerFactoryForTesting`): existing suites see Unknown and unchanged requests.
 - **What it changes:** `sync::manifest::ObjectStore::mode()` / `putOnce` (If-None-Match only where
   `sendsPreconditions`), `S3Store(controller, mode)`; segments, snapshots, the layout hint and KEV1 envelopes go through
-  `putOnce`; the `path_v0` index-v1 is PUT plainly on a non-conditional bucket. `manifest::publish` throws
-  `PublishUnsupported` **before any request** on VersionLog/Insufficient (spec 06 §5 is work item 5), which
-  `CloudEngine::publishManifestV2` turns into `SyncStalled("manifest_publish_unsupported: …")`; health lists those
-  opaque_v1 vaults (`vaults_manifest_unpublishable`, degraded; `vh status`).
+  `putOnce`; the `path_v0` index-v1 is PUT plainly on a non-conditional bucket. On VersionLog the manifest root is
+  published as provider versions (spec 06 §5; architecture.md "version_log publish"). `manifest::publish` throws
+  `PublishUnsupported` **before any request** on Insufficient only, which `CloudEngine::publishManifestV2` turns into
+  `SyncStalled("manifest_publish_unsupported: …")`; health lists those opaque_v1 vaults and any with a changed
+  conditional bucket (`vaults_manifest_unpublishable`, reasons `bucket_capability_insufficient` /
+  `bucket_capability_changed`, degraded; `vh status`).
 - **Never silently downgraded:** a 501/400 NotImplemented on a conditional PUT is `s3::PreconditionsUnsupported`
   (`buffer.cpp`; manifest-level `ConditionsUnsupported`), never retried without the condition. Stored Conditional:
   `noteChanged` marks `changed_at`, alerts once (`bucket_capability_changed`, operator notification), and
@@ -123,7 +125,9 @@ buckets it created. Other providers: plain storage, but protection locks still a
   ListObjectVersions newest first with id/ETag/IsLatest, pages with max-keys; GET/DELETE by version id; deleting the
   newest makes the previous current; delete by name = a delete marker; single-PUT ETag = MD5; GET If-Match and
   `x-amz-copy-source-if-match` honoured (412/200). Listings read-after-write and concurrent ordering held in the
-  trials of spec 06 §4; a stalled-body PUT got 500, lifecycle prefix rules unverified.
+  trials of spec 06 §4; a stalled-body PUT got 500 (the publisher treats a 5xx on the root PUT as an unknown
+  outcome and looks for its version by hash), lifecycle prefix rules unverified. Live suite `LiveB2.*`
+  (testing.md), not run yet.
 
 - AWS test identity `vaulthalla-test-admin`: S3 admin works; **no SQS permissions** and no
   `s3:GetBucketObjectLockConfiguration` → AWS event delivery untested live. Needed statement: docs/vaults/upstream-buckets.md.

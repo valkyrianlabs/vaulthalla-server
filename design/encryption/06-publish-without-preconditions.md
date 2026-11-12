@@ -1,7 +1,9 @@
 # 06. Publishing the manifest on buckets without conditional writes
 
-Status: design for review (managed storage plan of 2026-11-12, workstream E, step 0). Work items 2-4 (§9) are
-implemented (§7 "As implemented"); the `version_log` publish of §5 is not.
+Status: design for review (managed storage plan of 2026-11-12, workstream E, step 0). Work items 2-5 (§9) are
+implemented: the capability probe (§7), and the `version_log` publish, read, repair, GC and `writers` (§5). Each
+section's "As implemented" note records where the code differs from or adds to the text; §8.3 (live on Backblaze) has
+not run yet.
 Depends on [01](01-provider-blind-storage.md) and [03](03-metadata-recovery.md); used by
 [`design/cloud/mirrors.md`](../cloud/mirrors.md). Normative words: MUST, MUST NOT, SHOULD.
 
@@ -99,13 +101,23 @@ the end of the longest chain in *L* (ties: earliest). Any other version is a **s
 first), a **branch** (non-canonical `prev`), a **duplicate** (a canonical root's bytes) or **stale** (none of these:
 only tampering or replay makes one; ignored and reported as `manifest_replay`, security, warning).
 
+**As implemented (work item 5):** `sync/manifest/VersionLog.hpp`. `RootLog` is one `ListObjectVersions` of the
+root key (all pages, or down to a given version: `ObjectStore::versionsSince`); a version is opened by one GET by id
+and cached by id in `RootCache`, which the caller keeps across publishes. `walk` is C1 from an anchor (one forward
+scan: each successor sits after its predecessor), `walkBlind` the longest chain (chains start at versions that are
+no one's earliest successor; ties: the earliest head), `successorOf` succ(X) from a position. Stale versions are
+ignored as non-canonical but **not reported** (`manifest_replay` doesn't exist yet); the root janitor deletes them
+after 24 h (§5.4).
+
 ### 5.2 Writer
 
 1. Segments, snapshot segments, envelopes and the layout hint are PUT without conditions under today's names, under
    the pass lease, before the root (spec 03 §3.4 step 1). The ETag MAY be checked against the bytes' MD5 (A7).
 2. Root on base *B* (always canonical): `epoch = B.epoch + 1`, `prev = SHA-256(B)`, new members `"publish":
    "version_log"` and `writers` (§5.5). PUT unconditionally, keep `x-amz-version-id` (none: `SyncStalled`,
-   `bucket_capability_changed`). After a transport error, find the version by ETag (A7) or by fetching and hashing.
+   `bucket_capability_changed`). **A 5xx answer is an unknown outcome, like a transport error** (B2 answered a PUT
+   whose body stalled with `500 InternalError`, and such a PUT may have committed): find the version by ETag (A7) or
+   by fetching and hashing before deciding.
 3. List the key's versions (newest first, paging until *B*'s). Ours missing: list again after 1, 2, 4, 8 s; still
    missing, the publish stays unsettled (`listing_lag` warning) and the next pass retries.
 4. Decide by C1 from *B* (one GET by version id per unknown version, cached by id: versions are immutable):
@@ -117,6 +129,28 @@ only tampering or replay makes one; ignored and reported as `manifest_replay`, s
    - **Base displaced** (*B* no longer canonical; only when A3 or A4 fails): `order_violation`. Refuse, record and
      alert once, as `Service::refused` does for a fork, and publish nothing more for the vault.
 5. Repair (§5.4).
+
+**As implemented:**
+
+- **Root members.** `publish` (`conditional` or `version_log`, the bucket's mode) and `writers` are written in both
+  modes. `writers` is the base root's set while it names this node, otherwise this node alone: past the §5.5 check
+  that is a base from before the member, or a node with no own epoch (a restore), which so takes the vault over.
+  Adding a node to the set is the mirror join and isn't built.
+- **Step 2.** `S3Store::put` maps every failure but a request budget or bucket protection to `PutOutcomeUnknown`.
+  The publisher then lists and looks for its version by hash among the versions after its base (a GET per version it
+  hasn't opened; the ETag isn't used): found, it goes on as if the PUT had returned; not found while the base has no
+  successor, the publish fails and records nothing (the next pass publishes again); not found while another version
+  succeeds the base, it lost.
+- **Step 3.** The listing stops at the oldest version the decision needs (the settled root's base, else this
+  publish's base; the whole log when that version is gone). A publish whose version is still missing after 1, 2, 4
+  and 8 s throws `PublishUnsettled` (the pass stalls; `listing_lag` in its reason). The next publish's root is then a
+  sibling of the unsettled one, loses to it (that root already holds the same changes), merges and settles above.
+- **Step 4.** The settle window of the previous settled root is checked after every listing of the publish, and an
+  inserted id refuses with `order_violation` before anything is recorded. A base missing from the listing (deleted
+  since it was loaded) makes the publish reload the head and retry. Attempts: max(`max_attempts` = 3, writers + 1).
+  A loser retries at once, without jitter: every round has a winner (I7), so a delay buys nothing.
+- **Recording.** `remote_manifest_state` gains `root_version_id`, `base_version_id`, `settle_window` and `own_epoch`
+  (the epoch of the last root this node published itself), migration 137.
 
 ### 5.3 Reader (`Service::verifyRemote`, `manifest::load`, `vault::recover`)
 
@@ -131,6 +165,17 @@ anchor, fetch and check the head's segments (spec 03 §4.1 step 3). C1 replaces 
 | anchor absent from *L*: best candidate older / another root at its epoch / newer roots not linking to it | `rollback` / `fork` / `gap` (the longest chain's head, warning), as today |
 | the head names another `publish` mode than the bucket's | refuse, `publish_mode_mismatch` (I9) |
 
+**As implemented:** `manifest::load` takes this path when the store's mode is `VersionLog`, or when the root
+declares `publish: version_log` (the current object, or, when that is no root at all, a delete marker or a stray, the
+newest authentic version), so `vh vault recover` reads C1 without probing first. The anchor is found by version id
+(checked against its hash), else by hash among the newest 64 versions; with none, `walkBlind`, then the chain rules
+against what is known (`rollback`, `fork`, `gap`). **The mode check sits with the writers, not the reader:** a head
+another node published in the other mode is refused when a node builds on it or adopts it (`checkHeadForWriter`),
+while a node may switch its own vault's mode after a re-probe. `Service::verifyRemote` on `version_log`: one HEAD while
+the root's ETag is the settled one; otherwise a load from the settled anchor (window checked), the §5.5 check,
+recording (not as an own root), and repair. A root found only by its hash (a state from before migration 137, or one a
+restore recorded) gets its version id recorded.
+
 ### 5.4 Repair, retention, garbage collection
 
 - **Repair:** after any listing, non-canonical versions and delete markers *newer than the head* are deleted by id, so
@@ -144,6 +189,17 @@ anchor, fetch and check the head's segments (spec 03 §4.1 step 3). C1 replaces 
   for 24 h" (`first_unreferenced_at` per sid: another writer can supersede a segment minutes after it appears); on
   `version_log` buckets every version of a collected key is deleted by id (a B2 DELETE by name only hides one).
 
+**As implemented:** repair runs after a publish's listing (versions newer than its own root) and in
+`verifyRemote` (versions newer than the head). A publish built on a cached base doesn't repair versions that landed
+before its root: they end up below the new head, non-canonical, and go to the janitor. **Root janitor**
+(`collectRootVersions`, with the daily GC): keeps the head and its two canonical predecessors, deletes older
+canonical roots after 7 days and non-canonical versions and markers below the head after 24 h. **Segments**
+(`collectGarbageVersionLog`): `remote_manifest_gc.first_unreferenced_at` per sid, collected after 24 h unreferenced by
+the last three canonical roots, every version deleted by id. Found by the §8.2 suite: when A4 breaks (a stalled PUT
+ordered by its start), the writer whose version displaced a settled root deletes that root as a stray above its head,
+and the displaced writer then sees a `fork` rather than `order_violation`. That is still a refusal, but I6 holds only
+under A3 and A4.
+
 ### 5.5 Who may write (both paths)
 
 The root gains `writers`, the node ids allowed to publish (the producer among them; one for a solo vault). **A daemon
@@ -151,6 +207,15 @@ not in the head's `writers` stops publishing the vault** (`manifest_superseded`,
 set. This closes a gap: spec 03 §6.2 step 7 expects the old node to see a fork after a restore elsewhere, but it does
 only if it published past the state the restore read; otherwise it merges the restored root as another writer's, and
 after a restart (cold `PublisherCache`: `before = theirs`) `mergePending` drops every entry its database lacks.
+
+**As implemented:** `checkHeadForWriter`, both modes, wherever a node builds on or adopts a head (the publish's
+base, `verifyRemote`). A node is superseded only by a canonical root newer than its `own_epoch`; a node with no own
+epoch (a fresh restore, a state from before migration 137) is never superseded and takes over. Found by the §8.2
+crash suite: among several concurrent writers, one restarted from its database alone drops the other writers' changes
+its database lacks (the gap above; the merge base is gone with the cache). `writers` closes it for the restore. For
+real multi-writer vaults (mirrors) the database has to take in merged heads, since neither the cached base nor the
+last settled root (which holds the merged entries) is a safe merge base after a restart. One writer, or a restore that
+took the vault over, has nothing its database lacks.
 
 ### 5.6 Cases
 
@@ -164,6 +229,9 @@ after a restart (cold `PublisherCache`: `before = theirs`) `mergePending` drops 
 | Restore elsewhere while the old node lives | the restored root has `writers = [new]`; if the old node wins a race the restore merges onto it, keeps its `writers`, and the old node stops (§5.5) |
 | Bucket replays an old root as a new version | stale: ignored, reported, repaired; rollback detection as spec 03 §4.5 |
 
+**As implemented:** "restore elsewhere while the old node lives": the restore's first publish names the restored
+node alone, and the old node, whose own epoch is set, stops at its next publish or read (`manifest_superseded`).
+
 ### 5.7 Costs
 
 | Operation | `conditional` | `version_log` |
@@ -173,6 +241,12 @@ after a restart (cold `PublisherCache`: `before = theirs`) `mergePending` drops 
 | Pass that changed nothing | 1 HEAD | 1 HEAD |
 | Another writer published | 1 root GET + changed segments | 1 HEAD + 1 LIST + 1 GET per new version (usually 1) + changed segments |
 | Repair after a crash / daily GC | — / 1 LIST of `seg/` + DELETEs | 1 DELETE per stray version / 1 `ListObjectVersions` of `.vaulthalla/` + DELETEs by id |
+
+**As implemented** (measured on the fake bucket: `BucketCapabilityDbTest`, `ManifestPublishVersionLog*`): a solo
+publish costs the changed segments, 1 root PUT and 1 `ListObjectVersions`, no GET; a pass that changes nothing, 1
+HEAD; after a restart (database only) the first pass costs 1 HEAD, and the first publish 2 listings (the load from
+the settled anchor and the settling one), the settled root by version id and its segments, then the PUTs. The listing
+is one request while the root's history fits one page (1,000 versions; the janitor keeps a handful).
 
 ## 6. Correctness
 
@@ -193,6 +267,9 @@ with the same epoch and `prev`. By A4 *S* committed before *R*; by A3 ℓ showed
 contradiction. Later commits sort after *R* (A4); every base is canonical by induction from a settled anchor. **One
 writer needs less:** no root PUT is concurrent, so A1, A2, A5, A6 suffice. **Wave 1 (solo managed and BYOS vaults)
 rests on documented B2 behaviour**; two or more writers (a mirror, a restore racing its old node) also need A3, A4.
+
+**As implemented:** I1-I9 are checked after every step of the §8.2 scheduler. Under broken A4 the suite found the
+I6 exception described in §5.4 (repair deleting a displaced settled root).
 
 ## 7. Choosing the path
 
@@ -234,7 +311,7 @@ on which `publish`, `load` and GC branch. `Known` gains `version_id`; `remote_ma
   `vh vault recover` writes (never refusing: a rescue path), at a layout migration's start, `vh vault storage probe`,
   and lazily on first use for older rows (`resolve`, at most one failed attempt an hour). Test mode never probes on its
   own. A key whose provider or endpoint changes clears the verdict of every vault using it (`ops::api_keys::update`).
-- **Interim refusals until §5 exists:** a new encrypting (`opaque_v1`) vault on a non-conditional bucket is refused
+- **Interim refusals until §5 existed (lifted by work item 5, below):** a new encrypting (`opaque_v1`) vault on a non-conditional bucket is refused
   at creation (`ops::Refused` `conditional_writes_unsupported` / `bucket_capability_insufficient`), as is moving an
   `opaque_v1` vault to such a bucket and a layout migration onto one. Transparent and `path_v0` vaults are allowed
   (their index is PUT plainly). An existing `opaque_v1` vault there: `manifest::publish` throws `PublishUnsupported`
@@ -247,8 +324,12 @@ on which `publish`, `load` and GC branch. `Known` gains `version_id`; `remote_ma
   `manifest::ConditionsUnsupported` in the seam, never retried without the condition. Stored `Conditional`: marked
   `changed_at` in `bucket_probe`, alerted once (`bucket_capability_changed`), every later use stalls until a re-probe.
   Never probed: `conditional_writes_refused`, and the next use probes (an unprobed bucket is not "changed").
-- Not yet: `Known::version_id`, `root_version_id`, `settle_window`, `versions()` stopping at an id, and the fake's
-  `listingLag`, `orderBy`/`holdPut` and `expireNoncurrent` knobs (work item 5).
+- **Work item 5** added `Known::version_id`, `root_version_id`, `base_version_id`, `settle_window` and `own_epoch`
+  (migration 137), `ObjectStore::versionsSince` (stops at a version id), `versionsUnder` (GC), and lifted the interim
+  refusals above: opaque_v1 vaults are created on, moved to and layout-migrated onto `version_log` buckets; only an
+  `Insufficient` bucket refuses (`bucket_capability_insufficient`; `PublishUnsupported` before any request); health
+  lists only insufficient or changed buckets (`vaults_manifest_unpublishable`); `conditional_writes_unsupported` is
+  gone.
 
 ## 8. Test obligations
 
@@ -263,6 +344,25 @@ head, nothing stray above it, every writer's changes in it. Faults: a crash at e
 only), lost PUT responses, 503 after commit, failed DELETEs, a head under a crashed loser past `expireNoncurrent`
 (fails loudly). Under `listingLag` or `orderBy(Start)` every run satisfies I3 or ends in `order_violation`. Also
 `vault::recover` over a bucket holding siblings, and a solo vault paying exactly one LIST more per publish.
+
+**As implemented:** §8.1: the fake's `listingLag(s)`, `orderBy(Start)` + `holdPut(key)` (per thread: the next PUT
+of that key from that thread is inserted where it started) and `expireNoncurrent(prefix, days)`;
+`ManifestPublishVersionLog*` and `ManifestChainVersionLog*` (`test_manifest.cpp`) cover both modes' rules on a Reject501
+fake. §8.2: `ManifestVersionLog*` (`test_manifest_interleavings.cpp`). Every actor runs on its own thread over a
+`HookedStore`; the scheduling points are the root's PUT, `ListObjectVersions` and DELETE. Every other request rides in
+the slot of the preceding point: segment keys are fresh and read only through a root naming them, and a root GET by
+id reads immutable bytes and races only a DELETE of a version that is non-canonical in every listing showing it (I6),
+so neither changes a C1 decision (the file header has the argument). Within that bound: every interleaving of two
+writers and a reader (800 runs, stateless depth-first search, determinism asserted), every root-PUT-level
+interleaving of three writers, 200 seeded schedules of three writers and a reader; a crash before and after each of
+eight steps of one writer with a restart from the database only (every order of the other writer's PUTs plus 30
+seeds each); a lost PUT reply (a 5xx after the commit), a 5xx before it, failed DELETEs and listings at every step
+under every interleaving of two writers; `listingLag` (I3 holds: the fake hides a suffix of the order) and
+`orderBy(Start)` (every displaced settled root is refused by its holder). A head under a crashed loser past
+`expireNoncurrent` fails as `fork` (`ManifestChainVersionLog`). `vault::recover` over a bucket with a losing sibling
+and a marker: `VaultRecoverDb.OnABackblazeLike*`. The one extra LIST: `ManifestPublishVersionLog.ASoloPublish*`.
+§8.3: `LiveB2.TheManifestPublishesAsVersionsOfItsRoot` (opt-in, not run yet) covers the probe, publishes, a blind
+reload, a repaired sibling, GC of every version and an envelope; items 3-8 are not automated.
 
 **8.3 Live on Backblaze** (one `vh-test-*` bucket per run, deleted afterwards): (1) conditional PUTs (the coordinator's
 probe script), then §7's probe; (2) A1, A2, A7: version ids, ETag form (single and multipart), paging; (3) A3: PUT
@@ -279,7 +379,8 @@ key lists versions and deletes by id; (8) the recover drill on B2, then two daem
 3. Capability probe, columns, `vh vault storage probe`, the layout migration precondition. *Done.*
 4. Plain PUTs where conditions bought nothing (§7): this alone fixes BYOS `path_v0` vaults and envelopes on B2. *Done.*
 5. `version_log` publish, read, repair, GC and `writers` (`Publisher`, `Reader`, `Chain`, `Service`, `vault::recover`)
-   with §8.1-8.2: solo `opaque_v1` vaults then work on B2. Managed remotes (plan workstream E) build on 3-5.
+   with §8.1-8.2: solo `opaque_v1` vaults then work on B2. Managed remotes (plan workstream E) build on 3-5. *Done;
+   not yet run against Backblaze (§8.3).*
 6. The drill in `version_log` mode on the fake (`vhh drill recover`), then live (§8.3 item 8).
 7. Multi-writer enablement (wave 3) once A3 and A4 are confirmed (`mirrors.md`).
 
