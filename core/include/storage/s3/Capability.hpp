@@ -17,7 +17,7 @@
 //                 §3.4 says, every write-once object is PUT with If-None-Match: *.
 //   VersionLog    conditional PUT is rejected (501 / 400 NotImplemented, Backblaze B2) or silently ignored, and the
 //                 bucket keeps versions: write-once objects are PUT plainly (their names are random or
-//                 content-addressed); the root publish of spec 06 §5 is not implemented yet and refuses.
+//                 content-addressed); the root is published as provider versions (spec 06 §5, version_log).
 //   Insufficient  neither conditional PUT nor versions, or GET If-Match is not honoured: plain PUTs for write-once
 //                 objects and the path_v0 index; no opaque_v1 manifest.
 //   Unknown       never probed (or the probe could not run): today's behaviour, conditional writes. A bucket is never
