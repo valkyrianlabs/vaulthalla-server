@@ -613,6 +613,21 @@ TEST_F(RecoveryNoSilentCustody, NoFlowAddsANonCustomerGrantOrSendsKeyMaterialAny
     for (const auto& g : db::query::vault::RecoveryGrants::list(engine->vault->id))
         EXPECT_EQ(g.recipient_class, "customer");
 
+    // A local vault has no bucket: enrolling a recipient there keeps the envelope in this server's own database and
+    // sends nothing anywhere (no bucket request at all). The same envelope: customer class, purpose 1, this vault,
+    // this recipient. An S3 vault's rows never carry envelope bytes.
+    (void)enroll(local, seed);
+    EXPECT_EQ(requestsFor(local->vault->id), 0) << "a local vault's envelope goes to no bucket";
+    const auto held = db::query::vault::RemoteAttach::envelopes(local->vault->id);
+    ASSERT_EQ(held.size(), 1u);
+    const auto localHeader = kev1::inspect(held[0].bytes);
+    EXPECT_EQ(localHeader.recipient_class, kev1::kClassCustomer);
+    EXPECT_EQ(localHeader.purpose, kev1::kPurposeVaultKey);
+    EXPECT_EQ(localHeader.vault_uid, uidOf(local));
+    EXPECT_EQ(localHeader.recipient_id, rid);
+    for (const auto& e : db::query::vault::RemoteAttach::envelopes(engine->vault->id))
+        EXPECT_TRUE(e.bytes.empty()) << "an S3 vault's envelopes live in its bucket only";
+
     // No code path can record a non-customer grant: the database refuses it outright.
     EXPECT_ANY_THROW(db::Transactions::exec("RecipientFixture::custodian", [&](pqxx::work& txn) {
         txn.exec("INSERT INTO vault_recovery_grant (vault_id, grant_id, recipient_id, public_key, suite, class, "
