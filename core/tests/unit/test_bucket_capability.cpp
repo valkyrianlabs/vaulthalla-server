@@ -47,7 +47,7 @@
 
 namespace vh::test_bucket_capability {
 
-using storage::s3::WriteCapability;
+using sync::manifest::WriteCapability;
 using test_support::versioned::Versioning;
 using test_support::versioned::VersionedBucket;
 using Puts = VersionedBucket::ConditionalPuts;
@@ -177,10 +177,10 @@ TEST(BucketProbe, TheStoredFormRoundTrips) {
     EXPECT_EQ(back.conditional_put, r.conditional_put);
     EXPECT_EQ(back.steps.size(), r.steps.size());
     EXPECT_EQ(back.probed_at, r.probed_at);
-    EXPECT_EQ(storage::s3::publishModeFromString("version_log"), WriteCapability::VersionLog);
-    EXPECT_FALSE(storage::s3::publishModeFromString("insufficient")) << "not a stored manifest_publish value";
-    EXPECT_TRUE(storage::s3::sendsPreconditions(WriteCapability::Unknown)) << "never probed: no silent downgrade";
-    EXPECT_FALSE(storage::s3::sendsPreconditions(WriteCapability::VersionLog));
+    EXPECT_EQ(sync::manifest::publishModeFromString("version_log"), WriteCapability::VersionLog);
+    EXPECT_FALSE(sync::manifest::publishModeFromString("insufficient")) << "not a stored manifest_publish value";
+    EXPECT_TRUE(sync::manifest::sendsPreconditions(WriteCapability::Unknown)) << "never probed: no silent downgrade";
+    EXPECT_FALSE(sync::manifest::sendsPreconditions(WriteCapability::VersionLog));
     EXPECT_EQ(storage::object_keys::classify(std::string(storage::s3::kProbePrefix) +
                                              crypto::id::toBase32(crypto::id::newObjectUid())),
               storage::object_keys::KeyClass::Metadata);

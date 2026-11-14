@@ -315,7 +315,8 @@ on which `publish`, `load` and GC branch. `Known` gains `version_id`; `remote_ma
 
 **As implemented (work items 2-4; corrections to the text above):**
 
-- **Capability, four states** (`storage/s3/Capability.hpp`, `WriteCapability`): `Conditional`, `VersionLog`,
+- **Capability, four states** (`sync/manifest/WriteCapability.hpp`, `WriteCapability`; the probe is
+  `storage/s3/Capability.hpp`): `Conditional`, `VersionLog`,
   `Insufficient` and `Unknown` (never probed, or the probe could not run: behaves as `Conditional`, so nothing is
   downgraded without a probe). `Insufficient` is stored as a probe with `manifest_publish` NULL; migration 136.
 - **The probe** (`storage::s3::probeBucket`) also checks GET `If-Match` with the right ETag and records whether ETags

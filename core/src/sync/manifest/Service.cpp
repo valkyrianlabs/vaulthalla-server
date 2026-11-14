@@ -34,7 +34,7 @@ std::optional<Known> Service::known() const {
 
 namespace service_detail {
 
-bool versionLog(const ObjectStore& store) { return store.mode() == storage::s3::WriteCapability::VersionLog; }
+bool versionLog(const ObjectStore& store) { return store.mode() == WriteCapability::VersionLog; }
 
 std::optional<SettledWindow> settledOf(const db::query::sync::Manifest::State& state) {
     if (!state.root_version_id || !state.base_version_id) return std::nullopt;

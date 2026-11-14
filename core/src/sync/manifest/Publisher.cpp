@@ -44,7 +44,7 @@ struct Base {
 Base loadBase(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLookup& keys,
               const std::optional<Known>& known, PublisherCache& cache, const PublishOptions& options) {
     Base out;
-    if (store.mode() == storage::s3::WriteCapability::VersionLog) {
+    if (store.mode() == WriteCapability::VersionLog) {
         // The canonical head by rule C1 from what this writer knows (spec 06 §5.3), not the current object.
         try {
             LoadOptions lo;
@@ -96,8 +96,8 @@ Base loadBase(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLo
     return out;
 }
 
-std::string_view modeName(const storage::s3::WriteCapability mode) {
-    return mode == storage::s3::WriteCapability::VersionLog ? kPublishVersionLog : kPublishConditional;
+std::string_view modeName(const WriteCapability mode) {
+    return mode == WriteCapability::VersionLog ? kPublishVersionLog : kPublishConditional;
 }
 
 void checkHead(const RootDocument& head, const std::string& rootSha, const ObjectStore& store,
@@ -171,11 +171,11 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
                       const SealingKey& sealing, const Content& produced, const std::optional<Known>& known,
                       PublisherCache& cache, const PublishOptions& options) {
     using namespace publisher_detail;
-    if (store.mode() == storage::s3::WriteCapability::Insufficient)
+    if (store.mode() == WriteCapability::Insufficient)
         throw PublishUnsupported(
             "the bucket neither honours conditional writes nor keeps object versions (or not If-Match on GET): nothing "
             "can arbitrate the manifest's root on it (design/encryption/06-publish-without-preconditions.md §7)");
-    const bool versionLog = store.mode() == storage::s3::WriteCapability::VersionLog;
+    const bool versionLog = store.mode() == WriteCapability::VersionLog;
     const auto vaultUidText = uidText(vaultUid);
     if (cache.base && (!known || cache.base->known != *known)) cache.base.reset();
 

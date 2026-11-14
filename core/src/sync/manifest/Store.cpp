@@ -49,11 +49,11 @@ void ObjectStore::removeVersion(const std::string& key, const std::string& versi
 }
 
 std::string ObjectStore::putOnce(const std::string& key, const std::vector<uint8_t>& bytes) {
-    if (storage::s3::sendsPreconditions(mode())) return putIfAbsent(key, bytes);
+    if (sendsPreconditions(mode())) return putIfAbsent(key, bytes);
     return put(key, bytes).etag;
 }
 
-S3Store::S3Store(std::shared_ptr<storage::s3::Controller> s3, const storage::s3::WriteCapability mode)
+S3Store::S3Store(std::shared_ptr<storage::s3::Controller> s3, const WriteCapability mode)
     : s3_(std::move(s3)), mode_(mode) {
     if (!s3_) throw std::invalid_argument("manifest::S3Store needs a controller");
 }

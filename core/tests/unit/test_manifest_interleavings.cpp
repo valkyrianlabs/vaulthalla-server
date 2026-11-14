@@ -169,7 +169,7 @@ struct World {
     }
     [[nodiscard]] SealingKey sealing() const { return {1, keys.at(1)}; }
     [[nodiscard]] std::shared_ptr<ObjectStore> plainStore() const {
-        return std::make_shared<S3Store>(bucket, storage::s3::WriteCapability::VersionLog);
+        return std::make_shared<S3Store>(bucket, WriteCapability::VersionLog);
     }
 
     // Written by actors (one runs at a time), read by the controller while every actor is parked.

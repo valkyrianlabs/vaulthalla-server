@@ -192,7 +192,7 @@ struct Writer {
     std::optional<SettledWindow> settled;
 
     explicit Writer(std::shared_ptr<VersionedBucket> b,
-                    const storage::s3::WriteCapability mode = storage::s3::WriteCapability::Unknown)
+                    const WriteCapability mode = WriteCapability::Unknown)
         : bucket(std::move(b)), store(std::make_shared<S3Store>(bucket, mode)) {}
     explicit Writer(const Versioning v = Versioning::Enabled) : Writer(std::make_shared<VersionedBucket>(v)) {}
 
@@ -675,7 +675,6 @@ TEST(ManifestPublish, AConflictingRootThatForksIsNeverOverwritten) {
 // ── ManifestStore: buckets without conditional writes (spec 06 §7) ──────────────────────────────────────────────
 
 TEST(ManifestStore, PutOnceSendsAConditionOnlyWhereTheBucketHonoursIt) {
-    using storage::s3::WriteCapability;
     const auto bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
     const Bytes body{1, 2, 3};
 
@@ -684,7 +683,7 @@ TEST(ManifestStore, PutOnceSendsAConditionOnlyWhereTheBucketHonoursIt) {
         S3Store store(bucket, mode);
         const auto key = ".vaulthalla/seg/" + uidText(uidOf(static_cast<uint8_t>(mode), 1));
         (void)store.putOnce(key, body);
-        EXPECT_THROW((void)store.putOnce(key, body), PreconditionFailed) << storage::s3::to_string(mode);
+        EXPECT_THROW((void)store.putOnce(key, body), PreconditionFailed) << to_string(mode);
     }
 
     // Backblaze B2: a condition is refused outright (typed, nothing written)...
@@ -722,7 +721,7 @@ TEST(ManifestStore, AVersionListingStopsAtTheVersionItNeeds) {
     bucket->versionPageSize = 2;
     std::vector<std::string> ids;   // oldest first
     for (int i = 0; i < 7; ++i) ids.push_back(bucket->seed("k", "v" + std::to_string(i)));
-    S3Store store(bucket, storage::s3::WriteCapability::VersionLog);
+    S3Store store(bucket, WriteCapability::VersionLog);
     bucket->resetCounters();
     EXPECT_EQ(store.versions("k").size(), 7u);
     EXPECT_EQ(bucket->counters().list, 4u) << "pages of 2";
@@ -742,14 +741,14 @@ TEST(ManifestStore, TheBaseStoreRefusesPlainWritesItCannotMake) {
     RecordingStore rec(*w.store);
     EXPECT_THROW((void)rec.put("k", {}), std::logic_error);
     EXPECT_THROW(rec.removeVersion("k", "v"), std::logic_error);
-    EXPECT_EQ(rec.mode(), storage::s3::WriteCapability::Unknown);
+    EXPECT_EQ(rec.mode(), WriteCapability::Unknown);
 }
 
 TEST(ManifestPublish, ABucketThatCanArbitrateNothingRefusesBeforeAnyRequest) {
     // Neither conditional writes nor versions (spec 06 §7, Insufficient): never half a publish.
     Writer w;
     w.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
-    w.store = std::make_shared<S3Store>(w.bucket, storage::s3::WriteCapability::Insufficient);
+    w.store = std::make_shared<S3Store>(w.bucket, WriteCapability::Insufficient);
     w.bucket->resetCounters();
     EXPECT_THROW((void)w.publish(smallVault(3)), PublishUnsupported);
     const auto c = w.bucket->counters();
@@ -1142,7 +1141,7 @@ std::shared_ptr<VersionedBucket> b2Bucket() {
 }
 
 Writer vlWriter(std::shared_ptr<VersionedBucket> b, std::string node) {
-    Writer w(std::move(b), storage::s3::WriteCapability::VersionLog);
+    Writer w(std::move(b), WriteCapability::VersionLog);
     w.node = std::move(node);
     return w;
 }
@@ -1441,7 +1440,7 @@ TEST(ManifestPublishVersionLog, AServerTheHeadNoLongerNamesStopsAndANewcomerDoes
 TEST(ManifestPublishVersionLog, AnotherWritersRootInAnotherModeIsRefusedOurOwnModeSwitchIsNot) {
     namespace f = version_log_fixture;
     // A conditional bucket whose head another server published as version_log.
-    Writer cond(std::make_shared<VersionedBucket>(Versioning::Enabled), storage::s3::WriteCapability::Conditional);
+    Writer cond(std::make_shared<VersionedBucket>(Versioning::Enabled), WriteCapability::Conditional);
     cond.node = "node-c";
     auto other = f::vlWriter(cond.bucket, "node-o");
     other.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Ignore;   // so its plain PUTs land
@@ -1453,11 +1452,11 @@ TEST(ManifestPublishVersionLog, AnotherWritersRootInAnotherModeIsRefusedOurOwnMo
         EXPECT_EQ(e.code(), ChainError::PublishModeMismatch);
     }
     // One writer that re-probed its bucket switches mode on top of its own roots.
-    auto solo = Writer(std::make_shared<VersionedBucket>(Versioning::Enabled), storage::s3::WriteCapability::Conditional);
+    auto solo = Writer(std::make_shared<VersionedBucket>(Versioning::Enabled), WriteCapability::Conditional);
     solo.node = "node-s";
     auto c = f::ofNode(smallVault(2), "node-s");
     (void)solo.publish(c);
-    solo.store = std::make_shared<S3Store>(solo.bucket, storage::s3::WriteCapability::VersionLog);
+    solo.store = std::make_shared<S3Store>(solo.bucket, WriteCapability::VersionLog);
     nthFile(c, 0).size = 5;
     const auto r = solo.publish(c);
     EXPECT_EQ(r.published.known.epoch, 2u);

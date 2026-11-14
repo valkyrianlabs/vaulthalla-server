@@ -626,7 +626,7 @@ TEST_F(LayoutMigrationTest, LayoutMigrationOntoABackblazeLikeBucketPublishesTheM
     write(v, "/a.txt", "a2");
     (void)pass(v);
     ASSERT_EQ(migrate(v).state, lm::State::CutOver) << rowOf(v).last_error.value_or("");
-    EXPECT_EQ(db::query::vault::BucketCapability::get(v.id()).capability, storage::s3::WriteCapability::VersionLog);
+    EXPECT_EQ(db::query::vault::BucketCapability::get(v.id()).capability, sync::manifest::WriteCapability::VersionLog);
     const auto state = db::query::sync::Manifest::state(v.id());
     ASSERT_TRUE(state.epoch);
     ASSERT_TRUE(state.root_version_id) << "settled on a version of the root";

@@ -16,7 +16,7 @@ namespace vh::db::query::vault {
 class BucketCapability {
 public:
     struct Stored {
-        storage::s3::WriteCapability capability{storage::s3::WriteCapability::Unknown};
+        vh::sync::manifest::WriteCapability capability{vh::sync::manifest::WriteCapability::Unknown};
         std::optional<storage::s3::ProbeResult> probe;   // absent: never probed
         std::optional<std::time_t> changed_at;           // a conditional bucket refused a condition since its probe
         std::optional<std::string> changed_detail;

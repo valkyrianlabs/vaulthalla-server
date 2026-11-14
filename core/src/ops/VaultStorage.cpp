@@ -24,7 +24,7 @@ namespace vh::ops::vault_storage {
 namespace vault_storage_detail {
 
 using VaultPerm = rbac::permission::admin::VaultPermissions;
-using storage::s3::WriteCapability;
+using sync::manifest::WriteCapability;
 
 bool publishable(const vault::model::StorageLayout layout, const WriteCapability capability) {
     // opaque_v1's manifest root is arbitrated by conditional writes or by the root's provider versions
@@ -78,14 +78,14 @@ ProbeAnswer probe(const Actor& actor, const unsigned int vaultId) {
 
     vh::audit::record({.action = "vault.storage.probe", .outcome = vh::audit::Outcome::Success, .actor_id = actor->id,
                        .actor = actor->name(), .vault_id = vaultId,
-                       .details = {{"capability", std::string(storage::s3::to_string(answer.probe.capability))},
-                                   {"previous", std::string(storage::s3::to_string(answer.previous))},
+                       .details = {{"capability", std::string(sync::manifest::to_string(answer.probe.capability))},
+                                   {"previous", std::string(sync::manifest::to_string(answer.previous))},
                                    {"previously_changed", answer.previously_changed},
                                    {"conditional_put", answer.probe.conditional_put},
                                    {"versioning", answer.probe.versioning},
                                    {"get_if_match", answer.probe.get_if_match}}},
                       fmt::format("[ops::vault_storage] {} probed the bucket of vault {}: {} ({})", actor->name(),
-                                  vaultId, storage::s3::to_string(answer.probe.capability), answer.probe.reason));
+                                  vaultId, sync::manifest::to_string(answer.probe.capability), answer.probe.reason));
     return answer;
 }
 
@@ -95,7 +95,7 @@ nlohmann::json toJson(const ProbeAnswer& a) {
     return {{"vault_id", a.vault_id},
             {"vault_name", a.vault_name},
             {"layout", a.layout},
-            {"previous", std::string(storage::s3::to_string(a.previous))},
+            {"previous", std::string(sync::manifest::to_string(a.previous))},
             {"previously_changed", a.previously_changed},
             {"manifest_publishable", a.manifest_publishable},
             {"probe", std::move(probe)}};

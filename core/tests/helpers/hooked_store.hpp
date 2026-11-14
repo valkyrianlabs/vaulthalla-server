@@ -89,7 +89,7 @@ public:
             },
             versionId);
     }
-    storage::s3::WriteCapability mode() const override { return inner_->mode(); }
+    sync::manifest::WriteCapability mode() const override { return inner_->mode(); }
 
 private:
     std::shared_ptr<sync::manifest::ObjectStore> inner_;

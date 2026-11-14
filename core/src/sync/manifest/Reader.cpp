@@ -241,9 +241,9 @@ Loaded load(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLook
     RetainedRoots retained(store, vaultUid, keys, options.use_provider_versions);
 
     Loaded out;
-    bool versionLog = store.mode() == storage::s3::WriteCapability::VersionLog;
+    bool versionLog = store.mode() == WriteCapability::VersionLog;
     std::optional<StoredObject> current;
-    if (!versionLog && store.mode() != storage::s3::WriteCapability::Insufficient) {
+    if (!versionLog && store.mode() != WriteCapability::Insufficient) {
         // A root published without conditional writes names its mode: a reader that doesn't know the bucket's
         // capability (a restore) follows it, and reads the canonical head rather than the current object.
         // When the current object is no root (a delete marker or a stray from a crashed write above the head), the

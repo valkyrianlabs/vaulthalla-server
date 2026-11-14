@@ -473,7 +473,7 @@ CloudEngine::getGroupedFilesFromS3(const fs::path& prefix) const {
 
 bool CloudEngine::usesManifestV2() const { return opaqueLayout(); }
 
-s3::WriteCapability CloudEngine::writeCapability() const {
+vh::sync::manifest::WriteCapability CloudEngine::writeCapability() const {
     const auto resolved = bucket_capability::resolve(vault->id, *s3Provider_);
     if (resolved.changed)
         throw SyncStalled("the bucket refused a conditional write although its probe found support "
@@ -507,7 +507,7 @@ void CloudEngine::publishManifestV2(const bool onlyIfChanged) const {
         throw SyncStalled(e.what());
     } catch (const vh::sync::manifest::PublishUnsupported&) {
         // Nothing was written: no segment, no root (spec 06 §7). The pass stalls with the reason; health lists the vault.
-        s3::WriteCapability mode{};
+        sync::manifest::WriteCapability mode{};
         {
             std::scoped_lock lock(manifestV2Mutex_);
             mode = manifestV2Mode_;
@@ -580,7 +580,7 @@ void CloudEngine::publishRemoteIndexManifest(const std::optional<std::string>& e
 
     // The index is a sync cache one server writes and a full LIST rebuilds: on a bucket without conditional writes
     // (spec 06 §7) it is PUT plainly; elsewhere If-Match / If-None-Match keep a concurrent publish from being lost.
-    const bool conditions = s3::sendsPreconditions(writeCapability());
+    const bool conditions = sync::manifest::sendsPreconditions(writeCapability());
     const auto ifMatch = conditions ? expectedETag : std::optional<std::string>{};
     const auto ifNoneMatch = !conditions || ifMatch
         ? std::optional<std::string>{}

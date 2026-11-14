@@ -281,7 +281,7 @@ protected:
     }
 
     static void useBucket(const std::shared_ptr<VersionedBucket>& bucket,
-                          const storage::s3::WriteCapability mode = storage::s3::WriteCapability::Unknown) {
+                          const sync::manifest::WriteCapability mode = sync::manifest::WriteCapability::Unknown) {
         vault::envelopes::setStoreFactoryForTesting(
             [bucket, mode](uint32_t) { return std::make_shared<mf::S3Store>(bucket, mode); });
         ops::vault_recover::setStoreFactoryForTesting(
@@ -301,7 +301,7 @@ protected:
         o.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
         o.bucket->md5Etags = true;
         db::query::vault::BucketCapability::record(o.id, storage::s3::probeBucket(*o.bucket));
-        useBucket(o.bucket, storage::s3::WriteCapability::VersionLog);
+        useBucket(o.bucket, sync::manifest::WriteCapability::VersionLog);
         storage::bucket_capability::setControllerFactoryForTesting(
             [b = o.bucket](unsigned int, const std::string&) -> std::shared_ptr<storage::s3::Controller> { return b; });
     }
@@ -568,7 +568,7 @@ TEST_F(VaultRecoverDb, OnABackblazeLikeBucketTheRestoreTakesTheCanonicalHeadAndP
     // reads the canonical head by rule C1 although a losing sibling and a delete marker sit above it, and its first
     // publish (in version_log mode, after the restore's probe) chains on it and takes the vault over.
     auto o = populated(Versioning::Enabled, /*backblaze=*/true);
-    ASSERT_EQ(db::query::vault::BucketCapability::get(o.id).capability, storage::s3::WriteCapability::VersionLog);
+    ASSERT_EQ(db::query::vault::BucketCapability::get(o.id).capability, sync::manifest::WriteCapability::VersionLog);
     const auto state = db::query::sync::Manifest::state(o.id);
     ASSERT_TRUE(state.epoch);
     ASSERT_TRUE(state.root_version_id) << "the origin published its roots as versions";
@@ -594,7 +594,7 @@ TEST_F(VaultRecoverDb, OnABackblazeLikeBucketTheRestoreTakesTheCanonicalHeadAndP
     const auto restored = db::query::sync::Manifest::collect(*r.vault_id);
     EXPECT_EQ(shape(restored), shape(expected));
     EXPECT_EQ(restored.vault->name, expected.vault->name);
-    EXPECT_EQ(db::query::vault::BucketCapability::get(*r.vault_id).capability, storage::s3::WriteCapability::VersionLog);
+    EXPECT_EQ(db::query::vault::BucketCapability::get(*r.vault_id).capability, sync::manifest::WriteCapability::VersionLog);
 
     // The first publish settles on the head, as this node alone (a restore takes the vault over).
     ASSERT_TRUE(r.published_epoch) << r.note.value_or("");

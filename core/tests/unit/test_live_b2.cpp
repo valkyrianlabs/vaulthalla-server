@@ -34,7 +34,7 @@ namespace vh::test_live_b2 {
 namespace live = test_support::live;
 namespace mf = sync::manifest;
 namespace http = storage::s3::curl::http;
-using storage::s3::WriteCapability;
+using sync::manifest::WriteCapability;
 
 [[maybe_unused]] const auto* const kRunB2BucketEnvironment =
     ::testing::AddGlobalTestEnvironment(new live::RunB2BucketEnvironment);
@@ -134,7 +134,7 @@ TEST_F(LiveB2, TheManifestPublishesAsVersionsOfItsRoot) {
     EXPECT_TRUE(probe.versioning);
     EXPECT_TRUE(probe.get_if_match);
     EXPECT_EQ(probe.leftover_versions, 0u);
-    std::cout << "[live] probe: " << storage::s3::to_string(probe.capability) << ", MD5 ETags " << probe.md5_etags
+    std::cout << "[live] probe: " << sync::manifest::to_string(probe.capability) << ", MD5 ETags " << probe.md5_etags
               << std::endl;
 
     // (2) The manifest through the real S3Store.

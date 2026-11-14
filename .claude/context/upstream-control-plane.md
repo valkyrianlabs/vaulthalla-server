@@ -91,7 +91,8 @@ buckets it created. Other providers: plain storage, but protection locks still a
 - **What:** `storage::s3::probeBucket` (`storage/s3/Capability.hpp`, `capability.cpp`) answers, on one key
   `.vaulthalla/probe/<uid>` (allowlisted under opaque_v1, `ObjectKeys`): PUT If-None-Match absent/present, If-Match
   wrong/right; versions newest first and readable by id; GET If-Match wrong/right; then deletes every version it wrote
-  by id (`leftover_versions` counts refusals). Verdict (`WriteCapability`): `Conditional` (conditions honoured; versions
+  by id (`leftover_versions` counts refusals). Verdict (`sync::manifest::WriteCapability`, `sync/manifest/WriteCapability.hpp`:
+  the enum, `to_string`, `publishModeFromString` and `sendsPreconditions` live with the manifest, which the probe includes): `Conditional` (conditions honoured; versions
   not needed: R2 has none), `VersionLog` (rejected with 501/400 NotImplemented, or silently ignored, and versions
   kept), `Insufficient` (neither, or GET If-Match not honoured), `Unknown` (never probed: behaves as Conditional).
 - **Where it's stored:** `s3.manifest_publish` (`conditional|version_log`, NULL) + `s3.bucket_probe` JSONB (the

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "storage/Fwd.hpp"
-#include "storage/s3/Capability.hpp"
+#include "sync/manifest/WriteCapability.hpp"
 
 #include <cstdint>
 #include <ctime>
@@ -14,8 +14,9 @@
 // What the manifest needs from a bucket, and nothing else: conditional PUTs (If-None-Match: * for objects written
 // once, If-Match for the root), plain PUTs (buckets without conditional writes, spec 06), GETs (whole, ranged, by
 // provider version), a prefix listing, the versions of one key, DELETE and DELETE of one version. mode() is the
-// bucket's stored write capability (storage/s3/Capability.hpp): which of the PUTs its callers may use. S3Store maps it onto storage::s3::Controller, so every request is metered, budgeted and subject to the
-// protection guard like any other upstream request; tests use the same adapter over the versioned fake bucket.
+// bucket's write capability (WriteCapability.hpp): which of the PUTs its callers may use. S3Store maps it onto
+// storage::s3::Controller, so every request is metered, budgeted and subject to the protection guard like any other
+// upstream request; tests use the same adapter over the versioned fake bucket.
 //
 // Manifest objects never carry x-amz-meta-* (spec 01: the provider learns nothing from metadata).
 namespace vh::sync::manifest {
@@ -121,13 +122,13 @@ public:
     // refuses.
     virtual void removeVersion(const std::string& key, const std::string& versionId);
     // The bucket's write capability. Unknown (never probed) behaves as Conditional: no silent downgrade.
-    [[nodiscard]] virtual storage::s3::WriteCapability mode() const { return storage::s3::WriteCapability::Unknown; }
+    [[nodiscard]] virtual WriteCapability mode() const { return WriteCapability::Unknown; }
 };
 
 class S3Store final : public ObjectStore {
 public:
     explicit S3Store(std::shared_ptr<storage::s3::Controller> s3,
-                     storage::s3::WriteCapability mode = storage::s3::WriteCapability::Unknown);
+                     WriteCapability mode = WriteCapability::Unknown);
 
     [[nodiscard]] std::optional<StoredObject> get(const std::string& key,
                                                  const std::optional<std::string>& versionId) override;
@@ -145,14 +146,14 @@ public:
     void remove(const std::string& key) override;
     PutResult put(const std::string& key, const std::vector<uint8_t>& bytes) override;
     void removeVersion(const std::string& key, const std::string& versionId) override;
-    [[nodiscard]] storage::s3::WriteCapability mode() const override { return mode_; }
+    [[nodiscard]] WriteCapability mode() const override { return mode_; }
 
 private:
     std::string put(const std::string& key, const std::vector<uint8_t>& bytes, const std::optional<std::string>& ifMatch,
                     const std::optional<std::string>& ifNoneMatch);
 
     std::shared_ptr<storage::s3::Controller> s3_;
-    storage::s3::WriteCapability mode_;
+    WriteCapability mode_;
 };
 
 }

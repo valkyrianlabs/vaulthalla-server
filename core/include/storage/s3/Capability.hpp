@@ -1,5 +1,7 @@
 #pragma once
 
+#include "sync/manifest/WriteCapability.hpp"
+
 #include <ctime>
 #include <optional>
 #include <stdexcept>
@@ -9,32 +11,12 @@
 
 #include <nlohmann/json_fwd.hpp>
 
-// What a bucket can do for the writes that must never overwrite another writer's object
-// (design/encryption/06-publish-without-preconditions.md §7), learned by one probe and stored per vault
-// (s3.manifest_publish, s3.bucket_probe; storage/BucketCapability.hpp).
-//
-//   Conditional   PUT honours If-None-Match: * and If-Match (AWS S3, Cloudflare R2): the manifest publishes as spec 03
-//                 §3.4 says, every write-once object is PUT with If-None-Match: *.
-//   VersionLog    conditional PUT is rejected (501 / 400 NotImplemented, Backblaze B2) or silently ignored, and the
-//                 bucket keeps versions: write-once objects are PUT plainly (their names are random or
-//                 content-addressed); the root is published as provider versions (spec 06 §5, version_log).
-//   Insufficient  neither conditional PUT nor versions, or GET If-Match is not honoured: plain PUTs for write-once
-//                 objects and the path_v0 index; no opaque_v1 manifest.
-//   Unknown       never probed (or the probe could not run): today's behaviour, conditional writes. A bucket is never
-//                 downgraded without a probe saying so.
+// The bucket capability probe (design/encryption/06-publish-without-preconditions.md §7): one probe per bucket learns
+// its sync::manifest::WriteCapability (sync/manifest/WriteCapability.hpp: what each value means and what the manifest
+// does with it), stored per vault (s3.manifest_publish, s3.bucket_probe; storage/BucketCapability.hpp).
 namespace vh::storage::s3 {
 
 class Controller;
-
-enum class WriteCapability { Unknown, Conditional, VersionLog, Insufficient };
-
-// "unknown", "conditional", "version_log", "insufficient".
-[[nodiscard]] std::string_view to_string(WriteCapability capability);
-// The stored s3.manifest_publish values: "conditional" | "version_log"; anything else is nullopt.
-[[nodiscard]] std::optional<WriteCapability> publishModeFromString(std::string_view text);
-
-// May a write carry If-None-Match / If-Match? Conditional, and Unknown (never a silent downgrade).
-[[nodiscard]] bool sendsPreconditions(WriteCapability capability) noexcept;
 
 // What the probe found. `conditional_put`: "supported" (every step answered as S3 specifies), "rejected" (the
 // provider refused to evaluate a condition: PreconditionsUnsupported), "ignored" (a write that had to fail with 412
@@ -46,7 +28,7 @@ struct ProbeStep {
 };
 
 struct ProbeResult {
-    WriteCapability capability{WriteCapability::Unknown};
+    sync::manifest::WriteCapability capability{sync::manifest::WriteCapability::Unknown};
     std::string conditional_put;  // supported | rejected | ignored | inconsistent
     bool versioning{false};       // distinct version ids, listed newest first, each readable by id
     bool get_if_match{false};     // GET If-Match: 412 on a wrong ETag, 200 on the right one
