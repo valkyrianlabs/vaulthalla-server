@@ -237,7 +237,7 @@ bool retainedFor(const Row& row, const unsigned int prev) {
 
 // The secrets a row's wraps hold, in locked memory, one per field (nullopt where the field is NULL).
 struct Plain {
-    std::vector<std::optional<SecretBytes>> f{};
+    std::vector<std::optional<vl::keykit::SecretBytes>> f{};
 };
 
 // The secrets `w` wraps under `master` (nullopt when there is no master, a field doesn't authenticate, or a secret
@@ -253,7 +253,7 @@ std::optional<Plain> unwrapWith(const Spec& spec, const Provider& master, const 
         try {
             const WipedKeyCopy raw(util::decrypt_aes256_gcm(b->ct, master->getMasterKey(), b->iv));
             if (spec.plainSize && raw.bytes.size() != spec.plainSize) return std::nullopt;
-            out.f.emplace_back(SecretBytes(raw.bytes));
+            out.f.emplace_back(vl::keykit::SecretBytes(raw.bytes));
         } catch (const std::exception&) {
             return std::nullopt;
         }

@@ -124,7 +124,7 @@ Connection::Connection() : tpmKeyProvider_(
     auto initPass = getFirstInitDBPass();
     // The handed-over password is wiped once it is sealed, on every path (#350).
     const std::unique_ptr<std::string, void (*)(std::string*)> initPassWipe(
-        initPass ? &*initPass : nullptr, [](std::string* s) { crypto::wipeSecret(*s); });
+        initPass ? &*initPass : nullptr, [](std::string* s) { vl::keykit::wipe(*s); });
     if (tpmKeyProvider_->sealedExists()) {
         try {
             tpmKeyProvider_->init();
@@ -197,7 +197,7 @@ std::unique_ptr<pqxx::connection> Connection::open() const {
     withPassword.emplace_back(std::piecewise_construct, std::forward_as_tuple("password"),
                               std::forward_as_tuple(reinterpret_cast<const char*>(password.data()), password.size()));
     const std::unique_ptr<std::string, void (*)(std::string*)> wipePassword(
-        &withPassword.back().second, [](std::string* s) { crypto::wipeSecret(*s); });
+        &withPassword.back().second, [](std::string* s) { vl::keykit::wipe(*s); });
     auto conn = std::make_unique<pqxx::connection>(withPassword);
     configureSession(*conn);
     return conn;

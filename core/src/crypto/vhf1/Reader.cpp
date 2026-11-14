@@ -1,6 +1,5 @@
 #include "crypto/vhf1/Reader.hpp"
 
-#include <sodium.h>
 
 #include <algorithm>
 #include <mutex>
@@ -77,11 +76,11 @@ void ChunkWalker::openOne(const std::span<const uint8_t> sealed, const Sink& sin
     try {
         sink(next_, plain);
     } catch (...) {
-        sodium_memzero(plain.data(), plain.size());
+        vl::keykit::wipe(plain);
         broken_ = true;
         throw;
     }
-    sodium_memzero(plain.data(), plain.size());
+    vl::keykit::wipe(plain);
     ++next_;
 }
 
@@ -156,7 +155,7 @@ SecureBytes RangeReader::read(const uint64_t start, const uint64_t end, const st
         const uint64_t from = std::max(start, base) - base;
         const uint64_t to = std::min<uint64_t>(end, base + plain.size()) - base;
         out.append(plain.subspan(static_cast<std::size_t>(from), static_cast<std::size_t>(to - from)));
-        sodium_memzero(plain.data(), plain.size());
+        vl::keykit::wipe(plain);
     }
     return out;
 }

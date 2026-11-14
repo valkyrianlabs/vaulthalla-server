@@ -82,7 +82,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
   it (`resolveStorageLayout`), never a request; `opaque_v1` for every new encrypting vault since #371; an `opaque_v1`
   vault's encryption can't be turned off, and `encrypt_upstream` can't change while a layout migration copies.
   Existing path_v0 vaults move with `vh vault migrate-layout` (#373, architecture.md). `vault.uid` and
-  `files.object_uid` are 16 libsodium bytes (`crypto::id::ObjectUid`), assigned once (immutable by trigger): new rows
+  `files.object_uid` are 16 libsodium bytes (`crypto::id::ObjectUid` = `vl::keykit::Uid`; base32 text by `vl::keykit::toBase32`), assigned once (immutable by trigger): new rows
   in `upsertVault`/`File::upsertFile` (a rewritten inode keeps its uid; copies clear it first), existing rows by the
   deployer data step for 122 (`SqlDeployer` `kMigrationDataSteps`). Nothing in the data plane reads them yet (#369).
 

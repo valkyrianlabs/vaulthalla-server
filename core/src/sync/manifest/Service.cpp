@@ -1,5 +1,6 @@
 #include "sync/manifest/Service.hpp"
 
+#include "crypto/SecretKey.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/sync/Manifest.hpp"
 #include "log/Registry.hpp"

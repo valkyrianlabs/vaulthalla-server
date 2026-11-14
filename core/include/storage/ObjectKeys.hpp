@@ -1,6 +1,6 @@
 #pragma once
 
-#include "crypto/id/ObjectUid.hpp"
+#include <vl/keykit/uid.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -18,7 +18,7 @@
 //   .vaulthalla/probe/<uid>      the bucket capability probe's object, deleted by version id once it has answered
 //                                (storage/s3/Capability.hpp; design/encryption/06-publish-without-preconditions.md §7)
 //
-// Uids are lower-case Crockford base32 (crypto::id::toBase32), 26 symbols, one spelling per id. Anything else in an
+// Uids are lower-case Crockford base32 (vl::keykit::toBase32), 26 symbols, one spelling per id. Anything else in an
 // opaque_v1 bucket is a foreign object (spec 01 §4.4). Under path_v0 and transparent the key is the vault path
 // without its leading slash, as before.
 namespace vh::storage::object_keys {
@@ -28,10 +28,10 @@ inline constexpr std::string_view kMetadataPrefix = ".vaulthalla/";
 // Where `foreign_objects = import` puts a foreign object's content: /Imported/<its key>.
 inline constexpr std::string_view kImportedRoot = "/Imported";
 
-[[nodiscard]] std::string contentKey(const crypto::id::ObjectUid& uid);
+[[nodiscard]] std::string contentKey(const vl::keykit::Uid& uid);
 // The uid of an `o/<uid>` key (strict base32), nullopt for any other key. A leading '/' is accepted (scope keys and
 // index paths carry one).
-[[nodiscard]] std::optional<crypto::id::ObjectUid> uidOfContentKey(std::string_view key);
+[[nodiscard]] std::optional<vl::keykit::Uid> uidOfContentKey(std::string_view key);
 
 enum class KeyClass {
     Content,    // o/<uid>

@@ -27,7 +27,7 @@ namespace kev1 = vl::keykit::kev1;
 
 // The temporary X25519 secrets of the restores this process asked for, by restore id: memory only, never stored.
 struct Pending {
-    crypto::SecretBytes secret;
+    vl::keykit::SecretBytes secret;
     std::string vault_uid;
 };
 std::mutex& pendingMutex() {
@@ -47,7 +47,7 @@ void forget(const std::string& id) {
 struct Linked {
     vh::cloud::Endpoint endpoint;
     std::string installation;
-    crypto::SecretBytes seed;
+    vl::keykit::SecretBytes seed;
 };
 
 Linked linked() {
@@ -182,7 +182,7 @@ Started start(const Actor& actor, const std::string& vaultUid, const Channel cha
     if (!vl::keykit::fromBase32(vaultUid)) throw Invalid("--vault-uid is not a vault uid");
     auto link = linked();
     if (sodium_init() < 0) throw std::runtime_error("libsodium failed to initialise");
-    auto secret = crypto::SecretBytes::random(kev1::kX25519KeySize);
+    auto secret = vl::keykit::SecretBytes::random(kev1::kX25519KeySize);
     const auto pk = kev1::publicKeyOf(kev1::Suite::X25519, secret.bytes());
     const auto reply = vh::cloud::signedCall(link.endpoint, link.installation, link.seed.bytes(), "POST",
                                              "/v1/recovery/restores",

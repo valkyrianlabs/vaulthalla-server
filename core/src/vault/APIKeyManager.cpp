@@ -57,7 +57,7 @@ unsigned int APIKeyManager::addAPIKey(std::shared_ptr<APIKey>& key) {
         key->encrypted_secret_access_key = std::move(wrapped.ciphertext);
         key->iv = std::move(wrapped.iv);
         key->master_version = wrapped.master_version;
-        wipeSecret(key->secret_access_key);
+        vl::keykit::wipe(key->secret_access_key);
         key->secret_access_key.clear();
 
         key->id = db::query::vault::APIKey::upsertAPIKey(key);
@@ -143,7 +143,7 @@ void APIKeyManager::setProviderToken(const unsigned int keyId, std::optional<std
         db::query::vault::APIKey::clearProviderToken(keyId);
     } else {
         const auto wrapped = writer.wrap(viewBytes(*token));
-        wipeSecret(*token);
+        vl::keykit::wipe(*token);
         db::query::vault::APIKey::setProviderToken(keyId, wrapped.ciphertext, wrapped.iv, wrapped.master_version);
     }
     if (auto refreshed = db::query::vault::APIKey::getAPIKey(keyId)) apiKeys_[keyId] = std::move(refreshed);

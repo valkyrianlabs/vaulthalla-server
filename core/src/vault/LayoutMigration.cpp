@@ -3,6 +3,7 @@
 #include "vault/LayoutMigration.hpp"
 
 #include "audit/Trail.hpp"
+#include "crypto/SecretKey.hpp"
 #include "crypto/vhf1/Format.hpp"
 #include "db/query/recovery/Generation.hpp"
 #include "crypto/util/encrypt.hpp"
@@ -1549,7 +1550,7 @@ void verifyManifestAgainstDatabase(const storage::CloudEngine& engine) {
     for (const auto& e : loaded.entries) byUid[e.uid] = &e;
     for (const auto& f : layout_detail::Q::liveFiles(engine.vault->id)) {
         if (!f->object_uid) continue;
-        const auto it = byUid.find(crypto::id::toBase32(*f->object_uid));
+        const auto it = byUid.find(vl::keykit::toBase32(*f->object_uid));
         if (it == byUid.end())
             throw std::runtime_error(fmt::format("the bucket's manifest does not name file {}", f->id));
         // The object the bucket holds for it (the remote index's row of o/<uid>, Vaulthalla's own upload).

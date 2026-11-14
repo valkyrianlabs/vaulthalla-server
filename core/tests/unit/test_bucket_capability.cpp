@@ -183,7 +183,7 @@ TEST(BucketProbe, TheStoredFormRoundTrips) {
     EXPECT_TRUE(sync::manifest::sendsPreconditions(WriteCapability::Unknown)) << "never probed: no silent downgrade";
     EXPECT_FALSE(sync::manifest::sendsPreconditions(WriteCapability::VersionLog));
     EXPECT_EQ(storage::object_keys::classify(std::string(storage::s3::kProbePrefix) +
-                                             crypto::id::toBase32(crypto::id::newObjectUid())),
+                                             vl::keykit::toBase32(crypto::id::newObjectUid())),
               storage::object_keys::KeyClass::Metadata);
 }
 
@@ -460,7 +460,7 @@ TEST_F(BucketCapabilityDbTest, EnvelopesAreWrittenPlainlyWhereConditionsAreRejec
     record(v->id, *bucket);
     const auto store = std::make_shared<storage::s3::ManifestStore>(
         bucket, db::query::vault::BucketCapability::get(v->id).capability);
-    const auto key = std::string(".vaulthalla/key/") + crypto::id::toBase32(crypto::id::newObjectUid());
+    const auto key = std::string(".vaulthalla/key/") + vl::keykit::toBase32(crypto::id::newObjectUid());
     const std::vector<uint8_t> envelope{0x89, 'V', 'H', 'K'};
     (void)store->putOnce(key, envelope);
     (void)store->putOnce(key, envelope);

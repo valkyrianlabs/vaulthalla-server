@@ -24,13 +24,13 @@
 
 namespace vh::test_master_secret_memory {
 
-using crypto::SecretBytes;
+using vl::keykit::SecretBytes;
 using crypto::WipedKeyCopy;
 using crypto::secrets::KeyProvider;
 
 // Callers can only borrow the master secret, never take a vector copy of it by accident.
 static_assert(std::is_same_v<decltype(std::declval<const KeyProvider&>().getMasterKey()), std::span<const uint8_t>>);
-static_assert(!std::is_copy_constructible_v<SecretBytes>);
+static_assert(!std::is_copy_constructible_v<vl::keykit::SecretBytes>);
 
 struct Wiped {
     std::size_t size = 0;
@@ -69,9 +69,9 @@ class WipeObserved : public ::testing::Test {
 protected:
     void SetUp() override {
         forgetWipes();
-        crypto::setWipeObserverForTesting(recordWipe);
+        vl::keykit::setWipeObserverForTesting(recordWipe);
     }
-    void TearDown() override { crypto::setWipeObserverForTesting(nullptr); }
+    void TearDown() override { vl::keykit::setWipeObserverForTesting(nullptr); }
 };
 
 using SecretBytesTest = WipeObserved;
@@ -79,7 +79,7 @@ using SecretBytesTest = WipeObserved;
 TEST_F(SecretBytesTest, IsZeroedBeforeItIsFreed) {
     const void* where = nullptr;
     {
-        const SecretBytes secret(pattern(48));
+        const vl::keykit::SecretBytes secret(pattern(48));
         ASSERT_EQ(secret.size(), 48u);
         EXPECT_TRUE(std::ranges::equal(secret.bytes(), pattern(48)));
         where = secret.bytes().data();
@@ -91,13 +91,13 @@ TEST_F(SecretBytesTest, IsZeroedBeforeItIsFreed) {
 }
 
 TEST_F(SecretBytesTest, MovingHandsOverTheBufferWithoutACopy) {
-    SecretBytes a(pattern(32));
+    vl::keykit::SecretBytes a(pattern(32));
     const auto* where = a.bytes().data();
-    SecretBytes b(std::move(a));
+    vl::keykit::SecretBytes b(std::move(a));
     EXPECT_TRUE(a.empty());  // NOLINT(bugprone-use-after-move): the moved-from state is what is tested
     EXPECT_EQ(b.bytes().data(), where);
 
-    SecretBytes c(pattern(16));
+    vl::keykit::SecretBytes c(pattern(16));
     const auto* replaced = c.bytes().data();
     c = std::move(b);
     EXPECT_EQ(c.bytes().data(), where);
@@ -107,11 +107,11 @@ TEST_F(SecretBytesTest, MovingHandsOverTheBufferWithoutACopy) {
 }
 
 TEST_F(SecretBytesTest, RandomFillsLockedMemoryDirectly) {
-    const auto a = SecretBytes::random(32);
-    const auto b = SecretBytes::random(32);
+    const auto a = vl::keykit::SecretBytes::random(32);
+    const auto b = vl::keykit::SecretBytes::random(32);
     EXPECT_EQ(a.size(), 32u);
     EXPECT_FALSE(std::ranges::equal(a.bytes(), b.bytes()));
-    EXPECT_THROW((void)SecretBytes::random(0), std::invalid_argument);
+    EXPECT_THROW((void)vl::keykit::SecretBytes::random(0), std::invalid_argument);
 }
 
 TEST_F(SecretBytesTest, SecretKeysAndCopiesAreWipedToo) {

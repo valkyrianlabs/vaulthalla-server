@@ -13,6 +13,7 @@
 #include "../helpers/recovery_local.hpp"
 #include "../helpers/versioned_bucket.hpp"
 
+#include "crypto/id/ObjectUid.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/vhf1/Format.hpp"
 #include "db/query/fs/File.hpp"

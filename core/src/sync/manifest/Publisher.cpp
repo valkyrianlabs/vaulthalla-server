@@ -1,8 +1,6 @@
 #include "sync/manifest/Publisher.hpp"
 
-#include "crypto/id/ObjectUid.hpp"
-
-#include <fmt/format.h>
+#include <format>
 
 #include <algorithm>
 #include <thread>
@@ -147,14 +145,14 @@ void checkHeadForWriter(const RootDocument& head, const std::string& rootSha, co
     const auto named = head.publish.value_or(std::string(kPublishConditional));
     if (!ours && named != mode)
         throw ChainRejected(ChainError::PublishModeMismatch,
-                            fmt::format("the bucket's head was published as {} by node {}; this bucket is {}", named,
+                            std::format("the bucket's head was published as {} by node {}; this bucket is {}", named,
                                         head.producer.node_id, mode),
                             head.epoch, rootSha);
     if (selfNode.empty() || !head.writers || !ownEpoch) return;
     if (std::ranges::find(*head.writers, selfNode) != head.writers->end()) return;
     if (head.epoch > *ownEpoch)
         throw ChainRejected(ChainError::Superseded,
-                            fmt::format("the root of epoch {} names other writers, not this server (whose last root was "
+                            std::format("the root of epoch {} names other writers, not this server (whose last root was "
                                         "epoch {})",
                                         head.epoch, *ownEpoch),
                             head.epoch, rootSha);
@@ -237,7 +235,7 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
             if (ref.sid.empty())
                 if (const auto it = writtenSegments.find(p.plaintext); it != writtenSegments.end()) ref = it->second;
             if (ref.sid.empty()) {
-                const auto sid = crypto::id::newObjectUid();
+                const auto sid = vl::keykit::newUid();
                 const auto bytes = sealDocument(Json::parse(p.plaintext), crypto::vhf1::Kind::ManifestSegment, vaultUid,
                                                 sid, sealing);
                 ref = {uidText(sid), p.doc.range, p.doc.entries.size(), sha256Hex(bytes), bytes.size()};
@@ -262,7 +260,7 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
             if (ref.sid.empty())
                 if (const auto it = writtenSnapshots.find(plaintext); it != writtenSnapshots.end()) ref = it->second;
             if (ref.sid.empty()) {
-                const auto sid = crypto::id::newObjectUid();
+                const auto sid = vl::keykit::newUid();
                 const auto bytes = sealSnapshot(doc, vaultUid, sid, sealing);
                 ref = {uidText(sid), sha256Hex(bytes), bytes.size()};
                 (void)store.putOnce(segmentKey(ref.sid), bytes);
@@ -411,7 +409,7 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
         report.published = std::move(next);
         return report;
     }
-    throw PublishConflict(fmt::format("manifest publish conflict after {} attempts", report.attempts));
+    throw PublishConflict(std::format("manifest publish conflict after {} attempts", report.attempts));
 }
 
 GcReport collectGarbage(ObjectStore& store, const std::set<std::string>& retainedSids, const std::time_t now,

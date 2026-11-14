@@ -2,6 +2,7 @@
 
 #include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
+#include "crypto/SecretKey.hpp"
 #include "crypto/id/Generator.hpp"
 #include <vl/keykit/kev1.hpp>
 #include "db/query/sync/Manifest.hpp"
@@ -165,7 +166,7 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
     options.accept_rollback = req.accept_rollback;
     options.self_keys = selfKeys();
     if (req.vault_uid) {
-        options.vault_uid = crypto::id::fromBase32(*req.vault_uid);
+        options.vault_uid = vl::keykit::fromBase32(*req.vault_uid);
         if (!options.vault_uid) throw Invalid("vault uid is not a vault uid (26 base32 symbols)");
     }
 

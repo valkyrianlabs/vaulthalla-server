@@ -2,6 +2,7 @@
 // writes of re-sealed objects as Vaulthalla's own writes, the switch of the in-memory layout after the cutover
 // transaction, and the bucket-only load of the manifest v2.
 
+#include "crypto/SecretKey.hpp"
 #include "storage/CloudEngine.hpp"
 
 #include "fs/model/File.hpp"

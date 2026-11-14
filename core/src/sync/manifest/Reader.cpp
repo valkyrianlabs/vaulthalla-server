@@ -3,7 +3,7 @@
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/VersionLog.hpp"
 
-#include <fmt/format.h>
+#include <format>
 
 #include <algorithm>
 
@@ -377,10 +377,10 @@ BlindReport blindRebuild(ObjectStore& store, const Uid& vaultUid, const crypto::
             r.object_size = listed.size;
             r.plaintext_size = layout.plaintextSize;
             r.key_version = header.params().keyVersion;
-            for (const auto b : header.params().salt) r.generation += fmt::format("{:02x}", b);
+            for (const auto b : header.params().salt) r.generation += std::format("{:02x}", b);
             report.recovered.push_back(std::move(r));
         } catch (const crypto::vhf1::Error& e) {
-            report.rejected.push_back(fmt::format("{}: {}", listed.key, crypto::vhf1::errorCodeName(e.code())));
+            report.rejected.push_back(std::format("{}: {}", listed.key, crypto::vhf1::errorCodeName(e.code())));
         }
     }
     return report;
@@ -393,14 +393,14 @@ RestoreLoad loadForRestore(ObjectStore& store, const Uid& vaultUid, const crypto
         LoadOptions options;
         options.known = Known{checkpoint->epoch, checkpoint->root_sha256};
         auto loaded = load(store, vaultUid, keys, options);
-        auto report = fmt::format("freshness verified against the checkpoint of epoch {}: the root is epoch {}",
+        auto report = std::format("freshness verified against the checkpoint of epoch {}: the root is epoch {}",
                                   checkpoint->epoch, loaded.root.epoch);
         return {std::move(loaded), Freshness::Verified, std::move(report)};
     } catch (const ChainRejected& e) {
         if (e.code() != ChainError::Rollback || !acceptRollback) throw;
     }
     auto loaded = load(store, vaultUid, keys, {});
-    auto report = fmt::format("rollback accepted: the root is epoch {}, older than the checkpoint of epoch {}",
+    auto report = std::format("rollback accepted: the root is epoch {}, older than the checkpoint of epoch {}",
                               loaded.root.epoch, checkpoint->epoch);
     return {std::move(loaded), Freshness::RollbackAccepted, std::move(report)};
 }

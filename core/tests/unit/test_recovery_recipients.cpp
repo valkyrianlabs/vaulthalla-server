@@ -8,6 +8,7 @@
 #include "../helpers/temp_dir.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "audit/Trail.hpp"
+#include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include <vl/keykit/kev1.hpp>
 #include <vl/keykit/kit.hpp>
@@ -328,7 +329,7 @@ protected:
 
     static json kitFor(const vl::keykit::RecoverySeed& seed, const std::vector<kev1::VaultUid>& vaults = {}) {
         json doc{{"type", "vh.recovery-kit"}, {"v", 1}, {"recovery_seed", seed.text()}, {"vaults", json::array()}};
-        for (const auto& uid : vaults) doc["vaults"].push_back({{"vault_uid", crypto::id::toBase32(uid)}});
+        for (const auto& uid : vaults) doc["vaults"].push_back({{"vault_uid", vl::keykit::toBase32(uid)}});
         return doc;
     }
 
@@ -476,7 +477,7 @@ TEST_F(RecoveryRecipient, EnrollmentIsForTheCliAndPairedDevicesWithTheExportPerm
     const auto listed = WsKeys::listRecipients({{"vault_id", engine->vault->id}}, console(superUser));
     ASSERT_EQ(listed.at("recipients").size(), 1u);
     EXPECT_EQ(listed.at("recipients").at(0).at("public_key"), pk);
-    EXPECT_EQ(listed.at("vault_uid"), crypto::id::toBase32(uidOf(engine)));
+    EXPECT_EQ(listed.at("vault_uid"), vl::keykit::toBase32(uidOf(engine)));
 }
 
 TEST_F(RecoveryRecipient, RevocationStopsNewEnvelopesAndAsksForARotation) {
@@ -612,7 +613,7 @@ TEST_F(RecoveryNoSilentCustody, NoFlowAddsANonCustomerGrantOrSendsKeyMaterialAny
     EXPECT_ANY_THROW(db::Transactions::exec("RecipientFixture::custodian", [&](pqxx::work& txn) {
         txn.exec("INSERT INTO vault_recovery_grant (vault_id, grant_id, recipient_id, public_key, suite, class, "
                  "authorized_by) VALUES ($1, $2, $3, $4::bytea, 1, 'custodian', 'test')",
-                 pqxx::params{engine->vault->id, crypto::id::toBase32(crypto::id::newObjectUid()), std::string(64, 'a'),
+                 pqxx::params{engine->vault->id, vl::keykit::toBase32(crypto::id::newObjectUid()), std::string(64, 'a'),
                               db::encoding::to_hex_bytea(seed.x25519PublicKey())});
     }));
 }
@@ -877,7 +878,7 @@ TEST_F(CloudRecoveryEnrollment, SendsTheBucketsEnvelopesByteForByteAndNeverAKey)
 
     const auto e = ops::cloud_recovery::enroll(superUser, engine->vault->id, Channel::Cli);
     EXPECT_TRUE(e.created);
-    const auto uid = crypto::id::toBase32(uidOf(engine));
+    const auto uid = vl::keykit::toBase32(uidOf(engine));
     EXPECT_EQ(e.vault_uid, uid);
     ASSERT_TRUE(uploads.contains(uid));
     const auto& body = uploads.at(uid);

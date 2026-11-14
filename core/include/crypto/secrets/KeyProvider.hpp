@@ -81,7 +81,7 @@ public:
 
     // A fresh master secret from libsodium's CSPRNG (the OS generator: getrandom(2) / arc4random). Throws if
     // libsodium can't initialize. Never std::random_device, whose source is implementation-defined (#318).
-    [[nodiscard]] static crypto::SecretBytes generateMasterSecret(std::size_t bytes = 32);
+    [[nodiscard]] static vl::keykit::SecretBytes generateMasterSecret(std::size_t bytes = 32);
 
     // Tests only: runs on each secret a sealer returns, before the provider keeps it, so a test can fail an unseal
     // midway (by throwing) and check that the unsealed bytes were wiped. nullptr (the default) turns it off.
@@ -89,12 +89,12 @@ public:
     static void setUnsealHookForTesting(UnsealHook hook) noexcept;
 
 private:
-    crypto::SecretBytes master_;
+    vl::keykit::SecretBytes master_;
     std::string name_;
     std::filesystem::path sealedDir_;
 
     void unsealStored();
-    void sealAndKeep(crypto::SecretBytes candidate);
+    void sealAndKeep(vl::keykit::SecretBytes candidate);
     static void requirePosture();
 };
 

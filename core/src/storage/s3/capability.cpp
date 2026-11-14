@@ -136,7 +136,7 @@ ProbeResult probeBucket(const Controller& controller) {
     namespace d = capability_detail;
     ProbeResult r;
     r.probed_at = std::time(nullptr);
-    const auto key = std::string(kProbePrefix) + crypto::id::toBase32(crypto::id::newObjectUid());
+    const auto key = std::string(kProbePrefix) + vl::keykit::toBase32(crypto::id::newObjectUid());
     const auto first = d::bodyOf("vaulthalla bucket probe: first write\n");
     const auto second = d::bodyOf("vaulthalla bucket probe: second write\n");
     const auto note = [&](const std::string_view step, const std::string_view expected, const std::string& got) {

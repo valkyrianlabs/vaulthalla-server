@@ -350,6 +350,17 @@ TEST(ManifestVectors, EveryChainErrorNameIsKnown) {
 
 // ── ManifestDocument ─────────────────────────────────────────────────────────────────────────────────────────────
 
+TEST(ManifestDocument, IsoTimeIsTheUtcCalendarTimeToTheSecond) {
+    // The documents' timestamps (isoTime, <chrono>): what gmtime gives, leap days and times before 1970 included.
+    EXPECT_EQ(isoTime(0), "1970-01-01T00:00:00Z");
+    EXPECT_EQ(isoTime(-1), "1969-12-31T23:59:59Z");
+    EXPECT_EQ(isoTime(951782399), "2000-02-28T23:59:59Z");
+    EXPECT_EQ(isoTime(951782400), "2000-02-29T00:00:00Z");
+    EXPECT_EQ(isoTime(1709251199), "2024-02-29T23:59:59Z");
+    EXPECT_EQ(isoTime(1793880000), "2026-11-05T12:00:00Z");
+    EXPECT_EQ(isoTime(4102444799), "2099-12-31T23:59:59Z");
+}
+
 TEST(ManifestDocument, RichRootSegmentAndSnapshotRoundTrip) {
     const auto content = richContent();
     const Uid vault = uidOf(0x56, 0x48);

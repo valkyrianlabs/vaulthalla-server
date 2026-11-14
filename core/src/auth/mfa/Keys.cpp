@@ -31,7 +31,7 @@ Key loadMfaKey(Key& cache, const char* name, const crypto::secrets::DependentsCh
         if (!db::Transactions::dbPool_) throw std::runtime_error("no database");
         const auto secrets = runtime::Deps::get().secretsManager;
         if (!secrets) throw std::runtime_error("no secrets manager");
-        cache = std::make_shared<const crypto::SecretBytes>(secrets->sealedKey(name, kKeyBytes, dependents));
+        cache = std::make_shared<const vl::keykit::SecretBytes>(secrets->sealedKey(name, kKeyBytes, dependents));
         return cache;
     } catch (const std::exception& e) {
         log::Registry::crypto()->error("[auth::mfa] {} unavailable: {}", name, e.what());
@@ -90,7 +90,7 @@ SealedSecret sealTotpSecret(const std::span<const uint8_t> key, const uint32_t u
     return out;
 }
 
-crypto::SecretBytes openTotpSecret(const std::span<const uint8_t> key, const uint32_t userId,
+vl::keykit::SecretBytes openTotpSecret(const std::span<const uint8_t> key, const uint32_t userId,
                                    const std::string_view factorUuid, const SealedSecret& sealed) {
     if (sealed.iv.size() != crypto::util::AES_IV_SIZE || sealed.ciphertext.size() <= crypto::util::AES_TAG_SIZE)
         throw std::runtime_error("sealed TOTP secret is malformed");
@@ -102,7 +102,7 @@ crypto::SecretBytes openTotpSecret(const std::span<const uint8_t> key, const uin
                                   all.first(bodySize), all.subspan(bodySize).first<crypto::util::AES_TAG_SIZE>(),
                                   plain.bytes, aad))
         throw std::runtime_error("sealed TOTP secret does not open (wrong key, account or factor)");
-    return crypto::SecretBytes(plain.bytes);
+    return vl::keykit::SecretBytes(plain.bytes);
 }
 
 }

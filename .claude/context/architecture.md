@@ -821,12 +821,15 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   keystream (`crypto::util::gcmCtrDecryptAt`: plaintext offset o ↔ ciphertext offset o, counter IV‖BE32(2+o/16)).
   Keys come from `EncryptionManager::keySnapshot(version)` (immutable `crypto::SecretKey`, mlocked, wiped; rotation
   swaps pointers under a shared_mutex). `readAll()` does one authenticated pass and records the verdict.
-- **Master secrets in memory (#350).** `crypto::secrets::KeyProvider` holds its slot in `crypto::SecretBytes` (mlocked,
-  zeroed on release; `crypto/SecretBytes.hpp`) and `getMasterKey()` returns a `std::span` borrowed from it. The AES-GCM
-  helpers take key spans, so callers never copy a master into a vector; a plain copy an API insists on (decrypt output,
-  a sealer's return) goes in `crypto::WipedKeyCopy`. The share pepper and attestation seed are cached as
-  `shared_ptr<const SecretBytes>`. `crypto::setWipeObserverForTesting` and `KeyProvider::setUnsealHookForTesting` are
-  the test seams (`test_master_secret_memory.cpp`).
+- **Master secrets in memory (#350).** `crypto::secrets::KeyProvider` holds its slot in `vl::keykit::SecretBytes`
+  (vl-keykit's: mlocked, zeroed on release, random bytes from OpenSSL's `RAND_priv_bytes`; the server's own
+  `crypto::SecretBytes` is gone since #443, `crypto/SecretBytes.hpp` keeps `WipedKeyCopy` and `viewBytes`) and
+  `getMasterKey()` returns a `std::span` borrowed from it. The AES-GCM helpers take key spans, so callers never copy a
+  master into a vector; a plain copy an API insists on (decrypt output, a sealer's return) goes in
+  `crypto::WipedKeyCopy`, and `vl::keykit::wipe` zeroes a buffer. The share pepper and attestation seed are cached as
+  `shared_ptr<const vl::keykit::SecretBytes>`. `vl::keykit::setWipeObserverForTesting` (it sees `SecretBytes`,
+  `SecretKey` and `WipedKeyCopy` buffers) and `KeyProvider::setUnsealHookForTesting` are the test seams
+  (`test_master_secret_memory.cpp`).
 - **TPM PCR 7 policy (#351).** `platform::sealer::Policy {None, Pcr7}` (Linux TPM only; the Secure Enclave ignores it).
   `secrets.tpm_pcr_policy` binds newly sealed secrets only (PolicyPCR digest as the object's auth policy, no
   USERWITHAUTH); unseal reads the policy off the blob and fails with the typed `PolicyUnsatisfied` once PCR 7 changed,
@@ -884,7 +887,11 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   64 KiB AES-256-GCM chunks with AAD = header hash ‖ index ‖ final flag, a streaming `Writer` (final-chunk hold-back),
   `open()` / `ChunkWalker` (whole and streamed reads, only authenticated chunks reach the sink) and `RangeReader`
   (authenticated object size required, sticky failure). Errors are `vhf1::Error` with the spec's codes in the §3.6
-  check order. Primitives are OpenSSL (HKDF, HMAC, SHA-256, AES-GCM via `crypto::util::Gcm`) and libsodium.
+  check order. Primitives are OpenSSL only (HKDF, HMAC, SHA-256, the CSPRNG for salts, AES-GCM through the codec's
+  own one-message wrapper `vhf1/Aead.hpp`); wiping and constant-time comparison are vl-keykit's. Its key type is
+  `vhf1::Key` (`vhf1/Key.hpp`, 32 bytes in a `vl::keykit::SecretBytes`); the server's `crypto::SecretKey` derives from
+  it and only adds `random()`. `crypto::util::Gcm` (streaming GCM, the legacy v1 positioned decrypt, `gcmVerifyFd`)
+  is the server's and VHF1 no longer uses it.
   Proven byte for byte by `Vhf1Vectors` against `design/encryption/vectors/vectors.json`; fuzz target `vh_fuzz_vhf1`
   (`-Dfuzz=true`, clang; see testing.md).
 - **Encrypted manifest v2** (`sync::manifest`, `core/include/sync/manifest/`; #368, spec

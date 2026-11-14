@@ -6,6 +6,7 @@
 
 #include "../helpers/bytes.hpp"
 #include "crypto/ScratchFile.hpp"
+#include "crypto/SecretKey.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "fs/PlaintextSource.hpp"
 #include "fs/model/File.hpp"

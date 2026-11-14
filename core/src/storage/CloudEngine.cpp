@@ -1,4 +1,5 @@
 #include "storage/CloudEngine.hpp"
+#include "crypto/SecretKey.hpp"
 #include "storage/s3/ManifestStore.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "storage/s3/Controller.hpp"

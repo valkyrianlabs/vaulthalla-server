@@ -61,7 +61,7 @@ std::string text(const nlohmann::json& j, const char* key) {
 
 [[noreturn]] void unreachable(const vh::cloud::Reply& r) { throw Refused("cloud_unreachable", r.error); }
 
-crypto::SecretBytes seedOrThrow() {
+vl::keykit::SecretBytes seedOrThrow() {
     auto seed = vh::cloud::identity::load();
     if (!seed) throw Refused("cloud_identity_lost", "this server's Vaulthalla Cloud identity key is gone or no longer "
                                                     "unseals; run `vh cloud unlink --force`, then link again");

@@ -1,4 +1,6 @@
 #include "recovery/provider/Restore.hpp"
+#include "crypto/SecretKey.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "recovery/local/Backlog.hpp"
 #include "recovery/local/Versions.hpp"
 

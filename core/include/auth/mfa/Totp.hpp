@@ -24,7 +24,7 @@ inline constexpr int64_t kPeriodSeconds = 30;
 inline constexpr int64_t kWindowSteps = 1;  // the step before and after the current one are accepted too
 
 // A fresh seed from libsodium's CSPRNG, in locked memory.
-[[nodiscard]] crypto::SecretBytes generateSecret();
+[[nodiscard]] vl::keykit::SecretBytes generateSecret();
 
 // The clock codes are checked against (Factors.hpp's default `now`): the system clock, plus what a test moved it by.
 [[nodiscard]] std::chrono::system_clock::time_point now();

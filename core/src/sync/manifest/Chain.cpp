@@ -2,7 +2,7 @@
 
 #include "sync/manifest/Objects.hpp"
 
-#include <fmt/format.h>
+#include <format>
 
 #include <array>
 #include <utility>
@@ -44,8 +44,8 @@ std::optional<ChainError> chainErrorFromName(const std::string_view name) {
 
 ChainRejected::ChainRejected(const ChainError code, const std::string& detail, const uint64_t epoch,
                              std::string rootSha256)
-    : std::runtime_error(detail.empty() ? fmt::format("manifest {}", chainErrorName(code))
-                                        : fmt::format("manifest {}: {}", chainErrorName(code), detail)),
+    : std::runtime_error(detail.empty() ? std::format("manifest {}", chainErrorName(code))
+                                        : std::format("manifest {}: {}", chainErrorName(code), detail)),
       code_(code), epoch_(epoch), rootSha256_(std::move(rootSha256)) {}
 
 Acceptance checkChain(const RootDocument& root, const std::string& rootSha256, const std::optional<Known>& known,
@@ -55,17 +55,17 @@ Acceptance checkChain(const RootDocument& root, const std::string& rootSha256, c
 
     if (root.epoch < known->epoch)
         throw ChainRejected(ChainError::Rollback,
-                            fmt::format("epoch {} is older than the known epoch {}", root.epoch, known->epoch),
+                            std::format("epoch {} is older than the known epoch {}", root.epoch, known->epoch),
                             root.epoch, rootSha256);
     if (root.epoch == known->epoch) {
         if (rootSha256 != known->root_sha256)
-            throw ChainRejected(ChainError::Fork, fmt::format("another root at the known epoch {}", root.epoch),
+            throw ChainRejected(ChainError::Fork, std::format("another root at the known epoch {}", root.epoch),
                                 root.epoch, rootSha256);
         return out;
     }
     if (root.epoch == known->epoch + 1) {
         if (root.prev != known->root_sha256)
-            throw ChainRejected(ChainError::Fork, fmt::format("epoch {} does not follow the known root", root.epoch),
+            throw ChainRejected(ChainError::Fork, std::format("epoch {} does not follow the known root", root.epoch),
                                 root.epoch, rootSha256);
         return out;
     }
@@ -82,7 +82,7 @@ Acceptance checkChain(const RootDocument& root, const std::string& rootSha256, c
     if (epoch == known->epoch + 1) {
         if (prev != known->root_sha256)
             throw ChainRejected(ChainError::Fork,
-                                fmt::format("the chain from epoch {} reaches epoch {} through another root", root.epoch,
+                                std::format("the chain from epoch {} reaches epoch {} through another root", root.epoch,
                                             known->epoch),
                                 root.epoch, rootSha256);
         return out;

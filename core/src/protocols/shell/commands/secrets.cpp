@@ -164,11 +164,11 @@ static std::optional<nlohmann::json> getMfaKey(const std::string& name, const ch
     auto value = secrets->getSecret(key);
     if (!value) return std::nullopt;
     std::vector<uint8_t> bytes(value->begin(), value->end());
-    vh::crypto::wipeSecret(*value);
+    vl::keykit::wipe(*value);
     auto encoded = vh::crypto::util::b64_encode(bytes);
-    vh::crypto::wipeSecret(bytes);
+    vl::keykit::wipe(bytes);
     nlohmann::json out{{"name", name}, {"encoding", "base64"}, {"secret", encoded}};
-    vh::crypto::wipeSecret(encoded);
+    vl::keykit::wipe(encoded);
     return out;
 }
 
@@ -301,9 +301,9 @@ static CommandResult handle_mfa_key_import(const CommandCall& call, const std::s
             return invalid(err + ": the entry is not a base64 export");
         auto encoded = (*entry)["secret"].get<std::string>();
         key = vh::crypto::util::b64_decode(encoded);
-        vh::crypto::wipeSecret(encoded);
+        vl::keykit::wipe(encoded);
     } catch (const std::exception&) {
-        vh::crypto::wipeSecret(key);
+        vl::keykit::wipe(key);
         return invalid(err + ": the file is not a `vh secret export` file (JSON with a base64 secret)");
     }
 
@@ -316,7 +316,7 @@ static CommandResult handle_mfa_key_import(const CommandCall& call, const std::s
                                    : std::string("it reproduced a stored recovery code hash"),
                               seal ? "TOTP factors" : "Recovery codes"));
     });
-    vh::crypto::wipeSecret(key);
+    vl::keykit::wipe(key);
     return result;
 }
 

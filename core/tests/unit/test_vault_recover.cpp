@@ -20,6 +20,8 @@
 #include "cloud/Identity.hpp"
 #include "cloud/Signing.hpp"
 #include "config/Registry.hpp"
+#include "crypto/SecretKey.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "db/query/fs/File.hpp"
@@ -407,7 +409,7 @@ protected:
             txn.exec("UPDATE device_node SET node_id = gen_random_uuid()::text");
         });
         crypto::secrets::KeyProvider provider(paths::testMode ? "test_key_attest" : "key_attest");
-        const auto fresh = crypto::SecretBytes::random(32);
+        const auto fresh = vl::keykit::SecretBytes::random(32);
         provider.updateMasterKey(fresh.bytes());
         vault::attestation::resetForTesting();
     }
@@ -746,7 +748,7 @@ TEST_F(VaultRecoverDb, AWrongSeedOrAnotherVaultsKitIsRefused) {
     becomeAnotherNode(o.id);
     // A kit for another vault.
     auto other = kit;
-    other["vaults"][0]["vault_uid"] = crypto::id::toBase32(crypto::id::newObjectUid());
+    other["vaults"][0]["vault_uid"] = vl::keykit::toBase32(crypto::id::newObjectUid());
     EXPECT_EQ(code([&] { return recover(o, &other, nullptr); }), "kit_vault_mismatch");
     // The right vault, another seed.
     auto wrongSeed = kit;
@@ -893,7 +895,7 @@ protected:
                 keys_[u.key_version] = Bytes(u.key.bytes().begin(), u.key.bytes().end());
             } catch (const vl::keykit::kev1::Error&) {}
         }
-        vaultUid_ = crypto::id::toBase32(o.uid);
+        vaultUid_ = vl::keykit::toBase32(o.uid);
     }
 
     storage::s3::curl::http::Response cloud(const storage::s3::curl::http::Request& r) {

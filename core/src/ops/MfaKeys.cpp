@@ -45,7 +45,7 @@ bool currentKeyReadable(const crypto::secrets::Manager& secrets, const Key key) 
         auto stored = secrets.getSecret(rowName(key));
         if (!stored) return false;
         const bool usable = stored->size() == mk::kKeyBytes;
-        crypto::wipeSecret(*stored);
+        vl::keykit::wipe(*stored);
         return usable;
     } catch (const std::exception&) {
         return false;
@@ -179,15 +179,15 @@ ImportResult import(const Actor& actor, const Key which, const std::span<const u
         try {
             secrets.setSecret(rowName(which), text);
         } catch (...) {
-            crypto::wipeSecret(text);
+            vl::keykit::wipe(text);
             throw;
         }
-        crypto::wipeSecret(text);
+        vl::keykit::wipe(text);
         auto back = secrets.getSecret(rowName(which));
         const bool same = back && back->size() == key.size() &&
                           std::equal(back->begin(), back->end(), key.begin(),
                                      [](const char a, const uint8_t b) { return static_cast<uint8_t>(a) == b; });
-        if (back) crypto::wipeSecret(*back);
+        if (back) vl::keykit::wipe(*back);
         if (!same) throw std::runtime_error(name + " did not read back identically after sealing");
         mk::resetForTesting();  // drop the cached (failed or older) state; the next use reads the adopted row
 

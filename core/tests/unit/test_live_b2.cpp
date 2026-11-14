@@ -270,7 +270,7 @@ TEST_F(LiveB2, TheManifestPublishesAsVersionsOfItsRoot) {
 
     // (6) A recovery envelope (named by its own hash) is written without a condition and read back.
     {
-        const auto envelopeKey = std::string(".vaulthalla/key/") + crypto::id::toBase32(crypto::id::newObjectUid());
+        const auto envelopeKey = std::string(".vaulthalla/key/") + vl::keykit::toBase32(crypto::id::newObjectUid());
         const std::vector<uint8_t> envelope{0x89, 'V', 'H', 'K', 0x01, 0x02, 0x03};
         (void)s3->putOnce(envelopeKey, envelope);
         const auto back = s3->get(envelopeKey, std::nullopt);

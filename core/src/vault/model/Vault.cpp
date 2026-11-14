@@ -214,7 +214,7 @@ std::string vh::vault::model::to_string(const Vault& v) {
     out += "ID: " + std::to_string(v.id) + "\n";
     out += "Owner ID: " + std::to_string(v.owner_id) + "\n";
     out += "Type: " + to_string(v.type) + "\n";
-    if (v.uid) out += "Vault UID: " + vh::crypto::id::toBase32(*v.uid) + "\n";
+    if (v.uid) out += "Vault UID: " + vl::keykit::toBase32(*v.uid) + "\n";
     if (const auto* s3 = dynamic_cast<const S3Vault*>(&v)) {
         out += "API Key ID: " + std::to_string(s3->api_key_id) + "\n";
         out += "Bucket: " + s3->bucket + "\n";

@@ -1,5 +1,6 @@
 #include "vault/PrefixSealer.hpp"
 
+#include "crypto/id/ObjectUid.hpp"
 #include "crypto/vhf1/Reader.hpp"
 #include "storage/PlaintextReader.hpp"
 

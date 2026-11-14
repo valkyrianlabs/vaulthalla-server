@@ -10,6 +10,7 @@
 //                    keeps its object uid.
 
 #include "../helpers/db_suite.hpp"
+#include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "db/query/sync/Manifest.hpp"
 #include "notifications/OperatorNotificationBus.hpp"
@@ -46,7 +47,7 @@ std::string storageName() {
     return text;
 }
 
-std::string uuidOf(const std::string& b32) { return crypto::id::toUuid(*crypto::id::fromBase32(b32)); }
+std::string uuidOf(const std::string& b32) { return crypto::id::toUuid(*vl::keykit::fromBase32(b32)); }
 
 std::vector<uint8_t> keyBytes(const uint8_t seed) {
     std::vector<uint8_t> k(32);
@@ -366,7 +367,7 @@ TEST_F(ManifestDbTest, ContentRoundTripsDatabaseToBucketToScratchSchema) {
                                        "AND object_key LIKE 'o/%' AND object_key NOT IN (SELECT key FROM keys_)",
                                        pqxx::params{vaultId})) {
             const auto key = row[0].as<std::string>();
-            if (const auto uid = crypto::id::fromBase32(key.substr(2)))
+            if (const auto uid = vl::keykit::fromBase32(key.substr(2)))
                 txn.exec("INSERT INTO keys_ VALUES ($1::uuid, $2)", pqxx::params{crypto::id::toUuid(*uid), key});
         }
         loadScratch(txn, s, loaded.content);
@@ -395,7 +396,7 @@ TEST_F(ManifestDbTest, UidsAreAssignedOnceAndTrashKeepsTheObjectUid) {
     const auto first = db::query::sync::Manifest::collect(vaultId);
     const auto second = db::query::sync::Manifest::collect(vaultId);
     EXPECT_EQ(first.entries, second.entries);
-    for (const auto& e : first.entries) { EXPECT_TRUE(crypto::id::fromBase32(e.uid)) << e.name; }
+    for (const auto& e : first.entries) { EXPECT_TRUE(vl::keykit::fromBase32(e.uid)) << e.name; }
 
     fs::Filesystem::remove(engine->vaultPathToFusePath("/A/f.txt"), superUser->id);
     const auto after = db::query::sync::Manifest::collect(vaultId);
