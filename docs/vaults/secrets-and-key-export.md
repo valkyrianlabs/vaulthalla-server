@@ -132,13 +132,15 @@ Recovery stays under your control. The server only ever receives the public key;
 
    It writes the kit (mode `0600`, never over an existing file) and prints its public key. Keep the kit offline or in your password manager: anyone holding it can decrypt the vaults it serves. One kit can serve many vaults.
 
-2. **Enroll the public key on each S3 vault:**
+2. **Enroll the public key on each vault:**
 
    ```bash
    vh vault keys recipient add photos --public-key 9jB0b7LvRAo3+fTz//m8OhJQkp39Kcd1PjiFpjtmrTs= --label "Kit 2026-11"
    ```
 
    Every key version the vault holds is wrapped right away. A later rotation writes the new version's envelope before the new key encrypts anything; if the bucket can't be reached, the rotation doesn't start.
+
+   A local vault has no bucket, so its envelopes are kept in the server's database instead. They restore the vault's keys on this host when its vault master is lost, and they are copied into the bucket when you [attach one](/vaults/s3-r2-vaults#attaching-a-bucket-to-a-local-vault). They don't replace a backup of a local vault: its files exist only on this server's disk.
 
 3. **Pin the vault in the kit**, so a restore on another server can verify the keys were this server's:
 
@@ -156,7 +158,7 @@ Enrolling and revoking need the same permission as export and work from the loca
 
 ### Recovery Material Status
 
-A self-hosted S3 vault that encrypts its bucket needs recovery material that doesn't depend on this host: a recovery recipient whose envelopes cover every key version the vault still needs, or an export of its current key version. Without either, `vh vault keys status` reports `recovery: recovery_material_missing`, and `vh status` and the console's health turn **degraded** and name the vault. A key rotation makes an earlier export stale. Local vaults keep the export guidance above.
+A self-hosted S3 vault that encrypts its bucket needs recovery material that doesn't depend on this host: a recovery recipient whose envelopes cover every key version the vault still needs, or an export of its current key version. Without either, `vh vault keys status` reports `recovery: recovery_material_missing`, and `vh status` and the console's health turn **degraded** and name the vault. A key rotation makes an earlier export stale. Local vaults keep the export guidance above; attaching a bucket to one asks for the same recovery material first.
 
 ### Recover Keys With A Recovery Kit
 
