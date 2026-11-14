@@ -418,7 +418,7 @@ TEST_F(RemoteAttachTest, RemoteAttachEveryPreconditionRefusesWithNothingWritten)
 // A crash after each named step leaves a state the next run continues from; the outcome is the same vault either way.
 TEST_F(RemoteAttachTest, RemoteAttachResumesAfterACrashAtEveryStep) {
     for (const std::string step : {"prepared", "item:", "uploaded", "listed", "sampled", "published", "verified",
-                                   "cutover", "swapped"}) {
+                                   "staged", "cutover", "swapped"}) {
         SCOPED_TRACE(step);
         auto v = localVault();
         v.engine->mkdir("/d", superUser);
@@ -437,7 +437,7 @@ TEST_F(RemoteAttachTest, RemoteAttachResumesAfterACrashAtEveryStep) {
         };
         EXPECT_THROW((void)ra::run(v.id(), crashing), Crash);
         ASSERT_TRUE(crashed);
-        const bool cutOver = step == "cutover" || step == "swapped";
+        const bool cutOver = step == "cutover" || step == "swapped";   // "staged" is before the transaction
         EXPECT_EQ(typeOf(v), cutOver ? "s3" : "local");
         EXPECT_EQ(readLocal(v, "/two.txt"), std::string(70'000, '2')) << "the vault stays readable";
 
@@ -714,6 +714,45 @@ TEST_F(RemoteAttachTest, RemoteAttachCopiesALocalVaultsRecoveryEnvelopesIntoTheB
     ASSERT_EQ(after.size(), 1u);
     EXPECT_TRUE(after[0].bytes.empty()) << "the bucket holds it now";
     EXPECT_EQ(vault::envelopes::material(v.id()).state, std::string(vault::envelopes::kMaterialRecipient));
+}
+
+// A recipient enrolled after the envelopes were staged and before the cutover: its envelope exists only in the
+// database, so the cutover refuses instead of clearing it. The vault stays local with the bytes intact, the attach is
+// not failed, and the next run stages, verifies and cuts over with the envelope in the bucket.
+TEST_F(RemoteAttachTest, RemoteAttachNeverDropsAnEnvelopeEnrolledJustBeforeTheCutover) {
+    auto v = localVault();
+    write(v, "/a.txt", "alpha");
+    (void)start(v);
+    const auto seed = vl::keykit::RecoverySeed::generate();
+    auto d = deps(v);
+    bool enrolled = false;
+    d.afterStep = [&](const std::string_view at) {
+        if (at != "staged" || enrolled) return;
+        enrolled = true;
+        (void)ops::recovery_recipients::add(
+            superUser, {.vault_id = v.id(), .public_key = crypto::util::b64_encode(seed.x25519PublicKey()),
+                        .label = std::string("Late kit")},
+            ops::vault_keys::Channel::Cli);
+    };
+    const auto first = ra::run(v.id(), d);
+    ASSERT_TRUE(enrolled);
+    EXPECT_EQ(first.state, ra::State::Preparing) << first.error.value_or("");
+    EXPECT_EQ(rowOf(v).state, ra::State::Preparing) << "not failed: picked up by the next run";
+    EXPECT_FALSE(rowOf(v).verified_at);
+    EXPECT_EQ(typeOf(v), "local");
+    const auto held = Q::envelopes(v.id());
+    ASSERT_EQ(held.size(), 1u);
+    ASSERT_FALSE(held[0].bytes.empty()) << "the only copy was not cleared";
+    EXPECT_FALSE(v.bucket->current(vl::keykit::kev1::objectKey(held[0].kid)));
+
+    EXPECT_EQ(ra::run(v.id(), deps(v)).state, ra::State::Done);
+    const auto object = v.bucket->current(vl::keykit::kev1::objectKey(held[0].kid));
+    ASSERT_TRUE(object);
+    EXPECT_EQ(object->body, held[0].bytes);
+    const auto after = Q::envelopes(v.id());
+    ASSERT_EQ(after.size(), 1u);
+    EXPECT_TRUE(after[0].bytes.empty());
+    EXPECT_EQ(typeOf(v), "s3");
 }
 
 // A key rotation asked for while the attach runs is queued, never started: a new key version must not seal content

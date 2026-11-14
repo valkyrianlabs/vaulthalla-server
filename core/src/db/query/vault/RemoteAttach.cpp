@@ -420,6 +420,13 @@ void RemoteAttach::storeEnvelopeBytes(const uint32_t vaultId, const std::string&
     });
 }
 
+void RemoteAttach::clearEnvelopeBytes(const uint32_t vaultId, const std::string& kid) {
+    Transactions::exec("RemoteAttach::clearEnvelopeBytes", [&](pqxx::work& txn) {
+        txn.exec("UPDATE vault_key_envelope SET envelope = NULL WHERE vault_id = $1 AND kid = $2",
+                 pqxx::params{vaultId, kid});
+    });
+}
+
 RemoteAttach::CutoverOutcome RemoteAttach::cutover(const uint32_t vaultId, const CutoverInput& input) {
     return Transactions::exec("RemoteAttach::cutover", [&](pqxx::work& txn) {
         CutoverOutcome out;
@@ -444,6 +451,17 @@ RemoteAttach::CutoverOutcome RemoteAttach::cutover(const uint32_t vaultId, const
         }
         if (attach[0][7].as<bool>()) {
             out.refused = "an abort was requested";
+            return out;
+        }
+        // Recovery material is never dropped unverified: an envelope whose only copy is its database row (enrolled
+        // or wrapped after the envelopes were staged) stops the cutover until it was staged and verified.
+        if (!txn.exec("SELECT 1 FROM vault_key_envelope e WHERE e.vault_id = $1 AND e.envelope IS NOT NULL "
+                      "AND NOT EXISTS (SELECT 1 FROM vault_remote_attach_item i WHERE i.vault_id = e.vault_id "
+                      "  AND i.kind = 'envelope' AND i.state = 'verified' "
+                      "  AND i.object_key = '.vaulthalla/key/' || e.kid) LIMIT 1",
+                      pqxx::params{vaultId}).empty()) {
+            out.refused = "a recovery envelope has no verified copy in the bucket yet";
+            out.envelopes_unstaged = true;
             return out;
         }
         if (attach[0][2].is_null() || attach[0][5].is_null() || attach[0][6].is_null()) {
@@ -542,7 +560,11 @@ RemoteAttach::CutoverOutcome RemoteAttach::cutover(const uint32_t vaultId, const
         sync::Manifest::recordRoot(txn, vaultId, input.root);
 
         // The envelopes live in the bucket from here on, as for every S3 vault (their rows stay: the manifest names them).
-        txn.exec("UPDATE vault_key_envelope SET envelope = NULL WHERE vault_id = $1 AND envelope IS NOT NULL",
+        // Only rows with a verified copy there: one that committed after the check above keeps its bytes (the
+        // attach copies it into the bucket right after the cutover).
+        txn.exec("UPDATE vault_key_envelope e SET envelope = NULL WHERE e.vault_id = $1 AND e.envelope IS NOT NULL "
+                 "AND EXISTS (SELECT 1 FROM vault_remote_attach_item i WHERE i.vault_id = e.vault_id "
+                 "  AND i.kind = 'envelope' AND i.state = 'verified' AND i.object_key = '.vaulthalla/key/' || e.kid)",
                  pqxx::params{vaultId});
 
         // A gateway bucket on an S3 vault is a remote_cache bucket (ops::s3_gateway).

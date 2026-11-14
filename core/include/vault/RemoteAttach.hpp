@@ -192,7 +192,7 @@ struct RunDeps {
     std::function<void(const PricePreflight&, Estimate&)> pricePreflight;
     std::function<bool()> stop;                                   // optional: the service is stopping
     // Test seam, optional: called after each named step ("prepared", "item:<id>", "uploaded", "pass:<n>", "listed",
-    // "sampled", "published", "verified", "cutover", "swapped"); throwing from it leaves the state a crash there would.
+    // "sampled", "published", "verified", "staged", "cutover", "swapped"); throwing from it leaves the state a crash there would.
     std::function<void(std::string_view step)> afterStep;
     // After the cutover committed: the vault's engine rebuilt from its row (a CloudEngine now) and the sync task
     // replaced. Default: storage::Manager::reloadEngine + sync::Controller::refreshEngines.

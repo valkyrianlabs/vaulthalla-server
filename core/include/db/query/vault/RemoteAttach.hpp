@@ -98,6 +98,7 @@ public:
     [[nodiscard]] static std::vector<StoredEnvelope> envelopes(uint32_t vaultId);
     [[nodiscard]] static std::optional<std::vector<uint8_t>> envelopeBytes(uint32_t vaultId, const std::string& kid);
     static void storeEnvelopeBytes(uint32_t vaultId, const std::string& kid, const std::vector<uint8_t>& bytes);
+    static void clearEnvelopeBytes(uint32_t vaultId, const std::string& kid);
 
     // ---- the cutover
     struct CutoverFile {
@@ -128,11 +129,15 @@ public:
         std::string refused;             // why not: nothing was changed
         uint64_t indexed{}, orphans{};
         bool gateway_flipped{false};
+        // A recovery envelope the database still holds has no verified copy in the bucket (a recipient enrolled, or
+        // a key version wrapped, after the envelopes were staged): the caller stages and verifies again.
+        bool envelopes_unstaged{false};
     };
     // One transaction, the vault's row locked: still a live local vault whose attach is verifying and verified, the
     // (key, bucket) free; then vault.type = 's3', the s3 row (encrypting, opaque_v1, the probe), fsync -> rsync keeping
     // interval and enabled, the remote index and baselines of every verified item whose file still exists (the others
-    // become orphans), the manifest's chain position, the envelope bytes cleared (the bucket holds them now), a
+    // become orphans), the manifest's chain position, the bytes of every envelope with a verified copy in the bucket cleared (refused
+    // while one has none), a
     // gateway binding local -> remote_cache, the bucket row bound, and the attach row cutover.
     [[nodiscard]] static CutoverOutcome cutover(uint32_t vaultId, const CutoverInput& input);
 

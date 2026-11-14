@@ -1310,6 +1310,29 @@ void finishCutover(const uint32_t vaultId, const RunDeps& deps, RunResult& resul
                 }
             }
 
+            // An envelope that committed inside the cutover's own window still has its bytes in the database and
+            // no copy in the bucket: copied there now, read back, and only then cleared.
+            if (const auto held = Q::envelopes(vaultId);
+                std::ranges::any_of(held, [](const Q::StoredEnvelope& e) { return !e.bytes.empty(); })) {
+                if (!row->api_key_id) throw std::runtime_error("the API key no longer exists");
+                const auto mode = row->manifest_publish == std::optional<std::string>("version_log")
+                    ? storage::s3::WriteCapability::VersionLog : storage::s3::WriteCapability::Conditional;
+                mf::S3Store store(controllerFor(vaultId, *row->api_key_id, row->bucket), mode);
+                for (const auto& e : held) {
+                    if (e.bytes.empty()) continue;
+                    const auto objectKey = kev1::objectKey(e.kid);
+                    try {
+                        (void)store.putOnce(objectKey, e.bytes);
+                    } catch (const mf::PreconditionFailed&) {
+                        // The name is the envelope's hash: what is there is compared below.
+                    }
+                    const auto stored = store.get(objectKey, std::nullopt);
+                    if (!stored || stored->bytes != e.bytes)
+                        throw std::runtime_error("the recovery envelope " + e.kid + " did not reach the bucket");
+                    Q::clearEnvelopeBytes(vaultId, e.kid);
+                }
+            }
+
             // Orphans: objects of files deleted between their upload and the cutover. Before any sync pass can list them.
             uint64_t failed = 0;
             std::string firstError;
@@ -1589,8 +1612,17 @@ RunResult run(const uint32_t vaultId, const RunDeps& deps) {
             result.state = State::Preparing;
             return result;
         }
+        ctx->step("staged");
         const auto in = d::cutoverInput(*ctx);
         const auto outcome = d::Q::cutover(vaultId, in);
+        if (!outcome.done && outcome.envelopes_unstaged) {
+            // A recipient was enrolled (or a key version wrapped) after the envelopes were staged: nothing changed,
+            // and the next run stages and verifies it before cutting over.
+            d::Q::clearVerified(vaultId);
+            d::Q::setState(vaultId, State::Preparing);
+            result.state = State::Preparing;
+            return result;
+        }
         if (!outcome.done) throw d::RunFailed("cutover refused: " + outcome.refused);
         vh::audit::record({.action = "vault.remote.cutover", .outcome = vh::audit::Outcome::Success,
                            .actor_id = std::nullopt, .actor = "RemoteAttachService", .vault_id = vaultId,
