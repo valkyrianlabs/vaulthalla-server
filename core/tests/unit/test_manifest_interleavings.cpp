@@ -1,5 +1,8 @@
 // The version_log publish protocol (design/encryption/06-publish-without-preconditions.md §5) under interleavings and
-// faults (§8.2), DB-free, on the versioned fake bucket answering conditional PUTs as Backblaze B2 does (501).
+// faults (§8.2), DB-free, on a bucket answering conditional PUTs as Backblaze B2 does (501). Every test runs twice
+// (its name ends in the bucket): on the versioned fake bucket behind the server's storage::s3::ManifestStore
+// (HttpFake: the controller's request path, XML listings and paging), and on the in-memory versioned ObjectStore
+// (Memory: helpers/memory_store.hpp, nothing of the server), which the shared format library's own tests will use.
 //
 // ManifestVersionLogInterleavings  every interleaving of two writers and a reader; every root-PUT-level interleaving
 //                                   of three writers; seeded random schedules of three writers and a reader.
@@ -31,6 +34,7 @@
 // stray above it, every writer's changes in it.
 
 #include "../helpers/hooked_store.hpp"
+#include "../helpers/memory_store.hpp"
 #include "../helpers/versioned_bucket.hpp"
 #include "crypto/SecretKey.hpp"
 #include "storage/s3/ManifestStore.hpp"
@@ -59,6 +63,8 @@ namespace interleaving_fixture {
 
 using Bytes = std::vector<uint8_t>;
 using test_support::manifest_store::HookedStore;
+using test_support::manifest_store::MemoryBucket;
+using test_support::manifest_store::MemoryStore;
 using test_support::manifest_store::StoreOp;
 using test_support::versioned::VersionedBucket;
 using test_support::versioned::Versioning;
@@ -142,6 +148,88 @@ struct FaultPlan {
 // the faulty actor's and only the others' PUTs (a fault at every step of one actor, raced at the PUT level).
 enum class Gating { RootOps, RootPutsOnly, FaultyActorFull };
 
+// The bucket a run happens on, as the scheduler and the invariants need it: both implementations keep versions, answer
+// a conditional PUT with "not implemented" and use MD5 ETags.
+enum class Backend { HttpFake, Memory };
+
+class Bucket {
+public:
+    struct Version {
+        std::string version_id;
+        bool delete_marker{};
+        Bytes body;
+    };
+
+    virtual ~Bucket() = default;
+    // A version_log store over the bucket (one per actor).
+    [[nodiscard]] virtual std::shared_ptr<ObjectStore> store() = 0;
+    virtual void setNow(std::time_t now) = 0;
+    virtual void advance(std::time_t seconds) = 0;
+    virtual void listingLag(std::time_t seconds) = 0;   // breaks A3
+    virtual void orderByStart() = 0;                    // with holdPut: breaks A4
+    virtual void holdPut(const std::string& key) = 0;
+    // Writes a version as a PUT would; its version id.
+    virtual std::string seed(const std::string& key, const Bytes& body) = 0;
+    // Newest first.
+    [[nodiscard]] virtual std::vector<Version> history(const std::string& key) const = 0;
+    // The key's newest version is an object (not a delete marker).
+    [[nodiscard]] virtual bool holds(const std::string& key) const = 0;
+};
+
+class HttpFakeBucket final : public Bucket {
+public:
+    HttpFakeBucket() {
+        bucket_->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+        bucket_->md5Etags = true;
+    }
+    std::shared_ptr<ObjectStore> store() override {
+        return std::make_shared<storage::s3::ManifestStore>(bucket_, WriteCapability::VersionLog);
+    }
+    void setNow(const std::time_t now) override { bucket_->setNow(now); }
+    void advance(const std::time_t seconds) override { bucket_->advance(seconds); }
+    void listingLag(const std::time_t seconds) override { bucket_->listingLag(seconds); }
+    void orderByStart() override { bucket_->orderBy(VersionedBucket::Order::Start); }
+    void holdPut(const std::string& key) override { bucket_->holdPut(key); }
+    std::string seed(const std::string& key, const Bytes& body) override { return bucket_->seed(key, body); }
+    std::vector<Version> history(const std::string& key) const override {
+        std::vector<Version> out;
+        for (auto& v : bucket_->history(key)) out.push_back({v.version_id, v.delete_marker, std::move(v.body)});
+        return out;
+    }
+    bool holds(const std::string& key) const override { return bucket_->current(key).has_value(); }
+
+private:
+    std::shared_ptr<VersionedBucket> bucket_ = std::make_shared<VersionedBucket>(Versioning::Enabled);
+};
+
+class MemoryBackedBucket final : public Bucket {
+public:
+    MemoryBackedBucket() { bucket_->conditionalPuts(MemoryBucket::ConditionalPuts::Reject); }
+    std::shared_ptr<ObjectStore> store() override {
+        return std::make_shared<MemoryStore>(bucket_, WriteCapability::VersionLog);
+    }
+    void setNow(const std::time_t now) override { bucket_->setNow(now); }
+    void advance(const std::time_t seconds) override { bucket_->advance(seconds); }
+    void listingLag(const std::time_t seconds) override { bucket_->listingLag(seconds); }
+    void orderByStart() override { bucket_->orderBy(MemoryBucket::Order::Start); }
+    void holdPut(const std::string& key) override { bucket_->holdPut(key); }
+    std::string seed(const std::string& key, const Bytes& body) override { return bucket_->seed(key, body); }
+    std::vector<Version> history(const std::string& key) const override {
+        std::vector<Version> out;
+        for (auto& v : bucket_->history(key)) out.push_back({v.version_id, v.delete_marker, std::move(v.body)});
+        return out;
+    }
+    bool holds(const std::string& key) const override { return bucket_->current(key).has_value(); }
+
+private:
+    std::shared_ptr<MemoryBucket> bucket_ = std::make_shared<MemoryBucket>();
+};
+
+std::shared_ptr<Bucket> bucketOf(const Backend backend) {
+    if (backend == Backend::Memory) return std::make_shared<MemoryBackedBucket>();
+    return std::make_shared<HttpFakeBucket>();
+}
+
 struct Scenario {
     std::size_t writers{2};
     bool reader{true};
@@ -149,11 +237,19 @@ struct Scenario {
     FaultPlan fault{};
     std::time_t listing_lag{0};
     bool order_by_start{false};
+    Backend backend{Backend::HttpFake};
 };
+
+Scenario on(const Backend backend, Scenario sc) {
+    sc.backend = backend;
+    return sc;
+}
 
 // The world one run shares.
 struct World {
-    std::shared_ptr<VersionedBucket> bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
+    explicit World(const Backend backend) : bucket(bucketOf(backend)) {}
+
+    std::shared_ptr<Bucket> bucket;
     Uid vault = [] {
         Uid u{};
         u.fill(0x48);
@@ -169,9 +265,7 @@ struct World {
         };
     }
     [[nodiscard]] SealingKey sealing() const { return {1, keys.at(1)}; }
-    [[nodiscard]] std::shared_ptr<ObjectStore> plainStore() const {
-        return std::make_shared<storage::s3::ManifestStore>(bucket, WriteCapability::VersionLog);
-    }
+    [[nodiscard]] std::shared_ptr<ObjectStore> plainStore() const { return bucket->store(); }
 
     // Written by actors (one runs at a time), read by the controller while every actor is parked.
     std::set<std::string> deleted;           // root versions Vaulthalla deleted
@@ -363,7 +457,7 @@ struct RunReport {
 
 class Run {
 public:
-    Run(const Scenario& sc, Chooser choose) : sc_(sc), choose_(std::move(choose)) {}
+    Run(const Scenario& sc, Chooser choose) : sc_(sc), choose_(std::move(choose)), world_(sc.backend) {}
 
     RunReport go() {
         setUp();
@@ -405,8 +499,6 @@ public:
 
 private:
     void setUp() {
-        world_.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
-        world_.bucket->md5Etags = true;
         world_.bucket->setNow(kStart);
         // Node 0 published the genesis; a key holder then named every writer (the mirror join, not built here).
         auto store = world_.plainStore();
@@ -436,7 +528,7 @@ private:
         reader_.anchor = base;
         world_.bucket->advance(60);   // the setup is long settled: every listing shows it, however it lags
         if (sc_.listing_lag) world_.bucket->listingLag(sc_.listing_lag);
-        if (sc_.order_by_start) world_.bucket->orderBy(VersionedBucket::Order::Start);
+        if (sc_.order_by_start) world_.bucket->orderByStart();
         prevChain_ = truthOf(world_, opened_).chain;
         everCanonical_.insert(prevChain_.begin(), prevChain_.end());
     }
@@ -563,7 +655,7 @@ private:
         const auto t = truthOf(world_, opened_);
         for (const auto& [id, root] : t.roots) {
             for (const auto& s : root.first.segments)
-                if (!world_.bucket->current(segmentKey(s.sid))) violation("I1: root " + id + " names a missing segment");
+                if (!world_.bucket->holds(segmentKey(s.sid))) violation("I1: root " + id + " names a missing segment");
             if (root.first.publish != std::string(kPublishVersionLog)) violation("I9: root " + id + " names another mode");
         }
         const bool prefix = t.chain.size() >= prevChain_.size() &&
@@ -736,7 +828,8 @@ void tally(Explored& e, const RunReport& r, const std::string& label) {
 
 constexpr unsigned kRunCap = 20000;   // a tree larger than this fails the test instead of running for minutes
 
-Explored exhaust(const Scenario& sc, const std::string& label) {
+Explored exhaust(const Backend backend, const Scenario& scenario, const std::string& label) {
+    const auto sc = on(backend, scenario);
     Explored e;
     Dfs dfs;
     do {
@@ -748,7 +841,8 @@ Explored exhaust(const Scenario& sc, const std::string& label) {
     return e;
 }
 
-Explored sample(const Scenario& sc, const unsigned seeds, const std::string& label) {
+Explored sample(const Backend backend, const Scenario& scenario, const unsigned seeds, const std::string& label) {
+    const auto sc = on(backend, scenario);
     Explored e;
     for (unsigned seed = 1; seed <= seeds; ++seed) {
         std::mt19937 rng(seed);
@@ -770,8 +864,24 @@ void expectClean(const Explored& e) {
 
 namespace f = interleaving_fixture;
 
-TEST(ManifestVersionLogInterleavings, EveryInterleavingOfTwoWritersAndAReader) {
-    const auto e = f::exhaust({}, "2w+r");
+// Each suite on both buckets; a test is named <suite>.<test>/HttpFake or /Memory.
+class ManifestVersionLogInterleavings : public ::testing::TestWithParam<f::Backend> {};
+class ManifestVersionLogFaults : public ::testing::TestWithParam<f::Backend> {};
+class ManifestVersionLogBrokenOrder : public ::testing::TestWithParam<f::Backend> {};
+
+std::string backendName(const ::testing::TestParamInfo<f::Backend>& info) {
+    return info.param == f::Backend::Memory ? "Memory" : "HttpFake";
+}
+
+INSTANTIATE_TEST_SUITE_P(, ManifestVersionLogInterleavings, ::testing::Values(f::Backend::HttpFake, f::Backend::Memory),
+                         backendName);
+INSTANTIATE_TEST_SUITE_P(, ManifestVersionLogFaults, ::testing::Values(f::Backend::HttpFake, f::Backend::Memory),
+                         backendName);
+INSTANTIATE_TEST_SUITE_P(, ManifestVersionLogBrokenOrder, ::testing::Values(f::Backend::HttpFake, f::Backend::Memory),
+                         backendName);
+
+TEST_P(ManifestVersionLogInterleavings, EveryInterleavingOfTwoWritersAndAReader) {
+    const auto e = f::exhaust(GetParam(), {}, "2w+r");
     f::expectClean(e);
     // Both orders of the race occur, and some runs make a writer lose a round and merge.
     EXPECT_GT(e.runs, 50u);
@@ -780,20 +890,20 @@ TEST(ManifestVersionLogInterleavings, EveryInterleavingOfTwoWritersAndAReader) {
     RecordProperty("lost_round_runs", static_cast<int>(e.with_lost_round));
 }
 
-TEST(ManifestVersionLogInterleavings, EveryRootPutLevelInterleavingOfThreeWriters) {
-    const auto e = f::exhaust({.writers = 3, .reader = false, .gating = f::Gating::RootPutsOnly}, "3w puts");
+TEST_P(ManifestVersionLogInterleavings, EveryRootPutLevelInterleavingOfThreeWriters) {
+    const auto e = f::exhaust(GetParam(), {.writers = 3, .reader = false, .gating = f::Gating::RootPutsOnly}, "3w puts");
     f::expectClean(e);
     EXPECT_GT(e.with_lost_round, 0u);
     RecordProperty("runs", static_cast<int>(e.runs));
 }
 
-TEST(ManifestVersionLogInterleavings, SeededRandomSchedulesOfThreeWritersAndAReader) {
-    const auto e = f::sample({.writers = 3}, 200, "3w+r");
+TEST_P(ManifestVersionLogInterleavings, SeededRandomSchedulesOfThreeWritersAndAReader) {
+    const auto e = f::sample(GetParam(), {.writers = 3}, 200, "3w+r");
     f::expectClean(e);
     EXPECT_GT(e.with_lost_round, 0u);
 }
 
-TEST(ManifestVersionLogFaults, ACrashAtEveryStepRestartsFromTheDatabaseOnly) {
+TEST_P(ManifestVersionLogFaults, ACrashAtEveryStepRestartsFromTheDatabaseOnly) {
     // Writer 0 crashes before or after each of its root requests (8 cover a writer that loses a round) and restarts
     // from its database alone. Every interleaving with the other writer's PUTs, plus seeded schedules at every point.
     f::Explored all;
@@ -801,8 +911,8 @@ TEST(ManifestVersionLogFaults, ACrashAtEveryStepRestartsFromTheDatabaseOnly) {
         for (unsigned at = 0; at < 8; ++at) {
             const std::string label = std::string(kind == f::Fault::CrashBefore ? "crash before" : "crash after") +
                                       " point " + std::to_string(at);
-            for (const auto& e : {f::exhaust({.reader = false, .gating = f::Gating::FaultyActorFull, .fault = {0, at, kind}}, label),
-                                  f::sample({.reader = false, .fault = {0, at, kind}}, 30, label)}) {
+            for (const auto& e : {f::exhaust(GetParam(), {.reader = false, .gating = f::Gating::FaultyActorFull, .fault = {0, at, kind}}, label),
+                                  f::sample(GetParam(), {.reader = false, .fault = {0, at, kind}}, 30, label)}) {
                 f::expectClean(e);
                 all.runs += e.runs;
                 all.with_fault += e.with_fault;
@@ -816,11 +926,11 @@ TEST(ManifestVersionLogFaults, ACrashAtEveryStepRestartsFromTheDatabaseOnly) {
     RecordProperty("reverted_by_restart", static_cast<int>(all.reverted_by_restart));
 }
 
-TEST(ManifestVersionLogFaults, LostRepliesAndFailuresBeforeTheCommitAtEveryStep) {
+TEST_P(ManifestVersionLogFaults, LostRepliesAndFailuresBeforeTheCommitAtEveryStep) {
     f::Explored all;
     for (const auto kind : {f::Fault::LoseReply, f::Fault::FailBefore})
         for (unsigned at = 0; at < 8; ++at) {
-            const auto e = f::exhaust({.reader = false, .fault = {1, at, kind}},
+            const auto e = f::exhaust(GetParam(), {.reader = false, .fault = {1, at, kind}},
                                       std::string(kind == f::Fault::LoseReply ? "lost reply" : "fail before") +
                                           " point " + std::to_string(at));
             f::expectClean(e);
@@ -831,16 +941,16 @@ TEST(ManifestVersionLogFaults, LostRepliesAndFailuresBeforeTheCommitAtEveryStep)
     RecordProperty("runs", static_cast<int>(all.runs));
 }
 
-TEST(ManifestVersionLogBrokenOrder, ListingsThatLagKeepI3) {
+TEST_P(ManifestVersionLogBrokenOrder, ListingsThatLagKeepI3) {
     // The fake's lag hides the newest versions, so every listing is still a prefix of the order: a writer can miss its
     // own version (unsettled, published by the next pass) but never take a sibling for the successor.
-    const auto e = f::sample({.writers = 2, .listing_lag = 3}, 200, "lag");
+    const auto e = f::sample(GetParam(), {.writers = 2, .listing_lag = 3}, 200, "lag");
     f::expectClean(e);
     EXPECT_EQ(e.order_broken, 0u);
 }
 
-TEST(ManifestVersionLogBrokenOrder, VersionsOrderedByTheirStartKeepI3OrEndInOrderViolation) {
-    const auto e = f::sample({.writers = 2, .order_by_start = true}, 300, "order by start");
+TEST_P(ManifestVersionLogBrokenOrder, VersionsOrderedByTheirStartKeepI3OrEndInOrderViolation) {
+    const auto e = f::sample(GetParam(), {.writers = 2, .order_by_start = true}, 300, "order by start");
     f::expectClean(e);
     // Per run (expectClean): every root a writer settled or the reader adopted that left the chain was refused by its
     // holder at its next listing (order_violation, or fork once another writer's repair deleted it).
