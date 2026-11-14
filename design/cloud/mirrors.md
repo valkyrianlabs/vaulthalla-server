@@ -60,19 +60,28 @@ no local file names are counted as orphans, "left alone, never downloaded" (`Clo
 1. **Spec 06 on every replicated vault**, with `writers` listing the replicas. Multi-writer `version_log` buckets
    only once A3 and A4 are confirmed live.
 2. **A manifest applier, the core of the feature.** On every newly settled canonical root, a three-way merge into
-   the database, with the last applied root as base (`manifest_applied_epoch` and root hash, persisted, which also
-   gives a cold start its base):
+   the database (designed in issue #442), with the last applied root as base. The base is a local copy of that root
+   and its sealed segments plus an `applying` marker: the epoch and hash alone are not enough, because the bucket may
+   already have collected that root's versions and segments. That also gives a cold start its base:
    - new entries become remote-only files bound to `o/<uid>` (`cache` hydrates on open);
    - renames, moves, trash and purges are applied;
-   - key records, grants and snapshot records are applied;
+   - key records are checked, never applied, and a key version this server doesn't hold stalls the vault; snapshot
+     records are applied; recovery grants come only from the account's signed policy (item 4);
    - content changed on both sides goes through the existing conflict path under the vault's policy.
-   - Tree rules (proposal): an edit beats a delete; of two renames the later canonical root wins; a name clash in one
-     folder gets a `(conflict <server>)` suffix.
-   Publishing then always runs after applying, so `mergePending`'s "before" is the applied base.
+   - Tree rules (issue #442): an edit beats a delete, in both directions; for placement and attributes the head
+     wins and the undone change is reported ("later" is not defined against unpublished local changes); of two names
+     clashing in one folder the entry with the greater uid becomes `name (<uid[0..8]>)`, as `vault::recover::plan`
+     already does, so every server makes the same rename; a move that would close a directory cycle is not applied.
+   Publishing always runs after applying, and a publish that loses a round applies the head and publishes again
+   instead of merging in memory, so `mergePending`'s "before" is always the applied base and no published root holds
+   entries the database lacks.
 3. **Collision-free ids in the manifest.** Snapshot records keyed by a random uid. Key versions minted only by the
    rotation's owner (below).
-4. **Shared settings.** The root's `vault` and `recovery_policy` are applied like entries (the later canonical root
-   wins), not overwritten as "ours". Grants merge by `grant_id`.
+4. **Shared settings.** The root's `vault` settings are applied like entries (the head wins), not overwritten as
+   "ours". **Recovery grants are not merged between replicas** (decided, Cooper, 2026-11-14): one account-signed
+   recovery policy, carried in the root and served by the cloud, is verified by every replica against the account
+   key it pinned, and is the only thing that adds or revokes an account-managed grant (`key-manager.md`, "The
+   account's recovery policy"). The customer approves a recipient once, not once per server.
 5. **Refusals on a replicated vault:** the `mirror` strategy, layout migration (replicas must be `opaque_v1`), key
    salvage, and `vh vault recover --into` over the same uid.
 6. **Status:** the replica set, each writer's last root and time, and whether this server is behind.
@@ -136,7 +145,8 @@ replica; replicas on different providers; more than three replicas; a conflict-r
 2. **Multi-writer on B2 if A3/A4 fail live:** replicas refused on such buckets (spec 06 §10 Q2). No cloud arbiter.
 3. **Replica keys for rotation** (above) instead of a device ceremony per rotation. A KEV1 envelope of class `0`
    (customer-controlled: the customer's own server), kept outside `vault_recovery_grant`.
-4. **Tree conflict rules** as in "What the first version adds", item 2.
+4. **Tree conflict rules:** settled in issue #442 under the compatibility policy's rule 5, as listed in "What the
+   first version adds", item 2. Not an open question any more.
 5. **Conflict policy:** one per vault, carried in the root, `keep_local` by default as today. Under `keep_local` the
    server that syncs last wins, and the other version stays a provider version. Recommend `ask` for replicated vaults,
    which records two-sided changes instead of deciding by clock.

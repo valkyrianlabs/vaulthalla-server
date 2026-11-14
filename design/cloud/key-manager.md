@@ -107,6 +107,68 @@ rests on.
 `vault.keys.recipients.add {vault_id, account_key: true}`) adds the pinned key with today's permission, channels
 and step-up. Any other customer recipient (a kit, another admin) still works beside it.
 
+## The account's recovery policy
+
+**Decided (Cooper, 2026-11-14):** "one account-authorized signed recovery policy, independently verified by every
+server. Don't make the customer approve identical grants across every deployment." The rest of this section is the
+design that follows from it (compatibility policy rule 5); it replaces per-server confirmation of grants that
+another server added (issue #442).
+
+**What it is.** One document per account that lists the recovery recipients the account holder authorizes besides
+the account key itself: a kit, a key held in 1Password, another person. It is signed with the account key's Ed25519
+key on a device that holds the account key (Desktop, or the portal in a browser with the key unlocked). A server
+never holds that key and can't produce a policy.
+
+**Format** (vl-keykit, beside the key statement, with vectors): `vhc-recovery-policy-v1`; the account's
+`public_id`; `sequence` (1, then one more per change); the account key `generation` that signs; `issued_at`; one
+line per recipient with its `recipient_id` (SHA-256 of the public key), X25519 public key, suite, class `customer`,
+label, and scope (`account`: every vault the account key covers; a list of vault uids is reserved and not built).
+Exact parse, canonical base64url, one Ed25519 signature over the whole.
+
+**Verify, on every server independently.** The signature must verify under this server's `pinned` account key of
+the named generation, the pin a person confirmed once when the server was linked; a `pending`, `refused` or
+`superseded` generation signs nothing. `public_id` must be this link's. `sequence` must be greater than the highest
+this server has accepted: the accepted sequence and the policy's hash are kept under the same MAC as the pin
+(`cloud_account_pin`), so a database writer, the cloud or another replica can't roll it back. No person is asked:
+the pin is the authorization.
+
+**Where it travels.** Both transports are untrusted. The cloud serves the newest policy beside the key statements
+(`GET /v1/keys/account`), read by the same background check. Each covered vault's manifest root carries the policy's
+bytes in `recovery_policy.account_policy`, so replicas and a restore get it from the bucket with the cloud
+unreachable. A server takes whichever valid policy has the higher sequence.
+
+**What a server does with it.** For every vault whose recipients include the account key (managed vaults always;
+BYOS and local vaults that added it with `--account-key`), the vault's account-managed grants are exactly the
+policy's recipients. A new recipient becomes a grant (`authorized_by` = `account_policy:<sequence> signed by
+account_key:<n>`; one new nullable column `vault_recovery_grant.account_policy_sequence`), and the server wraps every
+key version to it and writes the envelopes as for any grant. A recipient the policy no longer lists is revoked
+(`revoked_at`), as a revocation is today. This runs in the background cloud service, never on FUSE, sync or ws hot
+paths, and `vh cloud key status` shows the sequence each vault has applied.
+
+**What it replaces.** On a vault the account key covers, a grant that only another server's root lists is never
+applied: the signed policy alone adds or revokes account-managed grants, so a compromised replica can neither enroll
+a recipient nor strip recovery from the others. Grants a super admin adds on one server (today's
+`ops::recovery_recipients`, with the `Keys` step-up) remain that server's own on a vault with one server; on a
+replicated vault adding one is refused (`recovery_policy_account_managed`) and the answer points at the account
+policy.
+
+**What it does not change.** Vaults without an account, and BYOS or local vaults that never added the account key,
+keep today's per-server grants and need nothing from the cloud. The account key is a recipient through the pin, not
+through the policy, so no policy can remove it and D2's last-recipient rule stands. vaulthalla.cloud stores and
+serves the policy; it can't forge one (no key) or roll one back (the sequence floor), and withholding a newer one
+only delays it until the bucket's copy or a later fetch delivers it.
+
+**Depends on the pin.** A server without a confirmed pin accepts no policy. The one fingerprint confirmation per
+server at linking is still a proposal awaiting the maintainer ("Open questions"); this decision is what makes it
+the only confirmation a server ever needs.
+
+**Surfaces, audit, tests.** `vh cloud key status` / `cloud.key.status` gain the accepted sequence and each vault's
+applied sequence; changing the policy is a Desktop and portal action only (the cloud's `key-manager.md`). Audit:
+`cloud.policy.accepted` (sequence, generation, recipients added and revoked), `cloud.policy.refused` (why).
+`AccountPolicy.*`: verify, wrong generation, lower or equal sequence refused, MAC tamper, a root carrying a newer
+policy than the cloud, a root grant not in the policy never wrapped to, a local add refused on a replicated vault,
+the account-key grant untouched by any policy.
+
 ## Enrolling with the cloud
 
 **Managed vaults: automatic** (spec 05 §3.2 as amended 2026-11-12). `CloudStorageService` calls
@@ -173,8 +235,9 @@ managed vault exists). Nothing is blocked: running vaults keep running and synci
 
 - **A joining server confirms its own pin** before its join's restore request: linking server B follows "Pin"
   above, and B wraps nothing to an account key it hasn't pinned.
-- **Handed-over grants.** The join is a restore (`ops::vault_recover`), and replicas apply each other's root grants
-  (`mirrors.md`, "What the first version adds" item 4). An account-key grant arriving either way is kept as one
+- **Handed-over grants.** The join is a restore (`ops::vault_recover`). Replicas never apply each other's root
+  grants: the account's signed recovery policy (above) is the only source of account-managed grants, verified by
+  each replica against its own pin. An account-key grant arriving with the restore is kept as one
   (`account_key_generation` set) only if its public key equals B's own MAC-verified pin of that generation;
   otherwise it stays an ordinary customer grant and B's admin is told.
 - **Rotation across replicas** uses per-replica keys, which are `mirrors.md`'s proposal (its open question 3) and
