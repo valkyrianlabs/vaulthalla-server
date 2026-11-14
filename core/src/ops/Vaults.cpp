@@ -1,4 +1,5 @@
 #include "ops/Vaults.hpp"
+#include "ops/VaultRemote.hpp"
 #include "auth/stepup/StepUp.hpp"
 
 #include "ops/Users.hpp"
@@ -671,8 +672,9 @@ DeletionPtr findDeleted(const Actor& actor, const std::string& idOrName, const s
 Details get(const Actor& actor, const unsigned int vaultId) {
     requireActor(actor);
     if (!canOnVault(actor, VaultPerm::View, vaultId)) throw Denied("you do not have permission to view this vault");
-    Details out{.vault = requireVault(vaultId), .sync = nullptr, .owner_name = {}};
+    Details out{.vault = requireVault(vaultId), .sync = nullptr, .owner_name = {}, .remote = {}};
     out.sync = currentPolicy(vaultId);
+    out.remote = vault_remote::remoteSummary(vaultId, out.vault->type == VaultType::S3);
     if (const auto owner = vh::identities::manager().user(out.vault->owner_id)) out.owner_name = owner->name();
     return out;
 }

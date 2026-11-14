@@ -36,6 +36,7 @@ static CommandResult handle_vault(const CommandCall& call) {
     if (isVaultMatch("format", sub)) return handle_vault_format(subcall);
     if (isVaultMatch("migrate-layout", sub)) return handle_vault_migrate_layout(subcall);
     if (isVaultMatch("storage", sub)) return handle_vault_storage(subcall);
+    if (isVaultMatch("remote", sub)) return handle_vault_remote(subcall);
     if (isVaultMatch("role", sub)) return handle_vault_role(subcall);
     if (isVaultMatch("recovery", sub)) return handle_vault_recovery(subcall);
 

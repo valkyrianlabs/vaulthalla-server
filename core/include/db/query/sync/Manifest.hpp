@@ -2,6 +2,8 @@
 
 #include "sync/manifest/Content.hpp"
 
+#include <pqxx/transaction>
+
 #include <cstdint>
 #include <ctime>
 #include <optional>
@@ -55,6 +57,8 @@ public:
     static void recordRoot(uint32_t vaultId, uint64_t epoch, const std::string& rootSha256,
                            const std::optional<std::string>& etag, const std::vector<std::string>& sids);
     static void recordRoot(uint32_t vaultId, const RootRecord& record);
+    // The same inside the caller's transaction (attach-remote's cutover records the root it verified with the rest).
+    static void recordRoot(pqxx::work& txn, uint32_t vaultId, const RootRecord& record);
 
     // A root the chain rules refused. True when it is not the root already recorded as refused: the caller alerts
     // the operator once per root, not once per pass.
@@ -77,6 +81,21 @@ public:
     // (this node, software version). Directories and symlinks without a uid get one here (libsodium) in the same
     // transaction. Throws std::runtime_error for a vault without a uid or a tree without one root.
     [[nodiscard]] static vh::sync::manifest::Content collect(uint32_t vaultId);
+
+    // Attach-remote (vault/RemoteAttach.hpp) publishes a still-local vault's manifest before its cutover: the objects
+    // the bucket already holds, which the remote index doesn't name until the cutover commits, and the sync strategy
+    // the vault will have then.
+    struct StagedObject {
+        std::string object_key;              // o/<uid>
+        uint64_t plaintext_bytes{};
+        std::string generation;              // files.encryption_iv form
+        std::optional<std::string> etag, version_id, storage_class;
+    };
+    struct CollectOptions {
+        std::vector<StagedObject> staged;
+        std::optional<std::string> sync_strategy;
+    };
+    [[nodiscard]] static vh::sync::manifest::Content collect(uint32_t vaultId, const CollectOptions& options);
 };
 
 }

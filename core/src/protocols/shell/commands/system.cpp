@@ -102,6 +102,16 @@ CommandResult handleStatus(const CommandCall& call) {
         out << "  check: vh vault storage probe <vault>\n";
     }
 
+    if (!health.remoteAttachFailed.empty()) {
+        out << "vaults whose remote attach failed (still local and untouched):\n";
+        for (const auto& v : health.remoteAttachFailed)
+            out << "  - " << v.vaultName << " (ID " << v.vaultId << "): " << v.detail << "\n";
+        out << "  resume: vh vault remote attach <vault> --api-key <key> --bucket <bucket>, or vh vault remote abort "
+               "<vault> --confirm <name>\n";
+    }
+    if (!health.remoteAttachesUnfinished.empty())
+        out << "remote attaches running: " << health.remoteAttachesUnfinished.size() << " (vh vault remote status all)\n";
+
     if (health.database) {
         const auto& pool = *health.database;
         out << "database pool:\n";

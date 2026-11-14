@@ -13,6 +13,7 @@
 #include "storage/Manager.hpp"
 #include "db/query/vault/BucketCapability.hpp"
 #include "db/query/vault/LayoutMigration.hpp"
+#include "db/query/vault/RemoteAttach.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "log/Registry.hpp"
 #include "vault/RecoveryEnvelopes.hpp"
@@ -123,6 +124,7 @@ SystemHealthStatus computeOverallStatus(const SystemHealth& health) {
         && health.vaultsUnavailable.empty()
         && health.vaultsRecoveryMaterialMissing.empty()
         && health.vaultsManifestUnpublishable.empty()
+        && health.remoteAttachFailed.empty()
         && health.deps.secretsWarning.empty()
         && health.database->brokenIdle == 0
         && protocolsHealthy(health.protocols, health.s3Gateway)
@@ -264,6 +266,14 @@ SystemHealth SystemHealth::snapshot() {
                                                     .legacyUploadFiles = legacy.legacy_upload_files};
         } catch (const std::exception& e) {
             log::Registry::vaulthalla()->warn("[SystemHealth] legacy content check failed: {}", e.what());
+        }
+        try {
+            const auto attaches = db::query::vault::RemoteAttach::summary();
+            for (const auto& f : attaches.failed)
+                out.remoteAttachFailed.push_back({.vaultId = f.vault_id, .vaultName = f.vault_name, .detail = f.detail});
+            out.remoteAttachesUnfinished.assign(attaches.unfinished.begin(), attaches.unfinished.end());
+        } catch (const std::exception& e) {
+            log::Registry::vaulthalla()->warn("[SystemHealth] remote attach check failed: {}", e.what());
         }
     }
 
@@ -433,6 +443,14 @@ void to_json(nlohmann::json& j, const VaultManifestUnpublishableHealth& health) 
     };
 }
 
+void to_json(nlohmann::json& j, const RemoteAttachFailedHealth& health) {
+    j = nlohmann::json{
+        {"vault_id", health.vaultId},
+        {"vault_name", health.vaultName},
+        {"detail", health.detail},
+    };
+}
+
 void to_json(nlohmann::json& j, const LegacyContentHealth& health) {
     j = nlohmann::json{
         {"remaining", health.remaining},
@@ -457,6 +475,8 @@ void to_json(nlohmann::json& j, const SystemHealth& health) {
         {"vaults_recovery_material_missing", health.vaultsRecoveryMaterialMissing},
         {"vaults_manifest_unpublishable", health.vaultsManifestUnpublishable},
         {"legacy_content", health.legacyContent ? nlohmann::json(*health.legacyContent) : nlohmann::json(nullptr)},
+        {"remote_attach_failed", health.remoteAttachFailed},
+        {"remote_attaches_unfinished", health.remoteAttachesUnfinished},
         {"summary", health.summary},
     };
 }

@@ -128,11 +128,15 @@ void Manifest::recordRoot(const uint32_t vaultId, const uint64_t epoch, const st
 }
 
 void Manifest::recordRoot(const uint32_t vaultId, const RootRecord& rec) {
+    Transactions::exec("Manifest::recordRoot", [&](pqxx::work& txn) { recordRoot(txn, vaultId, rec); });
+}
+
+void Manifest::recordRoot(pqxx::work& txn, const uint32_t vaultId, const RootRecord& rec) {
     using namespace manifest_query_detail;
     const auto epoch = rec.epoch;
     const auto& rootSha256 = rec.root_sha256;
     const auto& sids = rec.sids;
-    Transactions::exec("Manifest::recordRoot", [&](pqxx::work& txn) {
+    {
         // The window travels as JSON: version ids may hold '+', '/' and '='.
         txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, etag, epoch, root_sha256, root_version_id, "
                  "  base_version_id, settle_window, own_epoch, updated_at) "
@@ -161,7 +165,7 @@ void Manifest::recordRoot(const uint32_t vaultId, const RootRecord& rec) {
         txn.exec("DELETE FROM remote_manifest_root WHERE vault_id = $1 AND epoch NOT IN "
                  "(SELECT epoch FROM remote_manifest_root WHERE vault_id = $1 ORDER BY epoch DESC LIMIT $2)",
                  pqxx::params{vaultId, static_cast<int64_t>(kRetainedRoots)});
-    });
+    }
 }
 
 bool Manifest::recordRefused(const uint32_t vaultId, const std::string& reason, const uint64_t epoch,
@@ -216,7 +220,9 @@ void Manifest::markCollected(const uint32_t vaultId) {
     });
 }
 
-vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
+vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) { return collect(vaultId, CollectOptions{}); }
+
+vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId, const CollectOptions& options) {
     using namespace manifest_query_detail;
     const auto nodeId = device::Devices::nodeId();
     return Transactions::exec("Manifest::collect", [&](pqxx::work& txn) {
@@ -236,7 +242,7 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
         info.name = vrow[0]["name"].as<std::string>();
         info.created_at = optText(vrow[0]["created_at"]);
         if (const auto quota = vrow[0]["quota"].as<int64_t>(); quota > 0) info.quota_bytes = static_cast<uint64_t>(quota);
-        info.sync_strategy = optText(vrow[0]["strategy"]);
+        info.sync_strategy = options.sync_strategy ? options.sync_strategy : optText(vrow[0]["strategy"]);
         if (!vrow[0]["recovery_mode"].is_null())
             info.recovery_policy = mf::FileRecovery{vrow[0]["recovery_mode"].as<std::string>(),
                                                     optNum<uint32_t>(vrow[0]["version_max_age_days"])};
@@ -362,6 +368,14 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) {
             }
             objects[mf::uidText(*uid)] = {optText(row["etag"]), size, optText(row["version_id"]),
                                           optText(row["storage_class"])};
+        }
+        // Attach-remote: what the bucket holds before the index names it (CollectOptions).
+        for (const auto& staged : options.staged) {
+            const auto uid = mf::uidOfObjectKey(staged.object_key);
+            if (!uid || !vault::content::isVhf1(staged.generation)) continue;
+            objectGenerations[mf::uidText(*uid)] = manifest_query_detail::hexOf(crypto::util::b64_decode(staged.generation));
+            objects[mf::uidText(*uid)] = {staged.etag, vault::content::sealedSizeOf(staged.plaintext_bytes, staged.generation),
+                                          staged.version_id, staged.storage_class};
         }
 
         // ---- the tree

@@ -92,11 +92,12 @@ void checkVaultModels(Checker& c) {
     const auto s3 = s3Vault();
     for (const auto& row : json(std::vector<std::shared_ptr<Vault>>{local, s3}))
         c.check(row, "Vault", "storage.vault.list row (before the handler adds owner)");
-    c.check(Vaults::detailsJson({.vault = s3, .sync = remotePolicy(true), .owner_name = "alice"}), "Vault",
+    c.check(Vaults::detailsJson({.vault = s3, .sync = remotePolicy(true), .owner_name = "alice", .remote = "attached"}), "Vault",
             "storage.vault.get of an S3 vault with request limits");
-    c.check(Vaults::detailsJson({.vault = s3, .sync = remotePolicy(false), .owner_name = "alice"}), "Vault",
+    c.check(Vaults::detailsJson({.vault = s3, .sync = remotePolicy(false), .owner_name = "alice",
+                                 .remote = "attaching:cutover"}), "Vault",
             "storage.vault.get of an S3 vault, unlimited");
-    c.check(Vaults::detailsJson({.vault = local, .sync = nullptr, .owner_name = ""}), "Vault",
+    c.check(Vaults::detailsJson({.vault = local, .sync = nullptr, .owner_name = "", .remote = "none"}), "Vault",
             "storage.vault.get of a local vault");
 
     // AccessibleVault (ops::vaults::toJson): an owned local vault reached several ways, an S3 vault reachable only

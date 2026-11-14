@@ -215,16 +215,30 @@ PriceReservation::PriceReservation(const storage::CloudEngine& engine, const syn
                                    const std::string& operation, const std::string& objectKey)
     : what_(operation + " " + objectKey) {
     if (!engine.vault) throw std::invalid_argument("price preflight needs a vault");
+    reserve(engine.vault->id, {engine.s3ProviderProfile(), engine.s3ApiKey(), engine.resolvedStorageTier()}, planned,
+            operation, objectKey);
+}
+
+PriceReservation::PriceReservation(const uint32_t vaultId, const storage::s3::pricing::PriceSubject& subject,
+                                   const sync::model::S3CostEstimate& planned, const std::string& operation,
+                                   const std::string& objectKey)
+    : what_(operation + " " + objectKey) {
+    reserve(vaultId, subject, planned, operation, objectKey);
+}
+
+void PriceReservation::reserve(const uint32_t vaultId, const storage::s3::pricing::PriceSubject& subject,
+                               const sync::model::S3CostEstimate& planned, const std::string& operation,
+                               const std::string& objectKey) {
     namespace pricing = storage::s3::pricing;
     try {
-        const auto estimate = pricing::estimatePlannedS3Sync(engine, planned,
+        const auto estimate = pricing::estimatePlannedS3Sync(subject, planned,
                                                              {.mode = pricing::PriceEstimateMode::BudgetConservative});
-        const auto profile = engine.s3ProviderProfile();
+        const auto& profile = subject.profile;
         const auto costProfileId = profile ? profile->costProfileId() : std::optional<std::string>{};
         const auto providerKey = costProfileId ? *costProfileId : (profile ? profile->id() : std::string{"unknown"});
         const auto id = meteringRequestId();
         const pricing::PriceBudgetPreflightRequest request{
-            .vault_id = engine.vault->id,
+            .vault_id = vaultId,
             .run_uuid = id,
             .provider_key = providerKey,
             .provider_supported = costProfileId && pricing::isSupportedPriceBudgetProvider(*costProfileId),
@@ -243,8 +257,8 @@ PriceReservation::PriceReservation(const storage::CloudEngine& engine, const syn
         const auto decision = service.preflight(request);
         service.recordPreflightNotifications(request, decision);
         for (const auto& warning : decision.warnings)
-            log::Registry::cloud()->warn("[Recovery] S3 price budget warning for vault {} ({}): {}", engine.vault->id,
-                                         what_, warning);
+            log::Registry::cloud()->warn("[Recovery] S3 price budget warning for vault {} ({}): {}", vaultId, what_,
+                                         warning);
         if (!decision.allowed)
             throw storage::ContentUnavailable(fmt::format("S3 price budget refused {}: {}", what_,
                                                           decision.reason.empty() ? "budget would be exceeded"

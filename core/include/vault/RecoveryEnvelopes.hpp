@@ -19,6 +19,11 @@
 // envelopes, read byte for byte from this bucket, to the linked Vaulthalla Cloud account, explicitly per vault and
 // revocably (ops::cloud_recovery). They are ciphertext to the customer's own recipients; nothing else sends them.
 //
+// A local vault has no bucket: its envelopes are kept in this server's database (vault_key_envelope.envelope,
+// migration 138), written in the transaction that records them. They serve a lost vault master on the same host
+// (`vh vault keys import --recovery-kit`) and attaching a remote (vault/RemoteAttach.hpp), which copies them into the
+// new bucket before the vault switches to it; they don't recover a local vault whose disk is gone.
+//
 // When:
 //   - a rotation (EncryptionManager::prepare_key_rotation, the salvage key, a vault's first key): the new version's
 //     envelopes are PUT before the version is committed, so it never seals a file without them; a failed PUT fails the
@@ -28,8 +33,8 @@
 // A vault without a usable grant makes no request at all.
 namespace vh::vault::envelopes {
 
-// The bucket a vault's envelopes go to (an S3 vault's, through its API key). Throws std::runtime_error for a vault
-// without one. Tests replace it.
+// Where a vault's envelopes go: an S3 vault's bucket, through its API key (tests replace that), or for a local vault
+// the database. Throws std::runtime_error for an S3 vault without a bucket.
 using StoreFactory = std::function<std::shared_ptr<sync::manifest::ObjectStore>(uint32_t vaultId)>;
 void setStoreFactoryForTesting(StoreFactory factory);
 [[nodiscard]] std::shared_ptr<sync::manifest::ObjectStore> storeFor(uint32_t vaultId);

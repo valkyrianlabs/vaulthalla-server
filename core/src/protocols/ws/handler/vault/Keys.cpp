@@ -5,6 +5,7 @@
 #include "ops/VaultKeys.hpp"
 #include "ops/VaultLayout.hpp"
 #include "ops/VaultRecover.hpp"
+#include "ops/VaultRemote.hpp"
 #include "ops/VaultStorage.hpp"
 #include "identities/User.hpp"
 #include "protocols/ws/Session.hpp"
@@ -161,6 +162,46 @@ json VaultKeys::recover(const json& payload, const std::shared_ptr<Session>& ses
 
 json VaultKeys::storageProbe(const json& payload, const std::shared_ptr<Session>& session) {
     return ops::vault_storage::toJson(ops::vault_storage::probe(actorOf(session), requiredVaultId(payload)));
+}
+
+json VaultKeys::remoteAttach(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto vaultId = requiredVaultId(payload);
+    if (!payload.contains("api_key_id") || !payload.at("api_key_id").is_number_unsigned() ||
+        payload.at("api_key_id").get<uint64_t>() == 0 || payload.at("api_key_id").get<uint64_t>() > UINT32_MAX)
+        throw ops::Invalid("api_key_id is required (a positive integer)");
+    if (!payload.contains("bucket") || !payload.at("bucket").is_string())
+        throw ops::Invalid("bucket is required (a bucket name)");
+    std::optional<std::string> tier;
+    if (payload.contains("storage_tier") && !payload.at("storage_tier").is_null()) {
+        if (!payload.at("storage_tier").is_string()) throw ops::Invalid("storage_tier must be a string");
+        tier = payload.at("storage_tier").get<std::string>();
+    }
+    bool acceptUnpriced = false;
+    if (payload.contains("accept_unpriced") && !payload.at("accept_unpriced").is_null()) {
+        if (!payload.at("accept_unpriced").is_boolean()) throw ops::Invalid("accept_unpriced must be a boolean");
+        acceptUnpriced = payload.at("accept_unpriced").get<bool>();
+    }
+    return ops::vault_remote::toJson(ops::vault_remote::attach(
+        actorOf(session), {.vault_id = vaultId, .api_key_id = payload.at("api_key_id").get<unsigned int>(),
+                           .bucket = payload.at("bucket").get<std::string>(), .storage_tier = tier,
+                           .accept_unpriced = acceptUnpriced}));
+}
+
+json VaultKeys::remoteStatus(const json& payload, const std::shared_ptr<Session>& session) {
+    std::optional<unsigned int> vaultId;
+    if (payload.is_object() && payload.contains("vault_id") && !payload.at("vault_id").is_null())
+        vaultId = requiredVaultId(payload);
+    json vaults = json::array();
+    for (const auto& s : ops::vault_remote::status(actorOf(session), vaultId)) vaults.push_back(ops::vault_remote::toJson(s));
+    return {{"vaults", std::move(vaults)}};
+}
+
+json VaultKeys::remoteAbort(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto vaultId = requiredVaultId(payload);
+    if (!payload.contains("confirm") || !payload.at("confirm").is_string())
+        throw ops::Invalid("confirm must be the vault's name");
+    return ops::vault_remote::toJson(ops::vault_remote::abort(
+        actorOf(session), {.vault_id = vaultId, .confirm = payload.at("confirm").get<std::string>()}));
 }
 
 json VaultKeys::layoutStatus(const json& payload, const std::shared_ptr<Session>& session) {

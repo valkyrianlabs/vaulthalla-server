@@ -69,6 +69,9 @@ namespace vh::protocols::shell::commands::vault {
     // storage.cpp: `vh vault storage probe` (ops::vault_storage): what the vault's bucket supports for writes.
     CommandResult handle_vault_storage(const CommandCall &call);
 
+    // remote.cpp: `vh vault remote attach | status | abort` (ops::vault_remote): a local vault becomes an S3/R2 vault.
+    CommandResult handle_vault_remote(const CommandCall &call);
+
     // sync.cpp
     CommandResult handle_sync(const CommandCall &call);
 

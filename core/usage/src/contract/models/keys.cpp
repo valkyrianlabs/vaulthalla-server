@@ -183,6 +183,69 @@ std::vector<WsModel> vaultKeyModels() {
                              objectArray("kept", "VaultLayoutEntry"),
                              objectArray("deletable_entries", "VaultLayoutEntry")})}));
 
+    // ---- attaching a remote to a local vault (ops::vault_remote, core/src/ops/VaultRemote.cpp) -----------------
+    out.push_back(model("VaultRemoteEstimate",
+        "RemoteAttachCost: what the attach sends (vault::remote::toJson(Estimate)), computed before the first content "
+        "PUT.",
+        {uinteger("list_requests"), uinteger("head_requests"), uinteger("get_requests"),
+         uinteger("put_requests").desc("One per file, or a multipart upload's requests."),
+         uinteger("delete_requests"), uinteger("download_bytes").desc("The read-back sample."),
+         uinteger("upload_bytes"),
+         uinteger("readback_worst_case_gets").desc("If the provider's ETags are not MD5s every object is read back."),
+         uinteger("readback_worst_case_bytes"),
+         uinteger("metadata_puts").desc("Recovery envelopes and the encrypted manifest (approximate)."),
+         uinteger("files"), uinteger("envelopes"),
+         uinteger("sample").desc("Objects always read back and authenticated."), boolean("priced"),
+         str("estimated_cost").nullable().desc("The price budget's estimate, when priced.")}));
+
+    out.push_back(model("VaultRemoteProgress",
+        "vault::remote::toJson(Progress): rendered as is by clients.",
+        {str("phase").oneOf({"preparing", "uploading", "catching_up", "verifying", "cutover", "done", "failed",
+                             "aborted"}),
+         uinteger("files_total"), uinteger("files_done"), uinteger("bytes_total"), uinteger("bytes_done"),
+         uinteger("bytes_per_second").nullable().desc("Over the last minute; null while unknown."),
+         uinteger("eta_seconds").nullable().desc("null while unknown."),
+         uinteger("passes").desc("Catch-up passes so far."), vaultKeyTime("updated_at")}));
+
+    out.push_back(model("VaultRemoteAttach",
+        "A vault's remote attach (vault_remote_attach).",
+        {str("state").oneOf({"preparing", "uploading", "catching_up", "verifying", "cutover", "done", "failed",
+                             "aborted"})
+             .desc("preparing to verifying: the vault is local and in use; cutover: the vault uses its bucket and its "
+                   "first sync pass runs; done; failed: something failed before the cutover, the vault is local and "
+                   "untouched (start the attach again to resume); aborted: what the attach uploaded was deleted."),
+         str("origin").oneOf({"byos"}).desc("Whose bucket: the operator's own."),
+         uinteger("api_key_id").nullable().desc("null when the key was deleted meanwhile."), str("bucket"),
+         str("storage_tier").nullable(),
+         str("manifest_publish").nullable().oneOf({"conditional", "version_log"})
+             .desc("How the bucket's manifest is published, from its probe."),
+         boolean("versioned").nullable().desc("Listings and deletes go by provider version id."),
+         vaultKeyTime("started_at"), uinteger("started_by").nullable(), uinteger("attempts"),
+         boolean("accept_unpriced"), vaultKeyTime("verified_at").nullable(), vaultKeyTime("cutover_at").nullable(),
+         vaultKeyTime("done_at").nullable(), vaultKeyTime("aborted_at").nullable(),
+         vaultKeyTime("abort_requested_at").nullable(),
+         boolean("rotation_queued").desc("A key rotation was asked for meanwhile and starts when the attach ends."),
+         object("estimate", "VaultRemoteEstimate").nullable(),
+         object("usage", "", {uinteger("list_requests"), uinteger("head_requests"), uinteger("get_requests"),
+                              uinteger("put_requests"), uinteger("delete_requests"), uinteger("downloaded_bytes"),
+                              uinteger("uploaded_bytes")})
+             .nullable().desc("Requests and bytes sent so far."),
+         object("first_pass", "", {str("status").desc("The sync event's status, or not_run."),
+                                   vaultKeyTime("started_at").nullable(), vaultKeyTime("finished_at").nullable(),
+                                   str("error").nullable()})
+             .nullable().desc("The vault's first sync pass after the cutover, once it ended."),
+         str("last_error").nullable()}));
+
+    out.push_back(model("VaultRemoteStatus",
+        "ops::vault_remote::toJson(Status): a vault's remote storage and its attach.",
+        {vaultId(), str("vault_name"), str("type").oneOf({"local", "s3"}),
+         str("remote").desc("none, attaching:<state> or attached."),
+         object("attach", "VaultRemoteAttach").nullable().desc("null until an operator starts one."),
+         object("progress", "VaultRemoteProgress").nullable(),
+         object("items", "", {uinteger("files_pending"), uinteger("files_sent"), uinteger("files_failed"),
+                              uinteger("envelopes"), uinteger("metadata_objects"), uinteger("orphans")})
+             .desc("What the attach recorded in the bucket.")}));
+
     out.push_back(model("VaultStorageProbe",
         "ops::vault_storage::toJson(ProbeAnswer): what the vault's bucket supports for writes that must never overwrite "
         "(design/encryption/06-publish-without-preconditions.md §7), probed now and recorded.",

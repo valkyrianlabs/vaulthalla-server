@@ -93,6 +93,9 @@ struct Details {
     VaultPtr vault;
     PolicyPtr sync;
     std::string owner_name;
+    // none | attaching:<state> | attached (ops::vault_remote::remoteSummary): whether the vault has remote storage, or
+    // is being given one.
+    std::string remote{"none"};
 };
 
 enum class SyncStart { Started, RerunQueued };

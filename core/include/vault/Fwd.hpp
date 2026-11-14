@@ -7,6 +7,7 @@ namespace vh::vault {
     class RetentionService;
     class FormatConversionService;
     class LayoutMigrationService;
+    class RemoteAttachService;
 }
 
 namespace vh::vault::model {

@@ -19,6 +19,7 @@ namespace vh::storage::s3 {
 
 namespace vh::storage::s3::pricing {
     struct PriceBudgetReservation;
+    struct PriceSubject;
 }
 
 // The provider version index (upstream_object_version): what the bucket's ListObjectVersions says, metadata only.
@@ -87,14 +88,23 @@ public:
     // Throws storage::ContentUnavailable when the price budget refuses (nothing may be sent then).
     PriceReservation(const storage::CloudEngine& engine, const sync::model::S3CostEstimate& planned,
                      const std::string& operation, const std::string& objectKey);
+    // The same for a vault without a cloud engine (attach-remote: the bucket a still-local vault is about to use).
+    PriceReservation(uint32_t vaultId, const storage::s3::pricing::PriceSubject& subject,
+                     const sync::model::S3CostEstimate& planned, const std::string& operation,
+                     const std::string& objectKey);
     ~PriceReservation();   // not settled: charged conservatively (requests may have been sent)
     PriceReservation(const PriceReservation&) = delete;
     PriceReservation& operator=(const PriceReservation&) = delete;
 
     void commit() noexcept;   // charge the reserved estimate
     void release() noexcept;  // nothing was sent
+    // The estimate the reservation was made for, when the provider is priced.
+    [[nodiscard]] const std::optional<std::string>& estimatedCost() const noexcept { return estimatedCost_; }
 
 private:
+    void reserve(uint32_t vaultId, const storage::s3::pricing::PriceSubject& subject,
+                 const sync::model::S3CostEstimate& planned, const std::string& operation, const std::string& objectKey);
+
     std::vector<storage::s3::pricing::PriceBudgetReservation> reservations_;
     std::optional<std::string> estimatedCost_;
     std::string what_;

@@ -9,6 +9,7 @@
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
 #include "ops/VaultLayout.hpp"
+#include "ops/VaultRemote.hpp"
 #include "ops/VaultRecover.hpp"
 #include "ops/VaultStorage.hpp"
 #include "vault/KeyAttestation.hpp"
@@ -367,6 +368,70 @@ void checkVaultKeyModels(Checker& c) {
                                .last_modified = 1'759'000'000, .reason = "", .retain_until = std::nullopt}};
     c.check(vl::toJson(vl::CleanupAnswer{.dry_run = true, .started = false, .cleanup_after = 1'760'605'400, .plan = plan}),
             "VaultLayoutCleanup", "vault.layout.cleanup (dry run)");
+
+    // design/storage/attach-remote.md: attaching a remote to a local vault.
+    namespace vr = ops::vault_remote;
+    namespace ra = vault::remote;
+    vr::Status untouched;
+    untouched.vault_id = 4;
+    untouched.vault_name = "photos";
+    untouched.type = "local";
+    untouched.remote = "none";
+    c.check(vr::toJson(untouched), "VaultRemoteStatus", "vault.remote.status (no attach)");
+    ra::Row attaching;
+    attaching.vault_id = 4;
+    attaching.api_key_id = 2;
+    attaching.bucket = "photos-vault";
+    attaching.storage_tier_id = "standard";
+    attaching.manifest_publish = "conditional";
+    attaching.versioned = true;
+    attaching.state = ra::State::Uploading;
+    attaching.started_by = 1;
+    attaching.started_at = 1'762'000'000;
+    attaching.accept_unpriced = true;
+    attaching.attempts = 1;
+    attaching.passes = 1;
+    attaching.abort_requested_at = 1'762'000'300;
+    attaching.rotation_queued_at = 1'762'000'200;
+    attaching.estimate = ra::toJson(ra::Estimate{.list_requests = 2, .head_requests = 0, .get_requests = 104,
+                                                 .put_requests = 120, .delete_requests = 0, .download_bytes = 4096,
+                                                 .upload_bytes = 1'048'576, .readback_worst_case_gets = 118,
+                                                 .readback_worst_case_bytes = 1'048'576, .metadata_puts = 5,
+                                                 .files = 118, .envelopes = 2, .sample = 100,
+                                                 .estimated_cost = "0.000912", .priced = true});
+    attaching.usage = nlohmann::json{{"list_requests", 1}, {"head_requests", 0}, {"get_requests", 9}, {"put_requests", 40},
+                                     {"delete_requests", 0}, {"downloaded_bytes", 512}, {"uploaded_bytes", 349'525}};
+    attaching.last_error = "item 7 (o/01j...): transient";
+    attaching.updated_at = 1'762'000'400;
+    vr::Status running = untouched;
+    running.remote = "attaching:uploading";
+    running.attach = attaching;
+    running.progress = ra::Progress{.phase = "uploading", .files_total = 118, .files_done = 40, .bytes_total = 1'048'576,
+                                    .bytes_done = 349'525, .bytes_per_second = 65'536, .eta_seconds = 11, .passes = 1,
+                                    .updated_at = 1'762'000'400};
+    running.items = {.files_pending = 77, .files_sent = 40, .files_failed = 1, .envelopes = 2, .metadata_objects = 0,
+                     .orphans = 0};
+    c.check(vr::toJson(running), "VaultRemoteStatus", "vault.remote.status (uploading, an abort asked for)");
+    vr::Status finished = running;
+    finished.type = "s3";
+    finished.remote = "attached";
+    finished.attach->state = ra::State::Done;
+    finished.attach->verified_at = 1'762'000'900;
+    finished.attach->cutover_at = 1'762'000'950;
+    finished.attach->done_at = 1'762'001'000;
+    finished.attach->abort_requested_at.reset();
+    finished.attach->first_pass = nlohmann::json{{"status", "success"}, {"started_at", 1'762'000'960},
+                                                 {"finished_at", 1'762'000'990}, {"error", "none"}};
+    finished.progress->phase = "done";
+    finished.progress->bytes_per_second.reset();
+    finished.progress->eta_seconds.reset();
+    c.check(vr::toJson(finished), "VaultRemoteStatus", "vault.remote.status (done)");
+    vr::Status aborted = running;
+    aborted.remote = "none";
+    aborted.attach->state = ra::State::Aborted;
+    aborted.attach->aborted_at = 1'762'000'500;
+    aborted.progress->phase = "aborted";
+    c.check(vr::toJson(aborted), "VaultRemoteStatus", "vault.remote.status (aborted)");
 }
 
 }

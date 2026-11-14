@@ -158,10 +158,12 @@ AddResult add(const Actor& actor, const AddRequest& request, const vault_keys::C
     using namespace recipients_detail;
     requireEnroll(actor, channel);
     const auto vault = liveVault(request.vault_id);
+    // An S3 vault's envelopes go to its own bucket; a local vault's are kept in the database until a remote is
+    // attached (vault/RecoveryEnvelopes.hpp), which copies them into the bucket.
     const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(vault);
-    if (!s3 || s3->bucket.empty())
-        throw Conflict("vault '" + vault->name + "' has no bucket: recovery envelopes are stored in the vault's own "
-                       "bucket, so recovery recipients are for S3 vaults (local vaults keep key exports)");
+    const bool local = vault->type == vault::model::VaultType::Local;
+    if (!local && (!s3 || s3->bucket.empty()))
+        throw Conflict("vault '" + vault->name + "' has no bucket to hold its recovery envelopes");
     if (!vault->uid) throw Conflict("vault '" + vault->name + "' has no uid");
     if (request.label && request.label->size() > 200) throw Invalid("the label is longer than 200 characters");
     const auto publicKey = parsePublicKey(request.public_key);
@@ -198,8 +200,9 @@ AddResult add(const Actor& actor, const AddRequest& request, const vault_keys::C
             }
         });
     } catch (const std::exception& e) {
-        out.note = std::string("the recipient is enrolled, but its envelopes could not all be written to the bucket "
-                               "yet (") + e.what() + "); the next sync pass writes the missing ones";
+        out.note = std::string("the recipient is enrolled, but its envelopes could not all be written yet (") +
+                   e.what() + (local ? "); attaching a remote writes the missing ones"
+                                     : "); the next sync pass writes the missing ones");
         log::Registry::crypto()->warn("[ops::recovery_recipients] vault {}: {}", vault->id, *out.note);
     }
     requestPublish(engine);
@@ -213,9 +216,9 @@ AddResult add(const Actor& actor, const AddRequest& request, const vault_keys::C
                                    {"channel", channelName(channel)},
                                    {"envelopes", static_cast<int64_t>(out.envelopes_written)}}},
                       fmt::format("[ops::recovery_recipients] {} enrolled recovery recipient {} (recipient {}) on vault "
-                                  "{} through the {}; {} envelope(s) written to the vault's bucket",
+                                  "{} through the {}; {} envelope(s) written to the vault's {}",
                                   actor->name(), g.grant_id, g.recipient_id.substr(0, 16), vault->id,
-                                  channelName(channel), out.envelopes_written));
+                                  channelName(channel), out.envelopes_written, local ? "database" : "bucket"));
     return out;
 }
 

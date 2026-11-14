@@ -78,6 +78,17 @@ PriceEstimateReport estimatePlannedS3Sync(
     const PriceEstimateOptions options,
     IPriceBotClient* client,
     IPriceCatalogStore* catalogStore) {
+    return estimatePlannedS3Sync(
+        PriceSubject{engine.s3ProviderProfile(), engine.s3ApiKey(), engine.resolvedStorageTier()},
+        s3Estimate, options, client, catalogStore);
+}
+
+PriceEstimateReport estimatePlannedS3Sync(
+    const PriceSubject& subject,
+    const vh::sync::model::S3CostEstimate& s3Estimate,
+    const PriceEstimateOptions options,
+    IPriceBotClient* client,
+    IPriceCatalogStore* catalogStore) {
     const auto& pricing = config::Registry::get().pricing;
     const auto& cfg = pricing.storage_rates_api;
     if (options.disabled || !pricing.enabled)
@@ -85,10 +96,10 @@ PriceEstimateReport estimatePlannedS3Sync(
 
     const auto tier = options.storage_tier_override
         ? options.storage_tier_override
-        : engine.resolvedStorageTier();
+        : subject.tier;
     const auto target = resolvePriceProfileTarget(
-        engine.s3ProviderProfile(),
-        engine.s3ApiKey(),
+        subject.profile,
+        subject.key,
         tier);
     if (!target)
         return PriceEstimateReport::unsupported("S3 provider has no price-bot profile");

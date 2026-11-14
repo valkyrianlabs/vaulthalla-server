@@ -19,6 +19,7 @@
 #include "db/query/sync/Manifest.hpp"
 #include "db/query/vault/Key.hpp"
 #include "db/query/vault/RecoveryGrants.hpp"
+#include "db/query/vault/RemoteAttach.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
@@ -460,7 +461,7 @@ TEST_F(RecoveryRecipient, EnrollmentIsForTheCliAndPairedDevicesWithTheExportPerm
     EXPECT_EQ(code([&] { return rr::add(superUser, {.vault_id = engine->vault->id, .public_key = pk}, Channel::Cli); }),
               "conflict") << "the same key enrolled twice";
 
-    // Malformed and degenerate keys, a vault without a bucket.
+    // Malformed and degenerate keys.
     EXPECT_EQ(code([&] { return rr::add(superUser, {.vault_id = engine->vault->id, .public_key = "AAAA"}, Channel::Cli); }),
               "invalid");
     EXPECT_EQ(code([&] {
@@ -468,9 +469,13 @@ TEST_F(RecoveryRecipient, EnrollmentIsForTheCliAndPairedDevicesWithTheExportPerm
                                  Channel::Cli);
               }),
               "invalid");
+    // A local vault has no bucket: its envelopes are kept in the database, for an attach to copy into its bucket.
     const auto local = localVault();
-    EXPECT_EQ(code([&] { return rr::add(superUser, {.vault_id = local->vault->id, .public_key = pk}, Channel::Cli); }),
-              "conflict");
+    const auto localAdded = rr::add(superUser, {.vault_id = local->vault->id, .public_key = pk}, Channel::Cli);
+    EXPECT_EQ(localAdded.envelopes_written, 1u);
+    const auto held = db::query::vault::RemoteAttach::envelopes(local->vault->id);
+    ASSERT_EQ(held.size(), 1u);
+    EXPECT_EQ(vl::keykit::kev1::kid(held[0].bytes), held[0].kid);
 
     // Listing is public data: any session with the View permission, the console included.
     const auto listed = WsKeys::listRecipients({{"vault_id", engine->vault->id}}, console(superUser));

@@ -865,6 +865,96 @@ static std::shared_ptr<CommandUsage> vault_storage(const std::weak_ptr<CommandUs
     return cmd;
 }
 
+static std::shared_ptr<CommandUsage> remote_attach(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"attach"};
+    cmd->effect = CommandEffect::Destructive;
+    cmd->description =
+        "Turn a local vault into an S3 or R2 vault in place: the vault keeps its ID, keys, permissions, shares and "
+        "files, and its content is uploaded to the bucket you name as encrypted objects under opaque names. Only an "
+        "operator starts it. The bucket must be empty (every object version and delete marker counts) and no other "
+        "vault may use it; the vault must hold no content in a legacy format (vh vault format status) and must have "
+        "recovery material that does not depend on this host: a recovery recipient (vh vault keys recipient add) or "
+        "an export of the current key (vh vault keys export). The bucket is probed first for what it supports "
+        "(vh vault storage probe describes the probe); the cost is estimated and checked against the price budget "
+        "(--accept-unpriced when it can't be priced). The upload then runs in the background and resumes after a "
+        "restart, while the vault stays local and in use: files that change meanwhile are sent again. Every upload is "
+        "verified, the vault's encrypted manifest is published and read back from the bucket, and only then does the "
+        "vault switch to its bucket in one step, starting in the cache sync strategy with every file still on disk. "
+        "If anything fails before that, the vault is still local and untouched: run the command again with the same "
+        "API key and bucket to resume, or abort it. A key rotation asked for meanwhile waits until the attach has "
+        "ended. Earlier local versions and snapshots stay local recovery points; the bucket's history starts here.";
+    cmd->positionals = {vaultPos};
+    cmd->required = {Option::OneToMany("s3_api_key", "Name or ID of the API key that reaches the bucket", "api-key",
+                                       {"name", "id"})
+                         .withGen("name", contract::gen::ref("api_key", {"name"}))
+                         .withGen("id", contract::gen::ref("api_key", {"id"})),
+                     Option::Single("s3_bucket", "The empty bucket the vault's content goes to", "bucket", "name")
+                         .withGen("name", contract::gen::pattern("vh-test-{a}{a}{a}{9}{9}"))};
+    cmd->optional = {owner, s3StorageTierOpt};
+    cmd->optional_flags = {jsonFlag,
+                           Flag::Alias("accept_unpriced", "Start even when the cost can't be priced", "accept-unpriced")};
+    cmd->examples = {
+        {"vh vault remote attach finance --api-key r2-main --bucket finance-vault",
+         "Upload vault 'finance' to the empty bucket 'finance-vault' and switch it over once everything is verified."},
+        {"vh vault remote attach 42 --api-key 3 --bucket finance-vault --accept-unpriced",
+         "The same for the vault with ID 42, accepting a cost that can't be priced."}
+    };
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> remote_status(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"status"};
+    cmd->effect = CommandEffect::Read;
+    cmd->description =
+        "Show where attaching a remote to a vault stands: the state (preparing, uploading, catching_up, verifying, "
+        "cutover, done, failed or aborted), the bucket and how its manifest is published, the progress (files and "
+        "bytes sent, the rate over the last minute and the time left when known), the cost estimate and what was "
+        "actually sent, the last error, and after the switch the result of the vault's first sync pass. A failed "
+        "attach left the vault local and untouched.";
+    cmd->positionals = {vaultOrAll};
+    cmd->optional = {owner};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {
+        {"vh vault remote status finance", "Where the attach of vault 'finance' stands."},
+        {"vh vault remote status all --json", "Every vault with an attach, as JSON."}
+    };
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> remote_abort(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"abort"};
+    cmd->effect = CommandEffect::Destructive;
+    cmd->description =
+        "Abort attaching a remote to a vault, before the vault has switched to its bucket. Everything the attach "
+        "uploaded (file objects, recovery envelopes, the manifest) is deleted from the bucket, each object by the "
+        "version the attach recorded, and the bucket is released for other use. Nothing the attach did not write is "
+        "deleted, and the vault itself was never changed. A delete the provider refuses is retried and stays listed "
+        "in the status until it succeeds. Not possible once the vault has switched over.";
+    cmd->positionals = {vaultPos};
+    cmd->required = {Option::Single("confirm", "The vault's name, confirming the deletion of what the attach uploaded",
+                                    "confirm", "name")
+                         .withGen("name", contract::gen::ref("vault", {"name"}))};
+    cmd->optional = {owner};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {
+        {"vh vault remote abort finance --confirm finance", "Abort the attach of vault 'finance' and empty its bucket."}
+    };
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> vault_remote(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"remote"};
+    cmd->description = "Attach an S3 or R2 bucket to an existing local vault.";
+    cmd->examples = {{"vh vault remote status all", "Every vault with an attach."}};
+    cmd->subcommands = {remote_attach(cmd->weak_from_this()), remote_status(cmd->weak_from_this()),
+                        remote_abort(cmd->weak_from_this())};
+    return cmd;
+}
+
 static std::shared_ptr<CommandUsage> migrate_layout(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"migrate-layout"};
@@ -1068,6 +1158,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
     const auto formatCmd = vault_format(cmd->weak_from_this());
     const auto migrateLayoutCmd = migrate_layout(cmd->weak_from_this());
     const auto storageCmd = vault_storage(cmd->weak_from_this());
+    const auto remoteCmd = vault_remote(cmd->weak_from_this());
     const auto syncCmd = sync(cmd->weak_from_this()); // executable (manual sync) + has subcommands
     const auto recoveryCmd = recovery_book::vaultRecovery(cmd->weak_from_this());
 
@@ -1221,6 +1312,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
         formatCmd,
         migrateLayoutCmd,
         storageCmd,
+        remoteCmd,
         syncCmd,
         recoveryCmd
     };

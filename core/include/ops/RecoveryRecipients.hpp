@@ -11,12 +11,13 @@
 #include <nlohmann/json_fwd.hpp>
 
 // Recovery recipients (design/encryption/03-metadata-recovery.md §5; #370): customer-held X25519 public keys enrolled
-// on a vault, to which the daemon wraps every key version (KEV1 envelopes in the vault's bucket). Shared by
+// on a vault, to which the daemon wraps every key version (KEV1 envelopes in the vault's bucket; a local vault, which
+// has none, keeps them in the database until a remote is attached: vault/RecoveryEnvelopes.hpp). Shared by
 // `vh vault keys recipient list|add|revoke` and the ws vault.keys.recipients.* commands.
 //
 // Custody (amendment on #344): recovery is customer-controlled. Only class "customer" grants exist; the server only
 // ever receives a public key (the seed is generated on the customer's device: Desktop or `vh-recovery kit create`),
-// and envelopes go to the vault's own bucket and nowhere else. Nothing here is reachable from an account, payment,
+// and envelopes go to the vault's own bucket (or, for a local vault, this server's database) and nowhere else. Nothing here is reachable from an account, payment,
 // subscription or upgrade flow: a recipient is enrolled only by a person through these commands.
 //
 // Who: list needs the encryption-key View permission; add and revoke the Export permission (super admins hold both),

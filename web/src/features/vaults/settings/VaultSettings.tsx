@@ -166,7 +166,10 @@ const GeneralForm = ({ vault }: { vault: VaultDetail }) => {
             </div>
             <div className="grid gap-1 text-xs text-fg-subtle sm:col-span-2">
               <span>
-                Storage type: <span className="text-fg-muted">{vaultTypeLabel(vault.type)}</span> — fixed when the vault was created.
+                Storage type: <span className="text-fg-muted">{vaultTypeLabel(vault.type)}</span>
+                {vault.type === 'local'
+                  ? ' — a bucket can be attached from the command line (vh vault remote attach).'
+                  : ' — not changed here.'}
               </span>
             </div>
           </fieldset>

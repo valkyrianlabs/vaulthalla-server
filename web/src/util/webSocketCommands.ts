@@ -1050,6 +1050,10 @@ export interface WebSocketCommandMap {
   'vault.layout.cleanup': WsContract['vault.layout.cleanup']
   // Spec 06 §7: what the vault's bucket supports for writes that must never overwrite (conditional PUT, versions).
   'vault.storage.probe': WsContract['vault.storage.probe']
+  // A local vault becomes an S3/R2 vault in place (attach and abort ask a keys step-up); status follows the upload.
+  'vault.remote.attach': WsContract['vault.remote.attach']
+  'vault.remote.status': WsContract['vault.remote.status']
+  'vault.remote.abort': WsContract['vault.remote.abort']
 }
 
 export type WSCommandPayload<K extends keyof WebSocketCommandMap> = WebSocketCommandMap[K]['payload']
