@@ -18,6 +18,7 @@
 #include "storage/Manager.hpp"
 #include "storage/BucketCapability.hpp"
 #include "storage/s3/Controller.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Store.hpp"
 #include "vault/APIKeyManager.hpp"
@@ -68,7 +69,7 @@ std::shared_ptr<mf::ObjectStore> storeFor(const unsigned int apiKeyId, const std
     controller->setOpaqueLayout(true);
     // No probe here (a dry run writes nothing): a root published on a bucket without conditional writes says so
     // (`publish: version_log`), and manifest::load then reads the canonical head by rule C1 (spec 06 §5.3).
-    return std::make_shared<mf::S3Store>(std::move(controller));
+    return std::make_shared<storage::s3::ManifestStore>(std::move(controller));
 }
 
 std::vector<std::vector<uint8_t>> selfKeys() {

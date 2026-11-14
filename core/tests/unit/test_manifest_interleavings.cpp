@@ -33,6 +33,7 @@
 #include "../helpers/hooked_store.hpp"
 #include "../helpers/versioned_bucket.hpp"
 #include "crypto/SecretKey.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "sync/manifest/Chain.hpp"
 #include "sync/manifest/Content.hpp"
 #include "sync/manifest/Document.hpp"
@@ -169,7 +170,7 @@ struct World {
     }
     [[nodiscard]] SealingKey sealing() const { return {1, keys.at(1)}; }
     [[nodiscard]] std::shared_ptr<ObjectStore> plainStore() const {
-        return std::make_shared<S3Store>(bucket, WriteCapability::VersionLog);
+        return std::make_shared<storage::s3::ManifestStore>(bucket, WriteCapability::VersionLog);
     }
 
     // Written by actors (one runs at a time), read by the controller while every actor is parked.

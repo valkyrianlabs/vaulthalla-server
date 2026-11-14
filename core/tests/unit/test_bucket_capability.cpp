@@ -28,6 +28,7 @@
 #include "storage/CloudEngine.hpp"
 #include "storage/ObjectKeys.hpp"
 #include "storage/s3/Capability.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Store.hpp"
 #include "sync/model/Event.hpp"
@@ -457,7 +458,7 @@ TEST_F(BucketCapabilityDbTest, EnvelopesAreWrittenPlainlyWhereConditionsAreRejec
     const auto v = s3Vault(vault::model::StorageLayout::OpaqueV1);
     const auto bucket = bucket_capability_test::bucketWith(Versioning::Enabled, Puts::Reject501);
     record(v->id, *bucket);
-    const auto store = std::make_shared<sync::manifest::S3Store>(
+    const auto store = std::make_shared<storage::s3::ManifestStore>(
         bucket, db::query::vault::BucketCapability::get(v->id).capability);
     const auto key = std::string(".vaulthalla/key/") + crypto::id::toBase32(crypto::id::newObjectUid());
     const std::vector<uint8_t> envelope{0x89, 'V', 'H', 'K'};

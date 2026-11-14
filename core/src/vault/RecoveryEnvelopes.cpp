@@ -1,3 +1,4 @@
+#include "storage/s3/ManifestStore.hpp"
 #include "vault/RecoveryEnvelopes.hpp"
 
 #include <vl/keykit/kev1.hpp>
@@ -65,7 +66,7 @@ std::shared_ptr<sync::manifest::ObjectStore> storeFor(const uint32_t vaultId) {
     if (capability.changed)
         throw std::runtime_error("vault " + std::to_string(vaultId) + ": the bucket refused a conditional write since its "
                                  "probe; run vh vault storage probe " + std::to_string(vaultId));
-    return std::make_shared<sync::manifest::S3Store>(std::move(controller), capability.capability);
+    return std::make_shared<storage::s3::ManifestStore>(std::move(controller), capability.capability);
 }
 
 Pending put(const uint32_t vaultId, const uint32_t version, const crypto::SecretKey& key) {

@@ -1,4 +1,5 @@
 #include "storage/CloudEngine.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "storage/s3/Controller.hpp"
 #include "storage/BucketCapability.hpp"
@@ -488,7 +489,7 @@ std::shared_ptr<vh::sync::manifest::Service> CloudEngine::manifestV2() const {
     if (!manifestV2_ || manifestV2Mode_ != mode) {
         if (!vault->uid) throw std::runtime_error("an opaque_v1 vault without a uid can't publish its manifest");
         manifestV2_ = std::make_shared<vh::sync::manifest::Service>(
-            vault->id, *vault->uid, std::make_shared<vh::sync::manifest::S3Store>(s3Provider_, mode), encryptionManager);
+            vault->id, *vault->uid, std::make_shared<vh::storage::s3::ManifestStore>(s3Provider_, mode), encryptionManager);
         manifestV2Mode_ = mode;
     }
     return manifestV2_;

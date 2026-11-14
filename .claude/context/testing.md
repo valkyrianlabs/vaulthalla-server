@@ -438,7 +438,7 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   `Vhf1Fuzz` in the unit tests. Keep `build-fuzz` out of rsync `--delete` mirrors.
 - Manifest v2 (#368): `ManifestVectors`, `ManifestDocument`, `ManifestPartition`, `ManifestPublish*`, `ManifestChain*`,
   `ManifestContent*`, `ManifestReplay*` (`test_manifest.cpp`, DB-free, CI) run the protocol on the versioned fake bucket
-  through the production `S3Store`; `ManifestVectors` reads every `manifest` vector (the contract above checks it, and
+  through the production `storage::s3::ManifestStore`; `ManifestVectors` reads every `manifest` vector (the contract above checks it, and
   that every chain error/warning is one `sync::manifest` knows). `ManifestDbTest.*` (`test_manifest_db.cpp`,
   db-only) compares DB → collect → publish → load → a scratch schema with an independent SQL projection of the live
   tables, and covers `remote_manifest_state`, the refused-root alert and the opaque_v1 `CloudEngine` path.
@@ -551,7 +551,7 @@ Two hard rules, enforced by `tests/helpers/live_bucket.hpp` (the only way a test
   before any request; `RunB2Bucket` sweeps orphans, creates one `vh-test-<host>-<pid>-<start>` bucket and
   `RunB2BucketEnvironment` deletes every version and the bucket after the last test, also on failure. One
   consolidated test, `TheManifestPublishesAsVersionsOfItsRoot` (probe says version_log; four publishes through the
-  real `S3Store` with their request counts; a blind reload; a sibling landed after our PUT and repaired; GC of every
+  real `storage::s3::ManifestStore` with their request counts; a blind reload; a sibling landed after our PUT and repaired; GC of every
   version of a collected segment; an envelope written and read back). `LiveB2Guard.*` runs in CI. **Passes live**
   (us-west-004, 2026-11-14, on the code as pushed; a first run on 2026-11-12 failed on one wrong test assertion: GC
   reports keys, not sids). Run: `(eval "$(grep -E '^export VH_B2_TEST_' .bashrc)"; VH_LIVE_TESTS=1 build/core/vh_unit_tests

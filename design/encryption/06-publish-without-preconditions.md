@@ -24,7 +24,7 @@ changes no VHF1, KEV1, key or segment format and does not design mirrors, which 
 
 | Write | Condition | Code | What the condition protects |
 |---|---|---|---|
-| Root `.vaulthalla/root` | `If-Match: <known ETag>`; `If-None-Match: *` at epoch 1 | `manifest::publish` (`sync/manifest/Publisher.cpp`), `S3Store::putIfMatch/putIfAbsent` (`Store.cpp:78-94`) | the lost update between writers: the loser gets 412, loads, verifies, merges, retries (spec 03 §3.4 step 3). A rebuilt root (`loadBase`, §4.2 (b)) is PUT with `If-Match` on the unreadable root's ETag, so it never overwrites an authentic root published meanwhile |
+| Root `.vaulthalla/root` | `If-Match: <known ETag>`; `If-None-Match: *` at epoch 1 | `manifest::publish` (`sync/manifest/Publisher.cpp`), `storage::s3::ManifestStore::putIfMatch/putIfAbsent` (`storage/s3/ManifestStore.cpp`) | the lost update between writers: the loser gets 412, loads, verifies, merges, retries (spec 03 §3.4 step 3). A rebuilt root (`loadBase`, §4.2 (b)) is PUT with `If-Match` on the unreadable root's ETag, so it never overwrites an authentic root published meanwhile |
 | Segments, snapshot segments `.vaulthalla/seg/<sid>` | `If-None-Match: *` | `Publisher.cpp` ("a fresh 128-bit sid: never exists"; a 412 is not caught) | overwriting an object of the same name: only a sid collision or a hostile bucket writer |
 | Layout hint `.vaulthalla/layout.json` | `If-None-Match: *`, 412 ignored | `Publisher.cpp`, first publish | keeps an existing hint (identical for every writer) |
 | Envelopes `.vaulthalla/key/<kid>` | `If-None-Match: *`, 412 ignored | `vault/RecoveryEnvelopes.cpp:77` | idempotence only: `kid` is the envelope's hash, so the same name holds the same bytes |
@@ -143,7 +143,7 @@ after 24 h (§5.4).
   modes. `writers` is the base root's set while it names this node, otherwise this node alone: past the §5.5 check
   that is a base from before the member, or a node with no own epoch (a restore), which so takes the vault over.
   Adding a node to the set is the mirror join and isn't built.
-- **Step 2.** `S3Store::put` maps every failure but a request budget or bucket protection to `PutOutcomeUnknown`.
+- **Step 2.** `storage::s3::ManifestStore::put` maps every failure but a request budget or bucket protection to `PutOutcomeUnknown`.
   The publisher then lists and looks for its version by hash among the versions after its base (a GET per version it
   hasn't opened; the ETag isn't used): found, it goes on as if the PUT had returned; not found while the base has no
   successor, the publish fails and records nothing (the next pass publishes again); not found while another version

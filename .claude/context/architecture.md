@@ -897,7 +897,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   bounded retry; prior names carried; GC keeps the last three roots' segments and anything < 24 h), `Reader`
   (fallbacks: root provider versions; segment provider version → older root → blind range; `blindRebuild` reads
   120-byte headers of `o/` only; `loadForRestore` says "freshness unverified: no checkpoint supplied"), `Store`
-  (`S3Store` over `s3::Controller`, no `x-amz-meta-*`). `db::query::sync::Manifest` collects the DB into `Content`
+  (`storage::s3::ManifestStore` over `s3::Controller`, no `x-amz-meta-*`). `db::query::sync::Manifest` collects the DB into `Content`
   (assigns `directories.uid` / `symlinks.uid` lazily; trash via `files_trashed.object_uid`; versions and tombstones from
   `o/<uid>` rows of `upstream_object_version`) and keeps `remote_manifest_state` (manifest_key `.vaulthalla/root`:
   epoch, root hash, ETag, refused root, gc_at) and `remote_manifest_root` (last three roots' sids). `Service` is the

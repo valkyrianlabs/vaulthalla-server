@@ -107,7 +107,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
   before 136 (`resolve`, at most one failed attempt per vault an hour). **Test mode never probes on its own**
   (`setLazyProbingForTesting`, `setControllerFactoryForTesting`): existing suites see Unknown and unchanged requests.
 - **What it changes:** `sync::manifest::ObjectStore::mode()` / `putOnce` (If-None-Match only where
-  `sendsPreconditions`), `S3Store(controller, mode)`; segments, snapshots, the layout hint and KEV1 envelopes go through
+  `sendsPreconditions`), `storage::s3::ManifestStore(controller, mode)`; segments, snapshots, the layout hint and KEV1 envelopes go through
   `putOnce`; the `path_v0` index-v1 is PUT plainly on a non-conditional bucket. On VersionLog the manifest root is
   published as provider versions (spec 06 §5; architecture.md "version_log publish"). `manifest::publish` throws
   `PublishUnsupported` **before any request** on Insufficient only, which `CloudEngine::publishManifestV2` turns into

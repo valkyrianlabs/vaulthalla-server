@@ -30,6 +30,7 @@
 #include "recovery/provider/Restore.hpp"
 #include "storage/ObjectKeys.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "sync/Planner.hpp"
 #include "sync/manifest/Store.hpp"
 #include "sync/rotation/Runtime.hpp"
@@ -401,7 +402,7 @@ TEST_F(OpaqueLayoutTest, OpaqueRequestAudit) {
     // A recovery recipient (#370): its KEV1 envelopes go to the same bucket (.vaulthalla/key/<kid>), under the same
     // request rules, at enrollment and at every rotation.
     vault::envelopes::setStoreFactoryForTesting([bucket = v.bucket](uint32_t) -> std::shared_ptr<sync::manifest::ObjectStore> {
-        return std::make_shared<sync::manifest::S3Store>(bucket);
+        return std::make_shared<storage::s3::ManifestStore>(bucket);
     });
     struct ResetEnvelopeStore {
         ~ResetEnvelopeStore() { vault::envelopes::setStoreFactoryForTesting({}); }

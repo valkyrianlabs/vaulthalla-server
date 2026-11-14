@@ -1,11 +1,9 @@
 #pragma once
 
-#include "storage/Fwd.hpp"
 #include "sync/manifest/WriteCapability.hpp"
 
 #include <cstdint>
 #include <ctime>
-#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -14,9 +12,9 @@
 // What the manifest needs from a bucket, and nothing else: conditional PUTs (If-None-Match: * for objects written
 // once, If-Match for the root), plain PUTs (buckets without conditional writes, spec 06), GETs (whole, ranged, by
 // provider version), a prefix listing, the versions of one key, DELETE and DELETE of one version. mode() is the
-// bucket's write capability (WriteCapability.hpp): which of the PUTs its callers may use. S3Store maps it onto
-// storage::s3::Controller, so every request is metered, budgeted and subject to the protection guard like any other
-// upstream request; tests use the same adapter over the versioned fake bucket.
+// bucket's write capability (WriteCapability.hpp): which of the PUTs its callers may use. Nothing here knows a
+// provider: the server's implementation is storage::s3::ManifestStore (storage/s3/ManifestStore.hpp, over its metered
+// controller).
 //
 // Manifest objects never carry x-amz-meta-* (spec 01: the provider learns nothing from metadata).
 namespace vh::sync::manifest {
@@ -27,9 +25,9 @@ public:
     explicit PreconditionFailed(const std::string& message) : std::runtime_error(message) {}
 };
 
-// The bucket refused to evaluate a condition at all (storage::s3::PreconditionsUnsupported: 501 / 400
-// NotImplemented). Nothing was written. On a bucket whose stored capability is Conditional (or Unknown) this means
-// the capability changed: callers stall and ask for a re-probe, never fall back to a plain PUT on their own (spec 06 §7).
+// The bucket refused to evaluate a condition at all (501 / 400 NotImplemented). Nothing was written. On a bucket
+// whose stored capability is Conditional (or Unknown) this means the capability changed: callers stall and ask for a
+// re-probe, never fall back to a plain PUT on their own (spec 06 §7).
 class ConditionsUnsupported : public std::runtime_error {
 public:
     explicit ConditionsUnsupported(const std::string& message) : std::runtime_error(message) {}
@@ -123,37 +121,6 @@ public:
     virtual void removeVersion(const std::string& key, const std::string& versionId);
     // The bucket's write capability. Unknown (never probed) behaves as Conditional: no silent downgrade.
     [[nodiscard]] virtual WriteCapability mode() const { return WriteCapability::Unknown; }
-};
-
-class S3Store final : public ObjectStore {
-public:
-    explicit S3Store(std::shared_ptr<storage::s3::Controller> s3,
-                     WriteCapability mode = WriteCapability::Unknown);
-
-    [[nodiscard]] std::optional<StoredObject> get(const std::string& key,
-                                                 const std::optional<std::string>& versionId) override;
-    [[nodiscard]] std::optional<std::vector<uint8_t>> getRange(const std::string& key, uint64_t offset,
-                                                              uint64_t length) override;
-    [[nodiscard]] std::optional<std::string> headEtag(const std::string& key) override;
-    std::string putIfAbsent(const std::string& key, const std::vector<uint8_t>& bytes) override;
-    std::string putIfMatch(const std::string& key, const std::vector<uint8_t>& bytes, const std::string& etag) override;
-    [[nodiscard]] std::vector<ListedObject> list(const std::string& prefix) override;
-    [[nodiscard]] std::vector<StoredVersion> versions(const std::string& key) override;
-    // Stops paging after the page that holds stopAt.
-    [[nodiscard]] std::vector<StoredVersion> versionsSince(const std::string& key,
-                                                           const std::optional<std::string>& stopAt) override;
-    [[nodiscard]] std::vector<StoredVersion> versionsUnder(const std::string& prefix) override;
-    void remove(const std::string& key) override;
-    PutResult put(const std::string& key, const std::vector<uint8_t>& bytes) override;
-    void removeVersion(const std::string& key, const std::string& versionId) override;
-    [[nodiscard]] WriteCapability mode() const override { return mode_; }
-
-private:
-    std::string put(const std::string& key, const std::vector<uint8_t>& bytes, const std::optional<std::string>& ifMatch,
-                    const std::optional<std::string>& ifNoneMatch);
-
-    std::shared_ptr<storage::s3::Controller> s3_;
-    WriteCapability mode_;
 };
 
 }

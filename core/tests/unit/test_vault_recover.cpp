@@ -38,6 +38,7 @@
 #include "storage/ObjectKeys.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/Capability.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "storage/s3/curl/Http.hpp"
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Store.hpp"
@@ -283,9 +284,9 @@ protected:
     static void useBucket(const std::shared_ptr<VersionedBucket>& bucket,
                           const sync::manifest::WriteCapability mode = sync::manifest::WriteCapability::Unknown) {
         vault::envelopes::setStoreFactoryForTesting(
-            [bucket, mode](uint32_t) { return std::make_shared<mf::S3Store>(bucket, mode); });
+            [bucket, mode](uint32_t) { return std::make_shared<storage::s3::ManifestStore>(bucket, mode); });
         ops::vault_recover::setStoreFactoryForTesting(
-            [bucket](unsigned, const std::string&) { return std::make_shared<mf::S3Store>(bucket); });
+            [bucket](unsigned, const std::string&) { return std::make_shared<storage::s3::ManifestStore>(bucket); });
         ops::vault_recover::setEngineHookForTesting([bucket](const std::shared_ptr<storage::Engine>& engine) {
             const auto cloud = std::static_pointer_cast<storage::CloudEngine>(engine);
             cloud->setS3ControllerForTesting(bucket);
@@ -884,7 +885,7 @@ protected:
                                                : json(nullptr);
         // The deliverer's side: the vault keys, opened from the bucket's envelopes with the recipient's secret.
         const auto sk = vl::keykit::RecoverySeed::parse(o.seed).x25519SecretKey();
-        mf::S3Store store(o.bucket);
+        storage::s3::ManifestStore store(o.bucket);
         for (const auto& obj : store.list(std::string(vl::keykit::kev1::kObjectPrefix))) {
             const auto got = store.get(obj.key, std::nullopt);
             try {

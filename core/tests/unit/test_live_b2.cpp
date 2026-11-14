@@ -15,6 +15,7 @@
 #include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "storage/s3/Capability.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "sync/manifest/Content.hpp"
 #include "sync/manifest/Document.hpp"
 #include "sync/manifest/Objects.hpp"
@@ -137,8 +138,8 @@ TEST_F(LiveB2, TheManifestPublishesAsVersionsOfItsRoot) {
     std::cout << "[live] probe: " << sync::manifest::to_string(probe.capability) << ", MD5 ETags " << probe.md5_etags
               << std::endl;
 
-    // (2) The manifest through the real S3Store.
-    const auto s3 = std::make_shared<mf::S3Store>(sharedController(), WriteCapability::VersionLog);
+    // (2) The manifest through the real storage::s3::ManifestStore.
+    const auto s3 = std::make_shared<storage::s3::ManifestStore>(sharedController(), WriteCapability::VersionLog);
     const auto store = std::make_shared<test_support::manifest_store::HookedStore>(s3);
     std::vector<uint8_t> keyBytes(32);
     randombytes_buf(keyBytes.data(), keyBytes.size());
