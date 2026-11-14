@@ -20,8 +20,8 @@
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Publisher.hpp"
 #include "sync/manifest/Reader.hpp"
-#include "sync/manifest/Service.hpp"
 #include "sync/manifest/Store.hpp"
+#include "sync/vault_manifest/Service.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/model/Vault.hpp"
@@ -416,7 +416,7 @@ TEST_F(ManifestDbTest, UidsAreAssignedOnceAndTrashKeepsTheObjectUid) {
 TEST_F(ManifestDbTest, StateRecordsEveryPublishAndKeepsThreeRoots) {
     write("/a.txt", "a");
     auto bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
-    mf::Service service(vaultId, vaultUid, std::make_shared<storage::s3::ManifestStore>(bucket), testKeys());
+    sync::vault_manifest::Service service(vaultId, vaultUid, std::make_shared<storage::s3::ManifestStore>(bucket), testKeys());
     std::vector<mf::PublishReport> reports;
     for (int i = 0; i < 4; ++i) {
         write("/a.txt", "a" + std::to_string(i));
@@ -457,7 +457,7 @@ TEST_F(ManifestDbTest, RollbackAndForkAreRefusedRecordedAndAlertedOnce) {
     write("/a.txt", "a");
     auto bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
     const auto keys = testKeys();
-    mf::Service service(vaultId, vaultUid, std::make_shared<storage::s3::ManifestStore>(bucket), keys);
+    sync::vault_manifest::Service service(vaultId, vaultUid, std::make_shared<storage::s3::ManifestStore>(bucket), keys);
     (void)drainManifestAlerts("");
     (void)service.publish();
     const auto epoch1 = *bucket->current(std::string(mf::kRootKey));

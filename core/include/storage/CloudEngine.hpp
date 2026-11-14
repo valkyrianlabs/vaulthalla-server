@@ -345,10 +345,10 @@ namespace vh::storage {
         // opaque_v1 vaults: the encrypted manifest v2 (#368, spec 03) replaces index-v1.json. Created on first use, and
         // again when the bucket's write capability changes (its store's mode() is fixed at construction).
         mutable std::mutex manifestV2Mutex_;
-        mutable std::shared_ptr<sync::manifest::Service> manifestV2_;
+        mutable std::shared_ptr<sync::vault_manifest::Service> manifestV2_;
         mutable sync::manifest::WriteCapability manifestV2Mode_{sync::manifest::WriteCapability::Unknown};
         [[nodiscard]] bool usesManifestV2() const;
-        [[nodiscard]] std::shared_ptr<sync::manifest::Service> manifestV2() const;
+        [[nodiscard]] std::shared_ptr<sync::vault_manifest::Service> manifestV2() const;
         // Publishes the vault's manifest v2 (and collects superseded segments once a day). A refused root (rollback,
         // fork) or repeated conflicts stall the pass (SyncStalled): nothing is written over a root the chain rules
         // refuse. onlyIfChanged: nothing is written when the vault's content equals what the last publish produced.

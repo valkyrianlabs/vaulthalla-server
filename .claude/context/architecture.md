@@ -895,7 +895,10 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   Proven byte for byte by `Vhf1Vectors` against `design/encryption/vectors/vectors.json`; fuzz target `vh_fuzz_vhf1`
   (`-Dfuzz=true`, clang; see testing.md).
 - **Encrypted manifest v2** (`sync::manifest`, `core/include/sync/manifest/`; #368, spec
-  `design/encryption/03-metadata-recovery.md` §3-§4; migration 125). Replaces `.vaulthalla/index-v1.json` for
+  `design/encryption/03-metadata-recovery.md` §3-§4; migration 125). `sync::manifest`, `crypto::vhf1` and
+  `storage/ObjectKeys` are the candidates of the shared format library (#443): they include only each other,
+  vl-keykit, OpenSSL, nlohmann and the standard library (`tools/contracts/test_format_library_contract.py`); the
+  server's side is `storage::s3::ManifestStore`, `sync::vault_manifest` and `db::query::sync::Manifest`. Replaces `.vaulthalla/index-v1.json` for
   `opaque_v1` vaults only (every new encrypting vault since #371). `Document` (root, segment, snapshot schemas; readers ignore unknown
   members; `recovery_policy` v1 of revocable grants, only class `customer` usable, other versions "not understood"),
   `Objects` (VHF1 kind 3 root with object uid = vault uid, kind 2 segments with object uid = sid), `Chain` (rollback,
@@ -907,8 +910,14 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   (`storage::s3::ManifestStore` over `s3::Controller`, no `x-amz-meta-*`). `db::query::sync::Manifest` collects the DB into `Content`
   (assigns `directories.uid` / `symlinks.uid` lazily; trash via `files_trashed.object_uid`; versions and tombstones from
   `o/<uid>` rows of `upstream_object_version`) and keeps `remote_manifest_state` (manifest_key `.vaulthalla/root`:
-  epoch, root hash, ETag, refused root, gc_at) and `remote_manifest_root` (last three roots' sids). `Service` is the
-  per-vault glue `CloudEngine` uses for opaque_v1 (`publishManifestV2`, `refreshRemoteIndexFromManifestIfChanged`
+  epoch, root hash, ETag, refused root, gc_at) and `remote_manifest_root` (last three roots' sids). The per-vault
+  logic is `sync::manifest::Session` (`Session.hpp`: publish and record, `verifyRemote` in both modes, repair, refusal,
+  daily GC) over a `StateStore` interface (`ChainState`, `RootRecord`) and a `SessionHost` of callbacks (content,
+  keys, node id, clock, alert, notices); it includes nothing of the server. `sync::vault_manifest::Service`
+  (`sync/vault_manifest/`, the server's namespace, since #443) wires it: `StateStore` on PostgreSQL
+  (`db::query::sync::Manifest`), `collect`, the vault's `EncryptionManager`, `Devices::nodeId()`, notices to the
+  cloud log and `notifyRefusedRoot` to the operator bus. It is the glue `CloudEngine` uses for opaque_v1
+  (`publishManifestV2`, `refreshRemoteIndexFromManifestIfChanged`
   verifies only and returns false: one HEAD of the root while its ETag is the recorded one, `ObjectStore::headEtag`);
   a pass publishes only when the collected content moved since the service's last publish (`publishIfChanged`); a
   refused root stalls the pass (`SyncStalled`) and raises one

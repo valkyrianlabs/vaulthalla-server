@@ -26,7 +26,7 @@
 #include "config/Registry.hpp"
 #include "sync/model/RemotePolicy.hpp"
 #include "sync/model/RemoteManifest.hpp"
-#include "sync/manifest/Service.hpp"
+#include "sync/vault_manifest/Service.hpp"
 #include "sync/manifest/Store.hpp"
 #include "vault/RecoveryEnvelopes.hpp"
 #include "sync/model/Event.hpp"
@@ -484,12 +484,12 @@ vh::sync::manifest::WriteCapability CloudEngine::writeCapability() const {
     return resolved.capability;
 }
 
-std::shared_ptr<vh::sync::manifest::Service> CloudEngine::manifestV2() const {
+std::shared_ptr<vh::sync::vault_manifest::Service> CloudEngine::manifestV2() const {
     const auto mode = writeCapability();
     std::scoped_lock lock(manifestV2Mutex_);
     if (!manifestV2_ || manifestV2Mode_ != mode) {
         if (!vault->uid) throw std::runtime_error("an opaque_v1 vault without a uid can't publish its manifest");
-        manifestV2_ = std::make_shared<vh::sync::manifest::Service>(
+        manifestV2_ = std::make_shared<vh::sync::vault_manifest::Service>(
             vault->id, *vault->uid, std::make_shared<vh::storage::s3::ManifestStore>(s3Provider_, mode), encryptionManager);
         manifestV2Mode_ = mode;
     }
