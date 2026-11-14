@@ -13,7 +13,10 @@ key manager, with one recovery key per account across all deployments and no per
 is stored is the vault keys themselves, every version, each wrapped to the account key; a server fetches only its own
 vaults' wrapped keys and a linked Desktop all of the account's; 1Password remains for installs without an account or
 as a second copy; it is included and automatic for managed storage. Also decided (§3.1 item 2): the server is the hub
-and holds the vault keys. Everything else here is a proposal; choices are under Open questions.
+and holds the vault keys. Decided 2026-11-14: one fingerprint confirmation per server when it is linked ("Pin"
+below) is kept, and it is the only confirmation a server asks for; recovery recipients besides the account key come
+from one account-signed recovery policy that every server verifies against that pin. Everything else here is a
+proposal; choices are under Open questions.
 
 ## Today
 
@@ -159,8 +162,8 @@ serves the policy; it can't forge one (no key) or roll one back (the sequence fl
 only delays it until the bucket's copy or a later fetch delivers it.
 
 **Depends on the pin.** A server without a confirmed pin accepts no policy. The one fingerprint confirmation per
-server at linking is still a proposal awaiting the maintainer ("Open questions"); this decision is what makes it
-the only confirmation a server ever needs.
+server at linking is decided (Cooper, 2026-11-14), and this policy is what makes it the only confirmation a server
+ever needs.
 
 **Surfaces, audit, tests.** `vh cloud key status` / `cloud.key.status` gain the accepted sequence and each vault's
 applied sequence; changing the policy is a Desktop and portal action only (the cloud's `key-manager.md`). Audit:
@@ -306,8 +309,9 @@ Landing order (wave 1): spec 06's probe columns, attach-remote, items 2, 3 and 6
 
 1. **Folding the fingerprint into the link code** (the cloud's `key-manager.md` open question 3): a
    password-authenticated exchange keyed by the link code, so one comparison covers both the server and the account
-   key. *Recommendation: design it later; until then the confirmation is required before any automatic use, and
-   Desktop's confirmation (no digits compared) is the default path, which keeps the per-server step to one click.*
+   key. The confirmation itself is decided (2026-11-14): required once per server before any automatic use. Folding
+   it into the link code is a later refinement, and Desktop's confirmation (no digits compared) is the default
+   path, which keeps the per-server step to one click.
 2. **Confirming in the console** with a passkey step-up. *Recommendation: no, as for recipients; revisit with #361.*
 3. **Who confirms:** super admins only, or also holders of the Export permission. *Recommendation: super admins,
    since one confirmation reaches every managed vault on the server.*
