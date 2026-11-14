@@ -442,6 +442,13 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   that every chain error/warning is one `sync::manifest` knows). `ManifestDbTest.*` (`test_manifest_db.cpp`,
   db-only) compares DB → collect → publish → load → a scratch schema with an independent SQL projection of the live
   tables, and covers `remote_manifest_state`, the refused-root alert and the opaque_v1 `CloudEngine` path.
+- Format library candidates (#443): `tools/contracts/test_format_library_contract.py` (`verify.sh packaging`) fails
+  when `crypto/vhf1`, `sync/manifest`, `storage/ObjectKeys`, the fuzz target or the store test helpers include
+  anything but each other, vl-keykit, OpenSSL, nlohmann and the standard library. `tests/helpers/memory_store.hpp`
+  is an in-memory versioned bucket with the manifest `ObjectStore` over it (no HTTP, nothing of the server);
+  `ManifestVersionLogInterleavings`, `ManifestVersionLogFaults` and `ManifestVersionLogBrokenOrder`
+  (`test_manifest_interleavings.cpp`) are parameterised over the bucket and run each test as `<test>/HttpFake` (the
+  versioned fake behind `storage::s3::ManifestStore`) and `<test>/Memory`.
 - version_log publish (spec 06 §5, §8.1-8.2): `ManifestPublishVersionLog*` / `ManifestChainVersionLog*`
   (`test_manifest.cpp`, DB-free) on a Reject501 fake (plain PUTs, one LIST more than conditional, loser deletes and
   merges, repair, GC of every version, janitor, lost reply, 5xx before commit, failed delete, writers and mode,
