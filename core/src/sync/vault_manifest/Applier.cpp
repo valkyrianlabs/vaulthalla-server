@@ -567,7 +567,9 @@ ApplyReport apply(const uint32_t vaultId, const manifest::Uid& vaultUid, const c
              .settle_window = head.settle_window,
              .own = !selfNode.empty() && head.root.producer.node_id == selfNode,
              .base = mf::baseCopyOf(head.root, head.root_bytes, head.segments, head.snapshots),
-             .writers = head.root.writers.value_or(std::vector<std::string>{})});
+             .writers = head.root.writers.value_or(std::vector<std::string>{}),
+             .producer = head.root.producer.node_id,
+             .published_at = head.root.published_at});
     });
     report.recorded = true;
     save();

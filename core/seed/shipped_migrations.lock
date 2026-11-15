@@ -101,3 +101,4 @@ current    e1d8da422d87a30e31a1dbf6f27db0cc93aa1b499c504a8d603e4feb7fa2a536  146
 current    9d82c8b78703d9f4f94b7fc1c672af9e6cb28d2650f9da1e8888f4cf5f8a4e4c  147_manifest_replicas.sql  unreleased
 current    e2df33b4be03cb56ca988f558a6bf62c37bc03bf1aba1a3b967b5314db14133a  148_manifest_shared_purge.sql  unreleased
 current    39c6b90a22a27bdbd8057af453ae29be4a72d737973298c6c7d0fda24baaf25f  149_fs_entry_explicit_mtime.sql  unreleased
+current    b6c2ec990ceb4f75b2d4483667aa50019c9318375ae612977184546e55517922  150_manifest_replicas_join.sql  unreleased

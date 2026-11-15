@@ -11,6 +11,7 @@
 #include <sodium.h>
 
 #include <array>
+#include <string_view>
 
 namespace vh::cloud::storage {
 
@@ -124,6 +125,24 @@ VaultStorage parseVault(const json& v) {
     if (const auto t = optInt(v, "detached_at")) out.detached_at = static_cast<std::time_t>(*t);
     if (const auto t = optInt(v, "converted_at")) out.converted_at = static_cast<std::time_t>(*t);
     out.moved_to = contract::movedToOf(v);
+    for (const auto* list : {"replicas", "former_replicas"})
+        if (v.contains(list) && v[list].is_array())
+            for (const auto& r : v[list]) {
+                if (!r.is_object()) continue;
+                VaultStorage::Replica rep{.deployment_id = optString(r, "deployment_id").value_or(""),
+                                          .name = optString(r, "name").value_or(""),
+                                          .node_id = optString(r, "node_id"),
+                                          .reason = optString(r, "reason"),
+                                          .unlisted_by = std::nullopt};
+                if (r.contains("unlisted") && r["unlisted"].is_object()) {
+                    const auto& u = r["unlisted"];
+                    const auto by = u.contains("by") && u["by"].is_object() ? optString(u["by"], "name") : std::nullopt;
+                    rep.unlisted_by = by.value_or("another server");
+                }
+                (std::string_view(list) == "replicas" ? out.replicas : out.former_replicas).push_back(std::move(rep));
+            }
+    if (v.contains("removed") && v["removed"].is_object())
+        out.removed_reason = optString(v["removed"], "reason").value_or("owner");
     if (v.contains("credential") && v["credential"].is_object()) {
         const auto& k = v["credential"];
         out.key_state = optString(k, "state").value_or("none");
@@ -256,6 +275,26 @@ Credential requestCredential(const Linked& link, const std::string& vaultUid) {
         throw CallError(r.status, "sealed_credential", "bad_context", std::string("the bucket key didn't open: ") + e.what());
     }
     return out;
+}
+
+bool leaveReplica(const Linked& link, const std::string& vaultUid) {
+    namespace d = storage_client_detail;
+    const auto r = signedCall(link.endpoint, link.installation, link.seed.bytes(), "DELETE",
+                              "/v1/vaults/" + d::checkedUid(vaultUid) + "/replica");
+    if (r.status == 404) return false;
+    if (!r.ok()) d::fail(r);
+    return true;
+}
+
+bool reportUnlisted(const Linked& link, const std::string& vaultUid, const std::string& nodeId) {
+    namespace d = storage_client_detail;
+    const auto r = signedCall(link.endpoint, link.installation, link.seed.bytes(), "POST",
+                              "/v1/vaults/" + d::checkedUid(vaultUid) + "/replicas/unlisted", nlohmann::json{{"node_id", nodeId}});
+    if (r.status == 404 && r.body.is_object() && r.body.contains("error") && r.body["error"].is_object() &&
+        r.body["error"].value("reason", "") == "not_held")
+        return false;
+    if (!r.ok()) d::fail(r);
+    return true;
 }
 
 void acknowledge(const Linked& link, const std::string& keyId) {

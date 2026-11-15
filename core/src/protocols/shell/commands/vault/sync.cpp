@@ -1,4 +1,5 @@
 #include "protocols/shell/commands/vault.hpp"
+#include "ops/CloudStorage.hpp"
 #include "protocols/shell/util/runOp.hpp"
 #include "protocols/shell/util/argsHelpers.hpp"
 #include "runtime/Deps.hpp"
@@ -41,6 +42,7 @@
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <vl/keykit/uid.hpp>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -608,12 +610,40 @@ static CommandResult handle_vault_sync_events(const CommandCall& call) {
 static std::string manifestStatusString(const std::shared_ptr<vh::storage::Engine>& engine) {
     const auto s3 = std::dynamic_pointer_cast<vh::vault::model::S3Vault>(engine->vault);
     if (!s3 || s3->storage_layout != vh::vault::model::StorageLayout::OpaqueV1) return {};
-    const auto st = db::query::sync::ManifestApply::status(engine->vault->id);
+    const auto st = engine->vault->uid
+                        ? vh::ops::cloud_storage::describeReplicas(vl::keykit::toBase32(*engine->vault->uid),
+                                                                   db::query::sync::ManifestApply::status(engine->vault->id))
+                        : db::query::sync::ManifestApply::status(engine->vault->id);
     const auto num = [](const nlohmann::json& v) { return v.is_null() ? std::string("none") : std::to_string(v.get<uint64_t>()); };
     std::ostringstream out;
     out << "\nManifest:\n  root epoch: " << num(st["epoch"]) << " (last own: " << num(st["own_epoch"]) << ")\n";
     if (!st["applying_epoch"].is_null()) out << "  applying: epoch " << num(st["applying_epoch"]) << " (incomplete)\n";
-    if (st["writers"].size() > 1) out << "  writers: " << st["writers"].size() << "\n";
+    if (st["writers"].size() > 1) {
+        // A replicated vault (experimental): each writer and its last root this server recorded.
+        out << "  writers: " << st["writers"].size() << (st["behind"].get<bool>() ? " (this server is behind)" : "")
+            << "\n";
+        for (const auto& r : st["replicas"])
+            out << "    " << r["node_id"].get<std::string>() << (r["self"].get<bool>() ? " (this server)" : "")
+                << ": last root " << (r["last_epoch"].is_null() ? std::string("none seen here")
+                                                                 : "epoch " + std::to_string(r["last_epoch"].get<uint64_t>()))
+                << (r["last_published_at"].is_null() ? "" : " at " + r["last_published_at"].get<std::string>())
+                << (r["cloud"].is_null() || r["cloud"] == "listed"
+                        ? std::string()
+                        : r["cloud"] == "former" ? "; Vaulthalla Cloud removed it (the next publish drops it)"
+                        : r["cloud"] == "unlisted" ? "; reported removed to Vaulthalla Cloud, which still lists it"
+                                                   : "; Vaulthalla Cloud doesn't list it")
+                << "\n";
+    }
+    for (const auto& c : st["cloud_only"])
+        out << "  Vaulthalla Cloud also lists " << c["name"].get<std::string>() << " (" << c["node_id"].get<std::string>()
+            << "), which isn't a writer here"
+            << (c["unlisted_by"].is_null() ? " (joining, or removed by a writer: the account holder removes it in the portal)"
+                                           : "; " + c["unlisted_by"].get<std::string>() +
+                                                 " removed it: the account holder removes it in the portal")
+            << "\n";
+    if (const auto& c = st["writers_change"]; !c.is_null())
+        out << "  writers change not published yet: " << c["kind"].get<std::string>() << " "
+            << c["node"].get<std::string>() << "\n";
     if (st["deferred"].get<int64_t>() > 0) out << "  deferred until closed: " << st["deferred"].get<int64_t>() << "\n";
     if (const auto& a = st["last_apply"]; !a.is_null()) {
         out << "  last apply: epoch " << a["epoch"].get<uint64_t>() << " from node " << a["producer"].get<std::string>()

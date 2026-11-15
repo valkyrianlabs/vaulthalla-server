@@ -567,7 +567,8 @@ path: B's daemon runs with `VH_TEST_MANIFEST_WRITERS=<A's node id>`, read only i
 installed service never enters it), which adds A to the writers of B's roots (`PublishOptions::extra_writers`); A's
 roots carry the set after it. `VH_TEST_FAULT_DIR/crash-after-root-put` (test mode only) ends a daemon with
 `_Exit(137)` between a root's PUT and its record (`SessionHost::afterRootPut`). Undo: drop both hooks in
-`Service::hostOf`.
+`Service::hostOf`. (Since the join, the drill uses `vh vault join --kit` and `VH_TEST_MANIFEST_WRITERS` is removed;
+see "As built: the join".)
 
 Every phase changes files through the real mounts and runs real passes (`vh vault sync`, waited for in each database;
 an hourly interval, so no pass runs unasked), then requires both nodes to record the same root and both FUSE views to
@@ -654,3 +655,130 @@ and `.FsEntryMtimeMigration149*`.
 3. Refusals on a replicated vault: `mirror` (refused on apply today), layout migration, key salvage, key rotation by a
    non-owner, `vh vault recover --into`, local-only grants, and non-`ask` conflict policies on a bucket that keeps no
    versions (forced to `ask` today rather than refused).
+
+## As built: the join (branch `feat/replica-join`; migration 150)
+
+Experimental and off by default: `sync.replicas.experimental: true` (`config::ReplicasConfig`), or every command below
+refuses (`replicas_experimental`). Super admins only, from the host CLI or a paired device; agents and browser
+sessions are refused (MCP excludes all three commands). No operator page and no release note: this note, the CLI usage
+(marked EXPERIMENTAL) and a changelog fragment.
+
+**Decided by the coordinator (2026-11-15), recorded with their undo:**
+
+| Decision | Undo |
+|---|---|
+| Two ways to deliver the keys, one join underneath: the recovery kit (`vh vault join --kit`, no cloud at all; BYOS with the operator's own `--api-key`) and the linked account through the restore relay (`--from-cloud`) | drop `ops::vault_replicas::join` and `Request::join` |
+| Only a solo vault rotates: every path that mints a key version refuses on a replicated vault, saying how (remove the other replicas, rotate, join them again: a join delivers the current keys). No replica keys, no pending versions | drop `refuseIfReplicated` in `EncryptionManager::prepare_key_rotation` / `mintSalvageKey` and `runSalvage` |
+| Refused on a replicated vault: layout migration, key salvage, a second copy of the vault uid on one server, the `mirror` strategy, adding (or revoking) a recovery recipient here | the `refuseIfReplicated` calls in `VaultLayout::start`, `Vaults::refuseMirrorOnReplica`, `RecoveryRecipients::add/revoke`, and the `vault_uid_exists` check |
+| At most three writers (`kMaxWriters`); replicas only on buckets with conditional PUT (a `version_log` root or probe refuses the join) until spec 06's A3 and A4 are confirmed live | `requireJoinable`, `WritersRefused` |
+
+**Decisions of mine (compatibility policy, rule 5), each with its undo:**
+
+1. *Revoking a local recipient is refused too* on a replicated vault (the other replicas would keep it; the coordinator
+   named only adding). Undo: drop the `revoke` refusal.
+2. *Writers changes persist* (`remote_manifest_state.writers_change`, migration 150) instead of a one-shot publish
+   option: a join records it in the restore's transaction, so a crash before its first publish still joins and never
+   takes the vault over; every publish carries it (on every round, on top of `writersFor`) until a recorded root shows
+   it, and `publishIfChanged` publishes while one is due. Undo: a `PublishOptions` field set by the ops calls only.
+3. *A restore (not a join) of a replicated root takes it over* as before (disaster recovery when the other servers are
+   gone; logged as a warning); refused only when this server already holds the vault's uid. Undo: refuse it while
+   the root names several writers.
+4. *Leave keeps or deletes the local copy*: `--keep-local` turns sync off and keeps the vault as it is (files never
+   fetched stay readable from the bucket); `--delete-local` schedules the vault's deletion here with
+   `delete_upstream: false` (the bucket is untouched). One of the two is required. A server another one already
+   removed only does the local part. Undo: a detach-to-local instead of keep.
+5. *Status "behind"* = an apply in progress, skipped or stopped, entries deferred, or a writers change not published.
+   It does not HEAD the bucket (status stays free). Undo: a HEAD in `ManifestApply::status`.
+6. *Directory mtimes and noncurrent dates* stay out of the "unchanged" comparison (see the mirror drill note).
+
+**How it runs.** `vh vault join` is `vh vault recover` in join mode (`ops::vault_recover::Request::join`): the same D1
+proofs, every version canonical (`join_key_unproven` otherwise; no salvage), the manifest's name (`--into` refused),
+nothing downloaded. `requireJoinable` refuses `join_no_manifest`, `join_already_writer`, `replica_limit`,
+`join_version_log`, `join_publish_mode` (the probe of the binding is not conditional) and `join_grant_local_only` (a
+usable recipient the root lists that this server can't re-enroll identically, or an account-key grant it doesn't pin).
+`Recover::apply` records the loaded root's writers and the writers change "add this node"; the vault's first publish
+then names the old writers plus this node. The other side applies that root on its next pass and keeps the new writer
+(its own publishes keep the root's writers). `vh vault leave` publishes a root without this node (`last_writer` for the
+only one), turns sync off, reports the leave to the cloud when linked, and keeps or deletes the copy; a server that
+left is superseded by the others' next roots. `vh vault replica remove <vault> <node>` publishes a root without a dead
+writer; once this server is the only writer the vault is solo and rotates again.
+
+**Status.** `ManifestApply::status` (`storage.vault.get` `manifest`, `vh vault sync info`) adds `replicas` (each
+writer the recorded root names, `self`, its last root this server recorded: `manifest_writer_root`, written by every
+`recordRoot` with the root's producer), `writers_change` and `behind`. The ws contract changed (models
+`VaultManifestStatus`, `ManifestReplica`, `ManifestWritersChange`, `SyncConfig.replicas`, `ReplicasConfig`).
+
+**Through the cloud** (vaulthalla-cloud `docs/design/managed-storage.md`, "The join contract for the server"):
+- `ops::cloud_restore::start(..., Intent::Join)` sends `intent: "join"`; its refusals map the envelope's `reason`
+  (not_enrolled, already_held, held_by_desktop, unplaced, replica_limit, replicated, ejecting, bucket_deleting,
+  restore_limit, payment_required, installation_only, invalid_intent) to Refused with a message that says what to do.
+  The bundle is proven as for a restore.
+- A managed bucket: once delivered (so approved), `ops::cloud_storage::joinBucketKey` exchanges this server's own
+  sealed key (`POST /v1/storage/vaults/{uid}/credentials`, probe, ack; the others' keys untouched) and the join runs on
+  it; `adoptJoinedVault` gives the new vault its managed-storage row (`active`) and binds the bucket. A BYOS bucket needs
+  `--api-key` and `--bucket`.
+- A join that fails or is interrupted after the request cancels it and, since cancelling after the approval doesn't
+  remove the replica, reports a leave (`DELETE /v1/vaults/{uid}/replica`; 404 when it wasn't approved).
+- `vh vault leave` reports `DELETE /v1/vaults/{uid}/replica` when linked (a failure is a note: run it again).
+- The managed-storage pass (`stepReplicas`): a vault listed with `removed: {reason: "owner"}` stops syncing; a
+  `former_replicas` entry still among the manifest's writers is dropped by this server's next publish (one change at a
+  time).
+
+**Contract gaps, closed (2026-11-15, vaulthalla-cloud `managed-storage.md` "As built" 29 and contract 7, 10):**
+- The cloud's `replicas` and `former_replicas` carry each deployment's `node_id` (only to servers that hold or held the
+  vault); the server matches former replicas to the manifest's writers by it. Null only for a deployment linked before
+  link requests carried a node id: logged, nothing changes.
+- *A dead replica stays the account holder's to remove at the cloud* (decided with the cloud: one server never evicts
+  another there, since the cloud's replica set decides who gets a bucket key). `vh vault replica remove`, when linked,
+  publishes the root without the node and then reports it (`POST /v1/vaults/{uid}/replicas/unlisted {node_id}`), and
+  says what the cloud says: "Vaulthalla Cloud still lists '<name>' ... until the account holder removes it from the
+  vault in the portal", or that it no longer lists it (`RemoveResult.cloud`, `cloud` in `--json`). The cloud shows the
+  report beside that replica (`unlisted`). Undo: drop `reportWriterRemoved`.
+- *The two sides never disagree silently:* `vh vault sync info` and `storage.vault.get` (`manifest`) annotate each
+  writer with `cloud` (`listed`, `unlisted`, `former`: the next publish drops it, `not_listed`; null when unlinked or
+  before the first poll) and add `cloud_only` (servers the cloud lists that the root doesn't name: joining, or removed
+  here and not yet by the owner), from the managed-storage pass's last overview (`ops::cloud_storage::
+  describeReplicas`; no HEAD, no extra call). The ws contract changed (models `ManifestReplica.cloud`,
+  `VaultManifestStatus.cloud_only`, `ManifestCloudOnly`). Undo: drop the two calls of `describeReplicas`.
+- Refusals are matched on the envelope's `reason` (the contract now says so; `code` is only the class).
+
+**What the cloud drill found (vaulthalla-cloud `tests/milestone/managed.py` steps 17 and 18: real servers through the
+real cloud, moto checking every key), each fixed here with a test beside it:**
+
+1. *The flag was checked after the cloud acted.* `vh vault join --from-cloud` with `sync.replicas.experimental` off made
+   the restore request, waited for the approval (which adds the replica at the cloud) and the delivery, exchanged a
+   bucket key, and only then refused `replicas_experimental` (cleaning up with a cancel and a leave). The flag, the
+   channel and the caller are now checked before anything is asked (`vault_replicas::requireJoinAllowed`;
+   `VaultRecoverFromCloud.AJoinIsRefusedBeforeAnythingIsAskedWithTheFlagOffOrForAnAgent`).
+2. *A server the owner removed couldn't leave.* Its sync stopped before it applied the others' root without it, so its
+   own state still named it and `vh vault leave` tried to publish with a revoked key (`remote_unavailable`; nothing
+   changed, and a re-join was then refused because the old copy stayed). Leave now asks the cloud first
+   (`cloud_storage::removedAtCloud`, the last poll's answer when the cloud can't be reached): removed by the account
+   holder, it only does the local part (sync off, keep or delete the copy) and doesn't report a leave
+   (`CloudStorageTest.TheReplicaSetIsReadARemovedVaultStopsSyncingAndALeaveIsReported`; the drill). Undo: the
+   `removed` branch in `vault_replicas::leave`.
+3. *A re-join was stopped by the overview from before it.* The managed-storage pass acts on the cloud's overview cached
+   between polls; right after R joined again, a pass used the one that still said the owner had removed R, stopped the
+   new copy and dropped its fresh key. A restore or join through the cloud now drops the cached overview and starts
+   fast polling (`cloud_storage::refreshSoon`); nothing acts on the vault before a fresh answer
+   (`CloudStorageTest.TheReplicaSetIsReadARemovedVaultStopsSyncingAndALeaveIsReported`). Undo: the call in
+   `vault/recover.cpp`.
+4. *A join placed other writers' objects under /Recovered.* An object no live entry names (a purged file's object the
+   shared purge keeps for the orphan collection, or a PUT whose root isn't out yet) became `/Recovered/<uid>` on the
+   joining server, which then failed to upload it on every pass and would have published it into the shared tree. A
+   join leaves such objects alone (`vault::recover::Options::join`); a restore still recovers them
+   (`VaultRecoverDb.AJoinIsARestoreThatAddsThisNodeToTheWritersAndKeepsTheOthers`). Undo: the `options.join` skip.
+
+**Not built here:** rotation across replicas (replica keys, pending versions), the cloud-side removal of a dead
+replica by the owner (`DELETE /v1/vaults/{uid}/replicas/{deployment_id}`; the server drops it through
+`former_replicas`), conflict-review across replicas, B2 replicas.
+
+**Tests.** `ManifestApplyDb.ARemovalOrALeaveIsPublishedOnceAndClearedByTheRootThatShowsIt`,
+`.AFourthWriterIsRefusedByThePublish`, `.AReplicatedVaultRefusesWhatWouldMakeTheReplicasDiffer` (rotation, salvage
+mint, mirror, recipient, layout; a rotation once solo); `VaultRecoverDb.AJoinIsARestoreThatAddsThisNodeToTheWritersAndKeepsTheOthers`
+(flag, channel, dry run, writers, files, a second copy, no rotation); `VaultRecoverFromCloud.AJoinAsksForIntentJoinAndKeepsTheOtherWriter`
+(intent, every refusal reason, the join); `CloudStorageTest.TheReplicaSetIsReadARemovedVaultStopsSyncingAndALeaveIsReported`;
+`SqlDeployerHistoryDb` for 150 (below). The drill: `vhh drill mirror` joins B with the real `vh vault join --kit`
+(first refused with the flag off), then C as the third writer, D refused as the fourth, C leaving with its copy
+deleted, B removed by A after it died, A refused as the last writer, A rotating once solo, D joining with the new key.
+`VH_TEST_MANIFEST_WRITERS` is gone; the crash seam stays.

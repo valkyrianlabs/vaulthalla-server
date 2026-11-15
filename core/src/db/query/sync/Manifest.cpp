@@ -21,6 +21,12 @@ namespace vh::db::query::sync {
 
 namespace manifest_query_detail {
 
+vh::sync::manifest::WritersChange writersChangeOf(const nlohmann::json& j) {
+    return {j.at("kind").get<std::string>() == "add" ? vh::sync::manifest::WritersChange::Kind::Add
+                                                     : vh::sync::manifest::WritersChange::Kind::Remove,
+            j.at("node").get<std::string>()};
+}
+
 namespace mf = vh::sync::manifest;
 
 constexpr const char* kRootStateKey = ".vaulthalla/root";
@@ -101,7 +107,7 @@ vh::sync::manifest::ChainState Manifest::state(const uint32_t vaultId) {
             "       EXTRACT(EPOCH FROM refused_at)::bigint AS refused_at, EXTRACT(EPOCH FROM gc_at)::bigint AS gc_at, "
             "       root_version_id, base_version_id, array_to_json(settle_window)::text AS settle_window, own_epoch, "
             "       applying_epoch, applying_root_sha256, array_to_json(publishing_roots)::text AS publishing_roots, "
-            "       array_to_json(writers)::text AS writers "
+            "       array_to_json(writers)::text AS writers, writers_change::text AS writers_change "
             "FROM remote_manifest_state WHERE vault_id = $1 AND manifest_key = $2",
             pqxx::params{vaultId, kRootStateKey});
         if (res.empty()) return s;
@@ -125,8 +131,26 @@ vh::sync::manifest::ChainState Manifest::state(const uint32_t vaultId) {
             for (const auto& sha : nlohmann::json::parse(*p)) s.publishing_roots.push_back(sha.get<std::string>());
         if (const auto w = optText(row["writers"]))
             for (const auto& node : nlohmann::json::parse(*w)) s.writers.push_back(node.get<std::string>());
+        if (const auto c = optText(row["writers_change"])) s.writers_change = writersChangeOf(nlohmann::json::parse(*c));
         return s;
     });
+}
+
+void Manifest::setWritersChange(pqxx::work& txn, const uint32_t vaultId,
+                                const std::optional<vh::sync::manifest::WritersChange>& change) {
+    using namespace manifest_query_detail;
+    std::optional<std::string> text;
+    if (change)
+        text = nlohmann::json{{"kind", change->kind == vh::sync::manifest::WritersChange::Kind::Add ? "add" : "remove"},
+                              {"node", change->node}}.dump();
+    const auto r = txn.exec("UPDATE remote_manifest_state SET writers_change = $3::jsonb WHERE vault_id = $1 AND "
+                            "manifest_key = $2 RETURNING vault_id",
+                            pqxx::params{vaultId, kRootStateKey, text});
+    if (r.empty()) throw std::runtime_error("the vault has no recorded manifest root to change the writers of");
+}
+
+void Manifest::setWritersChange(const uint32_t vaultId, const std::optional<vh::sync::manifest::WritersChange>& change) {
+    Transactions::exec("Manifest::setWritersChange", [&](pqxx::work& txn) { setWritersChange(txn, vaultId, change); });
 }
 
 void Manifest::recordRoot(const uint32_t vaultId, const vh::sync::manifest::RootRecord& rec) {
@@ -164,6 +188,21 @@ void Manifest::recordRoot(pqxx::work& txn, const uint32_t vaultId, const vh::syn
                                        : std::nullopt,
                               nlohmann::json(rec.writers).dump()});
         txn.exec("DELETE FROM remote_manifest_pending WHERE vault_id = $1", pqxx::params{vaultId});
+        // A writers change this root shows is done (and one it can never show: a removal of a writer already gone).
+        if (const auto c = txn.exec("SELECT writers_change::text FROM remote_manifest_state WHERE vault_id = $1 AND "
+                                    "manifest_key = $2 AND writers_change IS NOT NULL",
+                                    pqxx::params{vaultId, kRootStateKey});
+            !c.empty() && writersChangeOf(nlohmann::json::parse(c[0][0].as<std::string>())).satisfiedBy(rec.writers))
+            txn.exec("UPDATE remote_manifest_state SET writers_change = NULL WHERE vault_id = $1 AND manifest_key = $2",
+                     pqxx::params{vaultId, kRootStateKey});
+        // Each writer's last root this server recorded (the replica status).
+        if (!rec.producer.empty())
+            txn.exec("INSERT INTO manifest_writer_root (vault_id, node_id, epoch, root_sha256, published_at, recorded_at) "
+                     "VALUES ($1, $2, $3, $4, NULLIF($5, '')::timestamptz, CURRENT_TIMESTAMP) "
+                     "ON CONFLICT (vault_id, node_id) DO UPDATE SET epoch = EXCLUDED.epoch, root_sha256 = "
+                     "  EXCLUDED.root_sha256, published_at = EXCLUDED.published_at, recorded_at = CURRENT_TIMESTAMP "
+                     "  WHERE manifest_writer_root.epoch <= EXCLUDED.epoch",
+                     pqxx::params{vaultId, rec.producer, static_cast<int64_t>(epoch), rootSha256, rec.published_at});
         std::string array = "{";
         for (std::size_t i = 0; i < sids.size(); ++i) {
             if (i) array += ',';

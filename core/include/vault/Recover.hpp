@@ -151,6 +151,10 @@ struct Options {
     std::optional<Uid> vault_uid;                 // which vault in the bucket (default: the kit's, else the bucket's hint)
     bool accept_rollback{false};
     std::vector<std::vector<uint8_t>> self_keys;  // this node's attestation public keys
+    // A join (vh vault join): the bucket is shared with the writers the root names, so an object no live entry names
+    // is theirs to account for (a purged file's object kept for the shared orphan collection, or a PUT whose root isn't
+    // published yet): it is left alone, never placed under /Recovered, and the joined tree is the root's.
+    bool join{false};
 };
 
 // Bytes fetched while planning, by what they were: the restore's download budget (spec 03 §7: nothing beyond
@@ -186,6 +190,8 @@ struct Plan {
     std::optional<std::string> root_sha256;
     std::optional<std::string> root_etag;
     std::optional<std::string> root_version_id;   // version_log buckets: the canonical head's provider version
+    std::optional<std::vector<std::string>> writers;  // the loaded root's writers (a join adds this node to them)
+    std::optional<std::string> publish_mode;       // the loaded root's `publish` (absent: conditional)
     sync::manifest::Freshness freshness{sync::manifest::Freshness::Unverified};
     std::string freshness_report;
     std::vector<std::string> issues;               // manifest fallbacks (segments from versions, older roots, blind)

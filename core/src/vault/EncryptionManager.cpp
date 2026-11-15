@@ -13,6 +13,7 @@
 #include "vault/RecoveryEnvelopes.hpp"
 #include "fs/model/File.hpp"
 #include "fs/PlaintextSource.hpp"
+#include "sync/vault_manifest/Replicas.hpp"
 
 #include <sodium.h>
 #include <openssl/evp.h>
@@ -247,6 +248,8 @@ void EncryptionManager::load_key() {
 
 void EncryptionManager::prepare_key_rotation() {
     if (!sealed_) throw std::logic_error("prepare_key_rotation requires a TPM-backed EncryptionManager");
+    // Only a solo vault mints key versions (design/cloud/mirrors.md, as amended: no replica keys yet).
+    sync::replicas::refuseIfReplicated(vault_id_, "a key rotation", sync::replicas::kRotateHow);
     if (db::query::vault::Key::keyRotationInProgress(vault_id_)) {
         log::Registry::crypto()->warn("[VaultEncryptionManager] Key rotation already in progress for vault {}", vault_id_);
         return;
@@ -294,6 +297,7 @@ void EncryptionManager::prepare_key_rotation() {
 
 unsigned int EncryptionManager::mintSalvageKey(const unsigned int vaultId, const unsigned int expectedVersion,
                                                const bool outgoingHeld) {
+    sync::replicas::refuseIfReplicated(vaultId, "a key salvage (it mints a key version)", sync::replicas::kRotateHow);
     const auto next = SecretKey::random();
     const auto key = std::make_shared<vault::model::Key>();
     key->vaultId = vaultId;

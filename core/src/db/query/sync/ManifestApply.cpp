@@ -1,5 +1,7 @@
 #include "db/query/sync/ManifestApply.hpp"
 
+#include "db/query/device/Device.hpp"
+
 #include "crypto/id/Generator.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "crypto/util/encrypt.hpp"
@@ -413,14 +415,35 @@ nlohmann::json ManifestApply::status(const uint32_t vaultId) {
     using namespace manifest_apply_detail;
     return Transactions::exec("ManifestApply::status", [&](pqxx::work& txn) {
         nlohmann::json out{{"epoch", nullptr}, {"own_epoch", nullptr}, {"applying_epoch", nullptr},
-                           {"writers", nlohmann::json::array()}, {"deferred", 0}, {"last_apply", nullptr}};
-        const auto s = txn.exec("SELECT epoch, own_epoch, applying_epoch, array_to_json(writers)::text FROM "
-                                "remote_manifest_state WHERE vault_id = $1 AND manifest_key = '.vaulthalla/root'",
+                           {"writers", nlohmann::json::array()}, {"deferred", 0}, {"last_apply", nullptr},
+                           {"replicas", nlohmann::json::array()}, {"writers_change", nullptr}, {"behind", false},
+                           {"cloud_only", nlohmann::json::array()}};   // the cloud's side: ops::cloud_storage::describeReplicas
+        const auto s = txn.exec("SELECT epoch, own_epoch, applying_epoch, array_to_json(writers)::text, "
+                                "  writers_change::text FROM remote_manifest_state WHERE vault_id = $1 AND "
+                                "  manifest_key = '.vaulthalla/root'",
                                 pqxx::params{vaultId});
         if (!s.empty()) {
             for (const auto* k : {"epoch", "own_epoch", "applying_epoch"})
                 if (!s[0][k].is_null()) out[k] = s[0][k].as<uint64_t>();
             out["writers"] = nlohmann::json::parse(s[0][3].as<std::string>());
+            if (!s[0][4].is_null()) out["writers_change"] = nlohmann::json::parse(s[0][4].as<std::string>());
+        }
+        // Each writer the recorded root names, with its last root this server recorded (none yet: nulls).
+        const auto self = db::query::device::Devices::nodeId();
+        for (const auto& w : out["writers"]) {
+            const auto node = w.get<std::string>();
+            nlohmann::json rep{{"node_id", node}, {"self", node == self}, {"last_epoch", nullptr},
+                               {"last_root_sha256", nullptr}, {"last_published_at", nullptr}, {"cloud", nullptr}};
+            const auto r = txn.exec("SELECT epoch, root_sha256, to_char(published_at AT TIME ZONE 'UTC', "
+                                    "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM manifest_writer_root WHERE vault_id = $1 AND "
+                                    "node_id = $2",
+                                    pqxx::params{vaultId, node});
+            if (!r.empty()) {
+                rep["last_epoch"] = r[0][0].as<uint64_t>();
+                rep["last_root_sha256"] = r[0][1].as<std::string>();
+                if (!r[0][2].is_null()) rep["last_published_at"] = r[0][2].as<std::string>();
+            }
+            out["replicas"].push_back(std::move(rep));
         }
         out["deferred"] = txn.exec("SELECT count(*) FROM manifest_apply_deferred WHERE vault_id = $1",
                                    pqxx::params{vaultId}).one_field_ref().as<int64_t>();
@@ -446,6 +469,12 @@ nlohmann::json ManifestApply::status(const uint32_t vaultId) {
                                  {"stopped", row[12].is_null() ? nlohmann::json(nullptr)
                                                                : nlohmann::json(row[12].as<std::string>())}};
         }
+        // Behind: this server has not taken in everything the bucket's head says (an apply in progress, skipped or
+        // stopped, or entries waiting for an open file), or a writers change is not published yet.
+        const auto& a = out["last_apply"];
+        out["behind"] = !out["applying_epoch"].is_null() || out["deferred"].get<int64_t>() > 0 ||
+                        (a.is_object() && (!a["recorded"].get<bool>() || !a["stopped"].is_null())) ||
+                        !out["writers_change"].is_null();
         return out;
     });
 }

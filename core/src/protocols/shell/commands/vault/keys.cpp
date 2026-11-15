@@ -2,6 +2,7 @@
 #include "protocols/shell/util/argsHelpers.hpp"
 #include "protocols/shell/commands/helpers.hpp"
 #include "runtime/Deps.hpp"
+#include "sync/vault_manifest/Replicas.hpp"
 #include "CommandUsage.hpp"
 
 #include "db/query/vault/Deletion.hpp"
@@ -357,6 +358,9 @@ static CommandResult handle_rotate_vault_keys(const CommandCall& call) {
     const auto rotateKey = [&syncNow](const std::shared_ptr<storage::Engine>& engine) -> std::string {
         const auto label = "'" + engine->vault->name + "' (ID: " + std::to_string(engine->vault->id) + ")";
         const bool alreadyPending = db::query::vault::Key::keyRotationInProgress(engine->vault->id);
+        if (!alreadyPending && ::vh::sync::replicas::replicated(engine->vault->id))
+            return "Key rotation for " + label + " is refused: the vault is replicated; " +
+                   std::string(::vh::sync::replicas::kRotateHow) + ".\n";
         // A new key version must not seal content before its recovery envelopes reach the bucket a remote attach is
         // filling: the rotation waits for the attach (vault/RemoteAttach.hpp) and starts when it ends.
         // A vault whose remote is read-only or unavailable can't put the new version's envelopes or re-sealed objects
@@ -403,6 +407,11 @@ static CommandResult handle_rotate_vault_keys(const CommandCall& call) {
     const auto engLkp = resolveEngine(call, vaultArg, usage, ERR);
     if (!engLkp || !engLkp.ptr) return invalid(engLkp.error);
     const auto engine = engLkp.ptr;
+    if (!db::query::vault::Key::keyRotationInProgress(engine->vault->id) &&
+        ::vh::sync::replicas::replicated(engine->vault->id))
+        return invalid("vault keys rotate: vault " + std::to_string(engine->vault->id) +
+                       " is replicated, and only a solo vault rotates: " + std::string(::vh::sync::replicas::kRotateHow) +
+                       " [vault_replicated]");
 
     return ok(rotateKey(engine));
 }

@@ -89,6 +89,26 @@ struct PublisherCache {
     RootCache roots;
 };
 
+// A replicated vault (design/cloud/mirrors.md, "Join", "Leave") has at most this many writers (spec 06 I7 bounds a
+// publish's rounds by writers + 1).
+inline constexpr std::size_t kMaxWriters = 3;
+
+// A change of the root's `writers` that this server's publishes carry until a recorded root shows it: a join adds this
+// node, a leave removes it, a replica removal another one. Applied on top of writersFor, on every round.
+struct WritersChange {
+    enum class Kind { Add, Remove };
+    Kind kind{Kind::Add};
+    std::string node;
+    [[nodiscard]] bool operator==(const WritersChange&) const = default;
+    // The writers already show it.
+    [[nodiscard]] bool satisfiedBy(const std::vector<std::string>& writers) const;
+};
+
+// A writers change the publish refuses (more than kMaxWriters); nothing is written.
+struct WritersRefused final : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 struct PublishOptions {
     std::string now;                 // published_at, and the `until` of prior names (isoTime(time(nullptr)))
     unsigned max_attempts{3};
@@ -111,9 +131,8 @@ struct PublishOptions {
     // never merged in memory; publish throws HeadMoved instead (after deleting a losing version_log root, as usual).
     // False: the in-memory merge of spec 03 §3.4 step 3 (the tests' writers without a database).
     bool apply_on_lost{false};
-    // Writers added to the root's set beside this server's (test instances only: the harness's stand-in for the
-    // mirror join; the server fills it only in test mode, see vault_manifest::Service).
-    std::vector<std::string> extra_writers{};
+    // The join, leave or replica removal this publish carries (ChainState::writers_change).
+    std::optional<WritersChange> writers_change{};
     // Called before each PUT of a root with its SHA-256 and its pending base copy: the sealed root and the sealed bytes
     // of the segments and snapshot segments this call wrote, by sid (the others are the base's, already kept). The
     // server records them (originOf's `noted`; the base when another writer builds on this root before its record).

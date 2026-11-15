@@ -878,13 +878,16 @@ Config& Config::operator=(Config&&) noexcept = default;
     void to_json(nlohmann::json &j, const SyncConfig &c) {
         j = {
             {"event_audit_retention_days", c.event_audit_retention_days},
-            {"event_audit_max_entries", c.event_audit_max_entries}
+            {"event_audit_max_entries", c.event_audit_max_entries},
+            {"replicas", {{"experimental", c.replicas.experimental}}}
         };
     }
 
     void from_json(const nlohmann::json &j, SyncConfig &c) {
         c.event_audit_retention_days = std::max(7, j.value("event_audit_retention_days", 30));
         c.event_audit_max_entries = std::max(1000, j.value("event_audit_max_entries", 10000));
+        if (const auto r = j.find("replicas"); r != j.end() && r->is_object())
+            c.replicas.experimental = r->value("experimental", false);
     }
 
     void to_json(nlohmann::json &j, const StorageRatesApiConfig &c) {

@@ -17,6 +17,7 @@
 #include "vault/model/APIKey.hpp"
 #include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
+#include "sync/vault_manifest/Replicas.hpp"
 
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
@@ -183,6 +184,8 @@ Status start(const Actor& actor, const StartRequest& request) {
     const auto vault = d::liveVault(request.vault_id);
     const auto engine = d::cloudEngineFor(vault->id);
     if (!engine) throw Conflict("vault '" + vault->name + "' is not an S3 or R2 vault loaded on this host");
+    sync::replicas::refuseIfReplicated(vault->id, "a layout migration",
+                                       "replicas are opaque_v1 already; a vault migrates only while it is solo");
     if (const auto existing = d::Q::get(vault->id); existing && existing->state != vault::layout::State::Failed)
         throw Conflict(fmt::format("vault '{}' already has a layout migration ({})", vault->name,
                                    vault::layout::to_string(existing->state)));

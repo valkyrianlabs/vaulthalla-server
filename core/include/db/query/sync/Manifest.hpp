@@ -35,6 +35,12 @@ public:
     // The same inside the caller's transaction (attach-remote's cutover records the root it verified with the rest).
     static void recordRoot(pqxx::work& txn, uint32_t vaultId, const vh::sync::manifest::RootRecord& record);
 
+    // A join, leave or replica removal (migration 150): every publish carries it until a recorded root shows it, then
+    // recordRoot clears it; nullopt clears it now. Throws std::runtime_error when the vault has no recorded root.
+    static void setWritersChange(uint32_t vaultId, const std::optional<vh::sync::manifest::WritersChange>& change);
+    static void setWritersChange(pqxx::work& txn, uint32_t vaultId,
+                                 const std::optional<vh::sync::manifest::WritersChange>& change);
+
     // The local base copy of the recorded root (migration 145): the root's sealed bytes and those of the segments it
     // names, as recordRoot stored them; nullopt when none is stored.
     [[nodiscard]] static std::optional<vh::sync::manifest::BaseCopy> base(uint32_t vaultId);

@@ -37,11 +37,19 @@
 #include "sync/manifest/Reconcile.hpp"
 #include "sync/vault_manifest/Service.hpp"
 #include "vault/EncryptionManager.hpp"
+#include "ops/Error.hpp"
+#include "ops/RecoveryRecipients.hpp"
+#include "ops/VaultLayout.hpp"
+#include "ops/Vaults.hpp"
+#include "sync/vault_manifest/Replicas.hpp"
 
 #include <vl/keykit/kev1.hpp>
 #include <vl/keykit/seed.hpp>
 
+#include <fmt/format.h>
+
 #include <atomic>
+#include <functional>
 #include <chrono>
 #include <set>
 #include <thread>
@@ -1367,6 +1375,102 @@ TEST_F(ManifestApplyDb, SharedTrashObjectsAreCollectedOnlyAfterTheGraceAndWhenNo
     db::query::sync::ManifestApply::notePurgedLocally(id(), "o/" + aUid);
     EXPECT_EQ(service->collectSharedOrphans(now + week + 60), 1u);
     EXPECT_FALSE(v.bucket->current("o/" + aUid));
+}
+
+
+// ── Replicated vaults: writers changes and refusals (design/sync/manifest-applier.md, "As built: the join") ──────────
+
+namespace {
+
+std::string refusalCode(const std::function<void()>& f) {
+    try {
+        f();
+    } catch (const ops::Refused& e) {
+        return e.code;
+    } catch (const std::exception& e) {
+        return std::string("other: ") + e.what();
+    }
+    return "ok";
+}
+
+}
+
+// A replica removal and a leave: the publish carries the change until the recorded root shows it, then it is cleared;
+// a server that left is superseded (its next publish is refused).
+TEST_F(ManifestApplyDb, ARemovalOrALeaveIsPublishedOnceAndClearedByTheRootThatShowsIt) {
+    seed();
+    share();
+    const auto self = db::query::device::Devices::nodeId();
+    ASSERT_TRUE(sync::replicas::replicated(id()));
+    db::query::sync::Manifest::setWritersChange(id(), mf::WritersChange{mf::WritersChange::Kind::Remove, "another-node"});
+    EXPECT_TRUE(db::query::sync::ManifestApply::status(id())["behind"].get<bool>()) << "a change not published yet";
+    EXPECT_TRUE(service->publishIfChanged()) << "a pending change publishes even with nothing else changed";
+    EXPECT_EQ(head().root.writers, std::vector<std::string>{self});
+    EXPECT_FALSE(db::query::sync::Manifest::state(id()).writers_change) << "shown by the recorded root: cleared";
+    EXPECT_FALSE(sync::replicas::replicated(id())) << "solo again";
+    EXPECT_FALSE(service->publishIfChanged());
+
+    fresh();
+    seed();
+    share();
+    db::query::sync::Manifest::setWritersChange(id(), mf::WritersChange{mf::WritersChange::Kind::Remove, self});
+    (void)service->publish();
+    EXPECT_EQ(head().root.writers, std::vector<std::string>{"another-node"}) << "left: the other writer stays";
+    mkdir("/AfterLeaving");
+    auto later = head().content;
+    (void)publishAs(later, "another-node", true);
+    EXPECT_NE(refusalCode([&] { (void)service->applyRemote(); (void)service->publish(); }), "ok")
+        << "a server that left publishes nothing over the others";
+}
+
+// At most three writers: a fourth is refused by the publish itself, and nothing is written.
+TEST_F(ManifestApplyDb, AFourthWriterIsRefusedByThePublish) {
+    seed();
+    const auto h = head();
+    auto named = h.root;
+    named.epoch = h.acceptance.epoch + 1;
+    named.prev = h.acceptance.root_sha256;
+    named.producer.node_id = "node-2";
+    named.writers = std::vector<std::string>{db::query::device::Devices::nodeId(), "node-2", "node-3"};
+    const auto k = v.engine->encryptionManager->currentKey();
+    (void)v.bucket->seed(std::string(mf::kRootKey), mf::sealRoot(named, uid(), {k.version, k.key}));
+    ASSERT_TRUE(service->applyRemote());
+    const auto epoch = head().acceptance.epoch;
+    db::query::sync::Manifest::setWritersChange(id(), mf::WritersChange{mf::WritersChange::Kind::Add, "node-4"});
+    EXPECT_THROW((void)service->publish(), mf::WritersRefused);
+    EXPECT_EQ(head().acceptance.epoch, epoch);
+    const auto st = db::query::sync::ManifestApply::status(id());
+    ASSERT_EQ(st["replicas"].size(), 3u);
+    EXPECT_TRUE(st["replicas"][0]["self"].get<bool>());
+    EXPECT_FALSE(st["replicas"][1]["last_epoch"].is_null()) << "node-2's root was recorded here";
+    EXPECT_TRUE(st["replicas"][2]["last_epoch"].is_null()) << "node-3 published nothing this server recorded";
+}
+
+// What a replicated vault refuses (design/cloud/mirrors.md, as amended): every path that mints a key version, the
+// mirror strategy, a local-only recovery recipient, a layout migration; and once solo again, a rotation works.
+TEST_F(ManifestApplyDb, AReplicatedVaultRefusesWhatWouldMakeTheReplicasDiffer) {
+    seed();
+    share();
+    EXPECT_EQ(refusalCode([&] { v.engine->encryptionManager->prepare_key_rotation(); }), "vault_replicated");
+    EXPECT_EQ(refusalCode([&] { (void)vault::EncryptionManager::mintSalvageKey(id(), 9, false); }), "vault_replicated");
+    ops::vaults::SyncPatch mirror;
+    mirror.strategy = "mirror";
+    EXPECT_EQ(refusalCode([&] { (void)ops::vaults::updateSync(superUser, id(), mirror); }), "vault_replicated");
+    const auto pk = vl::keykit::RecoverySeed::generate().x25519PublicKey();
+    std::string hex;
+    for (const auto b : pk) hex += fmt::format("{:02x}", b);
+    EXPECT_EQ(refusalCode([&] {
+                  (void)ops::recovery_recipients::add(superUser, {.vault_id = id(), .public_key = hex},
+                                                      ops::vault_keys::Channel::Cli);
+              }),
+              "vault_replicated");
+    EXPECT_EQ(refusalCode([&] { (void)ops::vault_layout::start(superUser, {.vault_id = id()}); }), "vault_replicated");
+
+    db::query::sync::Manifest::setWritersChange(id(), mf::WritersChange{mf::WritersChange::Kind::Remove, "another-node"});
+    (void)service->publish();
+    const auto before = v.engine->encryptionManager->get_key_version();
+    EXPECT_EQ(refusalCode([&] { v.engine->encryptionManager->prepare_key_rotation(); }), "ok") << "solo: rotates";
+    EXPECT_EQ(v.engine->encryptionManager->get_key_version(), before + 1);
 }
 
 }

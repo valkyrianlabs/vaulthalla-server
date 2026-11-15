@@ -3,12 +3,10 @@
     sudo tools/harness/vhh.sh drill mirror --build build [--keep] [--out report.json]
 
 Node A writes an opaque_v1 vault on the harness's fake S3 (versioned) and enrolls a recovery kit. Node B, an
-independent instance (own database, swtpm, mount), restores the vault from the bucket with the kit
-(`vh vault recover`). There is no join yet, so both nodes are made writers by a harness-only path: node B's daemon
-runs with VH_TEST_MANIFEST_WRITERS=<A's node id>, which the server reads only in test mode (an installed service never
-enters test mode: runtime::test_instance), so B's first root names both nodes and A's roots carry the set after it.
-A fault file (VH_TEST_FAULT_DIR/crash-after-root-put, test mode only) ends a daemon between a root's PUT and its
-record.
+independent instance (own database, swtpm, mount), joins it with the kit (`vh vault join --kit`, experimental: first
+refused with sync.replicas.experimental off, then run with it on): the vault is built from the bucket's manifest and
+B's first root adds B to the writers, keeping A. A fault file (VH_TEST_FAULT_DIR/crash-after-root-put, test mode
+only) ends a daemon between a root's PUT and its record.
 
 Each phase changes files through the real FUSE mounts, runs real sync passes (`vh vault sync`, waited for in the
 instance's database), and checks both daemons: the trees (path, kind, size, mode, bytes, symlink target) are equal, each
@@ -17,6 +15,9 @@ and restore, deletes; every row of the conflict table with real files; a file he
 deferred, then applied after the close; B crashing between its root PUT and the record while A builds on it; a
 remote-only file hydrated on B after A moved it; the trash race (A deletes, B edits) with real passes and no remote
 DELETE from either side's purge; publishes stable when nothing changes; a recovery grant on one node only detected.
+Then the replica set: a rotation refused while replicated; a third writer C joins and converges; a fourth (D) is
+refused; C leaves (its copy deleted); B dies and A removes it; A, solo again, can't leave, rotates, and D joins and
+reads with the new key.
 
 Secrets (the kit, S3 credentials) stay in the drill's private directory and process memory; nothing is printed.
 """
@@ -37,6 +38,7 @@ from vhh.fake_s3 import FakeS3
 from vhh.instance import Instance
 
 FUSE = "drill"
+REPLICAS_ON = "sync: {replicas: {experimental: true}}\n"
 
 
 def _sql(node: Node, query: str) -> str:
@@ -161,11 +163,12 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
         fake.create_bucket(name, "Enabled")
         bucket = Bucket(name, fake, fake.endpoint, "AKIAVHHMIRROR", secrets.token_hex(16), "other", "us-east-1")
 
-        def node(tag: str, extra: dict | None = None) -> Node:
+        def node(tag: str, replicas: bool = True) -> Node:
             faults = private / f"faults-{tag}"
             faults.mkdir(exist_ok=True)
             inst = Instance(build, run_id=f"mirror{tag}_{run_id}", own_tpm=True,
-                            extra_env={"VH_TEST_FAULT_DIR": str(faults), **(extra or {})})
+                            config_extra=REPLICAS_ON if replicas else "",
+                            extra_env={"VH_TEST_FAULT_DIR": str(faults)})
             inst.start()
             n = Node(inst, admin, private)
             n.faults = faults  # type: ignore[attr-defined]
@@ -184,8 +187,16 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
             if interval != "3600":
                 raise DrillError(f"vault {vid}: the sync interval is {interval}s, not an hour")
 
-        # ------------------------------------------------------------------ A writes, B restores, both writers
-        print("vhh drill mirror: node A writes; node B restores; both become writers (test-only)", flush=True)
+        def join(n: Node, tag: str) -> tuple[int, dict]:
+            return n.vh_json("vault", "join", "--api-key", "drill", "--bucket", bucket.name, "--kit", "kit.json",
+                             check=False)
+
+        def writers(n: Node, vid: int) -> int:
+            return int(_sql(n, f"SELECT cardinality(writers) FROM remote_manifest_state WHERE vault_id = {vid} "
+                               f"AND manifest_key = '.vaulthalla/root'") or 0)
+
+        # ------------------------------------------------------------------ A writes, B joins
+        print("vhh drill mirror: node A writes; node B joins with the kit", flush=True)
         a = node("a")
         cp = a.vh("vault", "create", FUSE, "--s3", "--api-key", "drill", "--bucket", bucket.name)
         va = vault_id_of(cp.stdout)
@@ -210,18 +221,25 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
                         "--status", str(status_path)], check=True, capture_output=True, timeout=60)
         node_a = status_a["node_id"]
 
-        b = node("b", {"VH_TEST_MANIFEST_WRITERS": node_a})
-        code, res = b.vh_json("vault", "recover", "--api-key", "drill", "--bucket", bucket.name, "--kit", "kit.json")
-        if not report.check("B: restored from the bucket with the kit", code == 0 and res.get("written") is True,
-                            json.dumps(res)[:800]):
-            raise DrillError("the restore failed")
+        b = node("b", replicas=False)
+        code, res = join(b, "b")
+        report.check("B: the join is refused while sync.replicas.experimental is off",
+                     code != 0 and res.get("error") == "replicas_experimental", json.dumps(res)[:400])
+        with open(b.inst.run_dir / "config.yaml", "a") as f:
+            f.write(REPLICAS_ON)
+        b.close()
+        b.inst.restart(kill=False)
+        code, res = join(b, "b")
+        if not report.check("B: joined with the kit (every key version proven, nothing downloaded)",
+                            code == 0 and res.get("written") is True and "join" in res, json.dumps(res)[:800]):
+            raise DrillError("the join failed")
         vb = int(res["vault_id"])
         quiet(b, vb)
         sync(b, vb)
         sync(a, va)
-        writers_a = _sql(a, f"SELECT cardinality(writers) FROM remote_manifest_state WHERE vault_id = {va} "
-                            f"AND manifest_key = '.vaulthalla/root'")
-        report.check("both nodes are writers of the recorded root (the harness-only path)", writers_a == "2", writers_a)
+        report.check("A accepted B: both nodes are writers of the recorded root", writers(a, va) == 2 == writers(b, vb),
+                     f"{writers(a, va)} {writers(b, vb)}")
+        node_b = _sql(b, "SELECT node_id FROM device_node LIMIT 1")
         pair = Pair(a, b, va, vb, report, fake)
         pair.converged("after the restore")
 
@@ -378,20 +396,80 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
         report.check("7: four passes with nothing changed publish nothing (no alternating roots)", before == after,
                      json.dumps({"before": before, "after": after}))
 
-        # ------------------------------------------------------------------ 8. a grant on one node only (detected)
-        print("vhh drill mirror: a recovery grant on B only", flush=True)
+        # ------------------------------------------------------------------ 8. a grant on one node only (refused)
+        print("vhh drill mirror: a recovery grant on B only is refused; the replica status", flush=True)
         kit2 = private / "kit-b-only.json"
         cp = subprocess.run(["runuser", "-u", admin, "--", str(build / "core" / "vh-recovery"), "kit", "create",
                              "--output", str(kit2)], capture_output=True, text=True, timeout=60, cwd=str(private))
-        b.vh("vault", "keys", "recipient", "add", str(vb), "--public-key", cp.stdout.split()[0], "--label", "b-only")
-        pair.sync("b", "a")
-        notes = _sql(a, f"SELECT notes::text FROM manifest_apply_report WHERE vault_id = {va}")
-        report.check("8: A detects the grants differ between the writers (report note)", "grants_differ" in notes,
-                     notes[:300])
+        added = b.vh("vault", "keys", "recipient", "add", str(vb), "--public-key", cp.stdout.split()[0], "--label",
+                     "b-only", check=False)
+        report.check("8: a recovery recipient added on one replica only is refused",
+                     added.returncode != 0 and "is refused on a replicated vault" in added.stdout + added.stderr,
+                     (added.stdout + added.stderr)[-300:])
         info = a.vh("vault", "sync", "info", str(va)).stdout
-        report.check("8: `vh vault sync info` shows the manifest status", "Manifest:" in info and "writers: 2" in info,
-                     info[-400:])
+        report.check("8: `vh vault sync info` shows the replica set (each writer and its last root)",
+                     "Manifest:" in info and "writers: 2" in info and node_b in info and "(this server)" in info,
+                     info[-600:])
         summary["epochs"] = {"a": epoch(a, va), "b": epoch(b, vb)}
+
+        # ------------------------------------------------------------------ 9. the replica set
+        print("vhh drill mirror: the replica set (rotation refused, a third writer, a fourth refused, leave, remove, "
+              "rotate when solo, join with the new key)", flush=True)
+        cp = a.vh("vault", "keys", "rotate", str(va), check=False)
+        report.check("9: a rotation is refused while the vault is replicated",
+                     cp.returncode != 0 and "vault_replicated" in cp.stdout + cp.stderr, (cp.stdout + cp.stderr)[-300:])
+        c = node("c")
+        code, res = join(c, "c")
+        if not report.check("9: C joined as the third writer", code == 0 and res.get("written") is True,
+                            json.dumps(res)[:600]):
+            raise DrillError("the third writer's join failed")
+        vc = int(res["vault_id"])
+        quiet(c, vc)
+        sync(c, vc)
+        pair.settle()
+        sync(c, vc)
+        report.check("9: three writers recorded on A, B and C", writers(a, va) == writers(b, vb) == writers(c, vc) == 3,
+                     f"{writers(a, va)} {writers(b, vb)} {writers(c, vc)}")
+        ta, tc = tree(a), tree(c)
+        diff = sorted(p for p in set(ta) | set(tc) if ta.get(p) != tc.get(p))
+        report.check("9: C's FUSE view equals A's", not diff and root_sha(c, vc) == root_sha(a, va), json.dumps(diff[:8]))
+        d = node("d")
+        code, res = join(d, "d")
+        report.check("9: a fourth writer is refused (at most three)", code != 0 and res.get("error") == "replica_limit",
+                     json.dumps(res)[:400])
+        code, res = c.vh_json("vault", "leave", str(vc), "--delete-local", check=False)
+        report.check("9: C left: a root without it, its copy deleted there (the bucket untouched)",
+                     code == 0 and res.get("deleted_local") is True and res.get("published_epoch") is not None,
+                     json.dumps(res)[:400])
+        sync(a, va)
+        sync(b, vb)
+        report.check("9: after C left, A and B record two writers", writers(a, va) == 2 == writers(b, vb),
+                     f"{writers(a, va)} {writers(b, vb)}")
+        b.close()
+        b.inst.stop()   # B is gone (its database too): A removes it
+        code, res = a.vh_json("vault", "replica", "remove", str(va), node_b, check=False)
+        report.check("9: A removed the dead B and is solo again", code == 0 and res.get("solo") is True,
+                     json.dumps(res)[:400])
+        code, res = a.vh_json("vault", "leave", str(va), "--keep-local", check=False)
+        report.check("9: the last writer can't leave", code != 0 and res.get("error") == "last_writer", json.dumps(res)[:300])
+        before = int(a.key_status(va)["version"])
+        a.vh("vault", "keys", "rotate", str(va))
+        sync(a, va)
+        sync(a, va)
+        after = int(a.key_status(va)["version"])
+        report.check("9: solo again, A rotates", after == before + 1, f"{before} -> {after}")
+        code, res = join(d, "d")
+        if report.check("9: D joins after the rotation (the kit unwraps the new version's envelope)",
+                        code == 0 and res.get("written") is True, json.dumps(res)[:600]):
+            vd = int(res["vault_id"])
+            quiet(d, vd)
+            sync(d, vd)
+            sync(a, va)
+            report.check("9: D holds the current key version", int(d.key_status(vd)["version"]) == after)
+            report.check("9: D reads A's files", d.sh(f"cat MNT/{FUSE}/Docs/report.txt").stdout ==
+                         a.sh(f"cat MNT/{FUSE}/Docs/report.txt").stdout)
+            report.check("9: A and D are the writers", writers(a, va) == 2 == writers(d, vd),
+                         f"{writers(a, va)} {writers(d, vd)}")
     except (DrillError, KeyboardInterrupt) as e:
         report.check("drill completed", False, str(e) or type(e).__name__)
         for n in nodes:   # what a failed step leaves behind: directory totals below zero

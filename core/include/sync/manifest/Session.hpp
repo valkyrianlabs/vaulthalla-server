@@ -55,6 +55,8 @@ struct ChainState {
     std::vector<std::string> publishing_roots;
     // The recorded root's `writers` (migration 147): more than this node means another writer exists.
     std::vector<std::string> writers;
+    // A join, leave or replica removal every publish carries until a recorded root shows it (migration 150).
+    std::optional<WritersChange> writers_change;
 };
 
 // One recorded root. version_id, base_version_id and the window on version_log buckets; own when this writer wrote it.
@@ -73,6 +75,9 @@ struct RootRecord {
     std::optional<BaseCopy> base{};
     // The recorded root's `writers`.
     std::vector<std::string> writers{};
+    // Its producer's node id and published_at (the replica status: each writer's last root; migration 150).
+    std::string producer{};
+    std::string published_at{};
 };
 
 // What verifyRemote found: the bucket's head as accepted, and, when it is not the recorded root, the loaded head itself
@@ -147,9 +152,7 @@ struct SessionHost {
     crypto::vhf1::KeyLookup keys;                     // every key version this writer holds
     std::function<std::string()> nodeId;              // this writer's name in a root's `writers`
     std::optional<uint64_t> vaultId{};                // this writer's id of the vault (a root's producer.vault_id)
-    // Test instances only (the server sets them in test mode): writers the next publish names beside this one (the
-    // harness's stand-in for the join), and a hook between a root's PUT and its record (a crash drill).
-    std::function<std::vector<std::string>()> extraWriters{};
+    // Test instances only (the server sets it in test mode): a hook between a root's PUT and its record (a crash drill).
     std::function<void()> afterRootPut{};
     std::function<std::time_t()> now;                 // the clock a publish stamps its root with
     std::function<void(const Refusal&)> alert;        // a root was refused: called once per refused root

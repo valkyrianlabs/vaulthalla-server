@@ -84,6 +84,10 @@ struct RecoverInput {
     std::optional<std::string> root_sha256{}, root_etag{};
     std::optional<std::string> root_version_id{};   // version_log buckets (migration 137)
     std::vector<std::string> root_sids{};
+    std::vector<std::string> writers{};             // the loaded root's writers, recorded with it
+    // A join (vh vault join): this node is added to the writers by the vault's next publish (writers_change, migration
+    // 150), in the same transaction as the restore, so a crash before that publish still joins and never takes over.
+    std::optional<std::string> join_node{};
     std::optional<unsigned int> created_by{};
     // An inode for each restored entry (root excluded: reinstateVault gives it one), from the FS cache, as creating
     // the entry would have: (the vault's FUSE name, the entry's vault path) → inode. Unset: assigned on first lookup.

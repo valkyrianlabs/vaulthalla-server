@@ -27,6 +27,7 @@
 #include "db/query/cloud/Storage.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/sync/Manifest.hpp"
+#include "db/query/sync/Policy.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/vault/RecoveryGrants.hpp"
 #include "db/query/vault/RemoteAttach.hpp"
@@ -162,6 +163,11 @@ struct FakeCloud {
         std::optional<std::string> detachedAt, convertedAt;
         bool hidden = false;   // removed from this deployment's view
         std::optional<std::string> movedTo;   // restored onto another deployment: listed with where it went
+        // Replicated vaults (the cloud's src/storage/ManagedStorage.cpp vaultView): the servers holding it, the ones
+        // removed lately, and `removed` once the account holder removed it from this server.
+        json replicas = json::array(), formerReplicas = json::array();
+        bool removedByOwner = false;
+        bool heldHere = true;   // DELETE /v1/vaults/{uid}/replica: 204 while held, then 404 no_such_vault
     };
     std::map<std::string, Vault> vaults;
     struct Key {
@@ -220,6 +226,12 @@ struct FakeCloud {
         if (const auto id = currentKeyOf(uid, &a); !id.empty())
             key = {{"key_id", id}, {"state", keys.at(id).state}, {"access", a}};
         out["credential"] = key;
+        out["replicas"] = v.replicas;
+        out["former_replicas"] = v.formerReplicas;
+        if (v.removedByOwner) {
+            out["removed"] = {{"reason", "owner"}, {"at", 1770000500}};
+            out["credential"] = {{"state", "none"}};
+        }
         return out;
     }
 
@@ -292,6 +304,22 @@ struct FakeCloud {
             if (!label || label->size() != vl::keykit::label::kSealedSize)
                 return error(400, "invalid_argument", "`label` is a sealed label: base64url of 240 bytes");
             vaults[uid].label = *label;
+            return reply(204, nullptr);
+        }
+        if (r.method == "POST" && path.starts_with("/v1/vaults/") && path.ends_with("/replicas/unlisted")) {
+            const auto uid = segment("/v1/vaults/");
+            const auto node = body.value("node_id", "");
+            for (auto& rep : vaults[uid].replicas)
+                if (rep.value("node_id", "") == node) {
+                    rep["unlisted"] = {{"by", {{"deployment_id", "dep-self"}, {"name", "this server"}}}, {"at", 3}};
+                    return reply(204, nullptr);
+                }
+            return error(404, "not_found", "no server of this vault has that node id", "not_held");
+        }
+        if (r.method == "DELETE" && path.starts_with("/v1/vaults/") && path.ends_with("/replica")) {
+            const auto uid = segment("/v1/vaults/");
+            if (!vaults.contains(uid) || !vaults[uid].heldHere) return error(404, "not_found", "no such vault", "no_such_vault");
+            vaults[uid].heldHere = false;
             return reply(204, nullptr);
         }
         if (r.method == "GET" && path == "/v1/storage") {
@@ -749,6 +777,125 @@ TEST_F(CloudStorageTest, ExistingVaultsAreOfferedAndNeverUploadedBeforeAPersonAc
     EXPECT_EQ(r.vaults, std::vector<unsigned int>{id});
     (void)tick();
     EXPECT_EQ(state(id), "registered");
+}
+
+// Replicated vaults (the join contract, 6 and 7): the replica set as the cloud lists it, a vault the account holder
+// removed from this server stops syncing, and a leave is reported once (then the cloud no longer holds it here).
+TEST_F(CloudStorageTest, TheReplicaSetIsReadARemovedVaultStopsSyncingAndALeaveIsReported) {
+    const auto parsed = vh::cloud::storage::parseOverview(json{
+        {"vaults", json::array({json{{"vault_uid", "0123456789abcdefghjkmnpqrs"},
+                                     {"replicas", json::array({{{"deployment_id", "dep-a"}, {"name", "A"}}})},
+                                     {"former_replicas", json::array({{{"deployment_id", "dep-b"}, {"name", "B"},
+                                                                       {"node_id", "node-b"}, {"reason", "server"},
+                                                                       {"removed_at", 1}}})},
+                                     {"removed", {{"reason", "owner"}, {"at", 2}}}}})}});
+    ASSERT_EQ(parsed.vaults.size(), 1u);
+    EXPECT_EQ(parsed.vaults[0].replicas.size(), 1u);
+    ASSERT_EQ(parsed.vaults[0].former_replicas.size(), 1u);
+    EXPECT_EQ(parsed.vaults[0].former_replicas[0].node_id, std::optional<std::string>("node-b"));
+    EXPECT_EQ(parsed.vaults[0].removed_reason, std::optional<std::string>("owner"));
+
+    const auto e = newVault("replica");
+    const auto id = e->vault->id;
+    linkAndPin();
+    const auto uid = uidOf(id);
+    auto& v = cloud_.vaults[uid];
+    v.registered = true;
+    v.replicas = json::array({{{"deployment_id", "dep-a"}, {"name", "A"}}});
+    (void)tick();
+    EXPECT_TRUE(db::query::sync::Policy::getSync(id)->enabled) << "listed as held: syncs";
+    EXPECT_FALSE(cs::removedAtCloud(uid));
+    v.removedByOwner = true;
+    EXPECT_TRUE(cs::removedAtCloud(uid)) << "asked live: vh vault leave then only changes the copy here";
+    (void)tick();
+    EXPECT_FALSE(db::query::sync::Policy::getSync(id)->enabled) << "removed by the account holder: stops syncing";
+    cloud_.reachable = false;
+    EXPECT_TRUE(cs::removedAtCloud(uid)) << "the last poll's word when the cloud can't answer";
+    cloud_.reachable = true;
+
+    // Joined again (the drill: the pass between fetches used the overview from before the join and stopped the new
+    // copy): a cloud restore or join drops the cached overview, and nothing acts on the vault before a fresh one.
+    const auto resume = [&] {
+        ops::vaults::SyncPatch on;
+        on.enabled = true;
+        (void)ops::vaults::updateSync(superUser, id, on);
+    };
+    v.removedByOwner = false;
+    resume();
+    (void)cs::tick(false);
+    EXPECT_FALSE(db::query::sync::Policy::getSync(id)->enabled) << "the stale overview still says removed";
+    resume();
+    cs::refreshSoon();
+    (void)cs::tick(false);
+    EXPECT_TRUE(db::query::sync::Policy::getSync(id)->enabled) << "no pass acts on the cache from before the join";
+    (void)tick();
+    EXPECT_TRUE(db::query::sync::Policy::getSync(id)->enabled) << "the fresh overview lists it as held";
+
+    std::string error;
+    EXPECT_TRUE(cs::reportLeft(uid, error)) << error;
+    EXPECT_EQ(callsTo("DELETE /v1/vaults/" + uid + "/replica"), 1u);
+    EXPECT_TRUE(cs::reportLeft(uid, error)) << "no longer held there (404): nothing to report";
+}
+
+// Contract 7 and 10 (2026-11-15): node ids in both lists; a writer removed here is reported, never removed at the cloud;
+// the manifest status says what the cloud lists, so the two sides never disagree silently.
+TEST_F(CloudStorageTest, AWriterRemovedHereIsReportedAndTheStatusSaysWhatTheCloudLists) {
+    const auto parsed = vh::cloud::storage::parseOverview(json{
+        {"vaults", json::array({json{{"vault_uid", "0123456789abcdefghjkmnpqrs"},
+                                     {"replicas", json::array({{{"deployment_id", "dep-a"}, {"name", "A"}, {"node_id", "node-a"},
+                                                                {"unlisted", nullptr}},
+                                                               {{"deployment_id", "dep-c"}, {"name", "C"}, {"node_id", "node-c"},
+                                                                {"unlisted", {{"by", {{"deployment_id", "dep-a"}, {"name", "A"}}},
+                                                                              {"at", 5}}}}})},
+                                     {"replica_limit", 3}}})}});
+    ASSERT_EQ(parsed.vaults[0].replicas.size(), 2u);
+    EXPECT_FALSE(parsed.vaults[0].replicas[0].unlisted_by.has_value());
+    EXPECT_EQ(parsed.vaults[0].replicas[1].unlisted_by, std::optional<std::string>("A"));
+
+    const auto e = newVault("replica");
+    const auto id = e->vault->id;
+    const auto uid = uidOf(id);
+    // Unlinked: nothing is reported, and the status knows nothing of the cloud.
+    EXPECT_EQ(cs::reportWriterRemoved(uid, "node-b"), "");
+    const json manifest{{"writers", {"node-self", "node-b"}},
+                        {"replicas", json::array({{{"node_id", "node-self"}, {"self", true}}, {{"node_id", "node-b"}, {"self", false}}})}};
+    auto st = cs::describeReplicas(uid, manifest);
+    EXPECT_TRUE(st["replicas"][0]["cloud"].is_null());
+    EXPECT_TRUE(st["cloud_only"].empty());
+
+    linkAndPin();
+    auto& v = cloud_.vaults[uid];
+    v.registered = true;
+    v.replicas = json::array({{{"deployment_id", "dep-self"}, {"name", "this server"}, {"node_id", "node-self"}},
+                              {{"deployment_id", "dep-b"}, {"name", "B"}, {"node_id", "node-b"}},
+                              {{"deployment_id", "dep-d"}, {"name", "D"}, {"node_id", "node-d"}}});
+    v.formerReplicas = json::array({{{"deployment_id", "dep-e"}, {"name", "E"}, {"node_id", "node-e"}, {"reason", "owner"}}});
+    (void)tick();
+    st = cs::describeReplicas(uid, json{{"writers", {"node-self", "node-b", "node-e", "node-x"}},
+                                        {"replicas", json::array({{{"node_id", "node-self"}}, {{"node_id", "node-b"}},
+                                                                  {{"node_id", "node-e"}}, {{"node_id", "node-x"}}})}});
+    EXPECT_EQ(st["replicas"][0]["cloud"], "listed");
+    EXPECT_EQ(st["replicas"][1]["cloud"], "listed");
+    EXPECT_EQ(st["replicas"][2]["cloud"], "former") << "removed at the cloud: the next publish drops it";
+    EXPECT_EQ(st["replicas"][3]["cloud"], "not_listed") << "a writer the cloud doesn't list";
+    ASSERT_EQ(st["cloud_only"].size(), 1u) << "a server the cloud lists that the manifest doesn't name";
+    EXPECT_EQ(st["cloud_only"][0]["name"], "D");
+    EXPECT_TRUE(st["cloud_only"][0]["unlisted_by"].is_null());
+
+    // B removed from the manifest here: reported; the cloud keeps listing B until the account holder removes it.
+    const auto said = cs::reportWriterRemoved(uid, "node-b");
+    EXPECT_NE(said.find("still lists 'B'"), std::string::npos) << said;
+    EXPECT_NE(said.find("the account holder removes it"), std::string::npos) << said;
+    EXPECT_EQ(callsTo("POST /v1/vaults/" + uid + "/replicas/unlisted"), 1u);
+    EXPECT_FALSE(v.replicas[1]["unlisted"].is_null());
+    (void)tick();
+    st = cs::describeReplicas(uid, json{{"writers", {"node-self"}}, {"replicas", json::array({{{"node_id", "node-self"}}})}});
+    ASSERT_EQ(st["cloud_only"].size(), 2u);
+    EXPECT_EQ(st["cloud_only"][0]["unlisted_by"], "this server");
+    // A node the cloud lists nowhere, and one it removed already: nothing to report.
+    EXPECT_EQ(cs::reportWriterRemoved(uid, "node-x"), "Vaulthalla Cloud doesn't list it as a server of this vault");
+    EXPECT_EQ(cs::reportWriterRemoved(uid, "node-e"), "Vaulthalla Cloud no longer lists it either");
+    EXPECT_EQ(callsTo("POST /v1/vaults/" + uid + "/replicas/unlisted"), 1u);
 }
 
 TEST_F(CloudStorageTest, WaitingReasonsAndASwitchOffBeforeTheBucketStopsWithoutAnAttach) {

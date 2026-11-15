@@ -27,8 +27,16 @@ struct Started {
     std::string restore_code;  // xxxx-xxxx-xxxx-xxxx: what the delivering device must show too
     std::time_t expires_at = 0;
 };
+// What the restore asks the cloud for (POST /v1/recovery/restores `intent`): a move of the vault onto this server
+// (`vh vault recover --from-cloud`), or a join beside the servers that hold it (`vh vault join --from-cloud`; the
+// approval adds this server as a replica, and cancelling afterwards doesn't remove it: leave does).
+enum class Intent { Restore, Join };
+
 // The encryption-key Export permission (as `vh vault recover`), the local CLI or a paired device, a linked server.
-Started start(const Actor& actor, const std::string& vaultUid, Channel channel);
+// The cloud's refusals arrive as Refused with its reason (the join contract's list: not_enrolled, already_held,
+// held_by_desktop, unplaced, replica_limit, replicated, ejecting, bucket_deleting, restore_limit, payment_required,
+// installation_only, invalid_intent) and a message that says what to do.
+Started start(const Actor& actor, const std::string& vaultUid, Channel channel, Intent intent = Intent::Restore);
 
 struct Delivered {
     nlohmann::json exported;   // a key export document; holds key bytes (base64): the caller wipes it

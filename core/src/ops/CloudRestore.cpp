@@ -61,7 +61,45 @@ Linked linked() {
     return {.endpoint = vh::cloud::endpoint(row->endpoint), .installation = *row->installation_id, .seed = std::move(*seed)};
 }
 
+// The cloud's reason for a refused restore or join (the error envelope's `reason`), said so a person knows what to do.
+std::string reasonText(const std::string& reason, const nlohmann::json& details) {
+    if (reason == "not_enrolled")
+        return "the vault isn't enrolled for recovery at Vaulthalla Cloud, so its keys can't be relayed (vh cloud recovery "
+               "enroll on a server that holds it)";
+    if (reason == "already_held") return "this server already holds the vault at Vaulthalla Cloud";
+    if (reason == "held_by_desktop") {
+        std::string who = "a Mac";
+        if (details.is_object() && details.contains("name") && details["name"].is_string())
+            who = "the Mac \"" + details["name"].get<std::string>() + "\"";
+        return who + " holds this vault (Desktop-only): a server can't join it; restore it to move it";
+    }
+    if (reason == "unplaced") return "no server holds the vault: restore it (vh vault recover --from-cloud) instead of joining";
+    if (reason == "replica_limit") {
+        std::string limit = "3";
+        if (details.is_object() && details.contains("limit") && details["limit"].is_string())
+            limit = details["limit"].get<std::string>();
+        return "the vault already has " + limit + " servers, the most a replicated vault has";
+    }
+    if (reason == "replicated")
+        return "several servers hold this vault: join it (vh vault join --from-cloud) instead, or remove servers from it "
+               "first";
+    if (reason == "ejecting") return "the vault's managed storage is being ejected; nothing can be added to it";
+    if (reason == "bucket_deleting") return "the vault's managed bucket is being deleted";
+    if (reason == "restore_limit") return "the account has ten open restores; cancel some on vaulthalla.cloud first";
+    if (reason == "payment_required") return "the account's plan doesn't allow this (vh cloud storage billing)";
+    if (reason == "installation_only") return "only a linked server can do this";
+    if (reason == "invalid_intent") return "Vaulthalla Cloud doesn't know this kind of restore (is it older than this server?)";
+    return {};
+}
+
 [[noreturn]] void refused(const vh::cloud::Reply& r) {
+    if (r.body.is_object() && r.body.contains("error") && r.body["error"].is_object()) {
+        const auto& e = r.body["error"];
+        const auto reason = e.contains("reason") && e["reason"].is_string() ? e["reason"].get<std::string>() : std::string();
+        if (const auto text = reasonText(reason, e.contains("details") ? e["details"] : nlohmann::json(nullptr));
+            !text.empty())
+            throw Refused(reason, text);
+    }
     if (r.status == 0) throw Refused("cloud_unreachable", r.error);
     if (r.status == 401)
         throw Refused("cloud_link_rejected", "Vaulthalla Cloud no longer accepts this server (`vh cloud status`)");
@@ -183,7 +221,7 @@ Delivered exportOf(const nlohmann::json& status, const Pending& p) {
 
 }
 
-Started start(const Actor& actor, const std::string& vaultUid, const Channel channel) {
+Started start(const Actor& actor, const std::string& vaultUid, const Channel channel, const Intent intent) {
     using namespace cloud_restore_detail;
     vault_keys::requireKeyMaterialAccess(actor, channel, "recover_requires_device");
     if (!vl::keykit::fromBase32(vaultUid)) throw Invalid("--vault-uid is not a vault uid");
@@ -193,7 +231,8 @@ Started start(const Actor& actor, const std::string& vaultUid, const Channel cha
     const auto pk = kev1::publicKeyOf(kev1::Suite::X25519, secret.bytes());
     const auto reply = vh::cloud::signedCall(link.endpoint, link.installation, link.seed.bytes(), "POST",
                                              "/v1/recovery/restores",
-                                             nlohmann::json{{"vault_uid", vaultUid}, {"temporary_public_key", b64(pk)}});
+                                             nlohmann::json{{"vault_uid", vaultUid}, {"temporary_public_key", b64(pk)},
+                                                            {"intent", intent == Intent::Join ? "join" : "restore"}});
     if (!reply.ok()) refused(reply);
     const auto& r = reply.body;
     if (!r.is_object() || !r.contains("id") || !r.at("id").is_string() || !r.contains("restore_code") ||
@@ -207,9 +246,12 @@ Started start(const Actor& actor, const std::string& vaultUid, const Channel cha
     }
     ::vh::audit::record({.action = "cloud.restore.request", .outcome = ::vh::audit::Outcome::Info,
                          .actor_id = actor->id, .actor = actor->name(),
-                         .details = {{"restore_id", out.restore_id}, {"vault_uid", vaultUid}}},
-                        "[ops::cloud_restore] " + actor->name() + " asked Vaulthalla Cloud to restore vault " + vaultUid +
-                            " to this server (restore code " + out.restore_code + ")");
+                         .details = {{"restore_id", out.restore_id}, {"vault_uid", vaultUid},
+                                     {"intent", intent == Intent::Join ? "join" : "restore"}}},
+                        "[ops::cloud_restore] " + actor->name() + " asked Vaulthalla Cloud to " +
+                            (intent == Intent::Join ? "add this server to vault " + vaultUid
+                                                    : "restore vault " + vaultUid + " to this server") +
+                            " (restore code " + out.restore_code + ")");
     return out;
 }
 
@@ -268,5 +310,6 @@ void cancel(const Actor& actor, const std::string& restoreId) noexcept {
         // The restore expires on its own within a day; the temporary key is already gone.
     }
 }
+
 
 }

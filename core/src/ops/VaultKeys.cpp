@@ -44,6 +44,7 @@
 #include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
 #include "vault/Content.hpp"
+#include "sync/vault_manifest/Replicas.hpp"
 
 #include <fcntl.h>
 #include <paths.h>
@@ -1293,6 +1294,7 @@ namespace {
 SalvageReport runSalvage(const Actor& actor, const ImportTarget& target, std::map<unsigned int, crypto::SecretKeyPtr> supplied,
                          Unsealer& unsealer, const Channel channel) {
     const SalvageGuard guard(target.vault_id);
+    sync::replicas::refuseIfReplicated(target.vault_id, "a key salvage (it mints a key version)", sync::replicas::kRotateHow);
     // A salvage mints a new key version: it waits for a remote attach of the vault, as a rotation does.
     if (vault::remote::attachInProgress(target.vault_id))
         throw Conflict("a remote is being attached to vault '" + target.name + "'; run the salvage once the attach has "

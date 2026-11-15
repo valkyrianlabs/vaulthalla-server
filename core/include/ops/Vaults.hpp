@@ -148,6 +148,9 @@ void requireCanRecoverInto(const Actor& actor, unsigned int ownerId, unsigned in
 // Schedules the deletion. On a vault already pending deletion, `now` purges it on the next pass (and
 // delete_upstream, when given, replaces the earlier choice); anything else is a Conflict.
 DeletionPtr remove(const Actor& actor, const Remove& req);
+// A service's own decision, no caller (the cloud said the account holder removed a replicated vault from this server):
+// the vault's sync is turned off. False when it was off already.
+bool stopSyncing(unsigned int vaultId);
 [[nodiscard]] RemovalPlan removalPlan(const Actor& actor, unsigned int vaultId);
 // Deletions the actor could have made: pending, purging, and purged tombstones (newest first).
 [[nodiscard]] std::vector<DeletionPtr> listDeleted(const Actor& actor);

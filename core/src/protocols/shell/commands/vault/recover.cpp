@@ -15,6 +15,7 @@
 #include "ops/CloudRestore.hpp"
 #include "ops/CloudStorage.hpp"
 #include "ops/VaultRecover.hpp"
+#include "ops/VaultReplicas.hpp"
 #include "identities/User.hpp"
 
 #include <fmt/format.h>
@@ -53,6 +54,10 @@ std::string text(const recover_ops::Result& r) {
     std::string out;
     if (r.dry_run)
         out += fmt::format("Dry run: vault {} in the bucket (nothing was written)\n", j.value("vault_uid", ""));
+    else if (j.contains("join"))
+        out += fmt::format("Vault {} ('{}') joined: this server is one more writer of it ({} before){}\n",
+                           r.vault_id.value_or(0), r.vault_name, j["join"]["writers"].size(),
+                           r.key_available ? "" : " [not started]");
     else
         out += fmt::format("Vault {} ('{}') restored from the bucket ({}){}\n", r.vault_id.value_or(0), r.vault_name,
                            r.mode, r.key_available ? "" : " [not started]");
@@ -93,14 +98,15 @@ std::string text(const recover_ops::Result& r) {
 // record, the restore's rollback bound), or the result to stop with.
 std::variant<nlohmann::json, CommandResult> keysFromCloud(const CommandCall& call, const std::string& vaultUid,
                                                           const keys_ops::Channel channel, std::string& restoreId,
-                                                          std::optional<vl::keykit::KitCheckpoint>& checkpoint) {
+                                                          std::optional<vl::keykit::KitCheckpoint>& checkpoint,
+                                                          const bool join) {
     namespace restore = vh::ops::cloud_restore;
-    constexpr const auto* ERR = "vault recover";
+    const auto* ERR = join ? "vault join" : "vault recover";
     if (!call.io)
         return invalid(std::string(ERR) + ": --from-cloud waits for your devices, so it runs in a terminal");
     restore::Started started;
     try {
-        started = restore::start(call.user, vaultUid, channel);
+        started = restore::start(call.user, vaultUid, channel, join ? restore::Intent::Join : restore::Intent::Restore);
     } catch (const ops::Refused& e) {
         return invalid(std::string(ERR) + ": " + e.what() + " [" + e.code + "]");
     } catch (const ops::Error& e) {
@@ -109,11 +115,11 @@ std::variant<nlohmann::json, CommandResult> keysFromCloud(const CommandCall& cal
     restoreId = started.restore_id;
     call.io->print(fmt::format(
         "Restore code   {}\n"
-        "  1. Approve the restore on vaulthalla.cloud.\n"
+        "  1. Approve the {} on vaulthalla.cloud.\n"
         "  2. On a device that holds a recovery recipient of this vault (Vaulthalla Desktop), deliver the keys; it must "
         "show the same code. If it doesn't, don't deliver.\n"
         "Waiting... (Ctrl-C cancels the restore)\n",
-        started.restore_code));
+        started.restore_code, join ? "join (it adds this server to the vault)" : "restore"));
     for (;;) {
         if (!call.io->peerConnected()) return invalid(std::string(ERR) + ": stopped; the restore was cancelled");
         try {
@@ -134,10 +140,11 @@ std::variant<nlohmann::json, CommandResult> keysFromCloud(const CommandCall& cal
 
 }  // namespace recover_cli
 
-CommandResult handle_vault_recover(const CommandCall& call) {
+// `vh vault recover`, and `vh vault join` (the same restore in join mode, ops::vault_replicas::join).
+static CommandResult recoverOrJoin(const CommandCall& call, const bool join) {
     using namespace recover_cli;
-    constexpr const auto* ERR = "vault recover";
-    const auto usage = resolveUsage({"vault", "recover"});
+    const auto* ERR = join ? "vault join" : "vault recover";
+    const auto usage = resolveUsage({"vault", join ? "join" : "recover"});
     validatePositionals(call, usage);
     const bool fromCloud = hasFlag(call, "from-cloud");
     if (fromCloud && call.input) return invalid(std::string(ERR) + ": --from-cloud replaces --kit and --export");
@@ -181,6 +188,7 @@ CommandResult handle_vault_recover(const CommandCall& call) {
     recover_ops::Request req;
     try {
         const auto keyId = apiKeyIdFromOption(call);
+        // A cloud restore or join of a managed vault gets this server's own bucket key from the cloud.
         if (!keyId && !fromCloud) return invalid(std::string(ERR) + ": --api-key is required");
         if (keyId) req.api_key_id = *keyId;
         req.bucket = optVal(call, "bucket").value_or("");
@@ -201,6 +209,18 @@ CommandResult handle_vault_recover(const CommandCall& call) {
     }
     const bool json = hasFlag(call, usage->resolveFlag("json_output")->aliases);
     const auto channel = AgentCallScope::active() ? keys_ops::Channel::Agent : keys_ops::Channel::Cli;
+    // A join is refused here, before a restore request reaches the cloud (whose approval would add the replica) or a
+    // bucket key is made: the flag off, an agent, a browser session, not a super admin.
+    if (join) {
+        try {
+            vh::ops::vault_replicas::requireJoinAllowed(call.user, channel);
+        } catch (const ops::Refused& e) {
+            if (json) return invalid(nlohmann::json{{"error", e.code}, {"message", e.what()}}.dump(4));
+            return invalid(std::string(ERR) + ": " + e.what() + " [" + e.code + "]");
+        } catch (const ops::Error& e) {
+            return invalid(std::string(ERR) + ": " + e.what());
+        }
+    }
 
     // --from-cloud: the keys come from the linked account through a device; the restore completes only once they
     // were imported (or a dry run reported), and is cancelled on every other way out.
@@ -208,17 +228,40 @@ CommandResult handle_vault_recover(const CommandCall& call) {
         const CommandCall& call;
         std::string id;
         bool done = false;
+        std::string joinUid{};   // a join: once approved, cancelling doesn't remove the replica; leaving does
         ~CloudRestore() {
-            if (!id.empty() && !done) vh::ops::cloud_restore::cancel(call.user, id);
+            if (id.empty() || done) return;
+            vh::ops::cloud_restore::cancel(call.user, id);
+            if (!joinUid.empty()) {
+                std::string error;
+                (void)vh::ops::cloud_storage::reportLeft(joinUid, error);   // 404 when the join wasn't approved
+            }
         }
     } cloudRestore{call, {}, false};
     if (fromCloud) {
         if (!req.vault_uid) return invalid(std::string(ERR) + ": --from-cloud needs --vault-uid (`vh cloud recovery status` "
                                            "on the original server, or vaulthalla.cloud, shows it)");
-        auto keys = keysFromCloud(call, *req.vault_uid, channel, cloudRestore.id, req.checkpoint);
+        if (join) cloudRestore.joinUid = *req.vault_uid;
+        auto keys = keysFromCloud(call, *req.vault_uid, channel, cloudRestore.id, req.checkpoint, join);
         if (auto* stop = std::get_if<CommandResult>(&keys)) return std::move(*stop);
         exported = std::move(std::get<nlohmann::json>(keys));
         req.exported = &exported;
+    }
+    // The managed bucket's key for this server (the join is approved by now: it is a replica at the cloud).
+    std::optional<vh::ops::cloud_storage::JoinedBucket> managedKey;
+    if (join && fromCloud && req.api_key_id == 0) {
+        try {
+            managedKey = vh::ops::cloud_storage::joinBucketKey(call.user, *req.vault_uid);
+        } catch (const ops::Refused& e) {
+            return invalid(std::string(ERR) + ": " + e.what() + " [" + e.code + "]");
+        } catch (const ops::Error& e) {
+            return invalid(std::string(ERR) + ": " + e.what());
+        }
+        if (!managedKey)
+            return invalid(std::string(ERR) + ": the vault's bucket isn't managed storage: give this server's own key for "
+                                              "it (--api-key, --bucket)");
+        req.api_key_id = managedKey->api_key_id;
+        req.bucket = managedKey->bucket;
     }
     // A managed vault: the approval moved it to this server's deployment, so its bucket key is this server's to ask for
     // now (the sealed exchange); it is kept only if the restore writes the vault.
@@ -229,7 +272,7 @@ CommandResult handle_vault_recover(const CommandCall& call) {
             if (key && !adopted) vh::ops::cloud_storage::discardRestoreKey(*key);
         }
     } managed;
-    if (fromCloud && req.api_key_id == 0) {
+    if (!join && fromCloud && req.api_key_id == 0) {
         try {
             const auto owner = req.owner_id.value_or(call.user->id);
             managed.key = vh::ops::cloud_storage::keyForRestore(call.user, *req.vault_uid, owner, channel);
@@ -245,7 +288,8 @@ CommandResult handle_vault_recover(const CommandCall& call) {
     try {
         recover_ops::Result result;
         try {
-            result = recover_ops::recover(call.user, req, channel);
+            result = join ? vh::ops::vault_replicas::join(call.user, req, channel)
+                          : recover_ops::recover(call.user, req, channel);
         } catch (const ops::NeedsConfirmation& e) {
             if (req.confirm_name)
                 return invalid(std::string(ERR) + ": --confirm-name is not the restored vault's name; nothing was written");
@@ -269,6 +313,10 @@ CommandResult handle_vault_recover(const CommandCall& call) {
             vh::ops::cloud_restore::complete(call.user, cloudRestore.id);
             cloudRestore.done = true;
         }
+        // The managed-storage pass's cached overview predates this vault: the next pass fetches a fresh one first.
+        if ((fromCloud || join) && result.written) vh::ops::cloud_storage::refreshSoon();
+        if (managedKey && result.written && result.vault_id)
+            vh::ops::cloud_storage::adoptJoinedVault(*result.vault_id, *req.vault_uid, *managedKey);
         if (json) return ok(recover_ops::toJson(result).dump(4));
         return ok(text(result));
     } catch (const ops::Refused& e) {
@@ -278,5 +326,8 @@ CommandResult handle_vault_recover(const CommandCall& call) {
         return invalid(std::string(ERR) + ": " + e.what());
     }
 }
+
+CommandResult handle_vault_recover(const CommandCall& call) { return recoverOrJoin(call, false); }
+CommandResult handle_vault_join(const CommandCall& call) { return recoverOrJoin(call, true); }
 
 }

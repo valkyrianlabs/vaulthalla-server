@@ -132,8 +132,9 @@ pass's one HEAD, compare-and-set skips, crashes between operations, deferral of 
 rounds, union without a base copy, share links), `VaultRecoverDb.ARestoreKeepsEachSnapshotsUid`. The interleaving
 suite's `ManifestVersionLogFaults.WithTheApplier*` runs writers with model databases (`Scenario::model_db`).
 The mirror drill (`vhh drill mirror`, `vhh/drill_mirror.py`): two daemons on one versioned fake bucket, B restored
-from A's with a kit and made a writer by the test-only `VH_TEST_MANIFEST_WRITERS`; every phase requires one recorded
-root and equal FUSE views on both (~6 min on dev; 37 checks). Its findings are DB tests in `ManifestApplyDb*`,
+from A's with a kit by the real `vh vault join --kit` (experimental flag first off, then on); every phase requires one
+recorded root and equal FUSE views on both, then the replica set: a third writer, a fourth refused, leave, remove of
+a dead replica, rotation refused while replicated and done once solo, a join that delivers the new key. Its findings are DB tests in `ManifestApplyDb*`,
 `ManifestReconcile*`, `VaultRecoverDb.RestoresTheVault*`, `SqlDeployerHistoryDb.FsEntryMtimeMigration149*`.
 
 ## Cloud relay suites

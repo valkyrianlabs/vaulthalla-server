@@ -148,6 +148,8 @@ auth:
 sync:
   event_audit_retention_days: 30          # Retain database events/conflicts for this many days, minimum 7 days
   event_audit_max_entries: 5000           # Max number of database events/conflicts to retain, minimum 1000
+  replicas:
+    experimental: false                   # Replicated vaults (vh vault join/leave/replica remove): experimental
 
 
 # === 💸 PRICING ESTIMATES ===
