@@ -169,7 +169,9 @@ reduced (plan section 7). Provider history follows the vault's recovery policy a
 (`vault_recovery_policy.mode`, `upstream_bucket.noncurrent_retention_*`); a BYOS B2 bucket versions always and gets no
 rule from the server (spec 06 §5.4); managed storage sends the retention to the cloud (`managed-remotes.md`).
 
-**The reverse.** No S3 → local conversion exists, and BYOS doesn't need one at launch. Managed storage does: its
+**The reverse** (built: `vh vault remote detach`, ws `vault.remote.detach`, `vault/RemoteDetach.hpp`, migration 139;
+operator docs in `docs/vaults/s3-r2-vaults.md`). Before it, no S3 → local conversion existed, and BYOS doesn't need
+one at launch. Managed storage does: its
 per-vault switch hydrates and detaches (`managed-storage.md`, "The per-vault switch"). The contract proposed here:
 `vault.remote.detach` hydrates every remote-only file, verifies every live file has a local copy at its current
 generation, then in one transaction makes the vault `local` (the `s3` row and remote index go, `rsync` becomes

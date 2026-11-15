@@ -23,7 +23,7 @@
   - Attaching a bucket is decided by a person: agents can read the status but can't start an attach. From the web
     console and paired devices, attach and abort ask for a fresh sign-in confirmation (step-up).
   - `vaults.remote_attach.max_passes` (default 3) in `config.yaml` bounds how often changed files are sent again
-    before the switch. There is no way back from S3/R2 to a local vault yet.
+    before the switch.
 - **Recovery recipients on local vaults.** `vh vault keys recipient add` now works on a local vault. A local vault
   has no bucket, so its key envelopes are kept in the server's database; they restore its keys on the same host
   (`vh vault keys import --recovery-kit`) and are copied into the bucket when one is attached. They don't replace a

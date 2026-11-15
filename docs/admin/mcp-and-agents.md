@@ -40,7 +40,7 @@ inside the limits below. `vh skill install` sets an agent up in one step.
   (`vh device pair`, `approve`, `deny`), `vh device remote enable|disable` or `vh cloud link|unlink`, nor the master
   secret rotations (`vh secret master rotate|finalize|rollback`, `vh secret jwt rotate`,
   `vh secret device-identity rotate`). Where a vault's data is stored is your decision too: `vh vault remote attach`
-  is never available to agents (they can read `vh vault remote status`). To back up a vault key, run
+  and `vh vault remote detach` are never available to agents (they can read `vh vault remote status`). To back up a vault key, run
   `vh vault keys export <vault>` yourself in a terminal.
 
 :::callout[Your account, your blast radius]{variant="warning"}

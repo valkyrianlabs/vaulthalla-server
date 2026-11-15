@@ -337,6 +337,7 @@ provider changed, or when a vault reports `bucket_capability_changed`. See
 
 ```bash
 vh vault remote attach <vault> --api-key <key> --bucket <name> [--storage-tier <tier>] [--accept-unpriced] [--json]
+vh vault remote detach <vault> --confirm <vault name> [--json]
 vh vault remote status <vault-or-all> [--json]
 vh vault remote abort <vault> --confirm <vault name> [--json]
 ```
@@ -344,7 +345,10 @@ vh vault remote abort <vault> --confirm <vault name> [--json]
 Turns a local vault into an S3/R2 vault in place: `attach` checks the vault and the bucket, then uploads the vault's
 files in the background while it stays in use and switches it to the bucket once everything is verified; `status`
 follows it; `abort` stops it before the switch and deletes what it uploaded. See
-[Attaching A Bucket To A Local Vault](/vaults/s3-r2-vaults#attaching-a-bucket-to-a-local-vault).
+[Attaching A Bucket To A Local Vault](/vaults/s3-r2-vaults#attaching-a-bucket-to-a-local-vault). `detach` does the
+reverse: it fetches and verifies every file on this server, copies the recovery envelopes into the database and then
+makes the vault local, leaving the bucket as it is; `abort` stops a detach before the switch too. See
+[Detaching A Bucket From A Vault](/vaults/s3-r2-vaults#detaching-a-bucket-from-a-vault).
 
 ## File Recovery
 

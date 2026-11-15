@@ -113,7 +113,7 @@ People who open a share link see the same file browser, limited to the operation
 - **Shares**: the vault's share links.
 - **Sync & cost**: the S3 sync policy and request guardrails, and a summary of the vault's price budget.
 - **Gateway**: S3 gateway bucket bindings for this vault.
-- **Settings**: name, description, quota, owner, slug and FUSE name, and deleting the vault. A vault's storage type isn't changed here; a local vault is given a bucket with `vh vault remote attach` ([Attaching A Bucket To A Local Vault](/vaults/s3-r2-vaults#attaching-a-bucket-to-a-local-vault)). Deleting a vault removes it from Vaulthalla; the data on disk or in the bucket is left in place.
+- **Settings**: name, description, quota, owner, slug and FUSE name, and deleting the vault. **Remote storage** gives a local vault a bucket, follows the upload, aborts or resumes it, and detaches the bucket from an S3/R2 vault again ([Attaching A Bucket To A Local Vault](/vaults/s3-r2-vaults#attaching-a-bucket-to-a-local-vault), [Detaching A Bucket From A Vault](/vaults/s3-r2-vaults#detaching-a-bucket-from-a-vault)); attaching, detaching and aborting ask for a step-up confirmation. Deleting a vault removes it from Vaulthalla; the data on disk or in the bucket is left in place.
 
 For S3-compatible vaults, creation asks for:
 

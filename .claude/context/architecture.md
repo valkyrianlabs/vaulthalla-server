@@ -187,7 +187,7 @@ usage book and the operation catalog and no daemon types, so the client links it
   (`McpCatalog.RunLinesParseAsCheckedForEveryDocumentedExample`). Refused before running: unknown commands, groups,
   `--`, odd option spellings, confirmation flags in the command, and `mcp::exclusions()` (one list: `vault key export|import`,
   `secrets export|update`, `setup`, `teardown`, `fs get|put`, `mcp`, `skill`, `device pair|approve|deny`,
-  `device remote enable|disable`, `cloud link|unlink`, `cloud recovery enroll|unenroll`, `vault remote attach`; also checked case-insensitively). Defense in depth for key material:
+  `device remote enable|disable`, `cloud link|unlink`, `cloud recovery enroll|unenroll`, `vault remote attach|detach`; also checked case-insensitively). Defense in depth for key material:
   `protocols::shell::AgentCallScope` marks a command run for an MCP client (`/mcp`'s executor; a `vh mcp` request
   carries `"agent": true`), and the vault key handlers refuse under it (`key-backup.md`).
 - Confirmations: a leaf's gates are its flags spelled `yes`/`accept-*`/`adopt-bucket` and the `confirm-token` option.
@@ -1034,10 +1034,32 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   `sync::Controller::refreshEngines`, `recovery::provider::noteOwnWrite` per version, orphan deletes (objects of
   files deleted between upload and cutover), then the first pass (`sync_event` after `cutover_at`) → done. Pricing
   goes through `pricing::PriceSubject` (no engine), operation `remote_attach`. Pre-attach local versions keep
-  `upstream_state = 'none'`. Not built: detach (S3 → local), re-attaching the vault's own earlier bucket, the web
-  flow, an `OperationSpec` (so no Tier B oracle entry). Health `remote_attach_failed` (degraded),
-  `remote_attaches_unfinished`; `storage.vault.get` adds `remote` (`ops::vault_remote::remoteSummary`). Tests
+  `upstream_state = 'none'`. Not built: re-attaching the vault's own earlier bucket, an `OperationSpec` (so no Tier B
+  oracle entry). Health `remote_attach_failed` (degraded), `remote_attaches_unfinished`; `storage.vault.get` adds
+  `remote` (`ops::vault_remote::remoteSummary`: none, attaching:<state>, attached, detaching:<state>). Tests
   `RemoteAttach*` (`test_remote_attach.cpp`), parity `VaultRemoteParityTest.*`.
+- **Detach a remote from a vault** (attach-remote.md "The reverse"; `vault::remote::detach`, `vault/RemoteDetach.hpp`,
+  migration 139 `vault_remote_detach` + `vault_remote_detach_item`, catalog `db::query::vault::RemoteDetach`). States
+  preparing → hydrating → verifying → cutover → done; failed = still an S3 vault, resumed by starting it again;
+  aborted. Run by the same `RemoteAttachService` (second loop over the detach rows). The vault's live CloudEngine
+  stays until the cutover (it syncs as before). Per live file with content: `CloudEngine::hydrate` when the backing
+  file is missing (price gate, metered, authenticated), then `content::verifyFd` of the backing file against the
+  catalog's generation, key version and the file's uid; an item records the verified generation. Envelopes: every
+  `vault_key_envelope` row without bytes is read from the bucket (`ManifestStore` over the engine's controller),
+  checked (`kev1::kid` = name, `kev1::inspect` vault uid, key version, grant's recipient) and stored with
+  `RemoteAttach::storeEnvelopeBytes`; an envelope missing from the bucket fails the detach. The final check, the
+  cutover transaction and the engine swap run under one hold of the vault's pass lease (a running sync pass or a
+  rotation → `busy`, retried; anything that moved → back to hydrating). `RemoteDetach::cutover` refuses while a live
+  file has no verified item at its current IV or any envelope row has NULL bytes; then vault.type local, `s3`,
+  `rsync`, `remote_object_index`, `sync_file_baseline`, `remote_manifest_{state,root,gc}` rows deleted, `fsync`
+  inserted, gateway mode → local, `upstream_bucket.vault_id` → NULL (ownership kept), pending `file_versions`
+  backlog → skipped (`upstream_error = 'detached'`), `vault_recovery_policy` provider_versioning → local_snapshots,
+  the attach row and items deleted. The bucket is never written to or deleted from. Abort clears only envelope bytes
+  the detach copied, and only when the bucket's copy reads back equal. Preconditions (`detach::requireVaultReady`):
+  not_s3, attach_running, layout_migration_running, key_rotation_running, key_salvage_running, legacy_content,
+  key_version_missing, event_sync_active, sync_conflicts_open. Health `remote_detach_failed` (degraded),
+  `remote_detaches_unfinished`. Tests `RemoteDetach*` (`test_remote_detach.cpp`), parity
+  `VaultRemoteParityTest.DetachAndItsAbort*`. Console: `features/vaults/settings/RemoteStoragePanel.tsx` (lazy).
 - **Local-vault recovery envelopes** (attach-remote open question 2): `vault::envelopes::storeFor` returns a
   database-backed `ObjectStore` for a local vault (bytes in `vault_key_envelope.envelope`, written in the transaction
   that records the envelope; `KeyEnvelope::envelope`), so `ops::recovery_recipients::add`, rotation, salvage and
@@ -1390,10 +1412,11 @@ status|export|import`; key material only through the CLI or a paired device, D4;
 (the bucket write-capability probe, spec 06 §7: ws `vault.storage.probe`, `vh vault storage probe`; the vault's admin
 Edit permission; audited `vault.storage.probe`; agent-available (effect write: it writes and deletes only its own
 `.vaulthalla/probe/` versions, no key material); see `upstream-control-plane.md`), `vault_remote` (attach a remote
-to a local vault: ws `vault.remote.attach|status|abort`, `vh vault remote attach|status|abort`; attach and abort need
-the vault's admin Edit + sync config Edit + the API key's Consume + the encryption-key Rotate permission and a keys
-step-up; status the vault's admin View; audited `vault.remote.attach|abort`; `vault remote attach` is MCP-excluded
-and refuses under `AgentCallScope`). Still per-surface: the ws-only
+to a local vault and detach it again: ws `vault.remote.attach|detach|status|abort`, `vh vault remote
+attach|detach|status|abort`; attach, detach and abort need the vault's admin Edit + sync config Edit + the
+encryption-key Rotate permission (attach also the API key's Consume) and a keys step-up; status the vault's admin
+View; audited `vault.remote.attach|detach|abort`; `vault remote attach|detach` are MCP-excluded and refuse under
+`AgentCallScope`). Still per-surface: the ws-only
 pricing preflight/override/notification endpoints, email test-send/history, `vh vault keys inspect|rotate`, sync
 diagnostics, and lifecycle commands (`setup`, `teardown`, `secrets`).
 

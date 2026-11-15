@@ -340,6 +340,11 @@ bash tools/dev/verify.sh harness                                   # unit + self
   `RunDeps::afterStep` (prepared, item:<id>, uploaded, pass:<n>, listed, sampled, published, verified, cutover,
   swapped). An R2 key (`S3Provider::CloudflareR2`) selects the unversioned path. Not covered: Tier B (attach while
   FUSE and the console write), the restore drill after an attach, live buckets.
+- Remote detach: DB-backed unit suite `RemoteDetach*` (`test_remote_detach.cpp`): each test attaches a real local
+  vault to a `VersionedBucket` first, drops backing files to make files remote-only, and detaches with
+  `detach::RunDeps` (the test's `sync::Controller` lease, `reloadEngine` as the swap); crash resume via `afterStep`
+  (prepared, item:<id>, pass:<n>, hydrated, checked, cutover, swapped); the bucket's version snapshot must be
+  unchanged. Not covered: Tier B (detach while FUSE writes), live buckets.
 - Lessons: the engine never touches the mount itself (a `Path.resolve()` blocked it in D state under a stopped
   daemon); `Instance.watchdog()` aborts the run's own FUSE connection past a hard deadline.
 - Never point mutating commands at vh-storage: targets are validated (a live `VH_TEST_MODE=1` daemon serving a
@@ -478,7 +483,7 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   enrolls there. `ManifestStore.*` and `ManifestPublish.*Refuses*|*RejectsConditions*` (`test_manifest.cpp`) cover
   the Store seam; CLI ↔ ws:
   `VaultStorageParityTest.*` (`test_ops_parity_vault_storage.cpp`, db-only); attach-remote CLI ↔ ws:
-  `VaultRemoteParityTest.*` (`test_ops_parity_vault_remote.cpp`, db-only).
+  `VaultRemoteParityTest.*` (`test_ops_parity_vault_remote.cpp`, db-only; attach, detach, abort).
 - opaque_v1 data plane (#369, `test_opaque_layout.cpp`): `OpaqueObjectKeys.*`, `OpaqueRequestPolicy.*` and
   `OpaqueMultipart.*` are DB-free (the 60 GiB object is a sparse file behind a part-counting controller: ~20 s);
   `OpaqueLayoutTest.*` (db) makes a vault opaque_v1 before it holds anything (test mode; `UPDATE s3 SET

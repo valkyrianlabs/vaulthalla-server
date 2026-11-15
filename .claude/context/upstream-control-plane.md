@@ -105,7 +105,8 @@ buckets it created. Other providers: plain storage, but protection locks still a
   the write (never refuses: a rescue path), `ops::vault_layout::start` (fresh probe; refuses an Insufficient bucket,
   spec 01 §6.1 step 5), `ops::vault_remote::attach` (a local vault attaching the bucket: `s3::probeBucket` through the
   attach's own controller, the verdict kept on `vault_remote_attach` and copied to the `s3` row by the cutover; refuses
-  an Insufficient bucket), `vh vault storage probe`, and lazily on first use for rows from
+  an Insufficient bucket; `vault.remote.detach` reverses it and only unbinds the `upstream_bucket` row, never touching
+  the bucket), `vh vault storage probe`, and lazily on first use for rows from
   before 136 (`resolve`, at most one failed attempt per vault an hour). **Test mode never probes on its own**
   (`setLazyProbingForTesting`, `setControllerFactoryForTesting`): existing suites see Unknown and unchanged requests.
 - **What it changes:** `sync::manifest::ObjectStore::mode()` / `putOnce` (If-None-Match only where
