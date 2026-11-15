@@ -7,6 +7,7 @@
 #include "crypto/util/encrypt.hpp"
 #include "ops/Cloud.hpp"
 #include "ops/CloudKeys.hpp"
+#include "ops/CloudStorage.hpp"
 #include "ops/Error.hpp"
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
@@ -343,6 +344,38 @@ void checkVaultKeyModels(Checker& c) {
             "CloudLinkStatus", "cloud.link.status (super admin)");
     c.check(ops::cloud::toJson(ops::cloud::LinkStatus{.linked = true}), "CloudLinkStatus", "cloud.link.status (a user)");
 
+    // design/cloud/managed-remotes.md: managed storage.
+    namespace cst = ops::cloud_storage;
+    cst::VaultEntry managed{.vault_id = 3, .vault_name = "photos", .vault_uid = "as4f38nkrkaydxr834n3pk2xdr",
+                            .storage = "managed", .switch_state = "on", .state = "attaching", .reason = "over_quota",
+                            .summary = "uploading", .local_bytes = 1024, .access = "full", .key_state = "active",
+                            .key_access = "full", .retention_days = 30, .retention_sent = 30, .retention_pending = false,
+                            .recovery = "ready",
+                            .progress = vault::remote::toJson(vault::remote::Progress{
+                                .phase = "uploading", .files_total = 2, .files_done = 1, .bytes_total = 10, .bytes_done = 5,
+                                .bytes_per_second = 5, .eta_seconds = 1, .passes = 1, .updated_at = 1'763'000'000}),
+                            .lost = {{"files", nlohmann::json::array({{{"file_id", 9}, {"path", "/b.txt"}, {"size_bytes", 5}}})},
+                                     {"envelopes_left_in_bucket", 0}},
+                            .last_error = "a refusal", .active_at = 1'763'000'000, .moved_at = 1'763'000'100,
+                            .ejected_at = 1'763'000'200, .ended_at = 1'763'000'300};
+    cst::VaultEntry own{.vault_id = 4, .vault_name = "s3", .vault_uid = "as4f38nkrkaydxr834n3pk2xds", .storage = "own",
+                        .state = "own", .summary = "uses its own storage", .progress = nullptr, .lost = nullptr};
+    c.check(cst::toJson(managed), "CloudStorageVault", "cloud.storage.switch (uploading)");
+    c.check(cst::toJson(own), "CloudStorageVault", "an S3 vault on its own storage");
+    cst::Status status{.linked = true, .account_key = "pinned", .available = true, .entitlement = "active",
+                       .plan = "storage-1tb", .quota_bytes = 1'000'000, .used_bytes = 10, .usage_day = "2026-11-13",
+                       .storage_access = "full", .cause = "active", .managed_local_bytes = 1024, .new_vaults = true,
+                       .offer_open = true, .offered = {managed}, .vaults = {managed, own},
+                       .billing = {{"state", "active"}}, .ejection = {{"state", "requested"}}, .fetched_at = 1'763'000'000,
+                       .fetch_error = "unreachable", .next_step = "accept the offer"};
+    c.check(cst::toJson(status), "CloudStorageStatus", "cloud.storage.status");
+    c.check(cst::toJson(cst::Status{.billing = nullptr, .ejection = nullptr}), "CloudStorageStatus",
+            "cloud.storage.status (unlinked)");
+    c.check(cst::toJson(cst::OfferResult{.vaults = {3}, .offer_open = false}), "CloudStorageOffer",
+            "cloud.storage.offer.accept");
+    c.check(cst::toJson(cst::Handoff{.kind = "portal", .url = "https://vaulthalla.test/handoff#h1", .expires_at = 1'763'000'600}),
+            "CloudStorageHandoff", "cloud.storage.billing.handoff");
+
     // Spec 06 §7: the bucket capability probe.
     namespace vs = ops::vault_storage;
     vs::ProbeAnswer probed{.vault_id = 3, .vault_name = "archive", .layout = "opaque_v1",
@@ -503,6 +536,9 @@ void checkVaultKeyModels(Checker& c) {
                                                    .history_in_bucket_only = 5, .trash_without_local_copy = 1});
     detaching.last_error = "file 7 could not be held locally: transient";
     detaching.updated_at = 1'763'000'200;
+    detaching.mode = rdt::Mode::InPlace;
+    detaching.lost = nlohmann::json{{"files", nlohmann::json::array({{{"file_id", 9}, {"path", "/b.txt"}, {"size_bytes", 5}}})},
+                                    {"envelopes_left_in_bucket", 1}};
     vr::Status hydrating = finished;
     hydrating.remote = "detaching:hydrating";
     hydrating.detach = detaching;

@@ -225,6 +225,10 @@ void walkContract(const FieldVisitor& visit) {
 const std::map<std::string, std::string>& opaqueObjects() {
     static const std::map<std::string, std::string> kOpaque{
         {"PriceBudgetNotification.metadata", "operator notification details stored as JSONB; each producer (budget preflight, gateway budgets, recovery cost alerts) records its own keys"},
+        {"cloud.storage.status response.billing", "the account's billing summary as the service last answered GET /v1/billing, passed through for display"},
+        {"cloud.storage.status response.ejection", "the account's ejection progress as the service reports it in GET /v1/storage, passed through for display"},
+        {"CloudStorageStatus.billing", "the account's billing summary as the service last answered GET /v1/billing, passed through for display"},
+        {"CloudStorageStatus.ejection", "the account's ejection progress as the service reports it in GET /v1/storage, passed through for display"},
         {"SessionUser.vault_roles", "the {} alternative: Auth::sessionUser keeps the empty object User sends for a user without vault roles"},
         {"ShareLink.metadata", "the link creator's free-form metadata, returned parsed"},
         {"SharePublicLink.metadata", "the link creator's free-form metadata, returned parsed"},
@@ -355,6 +359,10 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         {"cloud_key_requires_device", {"cloud.key.confirm"}}, {"cloud_key_mismatch", {"cloud.key.confirm"}},
         {"cloud_account_key_tampered", {"cloud.key.confirm"}},
         {"recovery_policy_account_managed", {"vault.keys.recipients.revoke"}},
+        // design/cloud/managed-remotes.md: managed storage.
+        {"managed_vault_account_key", {"vault.keys.recipients.revoke"}},
+        {"managed_storage_unavailable", {"cloud.storage.switch"}},
+        {"cloud_unreachable", {"cloud.storage.billing.handoff"}}, {"cloud_refused", {"cloud.storage.billing.handoff"}},
         // #371: vault.recover's D4 refusal and the restore's own refusals (vault::recover::Refusal, ops Refused).
         {"recover_requires_device", {"vault.recover"}}, {"salvage_required", {"vault.recover"}},
         {"rollback", {"vault.recover"}}, {"fork", {"vault.recover"}}, {"kit_vault_mismatch", {"vault.recover"}},

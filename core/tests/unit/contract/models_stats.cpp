@@ -357,6 +357,8 @@ void checkSystemStats(vh::test::contract_models::Checker& c) {
                                               .setBy = "user:admin", .since = 1'763'000'100});
     health.cloudAccountKey = sm::CloudAccountKeyHealth{.issue = "cloud_account_key_change_pending",
                                                           .detail = "the account recovery key was replaced"};
+    health.cloudStorage.push_back({.code = "vault_cloud_moved", .severity = "degraded", .vault_id = 22,
+                                   .detail = "restored onto another server"});
     c.check(json(health), "SystemHealth", "a read-only and an unavailable remote");
     health.deps.secretsWarning = "6 sealed secret(s) are bound to TPM PCR 7 and no `vh secret export all` was ever taken";
     c.check(json(health), "SystemHealth", "PCR-bound secrets with no recent export");

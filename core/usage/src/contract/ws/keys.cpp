@@ -349,7 +349,7 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
                                    .desc("The recipient's grant_id (vault.keys.recipients.list).")},
         .response = modelFields("VaultRecoveryRecipientRevoke"),
         .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "recipient_requires_device",
-                          "recovery_policy_account_managed"},
+                          "recovery_policy_account_managed", "managed_vault_account_key"},
         .response_model = "VaultRecoveryRecipientRevoke",
         .client_timeout = kDefaultTimeout,
     });

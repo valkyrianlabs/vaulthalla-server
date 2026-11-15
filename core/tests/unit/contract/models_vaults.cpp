@@ -85,6 +85,7 @@ void checkVaultModels(Checker& c) {
 
     // Vault: the base members (add/update/restore), list rows as the dynamic type, get with owner and sync.
     const auto local = localVault();
+    local->uid = *vl::keykit::fromBase32("as4f38nkrkaydxr834n3pk2xdr");
     c.check(json(*local), "Vault", "local vault (storage.vault.add/update/restore)");
     auto noFuse = localVault();
     noFuse->fuse_name.reset();
