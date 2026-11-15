@@ -37,7 +37,7 @@ inside the limits below. `vh skill install` sets an agent up in one step.
 - **Keys and secrets stay with you.** These commands are never available to agents: `vh vault keys export`,
   `vh secrets export`, `vh secrets update`, every `vh setup` and `vh teardown` command (including
   `vh setup set-super-admin-password`), and `vh fs get` / `vh fs put`. Neither are pairing decisions
-  (`vh device pair`, `approve`, `deny`), `vh device remote enable|disable` or `vh cloud link|unlink`, nor the master
+  (`vh device pair`, `approve`, `deny`), `vh device remote enable|disable`, `vh cloud link|unlink` or `vh cloud key confirm|forget`, nor the master
   secret rotations (`vh secret master rotate|finalize|rollback`, `vh secret jwt rotate`,
   `vh secret device-identity rotate`). Where a vault's data is stored is your decision too: `vh vault remote attach`,
   `vh vault remote detach` and `vh vault remote access` are never available to agents (they can read `vh vault remote status`). To back up a vault key, run

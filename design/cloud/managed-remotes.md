@@ -269,8 +269,8 @@ never the URL). Never a secret. The attach records its own `vault.remote.*`.
 6. **Unlink with managed vaults.** Refuse without `--force`.
 7. **Who owns a cloud key.** The vault's owner, read-only while `origin = 'cloud'`.
 8. **Copy before launch.** Neutral "Managed storage" copy in one module, changed with the lint at launch.
-9. **The sealed-credential code.** In vl-keykit now, with vectors: the server needs it in wave 1, which
-   `managed-storage.md` open question 8 defers to wave 4.
+9. **The sealed-credential code.** Built: vl-keykit 0.2.0 has it (`storage_credential.hpp`, with vectors), which this
+   server pins, so wave 1 uses it; it is no longer deferred to wave 4 as `managed-storage.md` open question 8 had it.
 10. **The server-wide default.** Keep `new_vaults` as an admin setting, on by default.
 11. **Default retention for managed vaults.** A configured number of days, shown at acceptance like the existing
     versioning disclosure, rather than indefinite (which bills every overwritten version for ever).
