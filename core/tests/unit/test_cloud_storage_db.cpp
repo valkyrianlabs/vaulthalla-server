@@ -18,6 +18,7 @@
 #include "cloud/AccountPin.hpp"
 #include "cloud/Identity.hpp"
 #include "cloud/Signing.hpp"
+#include "cloud/Storage.hpp"
 #include "config/Registry.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/cloud/AccountKey.hpp"
@@ -159,7 +160,8 @@ struct FakeCloud {
         unsigned retention = 30;
         std::string bucket;
         std::optional<std::string> detachedAt, convertedAt;
-        bool hidden = false;   // removed from this deployment's view (a move)
+        bool hidden = false;   // removed from this deployment's view
+        std::optional<std::string> movedTo;   // restored onto another deployment: listed with where it went
     };
     std::map<std::string, Vault> vaults;
     struct Key {
@@ -171,7 +173,7 @@ struct FakeCloud {
     std::map<std::string, Key> keys;
     std::map<std::string, json> enrollments;
     std::optional<uint32_t> dropEnvelopeVersion;
-    bool base64urlEnvelopes = false;   // the cloud's announced switch to base64url
+    std::optional<std::string> portal = "https://app.vaulthalla.test/storage/leave";
     std::map<std::string, std::shared_ptr<VersionedBucket>>* buckets = nullptr;
     unsigned nextKey = 1;
 
@@ -212,6 +214,7 @@ struct FakeCloud {
                  {"region", visible ? json("us-west-004") : json(nullptr)},
                  {"content_retention_days", v.state == "none" ? json(nullptr) : json(v.retention)},
                  {"detached_at", nullptr}, {"converted_at", nullptr}};
+        if (v.movedTo) out["moved_to"] = {{"deployment_id", "dep-" + *v.movedTo}, {"name", *v.movedTo}};
         json key{{"state", "none"}};
         std::string a;
         if (const auto id = currentKeyOf(uid, &a); !id.empty())
@@ -299,8 +302,9 @@ struct FakeCloud {
                                                 {"storage_quota_bytes", quota}, {"storage_access", access}, {"cause", cause}}},
                                {"usage", {{"stored_bytes", stored ? json(*stored) : json(nullptr)},
                                           {"date", stored ? json("2026-11-13") : json(nullptr)}}},
-                               {"account_key_confirmed", offlineCopy},
+                               {"account_key_offline_copy_confirmed", offlineCopy},
                                {"ejection", nullptr},
+                               {"ejection_portal_url", portal ? json(*portal) : json(nullptr)},
                                {"provider", "fake"},
                                {"vaults", vaultList}});
         }
@@ -392,7 +396,7 @@ struct FakeCloud {
                 const auto h = vl::keykit::kev1::inspect(*bytes);
                 if (dropEnvelopeVersion && h.key_version == *dropEnvelopeVersion) continue;
                 list.push_back({{"key_version", h.key_version}, {"generation", 1}, {"fingerprint", "f"},
-                                {"envelope", base64urlEnvelopes ? vl::keykit::base64UrlEncode(*bytes) : e.get<std::string>()}});
+                                {"envelope", vl::keykit::base64UrlEncode(*bytes)}});
             }
             return reply(200, {{"vault_uid", uid}, {"envelopes", list}});
         }
@@ -900,6 +904,40 @@ TEST_F(CloudStorageTest, AMovedVaultKeepsItsDataReadOnlyAndIsKeptLocalOnRequest)
     EXPECT_EQ(readLocal(id, "/a.txt"), "alpha");
 }
 
+TEST_F(CloudStorageTest, AVaultTheCloudListsAsMovedStopsAtOnceAndNamesWhereItWent) {
+    linkAndPin();
+    const auto id = activeVault();
+    cloud_.vaults[uidOf(id)].movedTo = "nas2";   // still listed to this deployment, with where it went
+    (void)tick();
+    EXPECT_EQ(state(id), "moved");
+    EXPECT_EQ(DB::get(id)->reason, std::optional<std::string>("restored on nas2"));
+    EXPECT_EQ(storage::remote_access::mode(id), storage::remote_access::Mode::None);
+    EXPECT_EQ(readLocal(id, "/a.txt"), "alpha");
+    // The portal page for leaving managed storage is the cloud's address; one that isn't https is refused.
+    EXPECT_EQ(cs::status(superUser).ejection.value("portal_url", ""), "https://app.vaulthalla.test/storage/leave");
+}
+
+TEST(CloudStorageContract, TheOverviewReadsTheCloudsNamesAndRefusesAnUnsafePortalAddress) {
+    const auto base = nlohmann::json{{"entitlement", {{"storage_access", "none"}}}, {"vaults", nlohmann::json::array()}};
+    auto body = base;
+    body["account_key_confirmed"] = true;   // the old name means nothing now
+    EXPECT_FALSE(::vh::cloud::storage::parseOverview(body).offline_copy_confirmed);
+    body["account_key_offline_copy_confirmed"] = true;
+    EXPECT_TRUE(::vh::cloud::storage::parseOverview(body).offline_copy_confirmed);
+    for (const auto* url : {"http://localhost.evil.test/x", "http://portal.test/storage/leave", "javascript:alert(1)"}) {
+        body["ejection_portal_url"] = url;
+        EXPECT_THROW((void)::vh::cloud::storage::parseOverview(body), std::runtime_error) << url;
+    }
+    body["ejection_portal_url"] = "http://localhost:3000/storage/leave";
+    EXPECT_EQ(::vh::cloud::storage::parseOverview(body).ejection_portal, std::optional<std::string>("http://localhost:3000/storage/leave"));
+    body["ejection_portal_url"] = nullptr;
+    EXPECT_FALSE(::vh::cloud::storage::parseOverview(body).ejection_portal);
+    body["vaults"] = nlohmann::json::array({{{"vault_uid", "x"}, {"moved_to", "somewhere"}}});
+    EXPECT_THROW((void)::vh::cloud::storage::parseOverview(body), std::runtime_error) << "moved_to is an object";
+    body["vaults"] = nlohmann::json::array({{{"vault_uid", "x"}, {"moved_to", {{"deployment_id", "d1"}, {"name", "nas2"}}}}});
+    EXPECT_EQ(::vh::cloud::storage::parseOverview(body).vaults.at(0).moved_to, std::optional<std::string>("nas2"));
+}
+
 TEST_F(CloudStorageTest, TheEndOfThePlanConvertsToLocalInPlaceAndListsWhatWasLostWithoutDeletingAnything) {
     linkAndPin();
     const auto id = activeVault();
@@ -1064,15 +1102,12 @@ TEST_F(CloudStorageTest, VerifyComparesTheCloudsAccountKeyEnvelopesWithThisServe
     const auto id = activeVault();
     (void)tick();   // enrolled
     ASSERT_TRUE(cloud_.enrollments.contains(uidOf(id)));
-    for (const bool url : {false, true}) {
-        cloud_.base64urlEnvelopes = url;
-        const auto ok = ops::cloud_recovery::status(superUser, id, true);
-        ASSERT_EQ(ok.size(), 1u);
-        EXPECT_EQ(ok[0].state, "ready") << ok[0].verify.dump();
-        EXPECT_TRUE(ok[0].automatic);
-        EXPECT_TRUE(ok[0].verify["missing"].empty());
-        EXPECT_GE(ok[0].verify["versions_checked"].get<int>(), 1);
-    }
+    const auto ok = ops::cloud_recovery::status(superUser, id, true);
+    ASSERT_EQ(ok.size(), 1u);
+    EXPECT_EQ(ok[0].state, "ready") << ok[0].verify.dump();
+    EXPECT_TRUE(ok[0].automatic);
+    EXPECT_TRUE(ok[0].verify["missing"].empty());
+    EXPECT_GE(ok[0].verify["versions_checked"].get<int>(), 1);
     cloud_.dropEnvelopeVersion = 1;
     const auto behind = ops::cloud_recovery::status(superUser, id, true);
     EXPECT_EQ(behind[0].state, "behind");
