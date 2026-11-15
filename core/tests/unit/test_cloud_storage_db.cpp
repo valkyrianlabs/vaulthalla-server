@@ -37,6 +37,7 @@
 #include "ops/APIKeys.hpp"
 #include "ops/Cloud.hpp"
 #include "ops/CloudKeys.hpp"
+#include "ops/CloudRecovery.hpp"
 #include "ops/CloudStorage.hpp"
 #include "ops/Error.hpp"
 #include "ops/VaultRemote.hpp"
@@ -169,6 +170,8 @@ struct FakeCloud {
     };
     std::map<std::string, Key> keys;
     std::map<std::string, json> enrollments;
+    std::optional<uint32_t> dropEnvelopeVersion;
+    bool base64urlEnvelopes = false;   // the cloud's announced switch to base64url
     std::map<std::string, std::shared_ptr<VersionedBucket>>* buckets = nullptr;
     unsigned nextKey = 1;
 
@@ -371,6 +374,27 @@ struct FakeCloud {
                 return error(409, "conflict", "this vault's storage isn't being ejected", "not_ejecting");
             v.convertedAt = "now";
             return reply(204, nullptr);
+        }
+        if (r.method == "GET" && path.starts_with("/v1/recovery/vaults/")) {
+            const auto uid = segment("/v1/recovery/vaults/");
+            if (!enrollments.contains(uid)) return error(404, "not_found", "no such vault");
+            json versions = json::array();
+            for (const auto& v : enrollments[uid]["key_versions"])
+                versions.push_back({{"version", v["version"]}, {"recipients", json::array({"r"})}});
+            return reply(200, {{"vault_uid", uid}, {"versions", versions}});
+        }
+        if (r.method == "GET" && path.starts_with("/v1/keys/vaults/") && path.ends_with("/envelopes")) {
+            const auto uid = segment("/v1/keys/vaults/");
+            if (!enrollments.contains(uid)) return error(404, "not_found", "this vault isn't enrolled for this account");
+            json list = json::array();
+            for (const auto& e : enrollments[uid]["envelopes"]) {
+                const auto bytes = vl::keykit::base64Decode(e.get<std::string>());
+                const auto h = vl::keykit::kev1::inspect(*bytes);
+                if (dropEnvelopeVersion && h.key_version == *dropEnvelopeVersion) continue;
+                list.push_back({{"key_version", h.key_version}, {"generation", 1}, {"fingerprint", "f"},
+                                {"envelope", base64urlEnvelopes ? vl::keykit::base64UrlEncode(*bytes) : e.get<std::string>()}});
+            }
+            return reply(200, {{"vault_uid", uid}, {"envelopes", list}});
         }
         if (r.method == "PUT" && path.starts_with("/v1/recovery/vaults/")) {
             enrollments[segment("/v1/recovery/vaults/")] = body;
@@ -623,7 +647,7 @@ TEST_F(CloudStorageTest, ANewVaultIsRegisteredAtItsFirstFileKeyedAttachedRetaine
     EXPECT_EQ(DB::get(id)->switch_state, "on") << "created after storage became available: on by default";
     EXPECT_EQ(state(id), "unregistered");
     EXPECT_EQ(DB::get(id)->reason, std::optional<std::string>("empty"));
-    EXPECT_EQ(callsTo("POST /v1/vaults"), 0u) << "an empty vault isn't registered";
+    EXPECT_FALSE(cloud_.vaults.contains(uid) && cloud_.vaults[uid].registered) << "an empty vault isn't registered";
 
     write(id, "/a.txt", "alpha");
     (void)tick();
@@ -1033,6 +1057,28 @@ TEST_F(CloudStorageTest, TheRootCarriesTheAccountPolicyAndARestoreOffersIt) {
     const auto forged = vl::keykit::base64UrlEncode(std::vector<uint8_t>(64, 7));
     EXPECT_FALSE(ops::cloud_keys::offerPolicy(history_.policy(3)["policy"], forged, "test root"));
     EXPECT_EQ(ops::cloud_keys::status(superUser).policy->sequence, 2u);
+}
+
+TEST_F(CloudStorageTest, VerifyComparesTheCloudsAccountKeyEnvelopesWithThisServersRecords) {
+    linkAndPin();
+    const auto id = activeVault();
+    (void)tick();   // enrolled
+    ASSERT_TRUE(cloud_.enrollments.contains(uidOf(id)));
+    for (const bool url : {false, true}) {
+        cloud_.base64urlEnvelopes = url;
+        const auto ok = ops::cloud_recovery::status(superUser, id, true);
+        ASSERT_EQ(ok.size(), 1u);
+        EXPECT_EQ(ok[0].state, "ready") << ok[0].verify.dump();
+        EXPECT_TRUE(ok[0].automatic);
+        EXPECT_TRUE(ok[0].verify["missing"].empty());
+        EXPECT_GE(ok[0].verify["versions_checked"].get<int>(), 1);
+    }
+    cloud_.dropEnvelopeVersion = 1;
+    const auto behind = ops::cloud_recovery::status(superUser, id, true);
+    EXPECT_EQ(behind[0].state, "behind");
+    EXPECT_FALSE(behind[0].verify["missing"].empty());
+    // Without --verify only the coverage report is compared.
+    EXPECT_EQ(ops::cloud_recovery::status(superUser, id, false)[0].verify, nullptr);
 }
 
 }

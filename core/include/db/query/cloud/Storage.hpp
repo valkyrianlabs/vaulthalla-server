@@ -105,6 +105,9 @@ struct CloudStorage {
         std::string vault_uid;
         std::string type;            // local | s3
         std::time_t created_at{};
+        // Created after storage became available on this link (compared at the database's precision; a vault from
+        // the same instant counts as existing, so it is offered rather than switched on).
+        bool after_enabled{false};
     };
     [[nodiscard]] static std::vector<Candidate> candidates();
     // Whether the vault holds a file with content (a vault is registered only once it does).

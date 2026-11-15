@@ -249,12 +249,14 @@ void CloudStorage::remove(const uint32_t vaultId) {
 std::vector<CloudStorage::Candidate> CloudStorage::candidates() {
     return Transactions::read("cloud::CloudStorage::candidates", [&](pqxx::transaction_base& txn) {
         std::vector<Candidate> out;
-        for (const auto r : txn.exec("SELECT v.id, v.uid::text, v.type, EXTRACT(EPOCH FROM v.created_at)::BIGINT FROM vault v "
+        for (const auto r : txn.exec("SELECT v.id, v.uid::text, v.type, EXTRACT(EPOCH FROM v.created_at)::BIGINT, "
+                                     "COALESCE(v.created_at > (SELECT enabled_at FROM cloud_storage_account), FALSE) FROM vault v "
                                      "WHERE v.deleted_at IS NULL AND v.uid IS NOT NULL AND NOT EXISTS (SELECT 1 FROM "
                                      "vault_cloud_storage c WHERE c.vault_id = v.id) ORDER BY v.id")) {
             const auto uid = crypto::id::fromUuid(r[1].as<std::string>());
             out.push_back({.vault_id = r[0].as<uint32_t>(), .vault_uid = vl::keykit::toBase32(uid),
-                           .type = r[2].as<std::string>(), .created_at = static_cast<std::time_t>(r[3].as<int64_t>())});
+                           .type = r[2].as<std::string>(), .created_at = static_cast<std::time_t>(r[3].as<int64_t>()),
+                           .after_enabled = r[4].as<bool>()});
         }
         return out;
     });

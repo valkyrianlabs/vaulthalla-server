@@ -874,7 +874,7 @@ void sweep(const db::query::cloud::StorageAccountRow& account) {
     bool offered = false;
     for (const auto& c : DB::candidates()) {
         if (c.type != "local") continue;
-        const bool on = account.new_vaults && c.created_at >= *account.enabled_at;
+        const bool on = account.new_vaults && c.after_enabled;
         Row r;
         r.vault_id = c.vault_id;
         r.vault_uid = c.vault_uid;
