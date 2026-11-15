@@ -217,8 +217,12 @@ TEST_F(VaultRemoteParityTest, DetachAndItsAbortAgreeOnBothSurfacesForEverySeeded
         });
         const bool started = cliDetach.first == 0;
         EXPECT_EQ(started, wsDetach.has_value()) << cliDetach.second;
-        if (role->name == "super_admin") EXPECT_TRUE(started) << cliDetach.second;
-        if (role->name == "unprivileged") EXPECT_FALSE(started) << cliDetach.second;
+        if (role->name == "super_admin") {
+            EXPECT_TRUE(started) << cliDetach.second;
+        }
+        if (role->name == "unprivileged") {
+            EXPECT_FALSE(started) << cliDetach.second;
+        }
         EXPECT_EQ(DQ::get(viaCli.id()).has_value(), started);
         EXPECT_EQ(DQ::get(viaWs.id()).has_value(), wsDetach.has_value());
         EXPECT_EQ(auditEvents("vault.remote.detach", viaCli.id()), started ? 1u : 0u);
