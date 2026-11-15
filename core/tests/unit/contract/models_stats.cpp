@@ -335,6 +335,10 @@ void checkSystemStats(vh::test::contract_models::Checker& c) {
         {.vaultId = 13, .vaultName = "photos", .detail = "no recovery recipient is enrolled and the last key export is "
                                                          "not of the current key version"});
     c.check(json(health), "SystemHealth", "a vault without recovery material");
+    health.vaultsManifestUnpublishable.push_back(
+        {.vaultId = 16, .vaultName = "minio-photos", .reason = "bucket_capability_insufficient",
+         .detail = "the bucket neither honours conditional writes nor keeps object versions"});
+    c.check(json(health), "SystemHealth", "an opaque_v1 vault on a bucket that can't arbitrate its root (spec 06)");
     health.legacyContent = sm::LegacyContentHealth{.remaining = true, .pathV0Vaults = {14},
                                                    .layoutMigrationsUnfinished = {15}, .legacyFiles = 3,
                                                    .legacyBlobs = 2, .legacyUploadFiles = 0};

@@ -86,7 +86,7 @@ trap 'exit 143' TERM
 # The opt-in switch, the R2 admin key (each run creates and deletes one vh-test-* bucket) and the optional Cloudflare
 # API token of the event-notification test.
 LIVE_ENV_VARS=(VH_LIVE_TESTS VH_R2_ADMIN_ACCESS_KEY VH_R2_ADMIN_SECRET_KEY VH_R2_ADMIN_ENDPOINT VH_R2_ADMIN_REGION
-               VH_CF_API_TOKEN)
+               VH_CF_API_TOKEN VH_B2_TEST_KEY_ID VH_B2_TEST_APP_KEY)
 # Prints `export NAME=<quoted value>` lines for the live variables that are set (nothing unless VH_LIVE_TESTS=1).
 live_env_exports() {
   [[ "${VH_LIVE_TESTS:-}" == 1 ]] || return 0

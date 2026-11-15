@@ -199,6 +199,21 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
     });
 
     out.push_back({
+        .command = "vault.storage.probe",
+        .description = "Probe what the vault's bucket supports for writes that must never overwrite another writer's "
+                       "object (design/encryption/06-publish-without-preconditions.md §7): conditional PUT honoured, "
+                       "rejected or ignored, object versions, GET If-Match. About ten requests under "
+                       ".vaulthalla/probe/, whose versions are deleted by id afterwards. Records the verdict, which "
+                       "replaces a bucket_capability_changed mark. The vault's admin Edit permission; refused (denied) "
+                       "on a protected bucket, bucket_probe_failed when the bucket can't be reached.",
+        .payload = {vaultId()},
+        .response = modelFields("VaultStorageProbe"),
+        .refusal_codes = {"denied", "invalid", "not_found", "unauthorized", "bucket_probe_failed"},
+        .response_model = "VaultStorageProbe",
+        .client_timeout = std::chrono::milliseconds(60'000),
+    });
+
+    out.push_back({
         .command = "vault.keys.recipients.list",
         .description = "The vault's recovery recipients (spec 03 §5; #370): customer-held X25519 public keys every key "
                        "version is wrapped to (KEV1 envelopes in the vault's own bucket), revoked ones included, with "

@@ -219,7 +219,7 @@ std::string blobName() {
 class RecoveryDbTest : public vh::test::db::Suite {
 protected:
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_recovery_db", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_recovery_db")) return;
         const auto user = vh::test::identities::createUser("rdb_super_" + recoveryDbTag(),
                                                            db::query::rbac::role::Admin::get("super_admin"),
                                                            "rdb_super@vaulthalla.test", "x", std::nullopt);

@@ -55,11 +55,11 @@ protected:
     inline static std::string skipWhy = "Skipping db tests due to missing environment variables.";
     inline static std::shared_ptr<vh::protocols::shell::Router> router;
 
-    // The DB suite (with `freshEngines`) and the `secret` CLI. With `probeSealing`, the suite skips when sealing
+    // The DB suite and the `secret` CLI. With `probeSealing`, the suite skips when sealing
     // doesn't round-trip on this host (CI's container TPM): real sealing is the point of these tests.
-    static bool setUpRewrapSuite(const std::string& name, const bool freshEngines, const bool probeSealing) {
+    static bool setUpRewrapSuite(const std::string& name, const bool probeSealing) {
         skipWhy = "Skipping db tests due to missing environment variables.";
-        if (!setUpDbSuite(name, {.freshEngines = freshEngines})) return false;
+        if (!setUpDbSuite(name)) return false;
         if (probeSealing) {
             try {
                 std::vector<uint8_t> first;
@@ -79,7 +79,6 @@ protected:
                 return false;
             }
         }
-        if (!freshEngines) vh::runtime::Deps::get().fsCache = std::make_shared<vh::fs::cache::Registry>();
         vh::crypto::secrets::versioned::resetForTesting();
         if (!vh::runtime::Deps::get().shellUsageManager)
             vh::runtime::Deps::get().shellUsageManager = std::make_shared<vh::protocols::shell::UsageManager>();

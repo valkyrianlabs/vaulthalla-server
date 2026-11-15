@@ -58,7 +58,7 @@ protected:
     std::filesystem::path fakeHelpers, noHelpers;
 
     static void SetUpTestSuite() {
-        if (setUpDbSuite("test_derive_queue", {.freshEngines = false})) admin = superUser;
+        if (setUpDbSuite("test_derive_queue")) admin = superUser;
     }
 
     static void TearDownTestSuite() {

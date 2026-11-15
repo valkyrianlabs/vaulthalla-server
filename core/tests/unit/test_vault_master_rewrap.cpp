@@ -67,7 +67,7 @@ struct StoredRow {
 class VaultMasterRewrapTest : public test::rewrap::Fixture {
 protected:
     static void SetUpTestSuite() {
-        if (setUpRewrapSuite("master_rewrap", true, false)) vault::attestation::resetForTesting();
+        if (setUpRewrapSuite("master_rewrap", false)) vault::attestation::resetForTesting();
     }
 
     static void TearDownTestSuite() {

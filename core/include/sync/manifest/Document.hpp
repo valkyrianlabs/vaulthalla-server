@@ -317,8 +317,17 @@ struct RootDocument {
     std::vector<SegmentRef> segments;           // ascending by range, covering 00..ff exactly
     std::vector<SnapshotRef> snapshots;
     Stats stats;
+    // design/encryption/06-publish-without-preconditions.md §5.2, §5.5. Absent in roots written before them (and in
+    // the vectors' reduced roots), and then omitted on output, so those bytes re-encode unchanged.
+    //   publish  "conditional" | "version_log": the publish path the bucket takes; absent reads as conditional.
+    //   writers  the node ids allowed to publish (the producer among them); absent: no restriction.
+    std::optional<std::string> publish{};
+    std::optional<std::vector<std::string>> writers{};
     [[nodiscard]] bool operator==(const RootDocument&) const = default;
 };
+
+inline constexpr std::string_view kPublishConditional = "conditional";
+inline constexpr std::string_view kPublishVersionLog = "version_log";
 
 [[nodiscard]] Json toJson(const RootDocument& root);
 // Checks the type, version, vault uid, epoch/prev (epoch >= 1; prev null exactly at epoch 1), layout, and the

@@ -92,7 +92,7 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_vault_retention", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_vault_retention")) return;
         superUser = createUser("vr_super_" + tag(), "super_admin");
         bob = createUser("vr_bob_" + tag(), "unprivileged");
     }

@@ -11,12 +11,15 @@ namespace vh::sync::manifest {
 
 namespace chain_detail {
 
-constexpr std::array<std::pair<ChainError, std::string_view>, 5> kChainErrorNames{{
+constexpr std::array<std::pair<ChainError, std::string_view>, 8> kChainErrorNames{{
     {ChainError::BadRoot, "bad_root"},
     {ChainError::Rollback, "rollback"},
     {ChainError::Fork, "fork"},
     {ChainError::SegmentMissing, "segment_missing"},
     {ChainError::SegmentMismatch, "segment_mismatch"},
+    {ChainError::OrderViolation, "order_violation"},
+    {ChainError::Superseded, "superseded"},
+    {ChainError::PublishModeMismatch, "publish_mode_mismatch"},
 }};
 
 void checkPinned(const std::string& sid, const std::string& sha, const uint64_t size,

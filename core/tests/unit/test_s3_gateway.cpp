@@ -697,7 +697,7 @@ protected:
     inline static uint32_t vaultId = 0;
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_s3_gateway", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_s3_gateway")) return;
         userId = vh::db::Transactions::exec("S3GatewayDbTest::seed", [](pqxx::work& txn) {
             return s3gw::insertUser(txn, "s3_gateway_user", "s3-gateway@vaulthalla.test");
         });

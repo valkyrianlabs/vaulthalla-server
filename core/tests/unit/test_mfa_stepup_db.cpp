@@ -43,7 +43,7 @@ protected:
     // An account that need not have MFA signs in with its password (aal 1): the table runs as a super admin.
     AuthRuntime auth_{{.level = mfa::policy::Level::Optional}};
 
-    static void SetUpTestSuite() { (void)setUpDbSuite("mfa_stepup", {.freshEngines = false}); }
+    static void SetUpTestSuite() { (void)setUpDbSuite("mfa_stepup"); }
     static void TearDownTestSuite() { tearDownDbSuite(); }
 
     static SessionPtr signedIn(const UserPtr& user) {

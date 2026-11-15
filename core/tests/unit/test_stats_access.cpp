@@ -169,7 +169,7 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_stats_access", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_stats_access")) return;
         superUser = createUser("sa_super", "super_admin");
         orgAdmin = createUser("sa_admin", "admin");
         auditor = createUser("sa_auditor", "auditor");

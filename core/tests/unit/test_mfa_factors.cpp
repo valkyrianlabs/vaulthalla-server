@@ -45,7 +45,7 @@ protected:
     inline static int counter = 0;
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("mfa_factors", {.freshEngines = false})) return;
+        if (!setUpDbSuite("mfa_factors")) return;
         audit::Trail::instance()->resetForTesting();
     }
 

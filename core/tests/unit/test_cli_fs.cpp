@@ -174,7 +174,7 @@ protected:
     inline static std::vector<uint8_t> big;
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_cli_fs", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_cli_fs")) return;
         if (!runtime::Deps::get().shellUsageManager)
             runtime::Deps::get().shellUsageManager = std::make_shared<UsageManager>();
         router = std::make_shared<Router>();

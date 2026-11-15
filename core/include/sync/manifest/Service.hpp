@@ -45,6 +45,9 @@ public:
 
 private:
     void refused(const ChainRejected& e, uint64_t epoch, const std::string& rootSha256);
+    // verifyRemote on a version_log bucket (spec 06 §5.3, §5.4): rule C1 from the settled root, the settle window,
+    // the writers and mode checks, and repair of stray versions above the head.
+    std::optional<Acceptance> verifyRemoteVersionLog();
     PublishReport publishLocked(const Content& produced);
     [[nodiscard]] std::optional<Known> known() const;
 

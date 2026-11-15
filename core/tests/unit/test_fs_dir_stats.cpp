@@ -62,7 +62,7 @@ class FsDirStatsDbTest : public vh::test::db::Suite {
 protected:
     EnginePtr engine;
 
-    static void SetUpTestSuite() { setUpDbSuite("test_fs_dir_stats", {.freshEngines = false}); }
+    static void SetUpTestSuite() { setUpDbSuite("test_fs_dir_stats"); }
     static void TearDownTestSuite() { tearDownDbSuite(); }
 
     void SetUp() override {
