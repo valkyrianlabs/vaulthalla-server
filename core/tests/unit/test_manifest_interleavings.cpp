@@ -286,7 +286,7 @@ struct Db {
     std::optional<SettledWindow> settled;
     Content model;                  // model_db: the database's content
     std::optional<Content> base;    // model_db: the base copy (the content of `known`)
-    std::optional<std::string> lastPut;   // model_db: the last root this writer PUT (written before the PUT)
+    std::vector<std::string> noted;   // model_db: the roots PUT since the last record, and the recorded one
 };
 
 struct WriterState {
@@ -616,7 +616,7 @@ private:
         o.root_cache = &w.cache.roots;
         const auto head = load(store, world_.vault, world_.lookup(), o);
         const auto origin = originOf(head.root, head.acceptance.root_sha256, head.base_version_id, w.db.known,
-                                     nodeName(w.index), std::nullopt, w.db.lastPut);
+                                     nodeName(w.index), std::nullopt, w.db.noted);
         if (origin == HeadOrigin::OwnUnexplained) {
             violation(nodeName(w.index) + " met a root naming it that it did not publish");
             throw std::runtime_error("own unexplained");
@@ -629,15 +629,18 @@ private:
                 w.db.settled = SettledWindow{*head.base_version_id, *head.version_id, head.settle_window};
             else w.db.settled.reset();
             w.db.own_epoch = head.acceptance.epoch;
+            w.db.noted = {head.acceptance.root_sha256};
             w.cache.base.reset();
             return;
         }
-        if (w.db.lastPut && (!w.db.known || *w.db.lastPut != w.db.known->root_sha256) &&
-            *w.db.lastPut != head.acceptance.root_sha256) {
+        {
             const auto t = truthOf(world_, opened_);
-            for (const auto& id : t.chain)
-                if (const auto it = t.roots.find(id); it != t.roots.end() && it->second.second == *w.db.lastPut)
-                    w.built_on = true;
+            for (const auto& sha : w.db.noted) {
+                if ((w.db.known && sha == w.db.known->root_sha256) || sha == head.acceptance.root_sha256) continue;
+                for (const auto& id : t.chain)
+                    if (const auto it = t.roots.find(id); it != t.roots.end() && it->second.second == sha)
+                        w.built_on = true;
+            }
         }
         auto r = reconcile(w.db.base ? *w.db.base : Content{}, head.content, w.db.model);
         if (r.stopped()) throw std::runtime_error("the apply stopped");
@@ -645,6 +648,7 @@ private:
         w.db.model = std::move(r.result);   // one transaction in the model: a crash keeps the old database or this
         w.db.base = head.content;
         w.db.known = head.known();
+        w.db.noted = {head.acceptance.root_sha256};
         if (head.version_id && head.base_version_id)
             w.db.settled = SettledWindow{*head.base_version_id, *head.version_id, head.settle_window};
         else w.db.settled.reset();
@@ -659,7 +663,7 @@ private:
                 try {
                     auto o = optionsFor(w);
                     o.apply_on_lost = true;
-                    o.before_root_put = [&w](const std::string& sha) { w.db.lastPut = sha; };
+                    o.before_root_put = [&w](const std::string& sha) { w.db.noted.push_back(sha); };
                     if (!w.cache.last_produced) o.pending_base = w.db.base;
                     const auto r = publish(store, world_.vault, world_.lookup(), world_.sealing(), w.db.model,
                                            w.db.known, w.cache, o);
@@ -667,6 +671,7 @@ private:
                     w.db.known = r.published.known;
                     w.db.own_epoch = r.published.known.epoch;
                     w.db.base = r.published.content;
+                    w.db.noted = {r.published.known.root_sha256};
                     if (r.settled.version_id && r.settled.base_version_id)
                         w.db.settled = SettledWindow{*r.settled.base_version_id, *r.settled.version_id, r.settled.window};
                     else w.db.settled.reset();

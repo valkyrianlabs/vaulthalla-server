@@ -111,7 +111,7 @@ struct PublishOptions {
     // never merged in memory; publish throws HeadMoved instead (after deleting a losing version_log root, as usual).
     // False: the in-memory merge of spec 03 §3.4 step 3 (the tests' writers without a database).
     bool apply_on_lost{false};
-    // Called with the root's SHA-256 before each PUT of a root (the server records it: originOf's lastPut). A throw
+    // Called with the root's SHA-256 before each PUT of a root (the server records it: originOf's `noted`). A throw
     // stops the publish before the PUT.
     std::function<void(const std::string& rootSha256)> before_root_put{};
 };
@@ -151,8 +151,11 @@ public:
 //   OwnPast         this writer's own root, PUT and not recorded (a crash or a failed record between the two): its
 //                   producer is this node and this vault id, it is built directly on `known` (epoch + 1, prev = known's
 //                   hash, and on version_log the version below it is known's when that is recorded; the first root when
-//                   nothing is known), and it is the last root this writer PUT (lastPut) when one is recorded. Its
-//                   content is the database's at that publish, so it is adopted (recorded as own), never reconciled.
+//                   nothing is known), and it is among the roots this writer PUT since its last record (`noted`,
+//                   which also holds the recorded root; empty only before any publish or record since migration 146:
+//                   then the rest decides). Every root a publish sealed is noted before its PUT, so a lost reply, a
+//                   retry that sealed another root, or a crash leaves each candidate in it. Its content is the
+//                   database's at that publish, so it is adopted (recorded as own), never reconciled.
 //   OwnUnexplained  it names this node and vault as its producer but is not that: no publish of this writer can leave
 //                   it (each publish builds on the recorded root, and a moved head is applied or adopted first), so
 //                   another installation publishes under this identity (a cloned database). Refused, never guessed.
@@ -162,7 +165,7 @@ enum class HeadOrigin { Foreign, OwnPast, OwnUnexplained };
                                   const std::optional<std::string>& headBaseVersionId,
                                   const std::optional<Known>& known, const std::string& selfNode,
                                   const std::optional<uint64_t>& selfVaultId,
-                                  const std::optional<std::string>& lastPut);
+                                  const std::vector<std::string>& noted);
 
 // version_log: our root's version isn't listed yet after every retry (the listing lags behind the PUT). Nothing is
 // recorded; the changes stay pending and the next publish settles or supersedes it.

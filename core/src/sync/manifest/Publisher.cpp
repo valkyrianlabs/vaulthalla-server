@@ -162,14 +162,14 @@ void checkHeadForWriter(const RootDocument& head, const std::string& rootSha, co
 HeadOrigin originOf(const RootDocument& head, const std::string& headSha256,
                     const std::optional<std::string>& headBaseVersionId, const std::optional<Known>& known,
                     const std::string& selfNode, const std::optional<uint64_t>& selfVaultId,
-                    const std::optional<std::string>& lastPut) {
+                    const std::vector<std::string>& noted) {
     if (selfNode.empty() || head.producer.node_id != selfNode) return HeadOrigin::Foreign;
     if (selfVaultId && head.producer.vault_id && *head.producer.vault_id != *selfVaultId) return HeadOrigin::Foreign;
     const bool direct = known ? head.epoch == known->epoch + 1 && head.prev == known->root_sha256 &&
                                     (!known->version_id || !headBaseVersionId || *headBaseVersionId == *known->version_id)
                               : head.epoch == 1 && !head.prev;
-    const bool lastOne = !lastPut || *lastPut == headSha256;
-    return direct && lastOne ? HeadOrigin::OwnPast : HeadOrigin::OwnUnexplained;
+    const bool put = noted.empty() || std::ranges::find(noted, headSha256) != noted.end();
+    return direct && put ? HeadOrigin::OwnPast : HeadOrigin::OwnUnexplained;
 }
 
 std::vector<std::string> Published::sids() const {

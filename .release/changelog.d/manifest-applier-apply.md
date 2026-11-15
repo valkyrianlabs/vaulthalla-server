@@ -5,6 +5,6 @@
   moved. Replicated vaults remain unsupported.
 - A root this server published but did not record (a crash or a database failure between the two) is recognized as its
   own at the next pass and recorded, never applied as another server's: local changes made since are kept.
-- Migration 146: `remote_manifest_state.publishing_root_sha256` (the last root this server sent) and
+- Migration 146: `remote_manifest_state.publishing_roots` (the roots this server sent since its last recorded one) and
   `manifest_apply_deferred` (changes waiting for an open file to close). Additive and idempotent.
 - New audit event `manifest.applied`.

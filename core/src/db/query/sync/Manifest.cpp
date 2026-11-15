@@ -100,7 +100,7 @@ vh::sync::manifest::ChainState Manifest::state(const uint32_t vaultId) {
             "SELECT epoch, root_sha256, etag, refused_reason, refused_epoch, refused_root_sha256, "
             "       EXTRACT(EPOCH FROM refused_at)::bigint AS refused_at, EXTRACT(EPOCH FROM gc_at)::bigint AS gc_at, "
             "       root_version_id, base_version_id, array_to_json(settle_window)::text AS settle_window, own_epoch, "
-            "       applying_epoch, applying_root_sha256, publishing_root_sha256 "
+            "       applying_epoch, applying_root_sha256, array_to_json(publishing_roots)::text AS publishing_roots "
             "FROM remote_manifest_state WHERE vault_id = $1 AND manifest_key = $2",
             pqxx::params{vaultId, kRootStateKey});
         if (res.empty()) return s;
@@ -120,7 +120,8 @@ vh::sync::manifest::ChainState Manifest::state(const uint32_t vaultId) {
         s.own_epoch = optNum<uint64_t>(row["own_epoch"]);
         s.applying_epoch = optNum<uint64_t>(row["applying_epoch"]);
         s.applying_root_sha256 = optText(row["applying_root_sha256"]);
-        s.publishing_root_sha256 = optText(row["publishing_root_sha256"]);
+        if (const auto p = optText(row["publishing_roots"]))
+            for (const auto& sha : nlohmann::json::parse(*p)) s.publishing_roots.push_back(sha.get<std::string>());
         return s;
     });
 }
@@ -137,15 +138,15 @@ void Manifest::recordRoot(pqxx::work& txn, const uint32_t vaultId, const vh::syn
     {
         // The window travels as JSON: version ids may hold '+', '/' and '='.
         txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, etag, epoch, root_sha256, root_version_id, "
-                 "  base_version_id, settle_window, own_epoch, base_root, updated_at) "
+                 "  base_version_id, settle_window, own_epoch, base_root, publishing_roots, updated_at) "
                  "VALUES ($1, $2, $3, $4::bigint, $5, $6, $7, ARRAY(SELECT json_array_elements_text($8::json)), "
-                 "  CASE WHEN $9::boolean THEN $4::bigint END, $10::bytea, "
+                 "  CASE WHEN $9::boolean THEN $4::bigint END, $10::bytea, ARRAY[$5::text], "
                  "  CURRENT_TIMESTAMP) "
                  "ON CONFLICT (vault_id, manifest_key) DO UPDATE SET etag = EXCLUDED.etag, epoch = EXCLUDED.epoch, "
                  "  root_sha256 = EXCLUDED.root_sha256, root_version_id = EXCLUDED.root_version_id, "
                  "  base_version_id = EXCLUDED.base_version_id, settle_window = EXCLUDED.settle_window, "
                  "  own_epoch = COALESCE(EXCLUDED.own_epoch, remote_manifest_state.own_epoch), "
-                 "  base_root = EXCLUDED.base_root, "
+                 "  base_root = EXCLUDED.base_root, publishing_roots = ARRAY[EXCLUDED.root_sha256], "
                  "  applying_epoch = CASE WHEN remote_manifest_state.applying_root_sha256 = EXCLUDED.root_sha256 "
                  "    THEN NULL ELSE remote_manifest_state.applying_epoch END, "
                  "  applying_root_sha256 = CASE WHEN remote_manifest_state.applying_root_sha256 = EXCLUDED.root_sha256 "
@@ -207,9 +208,11 @@ std::optional<vh::sync::manifest::BaseCopy> Manifest::base(const uint32_t vaultI
 void Manifest::notePublishing(const uint32_t vaultId, const std::string& rootSha256) {
     using namespace manifest_query_detail;
     Transactions::exec("Manifest::notePublishing", [&](pqxx::work& txn) {
-        txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, publishing_root_sha256, updated_at) "
-                 "VALUES ($1, $2, $3, CURRENT_TIMESTAMP) ON CONFLICT (vault_id, manifest_key) DO UPDATE SET "
-                 "  publishing_root_sha256 = EXCLUDED.publishing_root_sha256, updated_at = CURRENT_TIMESTAMP",
+        txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, publishing_roots, updated_at) "
+                 "VALUES ($1, $2, ARRAY[$3::text], CURRENT_TIMESTAMP) ON CONFLICT (vault_id, manifest_key) DO UPDATE SET "
+                 "  publishing_roots = (CASE WHEN cardinality(remote_manifest_state.publishing_roots) >= 256 "
+                 "    THEN remote_manifest_state.publishing_roots[cardinality(remote_manifest_state.publishing_roots) - 254:] "
+                 "    ELSE remote_manifest_state.publishing_roots END) || $3::text, updated_at = CURRENT_TIMESTAMP",
                  pqxx::params{vaultId, kRootStateKey, rootSha256});
     });
 }

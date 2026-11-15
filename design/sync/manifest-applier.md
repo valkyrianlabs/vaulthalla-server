@@ -445,9 +445,16 @@ before anything is applied:
 
 - *OwnPast*: producer node id = this node **and** producer vault id = this vault, built directly on `known` (epoch + 1,
   `prev` = known's hash, and on version_log the version below it = known's version id when recorded; epoch 1 with no
-  `prev` when nothing is known), and its hash is the last root this server PUT (`remote_manifest_state.
-  publishing_root_sha256`, migration 146, written before every root PUT through `PublishOptions::before_root_put`).
-  `Session::verifyRemote` records it as own with its base copy and nothing is reconciled.
+  `prev` when nothing is known), and its hash is among the roots this server PUT since its last record
+  (`remote_manifest_state.publishing_roots`, migration 146: each root's hash is added before its PUT through
+  `PublishOptions::before_root_put`; each record resets the set to the recorded root, so it is empty only before any
+  publish or record since the migration). `Session::verifyRemote` records it as own with its base copy and nothing is
+  reconciled. A set, not the last hash: a lost reply leaves the PUT's outcome unknown (conditional mode: the store
+  throws and the publish records nothing; version_log: `PutOutcomeUnknown`, the publish lists and looks for its version
+  by hash, and records nothing when it isn't listed yet), so the root may land after the next publish sealed and noted
+  another one; that publish then meets it (412, or C1 naming it) and adopts it. At 256 the oldest hash goes: that takes
+  256 root PUTs without one record, and a dropped hash that matters (its root lands later still) stalls the vault
+  (`ApplyStopped`), never misapplies it. Undo: the last hash alone (the first fix), which stalled this case.
 - *OwnUnexplained*: names this node and vault but fails the rest. No publish of this server leaves one (every publish
   builds on `known`, and a moved head is applied or adopted before the next), so another installation is publishing
   under this identity: `ApplyStopped`, never guessed.
@@ -458,9 +465,10 @@ How the identity behaves: the node id is `device_node.node_id`, one per installa
 on another server publishes under that server's node id; on the same server it restores into a new vault id
 (`Recover::reserveVaultId`, a sequence that never reuses an id), so neither looks own. A database restored from a backup
 onto a second machine while the first still runs is the one way two installations share a node id and vault id; the
-last-PUT hash then tells them apart (each server's own PUTs only). The hash is absent only in a state that has not
-published since migration 146; there the producer and the direct-on-known check decide, which a clone could pass (an
-accepted gap of that one-time window). Undo: drop the hash check in `originOf` (the producer rule alone).
+noted hashes then tell them apart (each server's own PUTs only). The set is empty only in a state that has neither
+published nor recorded since migration 146; there the producer and the direct-on-known check decide, which a clone
+could pass (an accepted gap of that one-time window). Undo: drop the set check in `originOf` (the producer rule
+alone).
 
 **One apply at a time.** `Service::applyRemote` holds `applyMutex_` for the whole remote step (deferred entries, verify,
 apply, `applied`). Lock order is apply mutex, then the session's: the session releases its mutex before `HeadMoved`

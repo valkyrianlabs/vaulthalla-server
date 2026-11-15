@@ -47,8 +47,10 @@ struct ChainState {
     // is published.
     std::optional<uint64_t> applying_epoch;
     std::optional<std::string> applying_root_sha256;
-    // The last root this writer PUT for the vault (migration 146), written before the PUT (originOf).
-    std::optional<std::string> publishing_root_sha256;
+    // Every root this writer PUT for the vault since its last record, and the recorded root (migration 146; written
+    // before each PUT, reset to the recorded root by each record; originOf). Empty only in a state that has neither
+    // published nor recorded since the migration.
+    std::vector<std::string> publishing_roots;
 };
 
 // One recorded root. version_id, base_version_id and the window on version_log buckets; own when this writer wrote it.
@@ -101,8 +103,8 @@ public:
     [[nodiscard]] virtual std::optional<BaseCopy> base() = 0;
     // An apply of this root begins (ChainState::applying_*); the recordRoot of the same root clears it.
     virtual void markApplying(uint64_t epoch, const std::string& rootSha256) = 0;
-    // This writer is about to PUT the root of this hash (ChainState::publishing_root_sha256). Durable before it
-    // returns; a throw stops the publish before the PUT.
+    // This writer is about to PUT the root of this hash (added to ChainState::publishing_roots, the oldest dropped past
+    // 256). Durable before it returns; a throw stops the publish before the PUT.
     virtual void notePublishing(const std::string& rootSha256) = 0;
     // A root the chain rules refused. True when it is not the root already recorded as refused: the session alerts
     // once per root, not once per pass.

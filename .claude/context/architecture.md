@@ -1019,7 +1019,8 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   base copy merges as a union. Tests: DB `ManifestApplyDb*` (test_manifest_apply_db.cpp),
   `VaultRecoverDb.ARestoreKeepsEachSnapshotsUid`, `ManifestVersionLogFaults.WithTheApplier*` (`Scenario::model_db`).
   A moved head is classified first (`originOf`): this server's own unrecorded root (producer node and vault id, built
-  directly on `known`, hash = `publishing_root_sha256`, written before every root PUT) is adopted by `verifyRemote`;
+  directly on `known`, hash in `publishing_roots`: every root PUT since the last record, noted before the PUT, reset to
+  the recorded root by each record) is adopted by `verifyRemote`;
   one only naming this identity is `ApplyStopped`. `Service::applyRemote` is serialized per vault (`applyMutex_`). A
   head naming several writers is refused (`kCarriesForeignEnvelopes` false: replicated vaults' prerequisites).
 - **`vh vault recover`** (#371, spec 03 §6.4): `vault::recover` (plan: envelopes, export, `loadForRestore` with the

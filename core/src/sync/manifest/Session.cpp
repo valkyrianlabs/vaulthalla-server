@@ -149,7 +149,7 @@ PublishReport Session::publishLocked(const Content& produced) {
 void Session::settleMoved(RemoteHead& out, Loaded&& loaded, const ChainState& state,
                           const std::optional<Known>& knownState) {
     switch (originOf(loaded.root, loaded.acceptance.root_sha256, loaded.base_version_id, knownState, host_.nodeId(),
-                     host_.vaultId, state.publishing_root_sha256)) {
+                     host_.vaultId, state.publishing_roots)) {
     case HeadOrigin::OwnPast:
         // Our own root, PUT and not recorded: the database is at it or past it. Recorded, never reconciled.
         state_->recordRoot({.epoch = loaded.acceptance.epoch,

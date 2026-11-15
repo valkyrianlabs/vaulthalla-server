@@ -717,4 +717,134 @@ TEST_F(ManifestApplyDb, AReplicatedHeadIsRefusedWhileForeignEnvelopesAreNotCarri
     EXPECT_EQ(db::query::sync::Manifest::state(id()).epoch, h.acceptance.epoch);
 }
 
+
+// ── Lost replies: every root PUT since the record is this server's own (review of 188f2377) ─────────────────────────
+
+namespace {
+
+// The bucket's store, except that the next root PUT's reply is lost before it lands (its bytes kept: they reach the
+// provider later), and that those bytes can be made to land just before the following root PUT.
+class LateRootStore final : public mf::ObjectStore {
+public:
+    LateRootStore(std::shared_ptr<mf::ObjectStore> inner, std::shared_ptr<VersionedBucket> bucket)
+        : inner_(std::move(inner)), bucket_(std::move(bucket)) {}
+
+    bool loseNextRootReply{false};
+    bool landBeforeNextRootPut{false};
+    std::optional<std::vector<uint8_t>> late;
+
+    std::optional<mf::StoredObject> get(const std::string& k, const std::optional<std::string>& v) override { return inner_->get(k, v); }
+    std::optional<std::vector<uint8_t>> getRange(const std::string& k, uint64_t o, uint64_t n) override { return inner_->getRange(k, o, n); }
+    std::optional<std::string> headEtag(const std::string& k) override { return inner_->headEtag(k); }
+    std::string putIfAbsent(const std::string& k, const std::vector<uint8_t>& b) override {
+        if (rootPut(k, b, false)) return {};
+        return inner_->putIfAbsent(k, b);
+    }
+    std::string putIfMatch(const std::string& k, const std::vector<uint8_t>& b, const std::string& e) override {
+        if (rootPut(k, b, false)) return {};
+        return inner_->putIfMatch(k, b, e);
+    }
+    mf::PutResult put(const std::string& k, const std::vector<uint8_t>& b) override {
+        if (rootPut(k, b, true)) return {};
+        return inner_->put(k, b);
+    }
+    std::vector<mf::ListedObject> list(const std::string& p) override { return inner_->list(p); }
+    std::vector<mf::StoredVersion> versions(const std::string& k) override { return inner_->versions(k); }
+    std::vector<mf::StoredVersion> versionsSince(const std::string& k, const std::optional<std::string>& s) override {
+        return inner_->versionsSince(k, s);
+    }
+    std::vector<mf::StoredVersion> versionsUnder(const std::string& p) override { return inner_->versionsUnder(p); }
+    void remove(const std::string& k) override { inner_->remove(k); }
+    void removeVersion(const std::string& k, const std::string& v) override { inner_->removeVersion(k, v); }
+    [[nodiscard]] mf::WriteCapability mode() const override { return inner_->mode(); }
+
+private:
+    // true: the PUT was swallowed (its reply lost). Throws as the real store does for a lost reply.
+    bool rootPut(const std::string& key, const std::vector<uint8_t>& bytes, const bool plain) {
+        if (key != mf::kRootKey) return false;
+        if (landBeforeNextRootPut && late) {
+            landBeforeNextRootPut = false;
+            (void)bucket_->seed(std::string(mf::kRootKey), *late);   // the earlier PUT reaches the provider now
+        }
+        if (!loseNextRootReply) return false;
+        loseNextRootReply = false;
+        late = bytes;
+        if (plain) throw mf::PutOutcomeUnknown("the reply was lost (test)");
+        throw std::runtime_error("the reply was lost (test)");
+    }
+
+    std::shared_ptr<mf::ObjectStore> inner_;
+    std::shared_ptr<VersionedBucket> bucket_;
+};
+
+}
+
+// Conditional PUTs: pass 1's root R1 loses its reply and lands after pass 2 verified; pass 2's root R2 is refused (412)
+// because R1 is the head now. R1 is this server's own (it was noted before its PUT, as R2 was): adopted, and pass 2
+// publishes on it. No stall, no apply, nothing local undone.
+TEST_F(ManifestApplyDb, AnOwnRootThatLandsLateIsAdoptedOnConditionalPuts) {
+    seed();
+    const auto known = *db::query::sync::Manifest::state(id()).epoch;
+    auto late = std::make_shared<LateRootStore>(store, v.bucket);
+    service = std::make_unique<sync::vault_manifest::Service>(id(), uid(), late, v.engine->encryptionManager);
+    write("/first.txt", "in R1");
+    late->loseNextRootReply = true;
+    EXPECT_ANY_THROW((void)service->publish());
+    ASSERT_TRUE(late->late);
+    EXPECT_EQ(head().acceptance.epoch, known) << "R1 has not landed yet";
+    EXPECT_EQ(db::query::sync::Manifest::state(id()).publishing_roots.size(), 2u) << "the recorded root and R1";
+
+    ASSERT_EQ(fs::Filesystem::rename(v.engine->vaultPathToFusePath("/top.txt"),
+                                     v.engine->vaultPathToFusePath("/moved.txt"), superUser), 0);
+    const auto since = journal();
+    late->landBeforeNextRootPut = true;
+    const auto r = service->publish();   // R2 412s on R1, R1 is adopted, the publish runs again on it
+    EXPECT_EQ(journal(), since) << "nothing was applied";
+    EXPECT_EQ(r.published.known.epoch, known + 2);
+    const auto state = db::query::sync::Manifest::state(id());
+    EXPECT_EQ(state.own_epoch, known + 2);
+    EXPECT_EQ(state.publishing_roots, std::vector<std::string>{r.published.known.root_sha256}) << "reset by the record";
+    const auto h = head().content;
+    EXPECT_TRUE(byName(h, "first.txt"));
+    EXPECT_TRUE(byName(h, "moved.txt"));
+    EXPECT_FALSE(byName(h, "top.txt"));
+    EXPECT_EQ(count("SELECT count(*) FROM sync_conflicts WHERE vault_id = $1", id()), 0);
+}
+
+// version_log: R1's outcome is unknown and the publish's own search doesn't find it (it hasn't landed); it lands just
+// before R2. Both are own versions at one epoch: rule C1 takes the earlier (R1) as the head, R2 loses and is deleted
+// (repaired), R1 is adopted, and the publish runs again on it.
+TEST_F(ManifestApplyDb, TwoOwnVersionsAtOneEpochOnVersionLogTheHeadIsAdoptedTheOtherRepaired) {
+    seed();
+    const auto known = *db::query::sync::Manifest::state(id()).epoch;
+    auto plain = std::make_shared<storage::s3::ManifestStore>(v.bucket, mf::WriteCapability::VersionLog);
+    auto late = std::make_shared<LateRootStore>(plain, v.bucket);
+    store = plain;
+    service = std::make_unique<sync::vault_manifest::Service>(id(), uid(), late, v.engine->encryptionManager);
+    write("/first.txt", "in R1");
+    late->loseNextRootReply = true;
+    EXPECT_ANY_THROW((void)service->publish());
+    ASSERT_TRUE(late->late);
+
+    ASSERT_EQ(fs::Filesystem::rename(v.engine->vaultPathToFusePath("/top.txt"),
+                                     v.engine->vaultPathToFusePath("/moved.txt"), superUser), 0);
+    const auto since = journal();
+    late->landBeforeNextRootPut = true;
+    const auto r = service->publish();
+    EXPECT_EQ(journal(), since) << "nothing was applied";
+    EXPECT_EQ(r.published.known.epoch, known + 2);
+    unsigned atKnownPlusOne = 0;
+    for (const auto& ver : v.bucket->history(std::string(mf::kRootKey)))
+        if (!ver.delete_marker)
+            try {
+                if (mf::openRoot(ver.body, uid(), service->keyLookup()).epoch == known + 1) ++atKnownPlusOne;
+            } catch (const std::exception&) {
+            }
+    EXPECT_EQ(atKnownPlusOne, 1u) << "the losing own version was deleted";
+    const auto h = head().content;
+    EXPECT_TRUE(byName(h, "first.txt"));
+    EXPECT_TRUE(byName(h, "moved.txt"));
+    EXPECT_FALSE(byName(h, "top.txt"));
+}
+
 }
