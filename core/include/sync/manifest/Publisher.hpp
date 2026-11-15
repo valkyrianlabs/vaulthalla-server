@@ -111,9 +111,11 @@ struct PublishOptions {
     // never merged in memory; publish throws HeadMoved instead (after deleting a losing version_log root, as usual).
     // False: the in-memory merge of spec 03 §3.4 step 3 (the tests' writers without a database).
     bool apply_on_lost{false};
-    // Called with the root's SHA-256 before each PUT of a root (the server records it: originOf's `noted`). A throw
-    // stops the publish before the PUT.
-    std::function<void(const std::string& rootSha256)> before_root_put{};
+    // Called before each PUT of a root with its SHA-256 and its pending base copy: the sealed root and the sealed bytes
+    // of the segments and snapshot segments this call wrote, by sid (the others are the base's, already kept). The
+    // server records them (originOf's `noted`; the base when another writer builds on this root before its record).
+    // A throw stops the publish before the PUT.
+    std::function<void(const std::string& rootSha256, const BaseCopy& pending)> before_root_put{};
 };
 
 struct PublishReport {

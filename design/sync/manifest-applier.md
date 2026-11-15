@@ -1,8 +1,9 @@
 # Applying another writer's manifest to the local database
 
 Status: design for review (managed storage plan of 2026-11-12, workstream I, "a manifest applier that merges another
-server's changes into the local database"); work items 1 to 5 are built (see "As built: items 1 to 3" and "As built:
-items 4 and 5"), items 6 (in part) and 7 are not. Replicated vaults stay refused (the join is `mirrors.md`). It covers how a running server takes a
+server's changes into the local database"); work items 1 to 5 and 7 are built (see the "As built" sections), item 6
+in part. The applier takes in heads naming several writers; replicated vaults are still not offered (no join,
+`mirrors.md`). It covers how a running server takes a
 canonical `opaque_v1` root that another writer published into its database, FUSE view, cache and change journal, and
 how that closes the restart gap of [spec 06](../encryption/06-publish-without-preconditions.md) §5.5. It does not cover
 the publish protocol (spec 03 §3.4, spec 06 §5), joining a node to `writers`, key hand-over or rotation between
@@ -490,4 +491,72 @@ applier refuses a head naming more than one writer, `ManifestApplyDb.AReplicated
 with one uid on one bucket now; it needs the join (writers naming both nodes, `mirrors.md`) or a test-only writers
 seed, and it should assert the journal and FUSE views on both. Item 7 (status) has `ApplyReport` (epoch, producer,
 counts, conflicts, union base, notes) and `manifest_apply_deferred` to show; nothing persists the last report yet.
+
+## As built: replica prerequisites and status (branch `feat/replica-prerequisites`; migration 147)
+
+**Foreign envelopes.** Under the decided model every replica holds the same account-managed grants (one signed
+policy, verified by each server), and each replica wraps every key version for each of them itself: the kids differ
+per server. So a root has to name every writer's kids, and no writer may drop another's.
+
+- *Kept as:* a reference in `manifest_foreign_envelope` (kid, key version, recipient id), read once per new kid before
+  the apply's first transaction: the envelope `.vaulthalla/key/<kid>` is fetched, its kid must be its bytes' hash, and
+  its header must name this vault and the key version the root lists it under (customer class). A kid that fails, or
+  whose object is missing, is not kept (a note in the report). Never a grant or `vault_key_envelope` row.
+- *Named when:* one of this vault's grants (revoked or not) has the envelope's recipient, the same rule by which a
+  server names its own envelopes (every kid it wrote, a revoked grant's too); the key version must be in the vault's
+  key history (the collector attaches envelopes only to listed versions, retired ones included).
+- *Policy removes a recipient:* the cloud service revokes the grant (it stays as revoked), so both writers keep naming
+  both writers' kids for it, as each names its own: the root stays the same. A grant deleted outright (only with the
+  vault) takes its references out of the root.
+- *Same recipient and version on both writers:* both kids, the union, sorted (the collector orders by version and kid),
+  so a publish with nothing changed produces the same list whoever publishes.
+- A grant that exists on one replica only (not from the account's policy) would make the roots alternate between
+  writers: a join prerequisite is that replicated vaults hold account-managed grants only.
+
+`kCarriesForeignEnvelopes` is now true and a head naming several writers is applied. It is refused on a vault syncing
+with the `mirror` strategy (`manifest_mirror_shared`: mirror deletes remote objects its database doesn't hold).
+
+**The pending root's base copy.** Before each root PUT the publisher hands the server the sealed root and the
+segments it wrote (`PublishOptions::before_root_put`); `notePublishing` keeps them (`remote_manifest_pending`, and
+the segments by sid in `remote_manifest_base`) beside the hash in `publishing_roots`; every record clears them. When
+a foreign head arrives, `Session::adoptBuiltOn` checks each pending own root P that is directly on `known`: when the
+head continues P (its `prev` is P, or the chain rules from P accept the head without a gap) and P's copy opens, P is
+recorded as own first, so the apply's base is P. The interleaving suite's crashed writers now keep their rename in
+every run, the 24 runs of 646 where another writer built on the unrecorded root included (asserted; the model takes
+the descent from the true chain). Undo: drop `adoptBuiltOn`.
+
+**Trash with another writer.** On a cloud vault a trashed file is purged at the next pass, remote object included.
+With another writer that DELETE can remove an object the other writer names live again (it restored the file; or,
+for a trash applied from its root, it still names it). Rule: while the recorded root names a writer other than this
+server (`remote_manifest_state.writers`), a trash is purged locally only, no remote DELETE (`Local::removeTrashedFiles`,
+`CloudEngine::manifestNamesOtherWriters`). Cost: the trashed objects stay in the bucket (`o/<uid>` no root names, an
+orphan "left alone"), so storage is not freed until an orphan collection exists (a join prerequisite). A vault this
+server writes alone keeps the remote purge: its own restore ends the trash row before any purge, so it has no such
+hazard. Undo: drop the `shared` branch.
+
+**Status (item 7).** The last apply is persisted (`manifest_apply_report`: epoch, producing node, recorded, union
+base, applied/skipped/deferred/kept, conflicts decided and open, notes, time) and shown by `storage.vault.get` of an
+opaque_v1 vault (`manifest`: `VaultManifestStatus` with `last_apply`, `ManifestApplyReport`) and `vh vault sync info`
+(a "Manifest" section). A stopped apply (`manifest_key_missing`, `manifest_key_mismatch`, `manifest_head_incomplete`,
+`manifest_mirror_shared`) is recorded with its root and alerts the operator once per root and reason
+(`manifest_apply_stopped`); the next successful apply clears it. No console UI.
+
+**Tests.** `ManifestApplyDb.AnotherWritersEnvelopeKidsAreCarriedForTheGrantsThisServerHolds` (carried, stable across
+publishes, no grant or envelope rows; not carried: a recipient without a grant here, a missing object, another
+vault's or key version's envelope, a kid that isn't its bytes' hash), `.AMirrorVaultRefusesASharedHeadAndAlertsOnce`,
+`.AnUnrecordedOwnRootAnotherWriterBuiltOnIsTheBaseOfTheApply`, `.WithAnotherWriterATrashIsPurgedWithoutARemoteDelete`,
+`.RemoteOnlyFilesHydrateAfterAnAppliedMoveAndReplacement`; the interleaving crash test as above; the ws model checks.
+
+**What the join and the two-daemon drill (item 6) still need:**
+
+1. The join itself: writers naming both nodes, the other server's keys (`mirrors.md` "Join"), and the account-managed
+   grants on both before the first publish; refusing local-only grants, `mirror`, layout migration, key salvage and
+   `vh vault recover --into` on a replicated vault.
+2. Key rotation by one replica: the other can't open roots sealed under the new key (`manifest_key_missing`, a stall,
+   no loss); the rotation owner and the key hand-over are `mirrors.md`'s.
+3. Content edit/edit across replicas resolves through the planner under the vault's policy (`keep_local` by default:
+   the losing generation survives only as a provider version, so replicated vaults need bucket versioning, or `ask`).
+4. An orphan collection for the objects shared vaults' trash leaves in the bucket.
+5. The drill: two daemons on one fake bucket in the Tier B harness, asserting journals and FUSE views on both, then
+   Backblaze once spec 06's A3 and A4 are confirmed.
 

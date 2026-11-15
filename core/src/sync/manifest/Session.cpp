@@ -106,7 +106,9 @@ PublishReport Session::publishLocked(const Content& produced) {
     options.own_epoch = state.own_epoch;
     options.settled = d::settledOf(state);
     options.apply_on_lost = true;
-    options.before_root_put = [this](const std::string& sha) { state_->notePublishing(sha); };
+    options.before_root_put = [this](const std::string& sha, const BaseCopy& pending) {
+        state_->notePublishing(sha, pending);
+    };
     try {
         auto report = manifest::publish(*store_, vaultUid_, host_.keys, current, produced, knownState, cache_, options);
         state_->recordRoot({.epoch = report.published.known.epoch,
@@ -118,7 +120,8 @@ PublishReport Session::publishLocked(const Content& produced) {
                             .settle_window = report.settled.window,
                             .own = true,
                             .base = baseCopyOf(report.published.root, report.published.root_bytes,
-                                               report.published.segments, report.published.snapshots)});
+                                               report.published.segments, report.published.snapshots),
+                            .writers = report.published.root.writers.value_or(std::vector<std::string>{})});
         d::dropSealed(cache_);
         if (report.lost)
             note(Notice::Info, std::format("another writer's root won {} round(s) of this publish; merged onto it "
@@ -160,7 +163,8 @@ void Session::settleMoved(RemoteHead& out, Loaded&& loaded, const ChainState& st
                             .base_version_id = loaded.base_version_id,
                             .settle_window = loaded.settle_window,
                             .own = true,
-                            .base = baseCopyOf(loaded.root, loaded.root_bytes, loaded.segments, loaded.snapshots)});
+                            .base = baseCopyOf(loaded.root, loaded.root_bytes, loaded.segments, loaded.snapshots),
+                                .writers = loaded.root.writers.value_or(std::vector<std::string>{})});
         if (cache_.base && cache_.base->known != loaded.known()) cache_.base.reset();
         out.adopted = true;
         note(Notice::Info, std::format("recorded this server's own root of epoch {}, which was published but not "
@@ -172,7 +176,59 @@ void Session::settleMoved(RemoteHead& out, Loaded&& loaded, const ChainState& st
         out.head = std::move(loaded);
         return;
     case HeadOrigin::Foreign:
+        if (knownState) adoptBuiltOn(loaded, state, *knownState);
         out.head = std::move(loaded);   // recorded by the apply, not here
+        return;
+    }
+}
+
+void Session::adoptBuiltOn(const Loaded& head, const ChainState& state, const Known& knownState) {
+    // Another writer may have built on a root of ours that is PUT and not recorded (noted, its pending base copy kept):
+    // then that root, not `known`, is what our database was at, and it must be the apply's base. It is adopted first.
+    for (const auto& sha : state.publishing_roots) {
+        if (sha == knownState.root_sha256 || sha == head.acceptance.root_sha256) continue;
+        const auto copy = state_->pendingBase(sha);
+        if (!copy) continue;
+        std::optional<RootDocument> root;
+        try {
+            root = openRoot(copy->root, vaultUid_, host_.keys);
+        } catch (const std::exception&) {
+            continue;
+        }
+        if (originOf(*root, sha, std::nullopt, knownState, host_.nodeId(), host_.vaultId, state.publishing_roots) !=
+            HeadOrigin::OwnPast)
+            continue;
+        bool descends = head.root.prev == sha && head.root.epoch == root->epoch + 1;
+        if (!descends) {
+            try {   // the chain rules from that root: the head must continue it without a gap
+                LoadOptions o;
+                o.known = Known{root->epoch, sha, std::nullopt};
+                o.root_cache = &cache_.roots;
+                const auto from = load(*store_, vaultUid_, host_.keys, o);
+                descends = !from.acceptance.gap && from.acceptance.root_sha256 == head.acceptance.root_sha256;
+            } catch (const std::exception&) {
+                descends = false;
+            }
+        }
+        if (!descends) continue;
+        if (!openBaseCopy(*copy, vaultUid_, host_.keys, Known{root->epoch, sha, std::nullopt})) continue;
+        std::vector<std::string> sids;
+        for (const auto& s : root->segments) sids.push_back(s.sid);
+        for (const auto& s : root->snapshots) sids.push_back(s.sid);
+        state_->recordRoot({.epoch = root->epoch,
+                            .root_sha256 = sha,
+                            .etag = std::nullopt,
+                            .sids = sids,
+                            .version_id = std::nullopt,
+                            .base_version_id = std::nullopt,
+                            .settle_window = {},
+                            .own = true,
+                            .base = copy,
+                            .writers = root->writers.value_or(std::vector<std::string>{})});
+        cache_.base.reset();
+        note(Notice::Info, std::format("another writer built on this server's own unrecorded root of epoch {}: recorded "
+                                       "first, the base of the apply",
+                                       root->epoch));
         return;
     }
 }
@@ -215,7 +271,8 @@ std::optional<RemoteHead> Session::verifyRemoteVersionLog() {
                                 .base_version_id = loaded.base_version_id,
                                 .settle_window = loaded.settle_window,
                                 .own = false,
-                                .base = baseCopyOf(loaded.root, loaded.root_bytes, loaded.segments, loaded.snapshots)});
+                                .base = baseCopyOf(loaded.root, loaded.root_bytes, loaded.segments, loaded.snapshots),
+                                .writers = loaded.root.writers.value_or(std::vector<std::string>{})});
         }
         // Repair (spec 06 §5.4): versions newer than the head that aren't on the chain.
         for (const auto& id : loaded.strays) {

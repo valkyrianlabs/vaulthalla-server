@@ -412,6 +412,10 @@ void Local::removeTrashedFiles() {
         purged.reserve(files.size());
         bool remoteIndexMutated = false;
         std::size_t failed = 0;
+        // Another writer names this vault (design/sync/manifest-applier.md, "Trash with another writer"): it may
+        // restore the file and name the same object live again, so the purge stays local and no remote DELETE goes
+        // out. A vault this server alone writes keeps purging remotely (its own restore ends the trash row first).
+        const bool shared = cloud->manifestNamesOtherWriters();
 
         for (const auto& file : files) {
             auto scoped = op(Throughput::Metric::DELETE);
@@ -420,7 +424,8 @@ void Local::removeTrashedFiles() {
                 if (!file) throw std::runtime_error("null trashed file");
                 scoped->start(file->size_bytes);
                 const auto key = cloud->objectKeyOf(*file);   // o/<uid> under opaque_v1, else the path
-                cloud->purge(file);
+                if (shared) cloud->removeLocally(file);
+                else cloud->purge(file);
                 db::query::sync::RemoteObjectIndex::deleteKey(file->vault_id, key);
                 purged.push_back({file, scoped});
                 remoteIndexMutated = true;

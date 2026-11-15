@@ -318,7 +318,7 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
         }
 
         const auto rootBytes = sealRoot(root, vaultUid, sealing);
-        if (options.before_root_put) options.before_root_put(sha256Hex(rootBytes));
+        if (options.before_root_put) options.before_root_put(sha256Hex(rootBytes), BaseCopy{rootBytes, writtenBytes});
         if (versionLog) {
             const auto ourSha = sha256Hex(rootBytes);
             std::optional<std::string> ourId;

@@ -41,6 +41,9 @@ namespace vh::storage {
 
     class CloudEngine final : public Engine {
     public:
+        // The recorded manifest root names a writer other than this server (remote_manifest_state.writers): a trash
+        // is then purged here without a remote DELETE (sync::Local::removeTrashedFiles).
+        [[nodiscard]] bool manifestNamesOtherWriters() const;
         struct RemoteEncryptionResolveOptions {
             bool trust_file_encryption_metadata{false};
             bool allow_local_db_recovery{false};

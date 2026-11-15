@@ -9,7 +9,7 @@ export const WS_CONTRACT_VERSION = 3
 export const WS_CONTRACT_HASH = 'f14dec94b0ad564ea133841b91b99eaf8b78e8f4dc6cb64f9157e73f6b0e67e3'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'b343025d5c4879445b3f08090da887eef7cd5e0c7a9defbad02f509e0ba81dcf'
+export const WS_MODELS_HASH = 'be236626b1116b06aebc16b233e2dcde7296ea2d76dc95e528fc55120cd2df64'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -787,6 +787,24 @@ export interface WsModels {
    * logging.* (Config.cpp to_json(LoggingConfig)).
    */
   'LoggingConfig': { levels: WsModels['LogLevelsConfig']; file_paths?: 'ids' | 'full' }
+  /**
+   * The last apply of another writer's root (manifest_apply_report, migration 147).
+   */
+  'ManifestApplyReport': {
+    epoch: number
+    producer: string
+    recorded: boolean
+    union_base: boolean
+    applied: number
+    skipped: number
+    deferred: number
+    kept: number
+    conflicts_decided: number
+    conflicts_open: number
+    notes: string[]
+    at: string
+    stopped: string | null
+  }
   /**
    * auth.mfa.* (Config.cpp to_json(MfaConfig), #359, #360): multi-factor authentication settings. Changing
    * policy, the admin flags or auth.webauthn.rp_id is audited (auth.mfa.policy.change); weakening them is
@@ -2587,6 +2605,7 @@ export interface WsModels {
     owner?: string
     remote?: string
     sync?: WsModels['RemoteSyncPolicy']
+    manifest?: WsModels['VaultManifestStatus']
   }
   /**
    * A vault's recent activity (core/src/stats/model/VaultActivity.cpp to_json).
@@ -2958,6 +2977,19 @@ export interface WsModels {
     delete_requests: number
     downloaded_bytes: number
     uploaded_bytes: number
+  }
+  /**
+   * The encrypted manifest of an opaque_v1 vault (db::query::sync::ManifestApply::status): the recorded root,
+   * an apply in progress, the root's writers, entries waiting for an open file to close and the last apply of
+   * a root this server did not publish (design/sync/manifest-applier.md).
+   */
+  'VaultManifestStatus': {
+    epoch: number | null
+    own_epoch: number | null
+    applying_epoch: number | null
+    writers: string[]
+    deferred: number
+    last_apply: WsModels['ManifestApplyReport'] | null
   }
   /**
    * What `vh vault recover` / vault.recover read and did (#371, spec 03 §6): ops::vault_recover::toJson

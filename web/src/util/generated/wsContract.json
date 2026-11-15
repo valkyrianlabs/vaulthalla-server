@@ -5248,6 +5248,118 @@
       "name": "LoggingConfig"
     },
     {
+      "description": "The last apply of another writer's root (manifest_apply_report, migration 147).",
+      "fields": [
+        {
+          "minimum": 0,
+          "name": "epoch",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The node id that published the root.",
+          "name": "producer",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The root became the recorded one; false: an operation was skipped (a local write since the collect) and the next pass applies it again.",
+          "name": "recorded",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "No usable base copy: merged without one (nothing deleted).",
+          "name": "union_base",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "applied",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "skipped",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "deferred",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Left to the planner, or kept for a local edit.",
+          "minimum": 0,
+          "name": "kept",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "conflicts_decided",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "conflicts_open",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "items": "string",
+          "name": "notes",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "ISO-8601 UTC.",
+          "name": "at",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The reason the last apply stopped at its root (the pass stalls; alerted once): manifest_key_missing, manifest_key_mismatch, manifest_head_incomplete, manifest_mirror_shared; null when it did not stop.",
+          "name": "stopped",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "name": "ManifestApplyReport"
+    },
+    {
       "description": "auth.mfa.* (Config.cpp to_json(MfaConfig), #359, #360): multi-factor authentication settings. Changing policy, the admin flags or auth.webauthn.rp_id is audited (auth.mfa.policy.change); weakening them is mailed to operator_emails.recipients.security.",
       "fields": [
         {
@@ -16967,6 +17079,15 @@
           "types": [
             "object"
           ]
+        },
+        {
+          "description": "storage.vault.get of an opaque_v1 S3 vault: its encrypted manifest.",
+          "model": "VaultManifestStatus",
+          "name": "manifest",
+          "required": false,
+          "types": [
+            "object"
+          ]
         }
       ],
       "name": "Vault"
@@ -19528,6 +19649,70 @@
         }
       ],
       "name": "VaultLayoutUsage"
+    },
+    {
+      "description": "The encrypted manifest of an opaque_v1 vault (db::query::sync::ManifestApply::status): the recorded root, an apply in progress, the root's writers, entries waiting for an open file to close and the last apply of a root this server did not publish (design/sync/manifest-applier.md).",
+      "fields": [
+        {
+          "description": "The recorded root's epoch; null before the first.",
+          "minimum": 0,
+          "name": "epoch",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The last root this server published itself.",
+          "minimum": 0,
+          "name": "own_epoch",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "An apply that has not finished: nothing is published meanwhile.",
+          "minimum": 0,
+          "name": "applying_epoch",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The node ids the recorded root names as its writers.",
+          "items": "string",
+          "name": "writers",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Entries an apply deferred until their open file closes.",
+          "minimum": 0,
+          "name": "deferred",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "null: no root was applied here yet.",
+          "model": "ManifestApplyReport",
+          "name": "last_apply",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        }
+      ],
+      "name": "VaultManifestStatus"
     },
     {
       "description": "What `vh vault recover` / vault.recover read and did (#371, spec 03 §6): ops::vault_recover::toJson (core/src/ops/VaultRecover.cpp) over vault::recover::toJson(Plan). Public data only: key checks, attestation verdicts and counts, never key material.",
@@ -23342,7 +23527,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "b343025d5c4879445b3f08090da887eef7cd5e0c7a9defbad02f509e0ba81dcf",
+  "models_hash": "be236626b1116b06aebc16b233e2dcde7296ea2d76dc95e528fc55120cd2df64",
   "protocol": {
     "min": 1,
     "version": 1

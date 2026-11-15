@@ -40,7 +40,11 @@ public:
     [[nodiscard]] static std::optional<vh::sync::manifest::BaseCopy> base(uint32_t vaultId);
     // This server is about to PUT the root of this hash (added to remote_manifest_state.publishing_roots, migration
     // 146, the oldest dropped past 256; recordRoot resets the set to the recorded root).
-    static void notePublishing(uint32_t vaultId, const std::string& rootSha256);
+    static void notePublishing(uint32_t vaultId, const std::string& rootSha256,
+                               const vh::sync::manifest::BaseCopy& pending);
+    // The pending base copy kept for a root noted since the last record (remote_manifest_pending, migration 147).
+    [[nodiscard]] static std::optional<vh::sync::manifest::BaseCopy> pendingBase(uint32_t vaultId,
+                                                                                 const std::string& rootSha256);
     // An apply of this root begins (remote_manifest_state.applying_*); recordRoot of the same root clears it.
     static void markApplying(uint32_t vaultId, uint64_t epoch, const std::string& rootSha256);
 

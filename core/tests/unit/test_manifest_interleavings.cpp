@@ -287,6 +287,7 @@ struct Db {
     Content model;                  // model_db: the database's content
     std::optional<Content> base;    // model_db: the base copy (the content of `known`)
     std::vector<std::string> noted;   // model_db: the roots PUT since the last record, and the recorded one
+    std::map<std::string, std::vector<uint8_t>> pendingRoots;   // model_db: their sealed bytes (the pending base)
 };
 
 struct WriterState {
@@ -296,9 +297,8 @@ struct WriterState {
     bool pending{true};
     unsigned crashes{0};
     unsigned adopted{0};   // model_db: own roots met unrecorded after a crash, adopted
-    // model_db: another writer built on this writer's own unrecorded root before it adopted it. The apply's base is
-    // then `known`, not that root, so changes made since may be read as conflicts (a replicated-vault gap: design,
-    // item 6 prerequisites). Counted, not judged.
+    // model_db: another writer built on this writer's own unrecorded root before it adopted it (that root, from its
+    // pending base copy, is then the apply's base).
     bool built_on{false};
     unsigned lost{0};
     std::optional<ChainError> refused;
@@ -634,12 +634,30 @@ private:
             return;
         }
         {
+            // Another writer built on our own unrecorded root P: P (its pending base copy) is adopted first and is the
+            // apply's base, as Session::adoptBuiltOn does (which proves the descent with the chain rules from P; the
+            // model takes it from the true chain).
             const auto t = truthOf(world_, opened_);
             for (const auto& sha : w.db.noted) {
                 if ((w.db.known && sha == w.db.known->root_sha256) || sha == head.acceptance.root_sha256) continue;
+                const auto pending = w.db.pendingRoots.find(sha);
+                if (pending == w.db.pendingRoots.end()) continue;
+                bool onChain = false;
                 for (const auto& id : t.chain)
-                    if (const auto it = t.roots.find(id); it != t.roots.end() && it->second.second == sha)
-                        w.built_on = true;
+                    if (const auto it = t.roots.find(id); it != t.roots.end() && it->second.second == sha) onChain = true;
+                if (!onChain) continue;
+                w.built_on = true;
+                auto plain = world_.plainStore();
+                const auto root = openRoot(pending->second, world_.vault, world_.lookup());
+                std::vector<SegmentDocument> segs;
+                for (const auto& ref : root.segments)
+                    segs.push_back(openSegment(plain->get(segmentKey(ref.sid))->bytes, world_.vault,
+                                               parseUid(ref.sid, "bad_root", "sid"), world_.lookup()));
+                w.db.base = contentOf(root, segs, {});
+                w.db.known = Known{root.epoch, sha, std::nullopt};
+                w.db.own_epoch = root.epoch;
+                w.db.settled.reset();
+                break;
             }
         }
         auto r = reconcile(w.db.base ? *w.db.base : Content{}, head.content, w.db.model);
@@ -663,7 +681,10 @@ private:
                 try {
                     auto o = optionsFor(w);
                     o.apply_on_lost = true;
-                    o.before_root_put = [&w](const std::string& sha) { w.db.noted.push_back(sha); };
+                    o.before_root_put = [&w](const std::string& sha, const BaseCopy& pending) {
+                        w.db.noted.push_back(sha);
+                        w.db.pendingRoots[sha] = pending.root;
+                    };
                     if (!w.cache.last_produced) o.pending_base = w.db.base;
                     const auto r = publish(store, world_.vault, world_.lookup(), world_.sealing(), w.db.model,
                                            w.db.known, w.cache, o);
@@ -902,8 +923,8 @@ private:
             if (sc_.model_db && writers_[i].crashes > 0) {
                 // its rename after the crash is kept: never reverted by its own earlier root
                 const bool kept = names.contains(movedOf(i)) && !names.contains(fileOf(i));
-                if (!kept && writers_[i].built_on) report_.built_on = true;
-                else if (!kept) violation("I4: " + nodeName(i) + "'s rename after its restart is not the head's");
+                if (writers_[i].built_on) report_.built_on = true;
+                if (!kept) violation("I4: " + nodeName(i) + "'s rename after its restart is not the head's");
                 if (!names.contains(movedOf(i)) && !names.contains(fileOf(i)))
                     violation("I4: " + nodeName(i) + "'s file is not in the head");
                 continue;
@@ -1093,8 +1114,9 @@ TEST_P(ManifestVersionLogFaults, WithTheApplierACrashAtEveryStepRevertsNothing) 
     EXPECT_EQ(all.reverted_by_restart, 0u);
     EXPECT_GT(all.adopted, 0u) << "some crash left an own root unrecorded (after its PUT), adopted at the restart";
     RecordProperty("adopted", static_cast<int>(all.adopted));
-    // The replicated-vault gap (design item 6 prerequisites), measured: runs where another writer built on a crashed
-    // writer's unrecorded root before its restart, so the crashed writer's later rename lost to that root.
+    // Runs where another writer built on a crashed writer's unrecorded root before its restart: the pending base copy
+    // makes that root the apply's base, so its later rename is kept there too (asserted above for every run).
+    EXPECT_GT(all.built_on, 0u) << "some schedule builds on an unrecorded root";
     RecordProperty("own_root_built_on", static_cast<int>(all.built_on));
     RecordProperty("runs", static_cast<int>(all.runs));
 }

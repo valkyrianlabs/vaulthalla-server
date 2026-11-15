@@ -100,7 +100,8 @@ vh::sync::manifest::ChainState Manifest::state(const uint32_t vaultId) {
             "SELECT epoch, root_sha256, etag, refused_reason, refused_epoch, refused_root_sha256, "
             "       EXTRACT(EPOCH FROM refused_at)::bigint AS refused_at, EXTRACT(EPOCH FROM gc_at)::bigint AS gc_at, "
             "       root_version_id, base_version_id, array_to_json(settle_window)::text AS settle_window, own_epoch, "
-            "       applying_epoch, applying_root_sha256, array_to_json(publishing_roots)::text AS publishing_roots "
+            "       applying_epoch, applying_root_sha256, array_to_json(publishing_roots)::text AS publishing_roots, "
+            "       array_to_json(writers)::text AS writers "
             "FROM remote_manifest_state WHERE vault_id = $1 AND manifest_key = $2",
             pqxx::params{vaultId, kRootStateKey});
         if (res.empty()) return s;
@@ -122,6 +123,8 @@ vh::sync::manifest::ChainState Manifest::state(const uint32_t vaultId) {
         s.applying_root_sha256 = optText(row["applying_root_sha256"]);
         if (const auto p = optText(row["publishing_roots"]))
             for (const auto& sha : nlohmann::json::parse(*p)) s.publishing_roots.push_back(sha.get<std::string>());
+        if (const auto w = optText(row["writers"]))
+            for (const auto& node : nlohmann::json::parse(*w)) s.writers.push_back(node.get<std::string>());
         return s;
     });
 }
@@ -138,15 +141,16 @@ void Manifest::recordRoot(pqxx::work& txn, const uint32_t vaultId, const vh::syn
     {
         // The window travels as JSON: version ids may hold '+', '/' and '='.
         txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, etag, epoch, root_sha256, root_version_id, "
-                 "  base_version_id, settle_window, own_epoch, base_root, publishing_roots, updated_at) "
+                 "  base_version_id, settle_window, own_epoch, base_root, publishing_roots, writers, updated_at) "
                  "VALUES ($1, $2, $3, $4::bigint, $5, $6, $7, ARRAY(SELECT json_array_elements_text($8::json)), "
                  "  CASE WHEN $9::boolean THEN $4::bigint END, $10::bytea, ARRAY[$5::text], "
-                 "  CURRENT_TIMESTAMP) "
+                 "  ARRAY(SELECT json_array_elements_text($11::json)), CURRENT_TIMESTAMP) "
                  "ON CONFLICT (vault_id, manifest_key) DO UPDATE SET etag = EXCLUDED.etag, epoch = EXCLUDED.epoch, "
                  "  root_sha256 = EXCLUDED.root_sha256, root_version_id = EXCLUDED.root_version_id, "
                  "  base_version_id = EXCLUDED.base_version_id, settle_window = EXCLUDED.settle_window, "
                  "  own_epoch = COALESCE(EXCLUDED.own_epoch, remote_manifest_state.own_epoch), "
                  "  base_root = EXCLUDED.base_root, publishing_roots = ARRAY[EXCLUDED.root_sha256], "
+                 "  writers = EXCLUDED.writers, "
                  "  applying_epoch = CASE WHEN remote_manifest_state.applying_root_sha256 = EXCLUDED.root_sha256 "
                  "    THEN NULL ELSE remote_manifest_state.applying_epoch END, "
                  "  applying_root_sha256 = CASE WHEN remote_manifest_state.applying_root_sha256 = EXCLUDED.root_sha256 "
@@ -157,7 +161,9 @@ void Manifest::recordRoot(pqxx::work& txn, const uint32_t vaultId, const vh::syn
                               rec.version_id, rec.base_version_id,
                               nlohmann::json(rec.settle_window).dump(), rec.own,
                               rec.base ? std::optional<std::string>(encoding::to_hex_bytea(rec.base->root))
-                                       : std::nullopt});
+                                       : std::nullopt,
+                              nlohmann::json(rec.writers).dump()});
+        txn.exec("DELETE FROM remote_manifest_pending WHERE vault_id = $1", pqxx::params{vaultId});
         std::string array = "{";
         for (std::size_t i = 0; i < sids.size(); ++i) {
             if (i) array += ',';
@@ -205,15 +211,43 @@ std::optional<vh::sync::manifest::BaseCopy> Manifest::base(const uint32_t vaultI
     });
 }
 
-void Manifest::notePublishing(const uint32_t vaultId, const std::string& rootSha256) {
+void Manifest::notePublishing(const uint32_t vaultId, const std::string& rootSha256,
+                              const vh::sync::manifest::BaseCopy& pending) {
     using namespace manifest_query_detail;
     Transactions::exec("Manifest::notePublishing", [&](pqxx::work& txn) {
+        // The pending base copy first: the new objects by sid (kept until a record names or drops them) and the root.
+        for (const auto& [sid, bytes] : pending.objects)
+            txn.exec("INSERT INTO remote_manifest_base (vault_id, sid, object_sha256, bytes) VALUES ($1, $2, $3, $4::bytea) "
+                     "ON CONFLICT (vault_id, sid) DO NOTHING",
+                     pqxx::params{vaultId, sid, mf::sha256Hex(bytes), encoding::to_hex_bytea(bytes)});
+        if (!pending.root.empty())
+            txn.exec("INSERT INTO remote_manifest_pending (vault_id, root_sha256, bytes) VALUES ($1, $2, $3::bytea) "
+                     "ON CONFLICT (vault_id, root_sha256) DO NOTHING",
+                     pqxx::params{vaultId, rootSha256, encoding::to_hex_bytea(pending.root)});
         txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, publishing_roots, updated_at) "
                  "VALUES ($1, $2, ARRAY[$3::text], CURRENT_TIMESTAMP) ON CONFLICT (vault_id, manifest_key) DO UPDATE SET "
                  "  publishing_roots = (CASE WHEN cardinality(remote_manifest_state.publishing_roots) >= 256 "
                  "    THEN remote_manifest_state.publishing_roots[cardinality(remote_manifest_state.publishing_roots) - 254:] "
                  "    ELSE remote_manifest_state.publishing_roots END) || $3::text, updated_at = CURRENT_TIMESTAMP",
                  pqxx::params{vaultId, kRootStateKey, rootSha256});
+        txn.exec("DELETE FROM remote_manifest_pending p USING remote_manifest_state s WHERE p.vault_id = $1 "
+                 "AND s.vault_id = $1 AND s.manifest_key = $2 AND p.root_sha256 <> ALL (s.publishing_roots)",
+                 pqxx::params{vaultId, kRootStateKey});
+    });
+}
+
+std::optional<vh::sync::manifest::BaseCopy> Manifest::pendingBase(const uint32_t vaultId, const std::string& rootSha256) {
+    using namespace manifest_query_detail;
+    return Transactions::exec("Manifest::pendingBase", [&](pqxx::work& txn) -> std::optional<mf::BaseCopy> {
+        const auto root = txn.exec("SELECT bytes FROM remote_manifest_pending WHERE vault_id = $1 AND root_sha256 = $2",
+                                   pqxx::params{vaultId, rootSha256});
+        if (root.empty()) return std::nullopt;
+        mf::BaseCopy copy;
+        copy.root = encoding::from_hex_bytea(root[0][0].as<std::string>());
+        for (const auto row : txn.exec("SELECT sid, bytes FROM remote_manifest_base WHERE vault_id = $1",
+                                       pqxx::params{vaultId}))
+            copy.objects[row[0].as<std::string>()] = encoding::from_hex_bytea(row[1].as<std::string>());
+        return copy;
     });
 }
 
@@ -345,8 +379,14 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId, const Coll
         c.recovery_policy = std::move(policy);
         // KEV1 envelopes by key version (keys[].envelopes): every kid written, a revoked grant's too.
         std::map<uint32_t, std::vector<std::string>> envelopesByVersion;
+        // And other writers' envelopes (manifest_foreign_envelope, migration 147) for a recipient one of this vault's
+        // grants has, revoked or not, as this server lists its own: every writer names the same kids, so the root is
+        // the same whoever publishes it.
         for (const auto row : txn.exec("SELECT key_version, kid FROM vault_key_envelope WHERE vault_id = $1 "
-                                       "ORDER BY key_version, kid",
+                                       "UNION SELECT f.key_version, f.kid FROM manifest_foreign_envelope f "
+                                       "WHERE f.vault_id = $1 AND EXISTS (SELECT 1 FROM vault_recovery_grant g "
+                                       "  WHERE g.vault_id = $1 AND g.recipient_id = f.recipient_id) "
+                                       "ORDER BY 1, 2",
                                        pqxx::params{vaultId}))
             envelopesByVersion[row[0].as<uint32_t>()].push_back(row[1].as<std::string>());
 

@@ -337,6 +337,101 @@ std::vector<std::string> ManifestApply::setVault(pqxx::work& txn, const uint32_t
     return notes;
 }
 
+std::set<std::string> ManifestApply::knownKids(const uint32_t vaultId) {
+    return Transactions::exec("ManifestApply::knownKids", [&](pqxx::work& txn) {
+        std::set<std::string> out;
+        for (const auto r : txn.exec("SELECT kid FROM vault_key_envelope WHERE vault_id = $1 UNION "
+                                     "SELECT kid FROM manifest_foreign_envelope WHERE vault_id = $1",
+                                     pqxx::params{vaultId}))
+            out.insert(r[0].as<std::string>());
+        return out;
+    });
+}
+
+void ManifestApply::addForeignEnvelope(const uint32_t vaultId, const std::string& kid, const uint32_t keyVersion,
+                                       const std::string& recipientIdHex) {
+    Transactions::exec("ManifestApply::addForeignEnvelope", [&](pqxx::work& txn) {
+        txn.exec("INSERT INTO manifest_foreign_envelope (vault_id, kid, key_version, recipient_id) VALUES ($1, $2, $3, $4) "
+                 "ON CONFLICT (vault_id, kid) DO NOTHING",
+                 pqxx::params{vaultId, kid, static_cast<int>(keyVersion), recipientIdHex});
+    });
+}
+
+void ManifestApply::saveReport(const uint32_t vaultId, const Report& r) {
+    Transactions::exec("ManifestApply::saveReport", [&](pqxx::work& txn) {
+        txn.exec("INSERT INTO manifest_apply_report (vault_id, epoch, root_sha256, producer, recorded, union_base, applied, "
+                 "  skipped, deferred, kept, conflicts_decided, conflicts_open, notes, applied_at) "
+                 "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, CURRENT_TIMESTAMP) "
+                 "ON CONFLICT (vault_id) DO UPDATE SET epoch = EXCLUDED.epoch, root_sha256 = EXCLUDED.root_sha256, "
+                 "  producer = EXCLUDED.producer, recorded = EXCLUDED.recorded, union_base = EXCLUDED.union_base, "
+                 "  applied = EXCLUDED.applied, skipped = EXCLUDED.skipped, deferred = EXCLUDED.deferred, "
+                 "  kept = EXCLUDED.kept, conflicts_decided = EXCLUDED.conflicts_decided, "
+                 "  conflicts_open = EXCLUDED.conflicts_open, notes = EXCLUDED.notes, applied_at = CURRENT_TIMESTAMP, "
+                 "  stopped_reason = NULL, stopped_root_sha256 = NULL, stopped_at = NULL",
+                 pqxx::params{vaultId, static_cast<int64_t>(r.epoch), r.root_sha256, r.producer, r.recorded, r.union_base,
+                              static_cast<int>(r.applied), static_cast<int>(r.skipped), static_cast<int>(r.deferred),
+                              static_cast<int>(r.kept), static_cast<int>(r.conflicts_decided),
+                              static_cast<int>(r.conflicts_open), nlohmann::json(r.notes).dump()});
+    });
+}
+
+bool ManifestApply::noteStopped(const uint32_t vaultId, const uint64_t epoch, const std::string& rootSha256,
+                                const std::string& producer, const std::string& reason) {
+    return Transactions::exec("ManifestApply::noteStopped", [&](pqxx::work& txn) {
+        const auto r = txn.exec(
+            "INSERT INTO manifest_apply_report (vault_id, epoch, root_sha256, producer, recorded, union_base, "
+            "  stopped_reason, stopped_root_sha256, stopped_at) VALUES ($1, $2, $3, $4, false, false, $5, $3, "
+            "  CURRENT_TIMESTAMP) "
+            "ON CONFLICT (vault_id) DO UPDATE SET stopped_reason = EXCLUDED.stopped_reason, "
+            "  stopped_root_sha256 = EXCLUDED.stopped_root_sha256, stopped_at = EXCLUDED.stopped_at "
+            "WHERE manifest_apply_report.stopped_root_sha256 IS DISTINCT FROM EXCLUDED.stopped_root_sha256 "
+            "   OR manifest_apply_report.stopped_reason IS DISTINCT FROM EXCLUDED.stopped_reason RETURNING 1",
+            pqxx::params{vaultId, static_cast<int64_t>(epoch), rootSha256, producer, reason});
+        return !r.empty();
+    });
+}
+
+nlohmann::json ManifestApply::status(const uint32_t vaultId) {
+    using namespace manifest_apply_detail;
+    return Transactions::exec("ManifestApply::status", [&](pqxx::work& txn) {
+        nlohmann::json out{{"epoch", nullptr}, {"own_epoch", nullptr}, {"applying_epoch", nullptr},
+                           {"writers", nlohmann::json::array()}, {"deferred", 0}, {"last_apply", nullptr}};
+        const auto s = txn.exec("SELECT epoch, own_epoch, applying_epoch, array_to_json(writers)::text FROM "
+                                "remote_manifest_state WHERE vault_id = $1 AND manifest_key = '.vaulthalla/root'",
+                                pqxx::params{vaultId});
+        if (!s.empty()) {
+            for (const auto* k : {"epoch", "own_epoch", "applying_epoch"})
+                if (!s[0][k].is_null()) out[k] = s[0][k].as<uint64_t>();
+            out["writers"] = nlohmann::json::parse(s[0][3].as<std::string>());
+        }
+        out["deferred"] = txn.exec("SELECT count(*) FROM manifest_apply_deferred WHERE vault_id = $1",
+                                   pqxx::params{vaultId}).one_field_ref().as<int64_t>();
+        const auto r = txn.exec("SELECT epoch, producer, recorded, union_base, applied, skipped, deferred, kept, "
+                                "  conflicts_decided, conflicts_open, notes::text, "
+                                "  to_char(applied_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), "
+                                "  stopped_reason, epoch FROM manifest_apply_report WHERE vault_id = $1",
+                                pqxx::params{vaultId});
+        if (!r.empty()) {
+            const auto row = r[0];
+            out["last_apply"] = {{"epoch", row[0].as<uint64_t>()},
+                                 {"producer", row[1].as<std::string>()},
+                                 {"recorded", row[2].as<bool>()},
+                                 {"union_base", row[3].as<bool>()},
+                                 {"applied", row[4].as<int64_t>()},
+                                 {"skipped", row[5].as<int64_t>()},
+                                 {"deferred", row[6].as<int64_t>()},
+                                 {"kept", row[7].as<int64_t>()},
+                                 {"conflicts_decided", row[8].as<int64_t>()},
+                                 {"conflicts_open", row[9].as<int64_t>()},
+                                 {"notes", nlohmann::json::parse(row[10].as<std::string>())},
+                                 {"at", row[11].as<std::string>()},
+                                 {"stopped", row[12].is_null() ? nlohmann::json(nullptr)
+                                                               : nlohmann::json(row[12].as<std::string>())}};
+        }
+        return out;
+    });
+}
+
 void ManifestApply::defer(pqxx::work& txn, const uint32_t vaultId, const DeferredEntry& d) {
     using namespace manifest_apply_detail;
     txn.exec("INSERT INTO manifest_apply_deferred (vault_id, uid, op, target, ours_generation, root_epoch, root_sha256) "

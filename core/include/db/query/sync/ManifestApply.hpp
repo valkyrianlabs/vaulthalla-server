@@ -2,10 +2,12 @@
 
 #include "sync/manifest/Content.hpp"
 
+#include <nlohmann/json.hpp>
 #include <pqxx/transaction>
 
 #include <cstdint>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -90,6 +92,29 @@ public:
     [[nodiscard]] static std::vector<std::string> setVault(pqxx::work& txn, uint32_t vaultId,
                                                            const vh::sync::manifest::VaultInfo& ours,
                                                            const vh::sync::manifest::VaultInfo& target);
+
+    // ---- other writers' envelopes (migration 147) ----
+    // Every kid this vault knows: its own envelopes' and the other writers' it has read.
+    [[nodiscard]] static std::set<std::string> knownKids(uint32_t vaultId);
+    static void addForeignEnvelope(uint32_t vaultId, const std::string& kid, uint32_t keyVersion,
+                                   const std::string& recipientIdHex);
+
+    // ---- status (migration 147) ----
+    struct Report {
+        uint64_t epoch{};
+        std::string root_sha256, producer;
+        bool recorded{false}, union_base{false};
+        std::size_t applied{}, skipped{}, deferred{}, kept{}, conflicts_decided{}, conflicts_open{};
+        std::vector<std::string> notes;
+    };
+    // The vault's last apply (one row per vault, replaced); it clears a recorded stop.
+    static void saveReport(uint32_t vaultId, const Report& report);
+    // An apply stopped at this root for `reason`: true the first time for that root and reason (alert once).
+    [[nodiscard]] static bool noteStopped(uint32_t vaultId, uint64_t epoch, const std::string& rootSha256,
+                                          const std::string& producer, const std::string& reason);
+    // What storage.vault.get and `vh vault sync info` show: the recorded root, the apply in progress, the writers and
+    // the last apply (null members when unknown).
+    [[nodiscard]] static nlohmann::json status(uint32_t vaultId);
 
     static void defer(pqxx::work& txn, uint32_t vaultId, const DeferredEntry& d);
     [[nodiscard]] static std::vector<DeferredEntry> deferred(uint32_t vaultId);
