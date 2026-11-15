@@ -54,8 +54,9 @@ public:
     ~RelayService() override;
 
     [[nodiscard]] RelayStatus snapshot() const;
-    // The switch or the link changed: look again now.
-    void wake();
+    // The switch or the link changed: look again now. `reset`: the switch was turned on, so a service stopped by the
+    // cloud's refusal tries again, without backoff.
+    void wake(bool reset = false);
 
     // Tests: hand streams to `acceptor` instead of the process's DeviceServer.
     void setAcceptorForTesting(Acceptor acceptor);
@@ -73,6 +74,6 @@ private:
 // The live service, for ops::cloud_relay (the latest one constructed, cleared by its destructor): its snapshot, or
 // nullopt when there is none; wakeRelay() does nothing then.
 [[nodiscard]] std::optional<RelayStatus> relaySnapshot();
-void wakeRelay();
+void wakeRelay(bool reset = false);
 
 }

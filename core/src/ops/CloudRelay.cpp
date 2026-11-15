@@ -61,14 +61,16 @@ json optStr(const std::optional<std::string>& s) { return s ? json(*s) : json(nu
     const auto row = db::query::cloud::Link::get();
     if (!row || row->status != "linked" || !row->installation_id)
         throw Conflict("this server isn't linked to a Vaulthalla Cloud account (`vh cloud link`)");
-    if (const auto sw = db::query::cloud::RelaySwitch::get(); sw && sw->installation_id == *row->installation_id)
+    if (const auto sw = db::query::cloud::RelaySwitch::get(); sw && sw->installation_id == *row->installation_id) {
+        ::vh::cloud::wakeRelay(true);  // already on: switching it on again is how a stopped relay tries again
         return current();
+    }
     auth::stepup::require(auth::stepup::Family::DeviceTrust, std::string("cloud.relay.enable"));
     db::query::cloud::RelaySwitch::enable(*row->installation_id, actor->name());
     ::vh::audit::record({.action = "cloud.relay.enable", .actor_id = actor->id, .actor = actor->name(),
                          .details = {{"installation", *row->installation_id}}},
                         "[ops::cloud_relay] " + actor->name() + " switched the Vaulthalla Cloud relay on");
-    ::vh::cloud::wakeRelay();
+    ::vh::cloud::wakeRelay(true);
     return current();
 }
 

@@ -801,6 +801,7 @@ struct RelayService::Impl {
     mutable std::mutex mutex;  // status_ and the decision state below
     RelayStatus status;
     std::atomic<bool> wake{true};
+    std::atomic<bool> reset{false};  // the switch went on: a stopped service tries again
     RelayService::Acceptor acceptor;
 
     std::shared_ptr<asio::io_context> ioc;
@@ -902,6 +903,11 @@ struct RelayService::Impl {
 
 void RelayService::Impl::tick(const std::function<bool()>& stopping) {
     const auto now = Clock::now();
+    if (reset.exchange(false)) {
+        stoppedFor.reset();
+        attempt = 0;
+        nextAttempt = {};
+    }
     if (wake.exchange(false) || now >= nextDesired) {
         try {
             const bool wasStopped = stoppedFor.has_value();
@@ -1088,13 +1094,26 @@ RelayService::~RelayService() {
 }
 
 RelayStatus RelayService::snapshot() const {
-    const std::scoped_lock lock(impl_->mutex);
-    auto out = impl_->status;
+    RelayStatus out;
+    {
+        const std::scoped_lock lock(impl_->mutex);
+        out = impl_->status;
+    }
+    {
+        // The counters as the I/O thread keeps them (the service thread copies them only every pass).
+        const std::scoped_lock lock(impl_->shared->mutex);
+        out.streams_accepted = impl_->shared->accepted;
+        out.streams_refused = impl_->shared->refused;
+        if (out.state == "connected") out.streams = impl_->shared->streams;
+    }
     if (!isRunning() && out.state != "off" && out.state != "not_linked") out.state = "stopped";
     return out;
 }
 
-void RelayService::wake() { impl_->wake.store(true); }
+void RelayService::wake(const bool reset) {
+    if (reset) impl_->reset.store(true);
+    impl_->wake.store(true);
+}
 
 void RelayService::setAcceptorForTesting(Acceptor acceptor) { impl_->acceptor = std::move(acceptor); }
 
@@ -1122,9 +1141,9 @@ std::optional<RelayStatus> relaySnapshot() {
     return gLive->snapshot();
 }
 
-void wakeRelay() {
+void wakeRelay(const bool reset) {
     const std::scoped_lock lock(gLiveMutex);
-    if (gLive) gLive->wake();
+    if (gLive) gLive->wake(reset);
 }
 
 }

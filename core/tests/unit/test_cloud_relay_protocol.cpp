@@ -13,6 +13,7 @@
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
 #include "rbac/role/Admin.hpp"
+#include "runtime/Deps.hpp"
 #include "../helpers/relay_browser.hpp"
 
 #include <gtest/gtest.h>
@@ -289,6 +290,7 @@ TEST(CloudRelayReadOnly, EveryCommandOutsideTheReadOnlySetIsRefusedOnARelayedSes
         EXPECT_EQ(protocols::ws::Router::classifyCommand(mutating, *relayed), Decision::DenyReadOnly) << mutating;
     // An unregistered command is refused too (the allowlist, not a denylist).
     EXPECT_EQ(protocols::ws::Router::classifyCommand("fs.entry.purge_everything", *relayed), Decision::DenyReadOnly);
+    (void)runtime::Deps::releaseSessions();  // the device principals joined the session manager
 }
 
 }
