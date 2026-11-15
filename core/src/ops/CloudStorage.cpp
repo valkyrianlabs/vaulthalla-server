@@ -1241,6 +1241,102 @@ void installHooks() {
     });
 }
 
+RestoreKey keyForRestore(const Actor& actor, const std::string& vaultUid, const unsigned int ownerId, const Channel channel) {
+    namespace d = cloud_storage_ops_detail;
+    d::requireStorage(actor, channel);
+    const auto link = d::cs::linked();
+    if (!link) throw Refused("managed_storage_unavailable", "this server isn't linked to an account (`vh cloud link`)");
+    if (!d::pinned())
+        throw Refused("managed_storage_unavailable", "confirm the account recovery key first (`vh cloud key confirm`)");
+    d::cs::Credential c;
+    std::string provider;
+    try {
+        // The cloud's view now: the restore's approval moved the vault here, so it is in this deployment's scope.
+        const auto ov = d::cs::overview(*link);
+        provider = ov.provider;
+        c = d::cs::requestCredential(*link, vaultUid);
+    } catch (const d::cs::CallError& e) {
+        if (e.unreachable()) throw Refused("cloud_unreachable", e.what());
+        throw Refused("cloud_refused", std::string(e.what()) + (e.reason().empty() ? "" : " [" + e.reason() + "]"));
+    }
+    const auto& keys = runtime::Deps::get().apiKeyManager;
+    if (!keys) throw std::runtime_error("the API key manager is not available");
+    std::string secret(reinterpret_cast<const char*>(c.secret.bytes().data()), c.secret.size());
+    auto key = std::make_shared<vault::model::APIKey>(ownerId, "managed storage " + vaultUid, d::providerOf(provider), c.key_id,
+                                                      std::move(secret), c.region.empty() ? std::string("auto") : c.region,
+                                                      c.s3_endpoint);
+    vl::keykit::wipe(secret);
+    RestoreKey out{.vault_uid = vaultUid, .api_key_id = keys->addAPIKey(key), .key_id = c.key_id, .access = c.access,
+                   .bucket = c.bucket, .bucket_id = c.bucket_id, .s3_endpoint = c.s3_endpoint, .region = c.region};
+    d::DB::markKeyCloud(out.api_key_id, c.access);
+    d::audit("cloud.storage.credential.issue", std::nullopt, {{"key_id", c.key_id}, {"access", c.access}, {"why", "restore"}},
+             fmt::format("bucket key {} ({}) received sealed for restoring vault {}", c.key_id, c.access, vaultUid));
+    std::string error;
+    if (!d::probeKey(out.api_key_id, out.bucket, error)) {
+        discardRestoreKey(out);
+        throw Refused("key_probe_failed", "the bucket key didn't pass the probe: " + error);
+    }
+    return out;
+}
+
+void adoptRestored(const RestoreKey& key, const unsigned int vaultId) {
+    namespace d = cloud_storage_ops_detail;
+    const auto link = d::cs::linked();
+    if (!link) throw Refused("managed_storage_unavailable", "this server is no longer linked to an account");
+    d::Row r;
+    if (const auto existing = d::DB::get(vaultId)) r = *existing;   // the service may have seen the new vault first
+    r.vault_id = vaultId;
+    r.vault_uid = key.vault_uid;
+    r.switch_state = "on";
+    r.switch_by = "restore";
+    r.switch_at = d::now();
+    r.api_key_id = key.api_key_id;
+    r.key_id = key.key_id;
+    r.key_access = key.access;
+    r.key_state = "issued";
+    r.bucket = key.bucket;
+    r.bucket_id = key.bucket_id;
+    r.s3_endpoint = key.s3_endpoint;
+    r.region = key.region;
+    r.registered_at = r.registered_at.value_or(d::now());
+    r.ready_at = r.ready_at.value_or(d::now());
+    if (!d::DB::insert(r)) d::DB::update(r);
+    try {
+        d::cs::acknowledge(*link, key.key_id);
+    } catch (const d::cs::CallError& e) {
+        // The vault is restored either way; the service asks for a new key when this one isn't acknowledged.
+        log::Registry::cloud()->warn("[CloudStorage] Vault {}: the restore's bucket key wasn't acknowledged yet: {}", vaultId,
+                                     e.what());
+        r.state = "keyed";
+        d::save(r);
+        return;
+    }
+    r.key_state = "active";
+    if (const auto k = db::query::vault::APIKey::getAPIKey(key.api_key_id)) {
+        const auto id = storage::upstream::identityFor(*k, key.bucket);
+        d::DB::bindManagedBucket(vaultId, id.provider, id.account_ref.value_or("managed:" + key.bucket_id), key.bucket,
+                                 r.region, key.api_key_id, d::retentionFor(r));
+    }
+    r.state = "active";
+    r.reason.reset();
+    r.active_at = d::now();
+    d::clearRetry(r);
+    d::save(r);
+    if (const auto account = d::DB::account()) d::applyGate(r, *account);
+    d::audit("cloud.storage.restored", vaultId, {{"bucket_id", key.bucket_id}, {"key_id", key.key_id}},
+             fmt::format("vault {} restored from its managed bucket and kept in managed storage", vaultId));
+    d::fast();
+}
+
+void discardRestoreKey(const RestoreKey& key) noexcept {
+    try {
+        if (key.api_key_id && db::query::vault::APIKey::listVaultsUsingKey(key.api_key_id).empty())
+            runtime::Deps::get().apiKeyManager->removeAPIKey(key.api_key_id);
+    } catch (const std::exception& e) {
+        log::Registry::cloud()->warn("[CloudStorage] The restore's bucket key {} wasn't removed: {}", key.api_key_id, e.what());
+    }
+}
+
 std::vector<std::string> unlinkBlockers() {
     namespace d = cloud_storage_ops_detail;
     std::vector<std::string> out;

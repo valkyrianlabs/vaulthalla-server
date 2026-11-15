@@ -1116,4 +1116,45 @@ TEST_F(CloudStorageTest, VerifyComparesTheCloudsAccountKeyEnvelopesWithThisServe
     EXPECT_EQ(ops::cloud_recovery::status(superUser, id, false)[0].verify, nullptr);
 }
 
+
+TEST_F(CloudStorageTest, AManagedVaultRestoredHereGetsAKeyOfItsOwnAndIsAdoptedOnlyAfterTheRestore) {
+    linkAndPin();
+    const auto id = activeVault();
+    const auto uid = uidOf(id);
+    // As after a restore onto this server: the vault is here, without a managed-storage row yet.
+    DB::remove(id);
+    EXPECT_EQ(code([&] { return cs::keyForRestore(superUser, uid, superUser->id, cs::Channel::Agent); }), "denied");
+    const auto key = cs::keyForRestore(superUser, uid, superUser->id, cs::Channel::Cli);
+    EXPECT_EQ(cloud_.keys.at(key.key_id).state, "issued") << "never acknowledged before the restore wrote the vault";
+    const auto stored = db::query::vault::APIKey::getAPIKey(key.api_key_id);
+    ASSERT_TRUE(stored);
+    EXPECT_TRUE(stored->cloudIssued());
+    EXPECT_EQ(stored->name, "managed storage " + uid);
+
+    // A restore that stops: the key goes (the cloud revokes the unacknowledged one).
+    const auto dropped = cs::keyForRestore(superUser, uid, superUser->id, cs::Channel::Cli);
+    cs::discardRestoreKey(dropped);
+    EXPECT_FALSE(db::query::vault::APIKey::getAPIKey(dropped.api_key_id));
+    EXPECT_EQ(cloud_.keys.at(key.key_id).state, "revoked") << "a new request revoked the earlier unacknowledged key";
+
+    const auto again = cs::keyForRestore(superUser, uid, superUser->id, cs::Channel::Cli);
+    cs::adoptRestored(again, id);
+    const auto row = DB::get(id);
+    ASSERT_TRUE(row);
+    EXPECT_EQ(row->state, "active");
+    EXPECT_EQ(row->switch_state, "on");
+    EXPECT_EQ(row->key_state, "active");
+    EXPECT_EQ(row->api_key_id, std::optional<uint32_t>(again.api_key_id));
+    EXPECT_EQ(cloud_.keys.at(again.key_id).state, "active") << "acknowledged once adopted";
+    EXPECT_EQ(storage::remote_access::mode(id), storage::remote_access::Mode::Full);
+    DB::remove(id);   // later tests in the suite share the fake cloud buckets and API key manager
+}
+
+TEST_F(CloudStorageTest, NoRestoreKeyWithoutAConfirmedAccountKey) {
+    link();
+    EXPECT_EQ(code([&] { return cs::keyForRestore(superUser, vl::keykit::toBase32(vl::keykit::newUid()), superUser->id,
+                                                  cs::Channel::Cli); }),
+              "managed_storage_unavailable");
+}
+
 }

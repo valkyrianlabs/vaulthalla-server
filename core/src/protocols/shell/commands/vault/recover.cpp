@@ -1,7 +1,8 @@
 // `vh vault recover` (#371, design/encryption/03-metadata-recovery.md §6): ops::vault_recover over the CLI. The kit
 // and the export are read by vh on the caller's side and arrive as one bundle (shell/ClientInput.hpp); the daemon
 // never opens a path the caller names. With --from-cloud the keys come from the linked Vaulthalla Cloud account
-// instead (ops::cloud_restore), as an export the same restore proves.
+// instead (ops::cloud_restore), as an export the same restore proves; --from-cloud without --api-key restores a vault
+// kept in managed storage, reading its bucket with a key of this server's own (ops::cloud_storage::keyForRestore).
 
 #include "protocols/shell/commands/vault.hpp"
 #include "protocols/shell/ClientInput.hpp"
@@ -12,6 +13,7 @@
 #include "CommandUsage.hpp"
 #include "ops/Error.hpp"
 #include "ops/CloudRestore.hpp"
+#include "ops/CloudStorage.hpp"
 #include "ops/VaultRecover.hpp"
 #include "identities/User.hpp"
 
@@ -179,9 +181,12 @@ CommandResult handle_vault_recover(const CommandCall& call) {
     recover_ops::Request req;
     try {
         const auto keyId = apiKeyIdFromOption(call);
-        if (!keyId) return invalid(std::string(ERR) + ": --api-key is required");
-        req.api_key_id = *keyId;
+        if (!keyId && !fromCloud) return invalid(std::string(ERR) + ": --api-key is required");
+        if (keyId) req.api_key_id = *keyId;
         req.bucket = optVal(call, "bucket").value_or("");
+        if (keyId && req.bucket.empty()) return invalid(std::string(ERR) + ": --bucket is required with --api-key");
+        if (!keyId && !req.bucket.empty())
+            return invalid(std::string(ERR) + ": --bucket names a bucket of your own storage, with its --api-key");
         req.kit = kit.is_null() ? nullptr : &kit;
         req.exported = exported.is_null() ? nullptr : &exported;
         req.into = optVal(call, std::vector<std::string>{"into", "name"});
@@ -215,6 +220,27 @@ CommandResult handle_vault_recover(const CommandCall& call) {
         exported = std::move(std::get<nlohmann::json>(keys));
         req.exported = &exported;
     }
+    // A managed vault: the approval moved it to this server's deployment, so its bucket key is this server's to ask for
+    // now (the sealed exchange); it is kept only if the restore writes the vault.
+    struct ManagedKey {
+        std::optional<vh::ops::cloud_storage::RestoreKey> key;
+        bool adopted = false;
+        ~ManagedKey() {
+            if (key && !adopted) vh::ops::cloud_storage::discardRestoreKey(*key);
+        }
+    } managed;
+    if (fromCloud && req.api_key_id == 0) {
+        try {
+            const auto owner = req.owner_id.value_or(call.user->id);
+            managed.key = vh::ops::cloud_storage::keyForRestore(call.user, *req.vault_uid, owner, channel);
+        } catch (const ops::Refused& e) {
+            return invalid(std::string(ERR) + ": the managed bucket's key: " + e.what() + " [" + e.code + "]");
+        } catch (const ops::Error& e) {
+            return invalid(std::string(ERR) + ": the managed bucket's key: " + e.what());
+        }
+        req.api_key_id = managed.key->api_key_id;
+        req.bucket = managed.key->bucket;
+    }
 
     try {
         recover_ops::Result result;
@@ -234,6 +260,10 @@ CommandResult handle_vault_recover(const CommandCall& call) {
             } catch (const ops::NeedsConfirmation&) {
                 return invalid(std::string(ERR) + ": that is not the vault's name; nothing was written");
             }
+        }
+        if (managed.key && result.written && result.vault_id) {
+            vh::ops::cloud_storage::adoptRestored(*managed.key, *result.vault_id);
+            managed.adopted = true;
         }
         if (fromCloud) {
             vh::ops::cloud_restore::complete(call.user, cloudRestore.id);
