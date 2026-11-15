@@ -167,6 +167,11 @@ void Handler::registerVaultKeyHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("vault.remote.detach", &handler::VaultKeys::remoteDetach);
     r->registerPayload("vault.remote.status", &handler::VaultKeys::remoteStatus);
     r->registerPayload("vault.remote.abort", &handler::VaultKeys::remoteAbort);
+    // design/cloud/key-manager.md: the linked account's recovery key (confirm: a paired device only).
+    r->registerPayload("cloud.key.status", &handler::VaultKeys::cloudKeyStatus);
+    r->registerPayload("cloud.key.confirm", &handler::VaultKeys::cloudKeyConfirm);
+    r->registerPayload("cloud.key.refresh", &handler::VaultKeys::cloudKeyRefresh);
+    r->registerPayload("cloud.link.status", &handler::VaultKeys::cloudLinkStatus);
 }
 
 void Handler::registerMetaHandlers(const std::shared_ptr<Router>& r) {

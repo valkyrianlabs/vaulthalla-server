@@ -36,11 +36,12 @@ proposal; choices are under Open questions.
 (`cloud::Client::signedCall`). The answer is the current key statement and the chain of earlier ones, in the format
 of the cloud's `key-manager.md`. Never on FUSE, sync or ws hot paths: a failed fetch changes nothing and is retried.
 
-**Verify.** Every statement must parse exactly (six lines, `vhc-account-key-v1`, canonical base64url, no trailing
-data); `public_id` must equal the account the claim reported (a new `cloud_link.account_public_id` column: the cloud
-now returns its public id, and the numeric id is internal to it); generations start at 1 and increase by one; each
-statement is signed by its own Ed25519 key, and from generation 2 also by the previous generation's, whose
-fingerprint it names. The fingerprint is computed here, never taken from the answer.
+**Verify.** Every statement must parse exactly (seven lines, the last the signed reason; `vhc-account-key-v1`,
+canonical base64url, no trailing data); `public_id` must equal the account the claim reported (a new
+`cloud_link.account_public_id` column: the cloud now returns its public id, and the numeric id is internal to it);
+generations start at 1 and increase by one; each statement is signed by its own Ed25519 key, and from generation 2
+also by the previous generation's, whose fingerprint it names. The fingerprint is computed here, never taken from the
+answer.
 
 **Pin.** A verified statement the server has not pinned is stored as `pending`. It becomes `pinned` only when a
 person confirms its fingerprint, because a self-signed chain can't tell the customer's key from a substitute the
@@ -325,3 +326,63 @@ Landing order (wave 1): spec 06's probe columns, attach-remote, items 2, 3 and 6
 7. **Whether attaches wait for an offline copy.** *Recommendation: no; holding back backups would leave data local.*
 8. **Elsewhere:** unenrolling a managed vault and the offline-copy condition (spec 05 §3.1, §3.2); local-first
    managed vaults before their bucket exists (spec 03 §5.5).
+
+## As built (2026-11-14)
+
+Work items 2, 3 and 6 and the link change are built (migration 141, `core/{include,src}/cloud/AccountPin.*`,
+`cloud/KeyService.*`, `ops/CloudKeys.*`, `db/query/cloud/AccountKey.*`), each open question with its recommendation.
+Items 4, 5 (beyond following the pin, below) and 7 are not. What the build settled where this document left a choice,
+each small to change:
+
+1. **Link.** The request's proof is v2 (`vhc-link-request-v2\n<key>\n<name>\nserver\n<node id>`, the node id is
+   `device_node.node_id`); the claim fills `cloud_link.deployment_id` and `.account_public_id`, both checked for shape. A
+   link made before migration 141 gets them from `GET /v1/installation` (`vh cloud status`, or the first key check);
+   a recorded account public id is never replaced (status says `account_mismatch`). `cloud.link.status` reads the
+   database only; super admins and the encryption-key View permission see the identifiers (no `admin.cloud` module
+   exists yet), anyone else `linked`; `relay` is left out until it exists.
+2. **The check** is `ops::cloud_keys::check`: right after a claim, from `cloud::KeyService` (daily while linked, hourly
+   after a failure, at once for `cloud.key.refresh`, which only asks the service and answers with the status as it
+   stands), and synchronously for `vh cloud key refresh` and `vh cloud link`. The server reads only `public_id`,
+   `chain[].statement`, `.signature`, `.previous_signature`, `current.offline_copy_confirmed_at` and
+   `policy.policy`, `.signature`; the cloud's `fingerprint`, `link`, `reason` and `status` are ignored (the library
+   computes them). One check runs at a time.
+3. **Rows.** One per generation seen, keyed `(account_public_id, generation)`; only the newest waiting generation
+   (pending or refused) is kept. The MAC is HMAC-SHA-256 under the `cloud_account_pin` key over a label
+   (`vh.cloud-account-key-row.v1`) and every column, each length-prefixed. The key is sealed when the first row is
+   stored and never regenerated: a slot that no longer unseals makes every row fail (`tampered`) until
+   `vh cloud key forget`. Residual risk: a database writer who kept an earlier copy of a row can put it back (a MAC has
+   no counter); both keys involved were confirmed for the account, and the next check moves the pin forward again.
+4. **The policy floor is in the pinned row** (`policy_sequence`, `policy_sha256`, `policy`, `policy_signature`), under
+   the same MAC, and carries over to the next pinned generation. Deleting the row loses the pin, so no policy is
+   accepted until a person confirms again (fail closed). The floor's own bytes served again (also after a rotation,
+   before the account signs the policy anew) are skipped silently; anything else that isn't newer is audited
+   `cloud.policy.refused` (`rollback`, `conflict` or vl-keykit's error code) and changes nothing.
+5. **Following the pin.** A signed rotation is pinned as `chain:<n-1>`, the earlier pin `superseded`; a replacement is
+   stored `refused` (health `cloud_account_key_change_pending`) until `vh cloud key confirm`. In both cases every
+   account-key grant of an earlier generation of the same account gets a grant for the new key, every retained
+   version is wrapped to it, and the old grant is revoked once the new one has every version it had; a routine reason
+   revokes as `account_key_rotation:<n>`, which doesn't raise `rotation_needed`, a `compromise` as
+   `account_key_compromise:<n>`, which does (open question 4). Re-run by every check until it converges.
+6. **The wrap guards** (`vault::envelopes::put` and `ensure`): a grant with `account_key_generation` is wrapped to only
+   while its key is a MAC-verified `pinned` row of that generation (of any account: the slot survives an unlink); one
+   with `account_policy_sequence` only while its key is listed in a MAC-verified pinned row's policy whose hash
+   matches. Anything else is skipped and logged; D2 then reports the version uncovered.
+7. **Policy grants.** A vault is covered while it holds an active account-key grant: only then are recipients added.
+   Grants the policy dropped are revoked on any vault that has them, covered or not. Revoking a policy grant by hand
+   is refused on every vault (`recovery_policy_account_managed`), since the next check would add it again; the
+   replicated-vault refusal of local adds (wave 3) isn't built. The policy's bytes in the manifest root
+   (`recovery_policy.account_policy`) aren't built: the cloud is the only transport so far.
+8. **Surfaces.** `vh cloud key status|confirm|refresh|forget`; `vh cloud link` prints the fingerprint after `Linked`
+   and takes the fingerprint or `yes`. `vh vault keys recipient add --account-key` (label `Vaulthalla Cloud recovery
+   key (generation n)`, `authorized_by` `user:<id> via cli; account_key:<n> confirmed by <who>`) and
+   `vh cloud recovery enroll --account-key` (the recipient add with its own step-up, then the enrollment with its: two
+   approvals on a device, none on the CLI). `forget` is refused while any vault holds an account-managed grant. ws
+   `cloud.key.status`, `.confirm` (keys step-up; console `cloud_key_requires_device`), `.refresh`,
+   `cloud.link.status`, behind the capability `cloud.account_key`; MCP excludes `cloud key confirm` and `forget`.
+   Health reports `cloud_account_key` (`tampered`, `change_pending`); the other health codes need managed storage.
+9. **Local vaults** (item 6) already kept their envelopes in the database (attach-remote, migration 138); what was
+   added is enrollment: `vh cloud recovery enroll` reads a local vault's envelopes from its rows and checks each as it
+   checks bucket objects.
+10. **Not built yet:** automatic enrollment and the managed attach's default grant (managed remotes), the offline-copy
+    health code, `--verify` against the scoped fetch, the restore's handling of a restored root's account-key grant,
+    the drill, and vault registration and sealed labels (`POST /v1/vaults`, `PUT /v1/vaults/{uid}/label`).

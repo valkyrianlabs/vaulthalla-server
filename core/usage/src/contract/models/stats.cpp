@@ -454,6 +454,14 @@ std::vector<WsModel> statsSystemModels() {
              .opt()
              .desc("S3 vaults whose remote access is none: no request reaches the bucket; files without a local copy "
                    "are unavailable. Any entry makes the node at least degraded."),
+         object("cloud_account_key", "",
+                {str("issue").oneOf({"cloud_account_key_tampered", "cloud_account_key_change_pending"}),
+                 str("detail").desc("What it means and what to do.")})
+             .opt()
+             .nullable()
+             .desc("The linked account's recovery key as this server pinned it: a stored row that fails its integrity "
+                   "check (nothing is wrapped to the account key) or a replacement key waiting for a super admin's "
+                   "fingerprint confirmation. null otherwise. Either one makes the node at least degraded."),
          object("summary", "",
                 {statsUint("services_ready"), statsUint("services_total"), statsUint("deps_ready"),
                  statsUint("deps_total"), statsUint("protocols_ready"), statsUint("protocols_total"),

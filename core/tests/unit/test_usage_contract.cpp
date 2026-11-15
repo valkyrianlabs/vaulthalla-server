@@ -351,6 +351,10 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         {"export_requires_device", {"vault.keys.export", "vault.keys.export.confirm"}},
         {"import_requires_device", {"vault.keys.import"}},
         {"recipient_requires_device", {"vault.keys.recipients.add", "vault.keys.recipients.revoke"}},
+        // design/cloud/key-manager.md: the account recovery key's confirmation and the policy's own grants.
+        {"cloud_key_requires_device", {"cloud.key.confirm"}}, {"cloud_key_mismatch", {"cloud.key.confirm"}},
+        {"cloud_account_key_tampered", {"cloud.key.confirm"}},
+        {"recovery_policy_account_managed", {"vault.keys.recipients.revoke"}},
         // #371: vault.recover's D4 refusal and the restore's own refusals (vault::recover::Refusal, ops Refused).
         {"recover_requires_device", {"vault.recover"}}, {"salvage_required", {"vault.recover"}},
         {"rollback", {"vault.recover"}}, {"fork", {"vault.recover"}}, {"kit_vault_mismatch", {"vault.recover"}},

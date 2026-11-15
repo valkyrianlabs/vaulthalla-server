@@ -853,7 +853,7 @@ protected:
                                       .installation_id = std::nullopt, .account_id = std::nullopt,
                                       .requested_by = "admin", .requested_at = 0, .linked_at = std::nullopt};
         ASSERT_TRUE(db::query::cloud::Link::putPending(row));
-        ASSERT_TRUE(db::query::cloud::Link::markLinked("0123456789abcdefghjkmnpqrs", "kceypk9vfn5tv6yx5c6qpfebdm", 7));
+        ASSERT_TRUE(db::query::cloud::Link::markLinked("0123456789abcdefghjkmnpqrs", "kceypk9vfn5tv6yx5c6qpfebdm", 7, std::nullopt, std::nullopt));
     }
     void TearDown() override {
         if (!skipTests) {

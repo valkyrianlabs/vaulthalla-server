@@ -159,7 +159,7 @@ fuse_bridge_sources = ['fuse/Bridge.cpp', 'fuse/Reply.cpp', 'fuse/Resolver.cpp',
 # vendored one (core/vendor/nlohmann), not the system's. A mismatch would fail to link (nlohmann's ABI namespaces).
 meson.override_dependency('nlohmann_json',
     declare_dependency(include_directories: include_directories('vendor'), version: '3.12.0'))
-vl_keykit_dep = dependency('vl-keykit', version: '>=0.1.0', fallback: ['vl-keykit', 'vl_keykit_dep'])
+vl_keykit_dep = dependency('vl-keykit', version: '>=0.2.0', fallback: ['vl-keykit', 'vl_keykit_dep'])
 
 deps = [
     dependency('libsodium', required: true),

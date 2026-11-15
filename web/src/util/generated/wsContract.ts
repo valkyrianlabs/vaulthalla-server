@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '5a8b7cf44c5c18fcf5db5d8ae379bf76b1c364ae28a5b994145eb93debf5c3e6'
+export const WS_CONTRACT_HASH = 'c12116b3d4ebaea58683952674e3c202483606a21c19da3c266b8baa7a6be120'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '02a9f2f80337c8a691b347aac757d9cf9fc487b136e824107f767fe53dcd6732'
+export const WS_MODELS_HASH = '1427024ab1e309b71608b7da8b2903394e714b88de07253553bba968dca0f839'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -18,6 +18,7 @@ export const WS_PROTOCOL_MIN = 1
 // The capabilities a daemon built from this book answers in meta.hello.
 export const WS_CAPABILITIES: readonly string[] = [
   'auth.step_up',
+  'cloud.account_key',
   'device.endpoints',
   'device.lanes.download',
   'device.lanes.preview',
@@ -211,6 +212,68 @@ export interface WsModels {
    * caching.* (Config.cpp to_json(CachingConfig)).
    */
   'CachingConfig': { thumbnails: WsModels['ThumbnailsConfig']; max_size_mb: number }
+  /**
+   * A confirmed account recovery key: ops::cloud_keys::toJson(Confirmed).
+   */
+  'CloudKeyConfirm': { generation: WsModels['CloudKeyGeneration']; replacement: boolean; vaults: number[] }
+  /**
+   * One generation of the linked account's recovery key as this server verified it:
+   * ops::cloud_keys::toJson(Generation). Public values only.
+   */
+  'CloudKeyGeneration': {
+    generation: number
+    fingerprint: string
+    state: 'pending' | 'pinned' | 'superseded' | 'refused'
+    link: 'initial' | 'rotation' | 'replacement'
+    reason: 'initial' | 'routine' | 'compromise' | 'unknown'
+    x25519_public: string
+    confirmed_by: string | null
+    confirmed_at: number | null
+  }
+  /**
+   * The linked account's recovery key on this server: ops::cloud_keys::toJson(Status). Read from the database
+   * only; public values only.
+   */
+  'CloudKeyStatus': {
+    state: 'unlinked' | 'unchecked' | 'none' | 'pending' | 'pinned' | 'change_pending' | 'tampered'
+    account_public_id: string | null
+    pinned: WsModels['CloudKeyGeneration'] | null
+    waiting: WsModels['CloudKeyGeneration'] | null
+    generations: WsModels['CloudKeyGeneration'][]
+    policy: {
+      sequence: number
+      generation: number
+      sha256: string
+      issued_at: string
+      recipients: { recipient_id: string; label: string }[]
+    } | null
+    vaults: {
+      vault_id: number
+      vault_name: string
+      account_key_generation: number | null
+      policy_grants: number
+      applied_sequence: number | null
+    }[]
+    offline_copy: 'confirmed' | 'none' | 'unknown'
+    offline_copy_at: number | null
+    checked_at: number | null
+    check: string | null
+    check_detail: string | null
+    issue: string | null
+    next_step: string | null
+  }
+  /**
+   * Whether this server is linked to an account, from the database only: ops::cloud::toJson(LinkStatus).
+   * Super admins and the encryption-key View permission see the identifiers; any other session sees `linked`
+   * alone.
+   */
+  'CloudLinkStatus': {
+    linked: boolean
+    installation_id?: string | null
+    deployment_id?: string | null
+    account_public_id?: string | null
+    account_key?: { generation: number; fingerprint: string } | null
+  }
   /**
    * services.connection_lifecycle_manager.* (Config.cpp to_json(ConnectionLifecycleManagerConfig)).
    */
@@ -2081,6 +2144,7 @@ export interface WsModels {
     remote_detaches_unfinished?: number[]
     vault_remote_restricted?: { vault_id: number; vault_name: string; reason: string; set_by: string; since: number }[]
     vault_remote_unavailable?: { vault_id: number; vault_name: string; reason: string; set_by: string; since: number }[]
+    cloud_account_key?: { issue: 'cloud_account_key_tampered' | 'cloud_account_key_change_pending'; detail: string } | null
     summary: {
       services_ready: number
       services_total: number
@@ -2913,6 +2977,8 @@ export interface WsModels {
     revoked_at: number | null
     revoked_by: string | null
     envelope_versions: number[]
+    account_key_generation: number | null
+    account_policy_sequence: number | null
   }
   /**
    * An enrollment: ops::recovery_recipients::toJson(AddResult).
@@ -3925,6 +3991,103 @@ export interface WsContract {
   'auth.users.list': {
     payload: null
     response: { users: WsModels['UserSummary'][] }
+  }
+  /**
+   * Pin the waiting account recovery key: the first one after linking, or a replacement. The fingerprint must
+   * be the waiting generation's (a device derives it from the key it holds); a mismatch pins nothing
+   * (cloud_key_mismatch). Super admins; a paired device only (cloud_key_requires_device otherwise), with a
+   * keys step-up.
+   */
+  'cloud.key.confirm': {
+    payload: { fingerprint: string }
+    response: { generation: WsModels['CloudKeyGeneration']; replacement: boolean; vaults: number[] }
+  }
+  /**
+   * Ask for a check of the account recovery key and recovery policy now. The check runs in the background
+   * (this answers at once, with the status as it stands); a signed rotation is followed, anything else waits
+   * for a confirmation. Super admins.
+   */
+  'cloud.key.refresh': {
+    payload: Record<string, never>
+    response: {
+      state: 'unlinked' | 'unchecked' | 'none' | 'pending' | 'pinned' | 'change_pending' | 'tampered'
+      account_public_id: string | null
+      pinned: WsModels['CloudKeyGeneration'] | null
+      waiting: WsModels['CloudKeyGeneration'] | null
+      generations: WsModels['CloudKeyGeneration'][]
+      policy: {
+        sequence: number
+        generation: number
+        sha256: string
+        issued_at: string
+        recipients: { recipient_id: string; label: string }[]
+      } | null
+      vaults: {
+        vault_id: number
+        vault_name: string
+        account_key_generation: number | null
+        policy_grants: number
+        applied_sequence: number | null
+      }[]
+      offline_copy: 'confirmed' | 'none' | 'unknown'
+      offline_copy_at: number | null
+      checked_at: number | null
+      check: string | null
+      check_detail: string | null
+      issue: string | null
+      next_step: string | null
+    }
+  }
+  /**
+   * The linked account's recovery key as this server pinned it: the pinned generation and fingerprint, a key
+   * waiting for confirmation, the accepted recovery policy, the vaults it covers and the last check. Reads
+   * the database only; public values only. Super admins or the encryption-key View permission.
+   */
+  'cloud.key.status': {
+    payload: Record<string, never>
+    response: {
+      state: 'unlinked' | 'unchecked' | 'none' | 'pending' | 'pinned' | 'change_pending' | 'tampered'
+      account_public_id: string | null
+      pinned: WsModels['CloudKeyGeneration'] | null
+      waiting: WsModels['CloudKeyGeneration'] | null
+      generations: WsModels['CloudKeyGeneration'][]
+      policy: {
+        sequence: number
+        generation: number
+        sha256: string
+        issued_at: string
+        recipients: { recipient_id: string; label: string }[]
+      } | null
+      vaults: {
+        vault_id: number
+        vault_name: string
+        account_key_generation: number | null
+        policy_grants: number
+        applied_sequence: number | null
+      }[]
+      offline_copy: 'confirmed' | 'none' | 'unknown'
+      offline_copy_at: number | null
+      checked_at: number | null
+      check: string | null
+      check_detail: string | null
+      issue: string | null
+      next_step: string | null
+    }
+  }
+  /**
+   * Whether this server is linked to an account, and as what: installation, deployment, account public id and
+   * the pinned account recovery key. Reads the database only. Super admins and the encryption-key View
+   * permission see the identifiers; any other session sees linked alone.
+   */
+  'cloud.link.status': {
+    payload: Record<string, never>
+    response: {
+      linked: boolean
+      installation_id?: string | null
+      deployment_id?: string | null
+      account_public_id?: string | null
+      account_key?: { generation: number; fingerprint: string } | null
+    }
   }
   /**
    * The caller's saved dashboard layout for a key; exists is false (empty layout) when none is saved. A
@@ -6708,13 +6871,14 @@ export interface WsContract {
   /**
    * Enroll a recovery recipient: an X25519 public key generated on the customer's own device (Vaulthalla
    * Desktop, or the offline `vh-recovery kit create`); the server never receives the seed. Every key version
-   * the vault holds is wrapped to it now and every future version at rotation, into the vault's bucket only.
-   * Customer-controlled (class customer) is the only kind. S3 vaults only (conflict otherwise). Paired
-   * devices only (recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the
-   * encryption-key Export permission.
+   * the vault holds is wrapped to it now and every future version at rotation, into the vault's bucket only
+   * (a local vault: this server's database). Customer-controlled (class customer) is the only kind. With
+   * account_key: the linked account's pinned recovery key (conflict without a pin). Paired devices only
+   * (recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the encryption-key
+   * Export permission.
    */
   'vault.keys.recipients.add': {
-    payload: { vault_id: number; public_key: string; label?: string | null }
+    payload: { vault_id: number; public_key?: string | null; label?: string | null; account_key?: boolean | null }
     response: {
       recipient: WsModels['VaultRecoveryRecipient']
       envelopes_written: number
@@ -6739,7 +6903,8 @@ export interface WsContract {
     }
   }
   /**
-   * Revoke a recovery recipient: no new envelopes are written for it. Access it already has is not revoked
+   * Revoke a recovery recipient: no new envelopes are written for it (a recipient the account's signed
+   * recovery policy added is refused recovery_policy_account_managed). Access it already has is not revoked
    * (an envelope keeps unwrapping the versions it covers): recovery.rotation_needed says when a key rotation
    * is needed to cut it off from new data. Paired devices only (recipient_requires_device otherwise), with a
    * keys step-up bound to the vault (#359); the encryption-key Export permission.
@@ -7176,6 +7341,10 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'auth.user.get.byName',
   'auth.user.update',
   'auth.users.list',
+  'cloud.key.confirm',
+  'cloud.key.refresh',
+  'cloud.key.status',
+  'cloud.link.status',
   'dashboard.preferences.get',
   'dashboard.preferences.reset',
   'dashboard.preferences.update',
@@ -7474,6 +7643,7 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'auth.user.change_password': 'account.credentials',
   'auth.user.delete': 'identity.admin',
   'auth.user.update': 'identity.admin',
+  'cloud.key.confirm': 'keys',
   'device.approval.key.register': 'device.trust',
   'device.backup.grant.confirm': 'device.trust',
   'device.backup.grant.create': 'device.trust',
@@ -7570,6 +7740,10 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'auth.user.get.byName': 15000,
   'auth.user.update': 15000,
   'auth.users.list': 15000,
+  'cloud.key.confirm': 15000,
+  'cloud.key.refresh': 15000,
+  'cloud.key.status': 15000,
+  'cloud.link.status': 15000,
   'dashboard.preferences.get': 15000,
   'dashboard.preferences.reset': 15000,
   'dashboard.preferences.update': 15000,

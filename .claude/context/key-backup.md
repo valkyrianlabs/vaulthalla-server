@@ -293,7 +293,12 @@ vaulthalla.cloud account; explicit per vault (super admin or Export, CLI or devi
 agent), refused unless every needed version has an envelope, and revocable (`vh cloud recovery unenroll` deletes the
 cloud's records). No key, seed, kit or export ever leaves. Restoring from the cloud is `vh vault recover --from-cloud`
 (`ops::cloud_restore`): keys arrive wrapped to a temporary key held in memory and are imported as an export (D1
-unchanged), and the checkpoint the cloud recorded at the last enrollment bounds rollback like a kit's (§4.5).
+unchanged), and the checkpoint the cloud recorded at the last enrollment bounds rollback like a kit's (§4.5). A
+linked server can also add its account's pinned recovery key as a recipient (`vh vault keys recipient add <vault>
+--account-key`, `vault.keys.recipients.add {account_key: true}`; same permission, channels and step-up), and the
+account's signed recovery policy then adds and revokes that vault's other account-managed grants
+(`design/cloud/key-manager.md`, "As built"; `ops::cloud_keys`). Such grants are wrapped to only while the
+MAC-verified pin agrees, and a policy grant is revoked only by the policy (`recovery_policy_account_managed`).
 
 | Operation | CLI | ws | Who | Where |
 |---|---|---|---|---|

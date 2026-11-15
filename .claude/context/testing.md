@@ -508,6 +508,12 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   (`vault::envelopes::setStoreFactoryForTesting`, which also records which vault asked for a bucket);
   `SqlDeployerHistoryDb.RecoveryRecipientsMigrationIsAdditiveIdempotentAndCustomerOnly` (migration 127).
   `recovery_tool` (meson, `core/tests/cli/test_recovery_tool.py`) runs the real `vh-recovery` in a temp dir.
+- The account recovery key (`design/cloud/key-manager.md`): `KeykitVectors.TheAccountKeyChainVectorsVerifyThroughTheLinkedLibrary`
+  runs vl-keykit's `vhc.json` chain vectors (DB-free). `AccountKeyPin.*`, `AccountKeyRotation.*`,
+  `AccountKeyRecipient.*`, `AccountPolicy.*`, `LocalVaultEnvelopes.*` (in `test_recovery_recipients.cpp`'s shared
+  schema, db-only) run against a fake cloud over the http seam that serves `GET /v1/keys/account` in the cloud's
+  as-built shape, with statements and policies signed by vl-keykit in the test (`AccountKeyHistory`). Their
+  `reset()` removes every account-managed grant, pin and link, since the suites share one database.
 
 ## Known test gaps
 

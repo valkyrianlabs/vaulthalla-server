@@ -9,6 +9,7 @@
 #include "db/query/vault/RecoveryGrants.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "identities/User.hpp"
+#include "ops/RecoveryRecipients.hpp"
 #include "rbac/permission/admin/keys/Encryption.hpp"
 #include "sync/manifest/Store.hpp"
 #include "vault/RecoveryEnvelopes.hpp"
@@ -19,6 +20,7 @@
 #include <vl/keykit/kit.hpp>
 #include <vl/keykit/uid.hpp>
 
+#include <algorithm>
 #include <set>
 
 namespace vh::ops::cloud_recovery {
@@ -70,7 +72,8 @@ Linked linked() {
     if (r.status == 0) throw Refused("cloud_unreachable", r.error);
     if (r.status == 401)
         throw Refused("cloud_link_rejected", "Vaulthalla Cloud no longer accepts this server (`vh cloud status`)");
-    if (r.status == 403) throw Refused("cloud_allowance", "Vaulthalla Cloud refused: " + r.error);
+    // 402 payment_required: over the account's recovery allowance (the cloud's billing); 403 from older clouds.
+    if (r.status == 402 || r.status == 403) throw Refused("cloud_allowance", "Vaulthalla Cloud refused: " + r.error);
     if (r.status == 409) throw Conflict("Vaulthalla Cloud refused: " + r.error);
     throw Refused("cloud_refused", "Vaulthalla Cloud refused: " + r.error);
 }
@@ -119,7 +122,7 @@ std::vector<std::vector<uint8_t>> bucketEnvelopes(const vault::model::Vault& vau
         const auto object = store->get(kev1::objectKey(e.kid));
         if (!object)
             throw Conflict("the recovery envelope " + e.kid + " of key version " + std::to_string(e.key_version) +
-                           " is missing from the bucket; the next sync pass writes it again, then retry");
+                           " is missing from where this vault keeps them; the next sync pass writes it again, then retry");
         const auto& bytes = object->bytes;
         try {
             const auto h = kev1::inspect(bytes);
@@ -139,15 +142,27 @@ std::string uidPath(const std::string& vaultUid) { return "/v1/recovery/vaults/"
 
 }
 
-Enrolled enroll(const Actor& actor, const unsigned int vaultId, const Channel channel) {
+Enrolled enroll(const Actor& actor, const unsigned int vaultId, const Channel channel, const bool accountKey) {
     using namespace cloud_recovery_detail;
     requireEnroll(actor, channel);
     const auto vault = liveVault(vaultId);
+    // An S3 vault's envelopes are read back from its bucket; a local vault's from this server's database
+    // (vault_key_envelope.envelope, design/cloud/key-manager.md "Local vaults"), checked the same way.
     const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(vault);
-    if (!s3 || s3->bucket.empty())
-        throw Conflict("vault '" + vault->name + "' has no bucket: cloud recovery holds the envelopes recovery "
-                       "recipients get in a vault's bucket, so it is for S3 vaults");
+    const bool local = vault->type == vault::model::VaultType::Local;
+    if (!local && (!s3 || s3->bucket.empty()))
+        throw Conflict("vault '" + vault->name + "' has no bucket to hold its recovery envelopes");
     auto link = linked();
+    // --account-key: the pinned account key becomes a recipient first (the recipient add's own rules and step-up),
+    // then the vault is enrolled: one person's decision for this vault. A vault that already has it keeps its grant.
+    if (accountKey) {
+        const bool has = std::ranges::any_of(db::query::vault::RecoveryGrants::usable(vaultId),
+                                             [](const auto& g) { return g.account_key_generation.has_value(); });
+        if (!has)
+            (void)recovery_recipients::add(actor, {.vault_id = vaultId, .public_key = {}, .label = std::nullopt,
+                                                   .account_key = true},
+                                           channel);
+    }
     const auto ks = keyStatus(actor, vaultId);
     if (!ks.vault_uid) throw Conflict("vault '" + vault->name + "' has no uid");
     if (ks.recovery.recipients == 0)

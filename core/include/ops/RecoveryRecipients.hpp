@@ -38,6 +38,8 @@ struct Recipient {
     std::optional<std::time_t> revoked_at{};
     std::optional<std::string> revoked_by{};
     std::vector<unsigned int> envelope_versions{};  // key versions with an envelope for this grant
+    std::optional<unsigned int> account_key_generation{};   // the pinned account key's grant
+    std::optional<unsigned int> account_policy_sequence{};  // added by the account's signed recovery policy
 };
 
 using Material = vault_keys::RecoveryMaterial;
@@ -54,8 +56,11 @@ struct RecipientList {
 
 struct AddRequest {
     unsigned int vault_id{};
-    std::string public_key{};  // X25519: base64 (44 characters) or hex (64 digits)
+    std::string public_key{};  // X25519: base64 (44 characters) or hex (64 digits); empty with account_key
     std::optional<std::string> label{};
+    // The linked account's pinned recovery key instead of a public key (design/cloud/key-manager.md): a person adds
+    // it with the same permission, channels and step-up; the grant names the confirmation the pin rests on.
+    bool account_key = false;
 };
 
 struct AddResult {
@@ -73,7 +78,8 @@ struct RevokeResult {
     Material recovery{};
 };
 
-// Stops new envelopes for the grant. Access it already has is not revoked: an envelope it received keeps unwrapping the
+// Stops new envelopes for the grant. A grant the account's recovery policy added is refused
+// (recovery_policy_account_managed): only the policy removes it. Access it already has is not revoked: an envelope it received keeps unwrapping the
 // versions it covers, so status says a rotation is needed (rotation_needed) to cut it off from new data.
 [[nodiscard]] RevokeResult revoke(const Actor& actor, unsigned int vaultId, const std::string& grantId,
                                   vault_keys::Channel channel);

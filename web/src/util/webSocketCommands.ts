@@ -1056,6 +1056,13 @@ export interface WebSocketCommandMap {
   'vault.remote.detach': WsContract['vault.remote.detach']
   'vault.remote.status': WsContract['vault.remote.status']
   'vault.remote.abort': WsContract['vault.remote.abort']
+  // The linked account's recovery key (design/cloud/key-manager.md), behind the cloud.account_key capability. Status and
+  // link status read the server's database; confirm answers only a paired device's session (cloud_key_requires_device
+  // elsewhere) with a keys step-up; refresh asks the server's background check. No console page uses them yet.
+  'cloud.key.status': WsContract['cloud.key.status']
+  'cloud.key.confirm': WsContract['cloud.key.confirm']
+  'cloud.key.refresh': WsContract['cloud.key.refresh']
+  'cloud.link.status': WsContract['cloud.link.status']
 }
 
 export type WSCommandPayload<K extends keyof WebSocketCommandMap> = WebSocketCommandMap[K]['payload']

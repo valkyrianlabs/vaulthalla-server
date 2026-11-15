@@ -450,15 +450,20 @@ static CommandResult handle_recipient_add(const CommandCall& call) {
     validatePositionals(call, usage);
     const auto lookup = resolveVault(call, call.positionals[0], usage, ERR);
     if (!lookup || !lookup.ptr) return invalid(lookup.error);
-    const auto key = optVal(call, usage->resolveRequired("public_key")->option_tokens);
-    if (!key || key->empty()) return invalid(std::string(ERR) + ": --public-key is required");
+    const auto key = optVal(call, usage->resolveOptional("public_key")->option_tokens);
+    const bool accountKey = hasFlag(call, usage->resolveFlag("account_key")->aliases);
+    if (accountKey && key) return invalid(std::string(ERR) + ": give --public-key or --account-key, not both");
+    if (!accountKey && (!key || key->empty()))
+        return invalid(std::string(ERR) + ": --public-key (or --account-key) is required");
     const auto label = optVal(call, usage->resolveOptional("label")->option_tokens);
     try {
-        const auto r = recipients_ops::add(call.user, {.vault_id = lookup.ptr->id, .public_key = *key, .label = label},
+        const auto r = recipients_ops::add(call.user, {.vault_id = lookup.ptr->id, .public_key = key.value_or(""),
+                                                       .label = label, .account_key = accountKey},
                                            cli_channel());
         if (hasFlag(call, usage->resolveFlag("json_output")->aliases)) return ok(recipients_ops::toJson(r).dump(4));
+        const bool local = lookup.ptr->type == ::vh::vault::model::VaultType::Local;
         std::string out = fmt::format("Enrolled recovery recipient on vault {}; {} envelope(s) written to the vault's "
-                                      "bucket.\n", lookup.ptr->id, r.envelopes_written);
+                                      "{}.\n", lookup.ptr->id, r.envelopes_written, local ? "database" : "bucket");
         out += recipient_text(r.recipient);
         if (r.note) out += "  " + *r.note + "\n";
         return ok(out + recovery_text(r.recovery));

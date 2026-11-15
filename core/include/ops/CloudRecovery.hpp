@@ -32,8 +32,10 @@ struct Enrolled {
 };
 // Super admins or users with the export encryption keys permission; the local CLI or a paired device (never the
 // browser or an agent), with the keys step-up on a device. Conflict unless the server is linked and every needed key
-// version has an envelope for a usable recovery recipient.
-Enrolled enroll(const Actor& actor, unsigned int vaultId, Channel channel);
+// version has an envelope for a usable recovery recipient. S3 vaults send their bucket's envelopes, local vaults the
+// ones this server's database holds for them. `accountKey`: add the pinned account recovery key as a recipient first
+// (ops::recovery_recipients::add with account_key), under the same step-up.
+Enrolled enroll(const Actor& actor, unsigned int vaultId, Channel channel, bool accountKey = false);
 
 struct VaultCoverage {
     unsigned int vault_id{};

@@ -35,7 +35,13 @@
 #include "config/Registry.hpp"
 #include "db/query/cloud/Link.hpp"
 #include "db/query/cloud/RecoveryVault.hpp"
+#include "ops/CloudKeys.hpp"
 #include "ops/CloudRecovery.hpp"
+#include "cloud/AccountPin.hpp"
+#include "db/query/cloud/AccountKey.hpp"
+#include <vl/keykit/account_key.hpp>
+#include <vl/keykit/base64url.hpp>
+#include <vl/keykit/recovery_policy.hpp>
 #include "storage/s3/curl/Http.hpp"
 #include "ops/Users.hpp"
 #include "ops/VaultKeys.hpp"
@@ -62,6 +68,7 @@
 #include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
 
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <paths.h>
@@ -816,7 +823,7 @@ protected:
                                       .installation_id = std::nullopt, .account_id = std::nullopt,
                                       .requested_by = "admin", .requested_at = 0, .linked_at = std::nullopt};
         ASSERT_TRUE(db::query::cloud::Link::putPending(row));
-        ASSERT_TRUE(db::query::cloud::Link::markLinked("0123456789abcdefghjkmnpqrs", installation_, 7));
+        ASSERT_TRUE(db::query::cloud::Link::markLinked("0123456789abcdefghjkmnpqrs", installation_, 7, std::nullopt, std::nullopt));
     }
 
     // Enough of the cloud: it checks the request is signed as the linked installation, keeps each vault's upload and
@@ -976,6 +983,585 @@ TEST_F(CloudRecoveryEnrollment, StatusComparesWithTheCloudAndUnenrollingDeletesI
     EXPECT_FALSE(db::query::cloud::RecoveryVaults::get(id).has_value());
     EXPECT_THROW((void)ops::cloud_recovery::status(superUser, id), ops::NotFound);
     EXPECT_THROW(ops::cloud_recovery::unenroll(superUser, id, Channel::Cli), ops::NotFound);
+}
+
+
+// ---- The account recovery key (design/cloud/key-manager.md, work items 2, 3 and 6) -------------------------------------
+//
+// Against a fake vaulthalla.cloud serving GET /v1/keys/account in the shape of the cloud's key-manager.md "As built" 5
+// ({public_id, current, chain[], offline_copy_confirmed_at, policy}, base64url signatures): the statements and policies
+// are made here with vl-keykit's own signing functions, as Desktop or the portal would.
+
+namespace account = vl::keykit::account;
+
+// An account's key history as a device holding the keys makes it.
+struct AccountKeyHistory {
+    std::string publicId = "5f0c3a3e-8d1b-4c2a-9e47-6b1d2f3a4c5e";
+    std::vector<vl::keykit::RecoverySeed> seeds;
+    std::vector<account::KeyStatement> statements;
+    std::vector<account::SignedStatement> chain;
+
+    void initial() { add(account::Reason::Initial, false); }
+    void rotate(const account::Reason r = account::Reason::Routine) { add(r, true); }
+    void replace() { add(account::Reason::Routine, false); }
+
+    [[nodiscard]] std::string fingerprint(const std::size_t generation) const {
+        return account::fingerprintText(account::fingerprint(statements.at(generation - 1)));
+    }
+    [[nodiscard]] const vl::keykit::RecoverySeed& seed(const std::size_t generation) const { return seeds.at(generation - 1); }
+
+    [[nodiscard]] json chainJson(std::size_t upTo = 0) const {
+        if (upTo == 0) upTo = chain.size();
+        json out = json::array();
+        for (std::size_t i = 0; i < upTo; ++i)
+            out.push_back({{"generation", i + 1}, {"statement", chain[i].statement},
+                           {"signature", vl::keykit::base64UrlEncode(chain[i].signature)},
+                           {"previous_signature", chain[i].previous_signature
+                                                      ? json(vl::keykit::base64UrlEncode(*chain[i].previous_signature))
+                                                      : json(nullptr)},
+                           {"fingerprint", fingerprint(i + 1)},
+                           {"reason", std::string(account::reasonName(statements[i].reason))},
+                           {"link", chain[i].previous_signature || i == 0 ? (i == 0 ? "initial" : "rotation")
+                                                                          : "replacement"},
+                           {"status", i + 1 == upTo ? "current" : "retired"}, {"created_at", 1770000000},
+                           {"retired_at", nullptr}, {"offline_copy_confirmed_at", nullptr}});
+        return out;
+    }
+
+    // A signed policy listing `recipients`, by generation `generation`'s key (default: the newest).
+    [[nodiscard]] json policy(const uint32_t sequence, const std::vector<std::vector<uint8_t>>& recipients,
+                              std::size_t generation = 0, std::optional<std::string> otherAccount = std::nullopt) const {
+        if (generation == 0) generation = statements.size();
+        account::RecoveryPolicy p{.public_id = otherAccount.value_or(publicId), .sequence = sequence,
+                                  .generation = static_cast<uint32_t>(generation), .issued_at = "2026-11-14T00:00:00Z",
+                                  .recipients = {}};
+        for (std::size_t i = 0; i < recipients.size(); ++i) {
+            account::PolicyRecipient r{.x25519_public = {}, .label = "Recipient " + std::to_string(i + 1)};
+            std::ranges::copy(recipients[i], r.x25519_public.begin());
+            p.recipients.push_back(r);
+        }
+        // signPolicy refuses another account; sign the bytes directly then (what a forger would send).
+        const auto text = account::encode(p);
+        const auto sig = otherAccount ? account::signBytes({reinterpret_cast<const uint8_t*>(text.data()), text.size()},
+                                                           seed(generation))
+                                      : account::signPolicy(p, seed(generation), statements.at(generation - 1)).signature;
+        return {{"sequence", sequence}, {"generation", generation}, {"policy", text},
+                {"signature", vl::keykit::base64UrlEncode(sig)}, {"created_by", "installation:test"},
+                {"created_at", 1770000000}};
+    }
+
+private:
+    void add(const account::Reason reason, const bool signedByPrevious) {
+        const auto generation = static_cast<uint32_t>(statements.size() + 1);
+        seeds.push_back(vl::keykit::RecoverySeed::generate());
+        std::optional<account::Fingerprint> previous;
+        if (generation > 1) previous = account::fingerprint(statements.back());
+        auto st = account::statementFor(seeds.back(), publicId, generation, previous, reason);
+        const auto* prev = signedByPrevious ? &seeds[seeds.size() - 2] : nullptr;
+        chain.push_back(account::sign(st, seeds.back(), prev));
+        statements.push_back(std::move(st));
+    }
+};
+
+class AccountKeyFixture : public RecipientFixture {
+protected:
+    void SetUp() override {
+        RecipientFixture::SetUp();
+        if (IsSkipped()) return;
+        auto cfg = config::Registry::get();
+        previousEndpoint_ = cfg.cloud.endpoint;
+        cfg.cloud.endpoint = "https://api.vaulthalla.test";
+        config::Registry::set(cfg);
+        storage::s3::curl::http::setTransportForTesting(
+            [this](const storage::s3::curl::http::Request& r) { return cloud(r); });
+        reset();
+    }
+    void TearDown() override {
+        if (!IsSkipped()) {
+            storage::s3::curl::http::setTransportForTesting(std::nullopt);
+            reset();
+            auto cfg = config::Registry::get();
+            cfg.cloud.endpoint = previousEndpoint_;
+            config::Registry::set(cfg);
+        }
+        RecipientFixture::TearDown();
+    }
+
+    // The suites share one database: every account-managed grant, pin and link of a test goes with it.
+    static void reset() {
+        db::Transactions::exec("AccountKeyFixture::reset", [&](pqxx::work& txn) {
+            txn.exec("DELETE FROM vault_recovery_grant WHERE account_key_generation IS NOT NULL OR "
+                     "account_policy_sequence IS NOT NULL");
+            txn.exec("DELETE FROM cloud_account_policy_vault");
+        });
+        for (const auto& row : db::query::cloud::RecoveryVaults::list())
+            (void)db::query::cloud::RecoveryVaults::remove(row.vault_id);
+        db::query::cloud::AccountKeys::clear();
+        cloud::pin::destroy();
+        db::query::cloud::Link::clear();
+        cloud::identity::destroy();
+    }
+
+    void link() {
+        const auto seed = cloud::identity::create();
+        db::query::cloud::LinkRow row{.endpoint = "https://api.vaulthalla.test", .status = "pending",
+                                      .public_key = cloud::publicKeyOf(seed.bytes()), .name = "test",
+                                      .request_id = std::string("0123456789abcdefghjkmnpqrs"), .request_expires_at = 0,
+                                      .installation_id = std::nullopt, .account_id = std::nullopt,
+                                      .requested_by = "admin", .requested_at = 0, .linked_at = std::nullopt};
+        ASSERT_TRUE(db::query::cloud::Link::putPending(row));
+        ASSERT_TRUE(db::query::cloud::Link::markLinked("0123456789abcdefghjkmnpqrs", installation_, 7,
+                                                       std::string("d3p1qymnt00000000000000000"), history.publicId));
+    }
+
+    // What GET /v1/keys/account answers now.
+    void serve(std::optional<std::size_t> upTo = std::nullopt, const json& policy = nullptr) {
+        const auto n = upTo.value_or(history.chain.size());
+        answer = {{"public_id", history.publicId},
+                  {"current", {{"generation", n}, {"fingerprint", history.fingerprint(n)}, {"link", "initial"},
+                               {"offline_copy_confirmed_at", 1770000000}}},
+                  {"offline_copy_confirmed_at", 1770000000},
+                  {"chain", history.chainJson(n)},
+                  {"policy", policy}};
+    }
+
+    ops::cloud_keys::Status check() { return ops::cloud_keys::check("test"); }
+
+    // Linked, the first generation fetched and confirmed.
+    void pinFirst() {
+        link();
+        history.initial();
+        serve();
+        ASSERT_EQ(check().state, "pending");
+        ASSERT_NO_THROW((void)ops::cloud_keys::confirm(superUser, history.fingerprint(1), Channel::Cli));
+    }
+
+    // A vault (local unless said otherwise) with the pinned account key as a recipient.
+    EnginePtr coveredVault(const bool s3 = false) {
+        const auto engine = s3 ? s3Vault("ak") : localVault();
+        write(engine, "/a.txt", "x");
+        (void)rr::add(superUser, {.vault_id = engine->vault->id, .public_key = {}, .label = std::nullopt,
+                                  .account_key = true},
+                      Channel::Cli);
+        return engine;
+    }
+
+    // Key versions whose stored envelope (bucket or database) `seed` unwraps.
+    static std::set<uint32_t> unwrappable(const EnginePtr& engine, const vl::keykit::RecoverySeed& seed) {
+        std::set<uint32_t> out;
+        const auto store = vault::envelopes::storeFor(engine->vault->id);
+        const auto sk = seed.x25519SecretKey();
+        for (const auto& o : store->list(std::string(kev1::kObjectPrefix))) {
+            const auto bytes = store->get(o.key, std::nullopt);
+            if (!bytes) continue;
+            try {
+                out.insert(kev1::unwrap(bytes->bytes, sk.bytes(), kev1::Suite::X25519, uidOf(engine)).key_version);
+            } catch (const kev1::Error&) {}
+        }
+        return out;
+    }
+
+    static std::vector<db::query::vault::RecoveryGrant> active(const EnginePtr& engine) {
+        return db::query::vault::RecoveryGrants::usable(engine->vault->id);
+    }
+
+    storage::s3::curl::http::Response cloud(const storage::s3::curl::http::Request& r) {
+        storage::s3::curl::http::Response res;
+        const std::string base = "https://api.vaulthalla.test";
+        std::string auth;
+        for (const auto& [k, v] : r.headers)
+            if (k == "Authorization") auth = v;
+        const auto path = r.url.substr(base.size());
+        requests.push_back(r.method + " " + path);
+        if (!r.url.starts_with(base) || auth.find("Installation=" + installation_) == std::string::npos) {
+            res.status = 401;
+            res.body = R"({"error":{"code":"unauthenticated","message":"request signature rejected"}})";
+            return res;
+        }
+        if (r.method == "GET" && path == "/v1/keys/account") {
+            if (answer.is_null()) {
+                res.status = 404;
+                res.body = R"({"error":{"code":"not_found","message":"this account has no recovery key yet"}})";
+            } else {
+                res.status = 200;
+                res.body = answer.dump();
+            }
+            return res;
+        }
+        if (r.method == "GET" && path == "/v1/installation") {
+            res.status = 200;
+            res.body = json{{"id", installation_}, {"account_id", 7}, {"account_public_id", history.publicId},
+                            {"deployment_id", "d3p1qymnt00000000000000000"}}.dump();
+            return res;
+        }
+        const std::string recovery = "/v1/recovery/vaults/";
+        if (path.starts_with(recovery) && r.method == "PUT") {
+            uploads[path.substr(recovery.size())] = json::parse(r.body);
+            res.status = 200;
+            res.body = json{{"created", true}, {"envelopes_added", 1}, {"versions_added", 1}, {"coverage", nullptr}}.dump();
+            return res;
+        }
+        res.status = 404;
+        res.body = R"({"error":{"code":"not_found","message":"no route"}})";
+        return res;
+    }
+
+    AccountKeyHistory history;
+    json answer;
+    std::string installation_ = "kceypk9vfn5tv6yx5c6qpfebdm";
+    std::map<std::string, json> uploads;
+    std::vector<std::string> requests;
+    std::string previousEndpoint_;
+};
+
+class AccountKeyPin : public AccountKeyFixture {};
+class AccountKeyRecipient : public AccountKeyFixture {};
+class AccountKeyRotation : public AccountKeyFixture {};
+class AccountPolicy : public AccountKeyFixture {};
+class LocalVaultEnvelopes : public AccountKeyFixture {};
+
+TEST_F(AccountKeyPin, WaitsForOneFingerprintConfirmationAndRefusesAMismatch) {
+    EXPECT_EQ(ops::cloud_keys::status(superUser).state, "unlinked");
+    EXPECT_THROW((void)check(), ops::Conflict) << "nothing runs unless linked";
+    EXPECT_TRUE(requests.empty()) << "an unlinked server contacts nobody";
+    link();
+    EXPECT_EQ(check().state, "none") << "404: the account has no key yet";
+    EXPECT_EQ(db::query::cloud::Link::get()->key_check, "none");
+
+    history.initial();
+    serve();
+    auto s = check();
+    EXPECT_EQ(s.state, "pending");
+    ASSERT_TRUE(s.waiting);
+    EXPECT_EQ(s.waiting->fingerprint, history.fingerprint(1)) << "computed here from the statement";
+    EXPECT_EQ(s.offline_copy, "confirmed");
+    EXPECT_FALSE(ops::cloud_keys::pinnedKey().has_value()) << "a pending key is never used";
+    EXPECT_EQ(code([&] { return rr::add(superUser, {.vault_id = localVault()->vault->id, .account_key = true},
+                                        Channel::Cli); }), "conflict") << "nothing to add before a person confirms";
+
+    // A wrong fingerprint pins nothing.
+    AccountKeyHistory other;
+    other.initial();
+    EXPECT_EQ(code([&] { return ops::cloud_keys::confirm(superUser, other.fingerprint(1), Channel::Cli); }),
+              "cloud_key_mismatch");
+    EXPECT_EQ(ops::cloud_keys::status(superUser).state, "pending");
+    EXPECT_EQ(code([&] { return ops::cloud_keys::confirm(superUser, "not a fingerprint", Channel::Cli); }), "invalid");
+
+    // What a person types: upper case, spaces between the groups.
+    auto typed = history.fingerprint(1);
+    std::ranges::replace(typed, '-', ' ');
+    std::ranges::transform(typed, typed.begin(), [](const unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    const auto c = ops::cloud_keys::confirm(superUser, typed, Channel::Cli);
+    EXPECT_EQ(c.generation.state, "pinned");
+    EXPECT_FALSE(c.replacement);
+    EXPECT_EQ(c.generation.confirmed_by, "user:" + std::to_string(superUser->id) + " via cli");
+    s = ops::cloud_keys::status(superUser);
+    EXPECT_EQ(s.state, "pinned");
+    ASSERT_TRUE(ops::cloud_keys::pinnedKey().has_value());
+    EXPECT_EQ(ops::cloud_keys::pinnedKey()->generation, 1u);
+    EXPECT_FALSE(ops::cloud_keys::health().has_value());
+
+    // The check is idempotent: nothing new is stored, the pin stays.
+    EXPECT_EQ(check().state, "pinned");
+    EXPECT_EQ(db::query::cloud::AccountKeys::list(history.publicId).size(), 1u);
+}
+
+TEST_F(AccountKeyPin, ConfirmIsForSuperAdminsOnTheCliOrAPairedDevice) {
+    link();
+    history.initial();
+    serve();
+    (void)check();
+    const auto fp = history.fingerprint(1);
+    EXPECT_EQ(code([&] { return ops::cloud_keys::confirm(superUser, fp, Channel::Console); }), "cloud_key_requires_device");
+    EXPECT_EQ(code([&] { return ops::cloud_keys::confirm(superUser, fp, Channel::Agent); }), "denied");
+    EXPECT_EQ(code([&] { return ops::cloud_keys::confirm(nullptr, fp, Channel::Cli); }), "denied");
+    EXPECT_EQ(code([&] { return WsKeys::cloudKeyConfirm({{"fingerprint", fp}}, console(superUser)); }),
+              "cloud_key_requires_device");
+    EXPECT_EQ(code([&] { return ops::cloud_keys::forget(superUser, Channel::Device); }), "denied") << "CLI only";
+    EXPECT_EQ(ops::cloud_keys::status(superUser).state, "pending");
+    // The console reads it (public values) and may ask for a check; the link status shows the pin once there is one.
+    EXPECT_EQ(WsKeys::cloudKeyStatus(json::object(), console(superUser)).at("state"), "pending");
+    EXPECT_EQ(WsKeys::cloudLinkStatus(json::object(), console(superUser)).at("account_key"), nullptr);
+    (void)ops::cloud_keys::confirm(superUser, fp, Channel::Cli);
+    const auto ls = WsKeys::cloudLinkStatus(json::object(), console(superUser));
+    EXPECT_EQ(ls.at("linked"), true);
+    EXPECT_EQ(ls.at("account_public_id"), history.publicId);
+    EXPECT_EQ(ls.at("account_key").at("fingerprint"), fp);
+}
+
+TEST_F(AccountKeyPin, RefusesAnotherAccountAndABrokenChain) {
+    link();
+    history.initial();
+    serve();
+    answer["public_id"] = "0b7e4d21-6a3c-4f8e-b1d2-93c4e5f60718";
+    EXPECT_EQ(check().check, "refused");
+    EXPECT_TRUE(db::query::cloud::AccountKeys::list("").empty()) << "nothing stored";
+
+    // A chain whose statements name another account, served under ours.
+    AccountKeyHistory other;
+    other.publicId = "0b7e4d21-6a3c-4f8e-b1d2-93c4e5f60718";
+    other.initial();
+    serve();
+    answer["chain"] = other.chainJson();
+    auto s = check();
+    EXPECT_EQ(s.check, "refused");
+    EXPECT_TRUE(s.check_detail && s.check_detail->starts_with("account_mismatch")) << s.check_detail.value_or("");
+
+    // A statement altered after signing.
+    serve();
+    auto statement = answer["chain"][0]["statement"].get<std::string>();
+    statement.back() = 'x';  // "initial" -> "initiax": not the signed bytes
+    answer["chain"][0]["statement"] = statement;
+    s = check();
+    EXPECT_EQ(s.check, "refused");
+    EXPECT_TRUE(db::query::cloud::AccountKeys::list("").empty());
+}
+
+TEST_F(AccountKeyPin, AMacTamperStopsEveryWrapAndIsReported) {
+    pinFirst();
+    const auto engine = coveredVault();
+    const auto id = engine->vault->id;
+    EXPECT_FALSE(unwrappable(engine, history.seed(1)).empty()) << "the account key opens the vault's envelopes";
+
+    // A database writer swaps the pinned key for one of their own.
+    const auto attacker = vl::keykit::RecoverySeed::generate();
+    db::Transactions::exec("tamper", [&](pqxx::work& txn) {
+        txn.exec("UPDATE cloud_account_key SET x25519_public = $1::bytea",
+                 pqxx::params{db::encoding::to_hex_bytea(attacker.x25519PublicKey())});
+        txn.exec("UPDATE vault_recovery_grant SET public_key = $1::bytea WHERE vault_id = $2 AND "
+                 "account_key_generation IS NOT NULL",
+                 pqxx::params{db::encoding::to_hex_bytea(attacker.x25519PublicKey()), id});
+    });
+    EXPECT_EQ(ops::cloud_keys::status(superUser).state, "tampered");
+    ASSERT_TRUE(ops::cloud_keys::health().has_value());
+    EXPECT_EQ(ops::cloud_keys::health()->code, "cloud_account_key_tampered");
+    EXPECT_EQ(stats::model::SystemHealth::snapshot().cloudAccountKey->issue, "cloud_account_key_tampered");
+    EXPECT_EQ(code([&] { return ops::cloud_keys::pinnedKey(); }), "cloud_account_key_tampered");
+    EXPECT_EQ(code([&] { return ops::cloud_keys::confirm(superUser, history.fingerprint(1), Channel::Cli); }),
+              "cloud_account_key_tampered");
+
+    rotate(engine);
+    EXPECT_TRUE(unwrappable(engine, attacker).empty()) << "nothing is wrapped to the swapped key";
+    EXPECT_EQ(check().check, "tampered") << "a check changes nothing either";
+}
+
+TEST_F(AccountKeyPin, ALinkAgainToTheSameAccountFollowsItsOldPinAndForgetStartsOver) {
+    pinFirst();
+    db::query::cloud::Link::clear();  // `vh cloud unlink --force`: the pin's slot survives
+    cloud::identity::destroy();
+    link();
+    serve();
+    EXPECT_EQ(check().state, "pinned") << "compared against the old pin, nobody is asked again";
+
+    const auto engine = coveredVault();
+    EXPECT_EQ(code([&] { return ops::cloud_keys::forget(superUser, Channel::Cli); }), "conflict")
+        << "a vault still holds a grant that rests on the pin";
+    for (const auto& g : active(engine))
+        if (g.account_key_generation) (void)rr::revoke(superUser, engine->vault->id, g.grant_id, Channel::Cli);
+    EXPECT_EQ(ops::cloud_keys::forget(superUser, Channel::Cli).generations, 1u);
+    EXPECT_FALSE(cloud::pin::exists());
+    EXPECT_EQ(check().state, "pending") << "forgotten: a person confirms again";
+}
+
+TEST_F(AccountKeyRotation, FollowsASignedRotationAndRefusesARollbackOrAnotherChain) {
+    pinFirst();
+    const auto engine = coveredVault();
+    history.rotate();
+    serve();
+    auto s = check();
+    EXPECT_EQ(s.state, "pinned");
+    ASSERT_TRUE(s.pinned);
+    EXPECT_EQ(s.pinned->generation, 2u);
+    EXPECT_EQ(s.pinned->confirmed_by, "chain:1");
+    EXPECT_EQ(s.pinned->link, "rotation");
+
+    // The vault's grant moved: the new key opens every version, the old grant is revoked without asking for a vault
+    // key rotation (a routine rotation of the account key).
+    EXPECT_EQ(unwrappable(engine, history.seed(2)), unwrappable(engine, history.seed(1)));
+    std::optional<uint32_t> generation;
+    for (const auto& g : active(engine))
+        if (g.account_key_generation) generation = g.account_key_generation;
+    EXPECT_EQ(generation, 2u);
+    EXPECT_FALSE(vault::envelopes::material(engine->vault->id).rotation_needed);
+
+    // A rollback: the cloud serves the chain without its newest generation.
+    serve(1);
+    s = check();
+    EXPECT_EQ(s.check, "refused");
+    EXPECT_TRUE(s.check_detail && s.check_detail->starts_with("rollback")) << s.check_detail.value_or("");
+    EXPECT_EQ(s.pinned->generation, 2u);
+
+    // A chain that doesn't reach the pin: another key under the numbers already pinned.
+    AccountKeyHistory substitute;
+    substitute.initial();
+    substitute.rotate();
+    serve();
+    answer["chain"] = substitute.chainJson();
+    s = check();
+    EXPECT_TRUE(s.check_detail && s.check_detail->starts_with("pin_mismatch")) << s.check_detail.value_or("");
+    EXPECT_EQ(ops::cloud_keys::pinnedKey()->generation, 2u);
+}
+
+TEST_F(AccountKeyRotation, AReplacementWaitsForAPersonAndOneDressedAsARotationIsRefused) {
+    pinFirst();
+    const auto engine = coveredVault();
+
+    // Generation 2 claims a previous signature, but the pinned key never made it.
+    history.replace();
+    serve();
+    const auto forger = vl::keykit::RecoverySeed::generate();
+    const auto st = history.chain.back().statement;
+    answer["chain"][1]["previous_signature"] = vl::keykit::base64UrlEncode(
+        account::signBytes({reinterpret_cast<const uint8_t*>(st.data()), st.size()}, forger));
+    answer["chain"][1]["link"] = "rotation";
+    auto s = check();
+    EXPECT_TRUE(s.check_detail && s.check_detail->starts_with("bad_previous_signature")) << s.check_detail.value_or("");
+    EXPECT_EQ(s.state, "pinned");
+    EXPECT_FALSE(s.waiting) << "nothing stored";
+
+    // The honest replacement: stored refused, the server keeps wrapping to its pin, health says so.
+    serve();
+    s = check();
+    EXPECT_EQ(s.state, "change_pending");
+    ASSERT_TRUE(s.waiting);
+    EXPECT_EQ(s.waiting->state, "refused");
+    EXPECT_EQ(s.pinned->generation, 1u);
+    EXPECT_EQ(ops::cloud_keys::health()->code, "cloud_account_key_change_pending");
+    rotate(engine);
+    EXPECT_TRUE(unwrappable(engine, history.seed(2)).empty()) << "nothing is wrapped to an unconfirmed key";
+    EXPECT_EQ(unwrappable(engine, history.seed(1)).size(), 2u) << "writes never wait for the confirmation";
+
+    // A person confirms it: the pin moves and the grant follows.
+    const auto c = ops::cloud_keys::confirm(superUser, history.fingerprint(2), Channel::Cli);
+    EXPECT_TRUE(c.replacement);
+    EXPECT_EQ(ops::cloud_keys::status(superUser).state, "pinned");
+    EXPECT_EQ(unwrappable(engine, history.seed(2)).size(), 2u);
+    EXPECT_FALSE(ops::cloud_keys::health().has_value());
+}
+
+TEST_F(AccountKeyRecipient, IsAddedByAPersonAndOnlyThePinnedKeyIsWrappedTo) {
+    pinFirst();
+    const auto engine = coveredVault();
+    const auto id = engine->vault->id;
+    std::optional<db::query::vault::RecoveryGrant> grant;
+    for (const auto& g : active(engine))
+        if (g.account_key_generation) grant = g;
+    ASSERT_TRUE(grant);
+    EXPECT_EQ(grant->account_key_generation, 1u);
+    EXPECT_NE(grant->authorized_by.find("account_key:1 confirmed by user:"), std::string::npos) << grant->authorized_by;
+    EXPECT_EQ(grant->label, "Vaulthalla Cloud recovery key (generation 1)");
+    EXPECT_EQ(unwrappable(engine, history.seed(1)).size(), 1u);
+    EXPECT_EQ(code([&] { return rr::add(superUser, {.vault_id = id, .public_key = b64(history.seed(1).x25519PublicKey()),
+                                                    .account_key = true}, Channel::Cli); }), "invalid");
+    EXPECT_EQ(code([&] { return rr::add(superUser, {.vault_id = id, .account_key = true}, Channel::Agent); }), "denied");
+    EXPECT_EQ(code([&] { return WsKeys::addRecipient({{"vault_id", id}, {"account_key", true}}, console(superUser)); }),
+              "recipient_requires_device");
+
+    // A grant planted in the database as an account-key grant of a key nobody pinned is never wrapped to.
+    const auto planted = vl::keykit::RecoverySeed::generate();
+    db::query::vault::RecoveryGrant g;
+    g.vault_id = id;
+    g.grant_id = vl::keykit::toBase32(crypto::id::newObjectUid());
+    const auto pk = planted.x25519PublicKey();
+    g.recipient_id = std::string(64, '0');
+    std::string hexId;
+    for (const auto b : kev1::recipientId(pk)) hexId += fmt::format("{:02x}", b);
+    g.recipient_id = hexId;
+    g.public_key = pk;
+    g.account_key_generation = 1;
+    g.authorized_by = "planted";
+    ASSERT_TRUE(db::query::vault::RecoveryGrants::add(g));
+    rotate(engine);
+    EXPECT_TRUE(unwrappable(engine, planted).empty());
+    EXPECT_EQ(unwrappable(engine, history.seed(1)).size(), 2u);
+}
+
+TEST_F(AccountPolicy, CoveredVaultsGrantsEqualTheVerifiedPolicy) {
+    pinFirst();
+    const auto engine = coveredVault();
+    const auto bystander = localVault();  // never added the account key: the policy doesn't touch it
+    write(bystander, "/b.txt", "y");
+    const auto k1 = vl::keykit::RecoverySeed::generate(), k2 = vl::keykit::RecoverySeed::generate();
+
+    serve(std::nullopt, history.policy(1, {k1.x25519PublicKey()}));
+    auto s = check();
+    ASSERT_TRUE(s.policy);
+    EXPECT_EQ(s.policy->sequence, 1u);
+    EXPECT_EQ(unwrappable(engine, k1).size(), 1u) << "the policy's recipient gets every version";
+    EXPECT_TRUE(active(bystander).empty());
+    ASSERT_EQ(s.vaults.size(), 1u);
+    EXPECT_EQ(s.vaults[0].applied_sequence, 1u);
+
+    // A grant the policy added is the policy's to remove.
+    std::string k1Grant;
+    for (const auto& g : active(engine))
+        if (g.account_policy_sequence) k1Grant = g.grant_id;
+    ASSERT_FALSE(k1Grant.empty());
+    EXPECT_EQ(code([&] { return rr::revoke(superUser, engine->vault->id, k1Grant, Channel::Cli); }),
+              "recovery_policy_account_managed");
+
+    // Sequence 2 drops k1 and adds k2: k1's grant is revoked as a revocation is today, k2 is wrapped to.
+    serve(std::nullopt, history.policy(2, {k2.x25519PublicKey()}));
+    (void)check();
+    const auto k1Row = db::query::vault::RecoveryGrants::get(engine->vault->id, k1Grant);
+    ASSERT_TRUE(k1Row);
+    EXPECT_EQ(k1Row->revoked_by, "account_policy:2");
+    EXPECT_EQ(unwrappable(engine, k2).size(), 1u);
+    bool accountKeyGrant = false;
+    for (const auto& g : active(engine)) accountKeyGrant = accountKeyGrant || g.account_key_generation.has_value();
+    EXPECT_TRUE(accountKeyGrant) << "no policy removes the account key itself";
+    EXPECT_TRUE(vault::envelopes::material(engine->vault->id).rotation_needed) << "k1 holds a needed version";
+}
+
+TEST_F(AccountPolicy, ARefusedPolicyChangesNothing) {
+    pinFirst();
+    const auto engine = coveredVault();
+    const auto k1 = vl::keykit::RecoverySeed::generate(), k2 = vl::keykit::RecoverySeed::generate();
+    serve(std::nullopt, history.policy(2, {k1.x25519PublicKey()}));
+    (void)check();
+    const auto before = active(engine).size();
+    const auto floorOf = [&] { return ops::cloud_keys::status(superUser).policy->sha256; };
+    const auto floor = floorOf();
+
+    auto refused = [&](const json& policy, const char* what) {
+        serve(std::nullopt, policy);
+        (void)check();
+        EXPECT_EQ(floorOf(), floor) << what;
+        EXPECT_EQ(active(engine).size(), before) << what;
+        EXPECT_TRUE(unwrappable(engine, k2).empty()) << what;
+    };
+    // A bad signature: k2's policy signed by a key that isn't the account's.
+    auto forged = history.policy(3, {k2.x25519PublicKey()});
+    const auto other = vl::keykit::RecoverySeed::generate();
+    const auto text = forged["policy"].get<std::string>();
+    forged["signature"] = vl::keykit::base64UrlEncode(
+        account::signBytes({reinterpret_cast<const uint8_t*>(text.data()), text.size()}, other));
+    refused(forged, "bad signature");
+    refused(history.policy(1, {k2.x25519PublicKey()}), "a lower sequence (rollback)");
+    refused(history.policy(2, {k2.x25519PublicKey()}), "the accepted sequence with other bytes (conflict)");
+    refused(history.policy(3, {k2.x25519PublicKey()}, 1, std::string("0b7e4d21-6a3c-4f8e-b1d2-93c4e5f60718")),
+            "another account");
+    // Another generation: one the server never pinned signs nothing.
+    history.replace();
+    refused(history.policy(3, {k2.x25519PublicKey()}, 2), "an unpinned generation");
+}
+
+TEST_F(LocalVaultEnvelopes, ALocalVaultEnrollsWithTheEnvelopesItsDatabaseHolds) {
+    pinFirst();
+    const auto engine = localVault();
+    write(engine, "/a.txt", "x");
+    const auto id = engine->vault->id;
+    const auto e = ops::cloud_recovery::enroll(superUser, id, Channel::Cli, true);
+    const auto uid = vl::keykit::toBase32(uidOf(engine));
+    ASSERT_TRUE(uploads.contains(uid));
+    std::set<std::vector<uint8_t>> held, sent;
+    for (const auto& r : db::query::vault::RemoteAttach::envelopes(id))
+        if (!r.bytes.empty()) held.insert(r.bytes);
+    for (const auto& env : uploads.at(uid).at("envelopes")) sent.insert(*vl::keykit::base64Decode(env.get<std::string>()));
+    EXPECT_FALSE(sent.empty());
+    EXPECT_EQ(sent, held) << "exactly the database's envelopes, byte for byte";
+    EXPECT_EQ(e.envelopes_sent, held.size());
+    EXPECT_EQ(unwrappable(engine, history.seed(1)).size(), 1u) << "--account-key added the pinned key first";
 }
 
 }

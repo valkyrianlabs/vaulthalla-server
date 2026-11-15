@@ -315,15 +315,21 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
         .description = "Enroll a recovery recipient: an X25519 public key generated on the customer's own device "
                        "(Vaulthalla Desktop, or the offline `vh-recovery kit create`); the server never receives the "
                        "seed. Every key version the vault holds is wrapped to it now and every future version at "
-                       "rotation, into the vault's bucket only. Customer-controlled (class customer) is the only kind. "
-                       "S3 vaults only (conflict otherwise). Paired devices only (recipient_requires_device "
+                       "rotation, into the vault's bucket only (a local vault: this server's database). "
+                       "Customer-controlled (class customer) is the only kind. With account_key: the linked account's "
+                       "pinned recovery key (conflict without a pin). Paired devices only (recipient_requires_device "
                        "otherwise), with a keys step-up bound to the vault (#359); the encryption-key Export "
                        "permission.",
         .payload = {vaultId(),
                     str("public_key")
+                        .opt()
+                        .nullable()
                         .gen(gen::constant("9jB0b7LvRAo3+fTz//m8OhJQkp39Kcd1PjiFpjtmrTs="))
-                        .desc("The recipient's X25519 public key: base64 (32 bytes) or 64 hex digits."),
-                    str("label").opt().nullable().desc("A name the customer recognizes (at most 200 characters).")},
+                        .desc("The recipient's X25519 public key: base64 (32 bytes) or 64 hex digits. Required "
+                              "unless account_key."),
+                    str("label").opt().nullable().desc("A name the customer recognizes (at most 200 characters)."),
+                    boolean("account_key").opt().nullable().desc(
+                        "Add the linked account's pinned recovery key instead of public_key.")},
         .response = modelFields("VaultRecoveryRecipientAdd"),
         .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "recipient_requires_device"},
         .response_model = "VaultRecoveryRecipientAdd",
@@ -332,7 +338,8 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
 
     out.push_back({
         .command = "vault.keys.recipients.revoke",
-        .description = "Revoke a recovery recipient: no new envelopes are written for it. Access it already has is "
+        .description = "Revoke a recovery recipient: no new envelopes are written for it (a recipient the account's "
+                       "signed recovery policy added is refused recovery_policy_account_managed). Access it already has is "
                        "not revoked (an envelope keeps unwrapping the versions it covers): recovery.rotation_needed "
                        "says when a key rotation is needed to cut it off from new data. Paired devices only "
                        "(recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the "
@@ -341,8 +348,57 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
                                    .gen(gen::ref("vault.recipient", {"grant_id"}))
                                    .desc("The recipient's grant_id (vault.keys.recipients.list).")},
         .response = modelFields("VaultRecoveryRecipientRevoke"),
-        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "recipient_requires_device"},
+        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "recipient_requires_device",
+                          "recovery_policy_account_managed"},
         .response_model = "VaultRecoveryRecipientRevoke",
+        .client_timeout = kDefaultTimeout,
+    });
+
+    // ---- the linked account's recovery key (design/cloud/key-manager.md; ops::cloud_keys) ----------------------
+    out.push_back({
+        .command = "cloud.key.status",
+        .description = "The linked account's recovery key as this server pinned it: the pinned generation and "
+                       "fingerprint, a key waiting for confirmation, the accepted recovery policy, the vaults it covers "
+                       "and the last check. Reads the database only; public values only. Super admins or the "
+                       "encryption-key View permission.",
+        .response = modelFields("CloudKeyStatus"),
+        .refusal_codes = {"denied", "unauthorized"},
+        .response_model = "CloudKeyStatus",
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "cloud.key.confirm",
+        .description = "Pin the waiting account recovery key: the first one after linking, or a replacement. The "
+                       "fingerprint must be the waiting generation's (a device derives it from the key it holds); a "
+                       "mismatch pins nothing (cloud_key_mismatch). Super admins; a paired device only "
+                       "(cloud_key_requires_device otherwise), with a keys step-up.",
+        .payload = {str("fingerprint")
+                        .gen(gen::constant("0000-0000-0000-0000-0000-0000-0000-0000"))
+                        .desc("Eight groups of four hex digits (upper case, spaces or no separators accepted).")},
+        .response = modelFields("CloudKeyConfirm"),
+        .refusal_codes = {"denied", "invalid", "conflict", "unauthorized", "cloud_key_requires_device",
+                          "cloud_key_mismatch", "cloud_account_key_tampered"},
+        .response_model = "CloudKeyConfirm",
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "cloud.key.refresh",
+        .description = "Ask for a check of the account recovery key and recovery policy now. The check runs in the "
+                       "background (this answers at once, with the status as it stands); a signed rotation is followed, "
+                       "anything else waits for a confirmation. Super admins.",
+        .response = modelFields("CloudKeyStatus"),
+        .refusal_codes = {"denied", "conflict", "unauthorized"},
+        .response_model = "CloudKeyStatus",
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "cloud.link.status",
+        .description = "Whether this server is linked to an account, and as what: installation, deployment, account "
+                       "public id and the pinned account recovery key. Reads the database only. Super admins and the "
+                       "encryption-key View permission see the identifiers; any other session sees linked alone.",
+        .response = modelFields("CloudLinkStatus"),
+        .refusal_codes = {"unauthorized"},
+        .response_model = "CloudLinkStatus",
         .client_timeout = kDefaultTimeout,
     });
 

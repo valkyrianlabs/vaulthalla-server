@@ -6,6 +6,11 @@
       "since": "1.22.0"
     },
     {
+      "description": "A linked server pins its account's recovery key (cloud.key.status, .confirm, .refresh; cloud.link.status) and adds it as a recovery recipient (vault.keys.recipients.add {account_key: true}).",
+      "name": "cloud.account_key",
+      "since": "1.23.0"
+    },
+    {
       "description": "ws device.endpoints answers a paired device with where the listener can be reached; device.pairing.open carries node_id, server_spki_sha256 and endpoints; device.remote.status carries diagnostics (docs/reference/transfer-protocol.md §1).",
       "name": "device.endpoints",
       "since": "1.20.0"
@@ -1317,6 +1322,443 @@
         }
       ],
       "name": "CachingConfig"
+    },
+    {
+      "description": "A confirmed account recovery key: ops::cloud_keys::toJson(Confirmed).",
+      "fields": [
+        {
+          "model": "CloudKeyGeneration",
+          "name": "generation",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "It replaced an earlier pin.",
+          "name": "replacement",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Vaults whose account-key grant moved to it.",
+          "items": "integer",
+          "name": "vaults",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "name": "CloudKeyConfirm"
+    },
+    {
+      "description": "One generation of the linked account's recovery key as this server verified it: ops::cloud_keys::toJson(Generation). Public values only.",
+      "fields": [
+        {
+          "minimum": 0,
+          "name": "generation",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Eight groups of four lowercase hex digits, computed here from the key statement.",
+          "name": "fingerprint",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "pending: verified, waiting for a super admin's confirmation; pinned: what this server wraps to; superseded: a pin a later generation replaced; refused: a replacement waiting for a confirmation.",
+          "enum": [
+            "pending",
+            "pinned",
+            "superseded",
+            "refused"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "How it follows the generation before it, as the signatures show.",
+          "enum": [
+            "initial",
+            "rotation",
+            "replacement"
+          ],
+          "name": "link",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The statement's signed reason.",
+          "enum": [
+            "initial",
+            "routine",
+            "compromise",
+            "unknown"
+          ],
+          "name": "reason",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "base64url (32 bytes): the recovery recipient key.",
+          "name": "x25519_public",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "user:<id> via cli|device, or chain:<previous generation>.",
+          "name": "confirmed_by",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "confirmed_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "name": "CloudKeyGeneration"
+    },
+    {
+      "description": "The linked account's recovery key on this server: ops::cloud_keys::toJson(Status). Read from the database only; public values only.",
+      "fields": [
+        {
+          "enum": [
+            "unlinked",
+            "unchecked",
+            "none",
+            "pending",
+            "pinned",
+            "change_pending",
+            "tampered"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The account's public id (UUID text) the key statements name.",
+          "name": "account_public_id",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "model": "CloudKeyGeneration",
+          "name": "pinned",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "The first key or a replacement, waiting for a fingerprint confirmation.",
+          "model": "CloudKeyGeneration",
+          "name": "waiting",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "items": "object",
+          "model": "CloudKeyGeneration",
+          "name": "generations",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The highest signed recovery policy this server accepted, or null.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "sequence",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "generation",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "64 lowercase hex digits.",
+              "name": "sha256",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "issued_at",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "64 lowercase hex digits.",
+                  "name": "recipient_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "label",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "recipients",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "name": "policy",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "Vaults with account-managed recovery grants.",
+          "fields": [
+            {
+              "description": "Vault id.",
+              "generator": {
+                "attrs": [
+                  "id"
+                ],
+                "entity": "vault",
+                "kind": "ref",
+                "scope": "any"
+              },
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "account_key_generation",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "policy_grants",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "applied_sequence",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "vaults",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "enum": [
+            "confirmed",
+            "none",
+            "unknown"
+          ],
+          "name": "offline_copy",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "offline_copy_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "checked_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The last check: ok, none, unreachable, refused, rejected or tampered.",
+          "name": "check",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "check_detail",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "cloud_account_key_tampered or cloud_account_key_change_pending.",
+          "name": "issue",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "next_step",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "name": "CloudKeyStatus"
+    },
+    {
+      "description": "Whether this server is linked to an account, from the database only: ops::cloud::toJson(LinkStatus). Super admins and the encryption-key View permission see the identifiers; any other session sees `linked` alone.",
+      "fields": [
+        {
+          "name": "linked",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "installation_id",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "deployment_id",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "account_public_id",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The pinned account recovery key, or null.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "generation",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "fingerprint",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "account_key",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        }
+      ],
+      "name": "CloudLinkStatus"
     },
     {
       "description": "services.connection_lifecycle_manager.* (Config.cpp to_json(ConnectionLifecycleManagerConfig)).",
@@ -13540,6 +13982,36 @@
           ]
         },
         {
+          "description": "The linked account's recovery key as this server pinned it: a stored row that fails its integrity check (nothing is wrapped to the account key) or a replacement key waiting for a super admin's fingerprint confirmation. null otherwise. Either one makes the node at least degraded.",
+          "fields": [
+            {
+              "enum": [
+                "cloud_account_key_tampered",
+                "cloud_account_key_change_pending"
+              ],
+              "name": "issue",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What it means and what to do.",
+              "name": "detail",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "cloud_account_key",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
           "fields": [
             {
               "minimum": 0,
@@ -19127,6 +19599,26 @@
           "types": [
             "array"
           ]
+        },
+        {
+          "description": "Set on the grant of the linked account's pinned recovery key: the generation it was pinned at.",
+          "minimum": 0,
+          "name": "account_key_generation",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Set on a grant the account's signed recovery policy added (the sequence that added it); only the policy revokes it.",
+          "minimum": 0,
+          "name": "account_policy_sequence",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
         }
       ],
       "name": "VaultRecoveryRecipient"
@@ -21940,7 +22432,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "02a9f2f80337c8a691b347aac757d9cf9fc487b136e824107f767fe53dcd6732",
+  "models_hash": "1427024ab1e309b71608b7da8b2903394e714b88de07253553bba968dca0f839",
   "protocol": {
     "min": 1,
     "version": 1
@@ -26158,6 +26650,704 @@
         }
       ],
       "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "cloud.key.confirm",
+      "confirmations": [],
+      "description": "Pin the waiting account recovery key: the first one after linking, or a replacement. The fingerprint must be the waiting generation's (a device derives it from the key it holds); a mismatch pins nothing (cloud_key_mismatch). Super admins; a paired device only (cloud_key_requires_device otherwise), with a keys step-up.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Eight groups of four hex digits (upper case, spaces or no separators accepted).",
+          "generator": {
+            "kind": "const",
+            "values": [
+              "0000-0000-0000-0000-0000-0000-0000-0000"
+            ]
+          },
+          "name": "fingerprint",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "conflict",
+        "unauthorized",
+        "cloud_key_requires_device",
+        "cloud_key_mismatch",
+        "cloud_account_key_tampered",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "conflict",
+        "unauthorized",
+        "cloud_key_requires_device",
+        "cloud_key_mismatch",
+        "cloud_account_key_tampered",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "model": "CloudKeyGeneration",
+          "name": "generation",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "It replaced an earlier pin.",
+          "name": "replacement",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Vaults whose account-key grant moved to it.",
+          "items": "integer",
+          "name": "vaults",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": "CloudKeyConfirm",
+      "step_up": "keys",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "cloud.key.refresh",
+      "confirmations": [],
+      "description": "Ask for a check of the account recovery key and recovery policy now. The check runs in the background (this answers at once, with the status as it stands); a signed rotation is followed, anything else waits for a confirmation. Super admins.",
+      "input": "payload",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "enum": [
+            "unlinked",
+            "unchecked",
+            "none",
+            "pending",
+            "pinned",
+            "change_pending",
+            "tampered"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The account's public id (UUID text) the key statements name.",
+          "name": "account_public_id",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "model": "CloudKeyGeneration",
+          "name": "pinned",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "The first key or a replacement, waiting for a fingerprint confirmation.",
+          "model": "CloudKeyGeneration",
+          "name": "waiting",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "items": "object",
+          "model": "CloudKeyGeneration",
+          "name": "generations",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The highest signed recovery policy this server accepted, or null.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "sequence",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "generation",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "64 lowercase hex digits.",
+              "name": "sha256",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "issued_at",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "64 lowercase hex digits.",
+                  "name": "recipient_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "label",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "recipients",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "name": "policy",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "Vaults with account-managed recovery grants.",
+          "fields": [
+            {
+              "description": "Vault id.",
+              "generator": {
+                "attrs": [
+                  "id"
+                ],
+                "entity": "vault",
+                "kind": "ref",
+                "scope": "any"
+              },
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "account_key_generation",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "policy_grants",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "applied_sequence",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "vaults",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "enum": [
+            "confirmed",
+            "none",
+            "unknown"
+          ],
+          "name": "offline_copy",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "offline_copy_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "checked_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The last check: ok, none, unreachable, refused, rejected or tampered.",
+          "name": "check",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "check_detail",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "cloud_account_key_tampered or cloud_account_key_change_pending.",
+          "name": "issue",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "next_step",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "response_model": "CloudKeyStatus",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "cloud.key.status",
+      "confirmations": [],
+      "description": "The linked account's recovery key as this server pinned it: the pinned generation and fingerprint, a key waiting for confirmation, the accepted recovery policy, the vaults it covers and the last check. Reads the database only; public values only. Super admins or the encryption-key View permission.",
+      "input": "payload",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "enum": [
+            "unlinked",
+            "unchecked",
+            "none",
+            "pending",
+            "pinned",
+            "change_pending",
+            "tampered"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The account's public id (UUID text) the key statements name.",
+          "name": "account_public_id",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "model": "CloudKeyGeneration",
+          "name": "pinned",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "The first key or a replacement, waiting for a fingerprint confirmation.",
+          "model": "CloudKeyGeneration",
+          "name": "waiting",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "items": "object",
+          "model": "CloudKeyGeneration",
+          "name": "generations",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The highest signed recovery policy this server accepted, or null.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "sequence",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "generation",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "64 lowercase hex digits.",
+              "name": "sha256",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "issued_at",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "64 lowercase hex digits.",
+                  "name": "recipient_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "label",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "recipients",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "name": "policy",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "Vaults with account-managed recovery grants.",
+          "fields": [
+            {
+              "description": "Vault id.",
+              "generator": {
+                "attrs": [
+                  "id"
+                ],
+                "entity": "vault",
+                "kind": "ref",
+                "scope": "any"
+              },
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "account_key_generation",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "policy_grants",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "applied_sequence",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "vaults",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "enum": [
+            "confirmed",
+            "none",
+            "unknown"
+          ],
+          "name": "offline_copy",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "offline_copy_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "checked_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The last check: ok, none, unreachable, refused, rejected or tampered.",
+          "name": "check",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "check_detail",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "cloud_account_key_tampered or cloud_account_key_change_pending.",
+          "name": "issue",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "next_step",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "response_model": "CloudKeyStatus",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "cloud.link.status",
+      "confirmations": [],
+      "description": "Whether this server is linked to an account, and as what: installation, deployment, account public id and the pinned account recovery key. Reads the database only. Super admins and the encryption-key View permission see the identifiers; any other session sees linked alone.",
+      "input": "payload",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "name": "linked",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "installation_id",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "deployment_id",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "account_public_id",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The pinned account recovery key, or null.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "generation",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "fingerprint",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "account_key",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        }
+      ],
+      "response_model": "CloudLinkStatus",
       "untyped_refusals": [],
       "variants": []
     },
@@ -47911,7 +49101,7 @@
       "client_timeout_ms": 120000,
       "command": "vault.keys.recipients.add",
       "confirmations": [],
-      "description": "Enroll a recovery recipient: an X25519 public key generated on the customer's own device (Vaulthalla Desktop, or the offline `vh-recovery kit create`); the server never receives the seed. Every key version the vault holds is wrapped to it now and every future version at rotation, into the vault's bucket only. Customer-controlled (class customer) is the only kind. S3 vaults only (conflict otherwise). Paired devices only (recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the encryption-key Export permission.",
+      "description": "Enroll a recovery recipient: an X25519 public key generated on the customer's own device (Vaulthalla Desktop, or the offline `vh-recovery kit create`); the server never receives the seed. Every key version the vault holds is wrapped to it now and every future version at rotation, into the vault's bucket only (a local vault: this server's database). Customer-controlled (class customer) is the only kind. With account_key: the linked account's pinned recovery key (conflict without a pin). Paired devices only (recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the encryption-key Export permission.",
       "input": "payload",
       "operation": null,
       "payload": [
@@ -47933,7 +49123,7 @@
           ]
         },
         {
-          "description": "The recipient's X25519 public key: base64 (32 bytes) or 64 hex digits.",
+          "description": "The recipient's X25519 public key: base64 (32 bytes) or 64 hex digits. Required unless account_key.",
           "generator": {
             "kind": "const",
             "values": [
@@ -47941,9 +49131,10 @@
             ]
           },
           "name": "public_key",
-          "required": true,
+          "required": false,
           "types": [
-            "string"
+            "string",
+            "null"
           ]
         },
         {
@@ -47952,6 +49143,15 @@
           "required": false,
           "types": [
             "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Add the linked account's pinned recovery key instead of public_key.",
+          "name": "account_key",
+          "required": false,
+          "types": [
+            "boolean",
             "null"
           ]
         }
@@ -48126,7 +49326,7 @@
       "client_timeout_ms": 15000,
       "command": "vault.keys.recipients.revoke",
       "confirmations": [],
-      "description": "Revoke a recovery recipient: no new envelopes are written for it. Access it already has is not revoked (an envelope keeps unwrapping the versions it covers): recovery.rotation_needed says when a key rotation is needed to cut it off from new data. Paired devices only (recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the encryption-key Export permission.",
+      "description": "Revoke a recovery recipient: no new envelopes are written for it (a recipient the account's signed recovery policy added is refused recovery_policy_account_managed). Access it already has is not revoked (an envelope keeps unwrapping the versions it covers): recovery.rotation_needed says when a key rotation is needed to cut it off from new data. Paired devices only (recipient_requires_device otherwise), with a keys step-up bound to the vault (#359); the encryption-key Export permission.",
       "input": "payload",
       "operation": null,
       "payload": [
@@ -48171,6 +49371,7 @@
         "conflict",
         "unauthorized",
         "recipient_requires_device",
+        "recovery_policy_account_managed",
         "step_up_required",
         "recovery_cooldown"
       ],
@@ -48181,6 +49382,7 @@
         "conflict",
         "unauthorized",
         "recipient_requires_device",
+        "recovery_policy_account_managed",
         "step_up_required",
         "recovery_cooldown"
       ],
@@ -51177,5 +52379,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "5a8b7cf44c5c18fcf5db5d8ae379bf76b1c364ae28a5b994145eb93debf5c3e6"
+  "ws_hash": "c12116b3d4ebaea58683952674e3c202483606a21c19da3c266b8baa7a6be120"
 }

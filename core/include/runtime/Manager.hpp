@@ -30,6 +30,7 @@ namespace vh::log { class RotationService; }
 namespace vh::audit { class Trail; }
 namespace vh::notifications { class OperatorEmailService; }
 namespace vh::stats { class SnapshotService; }
+namespace vh::cloud { class KeyService; }
 
 namespace vh::runtime {
 
@@ -100,6 +101,7 @@ private:
     std::shared_ptr<vault::FormatConversionService> formatConversionService;
     std::shared_ptr<vault::LayoutMigrationService> layoutMigrationService;
     std::shared_ptr<vault::RemoteAttachService> remoteAttachService;
+    std::shared_ptr<cloud::KeyService> cloudKeyService;
     std::shared_ptr<stats::SnapshotService> statsSnapshotService;
     std::shared_ptr<notifications::OperatorEmailService> operatorEmailService;
     std::shared_ptr<sync::events::Service> upstreamEventService;

@@ -87,6 +87,8 @@ const std::vector<Exclusion>& exclusions() {
         {{"cloud", "unlink"}, "unlinking this server from Vaulthalla Cloud is decided by a human"},
         {{"cloud", "recovery", "enroll"}, "where a vault's recovery records go is decided by a human (D4)"},
         {{"cloud", "recovery", "unenroll"}, "where a vault's recovery records go is decided by a human (D4)"},
+        {{"cloud", "key", "confirm"}, "which recovery key every managed vault is wrapped to is decided by a human"},
+        {{"cloud", "key", "forget"}, "forgetting the account recovery key pin is decided by a human"},
     };
     return list;
 }

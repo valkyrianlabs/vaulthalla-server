@@ -387,9 +387,11 @@ held in `design/cloud/server-link.md` until vaulthalla.cloud opens: the claims l
 `cloud_identity` (`test_cloud_identity`), created by `vh cloud link` and destroyed by unlink; nothing is wrapped under
 it. `cloud/Client` makes JSON calls over `storage::s3::curl::http` (bounded, no redirects; `cloud.endpoint` must be
 https or loopback http, checked at config load). `db::query::cloud::Link` is the single `cloud_link` row (pending
-with the cloud's request id, or linked with installation and account ids). `ops::cloud`
+with the cloud's request id, or linked with installation, account, deployment and account public ids: migration 141).
+The link request's proof is v2 and covers this server's node id (`device_node.node_id`). `ops::cloud`
 (`startLink`/`claimLink`/`status`/`unlink`) is super admins only, channel Cli or Agent (Agent refused), and
-`cloud link|unlink` are in `mcp::exclusions()`. CLI only (no ws command yet). Unlink sends a signed
+`cloud link|unlink` are in `mcp::exclusions()`; ws `cloud.link.status` (`ops::cloud::linkStatus`) reads the row only.
+Unlink sends a signed
 `DELETE /v1/installation`, and `--force` forgets the link when the cloud can't confirm. Tests:
 `test_cloud_signing.cpp` (DB-free) and `test_cloud_link_db.cpp` (a fake cloud over the http seam verifies every proof
 and signature).
@@ -402,6 +404,16 @@ X25519 secret in process memory (by restore id), a signed request, polling, the 
 (records' key checks and attestations, anchors' public keys) that `ops::vault_recover` proves like any export, with
 the records' checkpoint as the rollback bound (`rec::Material::checkpoint`, used when no kit entry has one; a malformed
 one refuses the restore); complete on success, cancel on every other way out. Tests: `VaultRecoverFromCloud` in `test_vault_recover.cpp`.
+The account recovery key (`design/cloud/key-manager.md`, "As built"; migration 141): `ops::cloud_keys` fetches
+`GET /v1/keys/account`, verifies the chain and the signed recovery policy with vl-keykit 0.2.0 (`verifyChain`,
+`follow`, `verifyPolicy`, `compareToFloor`), stores each generation in `cloud_account_key` (pending, pinned,
+superseded, refused) with an HMAC under the KeyProvider slot `cloud_account_pin` (`cloud/AccountPin`; the policy floor
+lives in the pinned row), pins only after a super admin's `vh cloud key confirm` (CLI, or ws `cloud.key.confirm` from
+a paired device with the keys step-up), follows signed rotations itself, and keeps covered vaults' account-managed
+grants (`vault_recovery_grant.account_key_generation`, `.account_policy_sequence`) equal to the accepted policy.
+`vault::envelopes::put` wraps to such grants only while the MAC-verified pin agrees. `cloud::KeyService`
+(`CloudKeyService`) runs the check daily while linked. Tests: `AccountKey*`, `AccountPolicy`, `LocalVaultEnvelopes` in
+`test_recovery_recipients.cpp`.
 
 ### WebAuthn verifier (vl-webauthn, from #355)
 
@@ -1080,7 +1092,8 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 - **Local-vault recovery envelopes** (attach-remote open question 2): `vault::envelopes::storeFor` returns a
   database-backed `ObjectStore` for a local vault (bytes in `vault_key_envelope.envelope`, written in the transaction
   that records the envelope; `KeyEnvelope::envelope`), so `ops::recovery_recipients::add`, rotation, salvage and
-  `vh vault keys import --recovery-kit` work for local vaults. `ops::cloud_recovery` still refuses local vaults.
+  `vh vault keys import --recovery-kit` work for local vaults, and `ops::cloud_recovery::enroll` sends a local
+  vault's envelopes from its rows.
 - **Derived cache** (`preview::cache::Store`, `cache_index` rows `type='derived'`, migration 103). One encrypted,
   disposable cache for thumbnails (`thumbnail`/`<size>`), sheet and PDF page renders (`render`/`p<page>-s<size>`),
   posters, probes, GLB, transcodes. File: `<cacheRoot>/derived/<file_id>/<kind>.<variant>.vhd` = 64-byte header

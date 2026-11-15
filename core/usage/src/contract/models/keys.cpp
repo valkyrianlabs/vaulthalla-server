@@ -92,7 +92,71 @@ std::vector<WsModel> vaultKeyModels() {
          str("label").nullable(), vaultKeyTime("added_at"),
          str("authorized_by").desc("Who enrolled it: user:<id> via cli|device."),
          vaultKeyTime("revoked_at").nullable(), str("revoked_by").nullable(),
-         intArray("envelope_versions").desc("Key versions wrapped to it (KEV1 envelopes in the vault's bucket).")}));
+         intArray("envelope_versions").desc("Key versions wrapped to it (KEV1 envelopes in the vault's bucket)."),
+         uinteger("account_key_generation").nullable().desc(
+             "Set on the grant of the linked account's pinned recovery key: the generation it was pinned at."),
+         uinteger("account_policy_sequence").nullable().desc(
+             "Set on a grant the account's signed recovery policy added (the sequence that added it); only the policy "
+             "revokes it.")}));
+
+    // ---- the linked account's recovery key (design/cloud/key-manager.md; ops::cloud_keys, core/src/ops/CloudKeys.cpp)
+    out.push_back(model("CloudKeyGeneration",
+        "One generation of the linked account's recovery key as this server verified it: "
+        "ops::cloud_keys::toJson(Generation). Public values only.",
+        {uinteger("generation"),
+         str("fingerprint").desc("Eight groups of four lowercase hex digits, computed here from the key statement."),
+         str("state").oneOf({"pending", "pinned", "superseded", "refused"}).desc(
+             "pending: verified, waiting for a super admin's confirmation; pinned: what this server wraps to; "
+             "superseded: a pin a later generation replaced; refused: a replacement waiting for a confirmation."),
+         str("link").oneOf({"initial", "rotation", "replacement"}).desc("How it follows the generation before it, as "
+                                                                        "the signatures show."),
+         str("reason").oneOf({"initial", "routine", "compromise", "unknown"}).desc("The statement's signed reason."),
+         str("x25519_public").desc("base64url (32 bytes): the recovery recipient key."),
+         str("confirmed_by").nullable().desc("user:<id> via cli|device, or chain:<previous generation>."),
+         vaultKeyTime("confirmed_at").nullable()}));
+
+    out.push_back(model("CloudKeyStatus",
+        "The linked account's recovery key on this server: ops::cloud_keys::toJson(Status). Read from the database "
+        "only; public values only.",
+        {str("state").oneOf({"unlinked", "unchecked", "none", "pending", "pinned", "change_pending", "tampered"}),
+         str("account_public_id").nullable().desc("The account's public id (UUID text) the key statements name."),
+         object("pinned", "CloudKeyGeneration").nullable(),
+         object("waiting", "CloudKeyGeneration").nullable().desc("The first key or a replacement, waiting for a "
+                                                                 "fingerprint confirmation."),
+         objectArray("generations", "CloudKeyGeneration"),
+         object("policy", "",
+                {uinteger("sequence"), uinteger("generation"), str("sha256").desc("64 lowercase hex digits."),
+                 str("issued_at"),
+                 objectArray("recipients", "", {str("recipient_id").desc("64 lowercase hex digits."), str("label")})})
+             .nullable()
+             .desc("The highest signed recovery policy this server accepted, or null."),
+         objectArray("vaults", "",
+                     {vaultId(), str("vault_name"), uinteger("account_key_generation").nullable(),
+                      uinteger("policy_grants"), uinteger("applied_sequence").nullable()})
+             .desc("Vaults with account-managed recovery grants."),
+         str("offline_copy").oneOf({"confirmed", "none", "unknown"}),
+         vaultKeyTime("offline_copy_at").nullable(), vaultKeyTime("checked_at").nullable(),
+         str("check").nullable().desc("The last check: ok, none, unreachable, refused, rejected or tampered."),
+         str("check_detail").nullable(),
+         str("issue").nullable().desc("cloud_account_key_tampered or cloud_account_key_change_pending."),
+         str("next_step").nullable()}));
+
+    out.push_back(model("CloudKeyConfirm",
+        "A confirmed account recovery key: ops::cloud_keys::toJson(Confirmed).",
+        {object("generation", "CloudKeyGeneration"),
+         boolean("replacement").desc("It replaced an earlier pin."),
+         intArray("vaults").desc("Vaults whose account-key grant moved to it.")}));
+
+    out.push_back(model("CloudLinkStatus",
+        "Whether this server is linked to an account, from the database only: ops::cloud::toJson(LinkStatus). Super "
+        "admins and the encryption-key View permission see the identifiers; any other session sees `linked` alone.",
+        {boolean("linked"),
+         str("installation_id").opt().nullable(), str("deployment_id").opt().nullable(),
+         str("account_public_id").opt().nullable(),
+         object("account_key", "", {uinteger("generation"), str("fingerprint")})
+             .opt()
+             .nullable()
+             .desc("The pinned account recovery key, or null.")}));
 
     out.push_back(model("VaultRecoveryRecipientList",
         "A vault's recovery recipients: ops::recovery_recipients::toJson(RecipientList).",

@@ -38,6 +38,14 @@ struct VaultKeys {
     // vault.remote.detach: an S3 vault becomes a local vault in place (vault/RemoteDetach.hpp), with a keys step-up.
     static json remoteDetach(const json& payload, const std::shared_ptr<Session>& session);
     static json remoteStatus(const json& payload, const std::shared_ptr<Session>& session);
+    // cloud.key.* and cloud.link.status (ops::cloud_keys, ops::cloud; design/cloud/key-manager.md): the linked
+    // account's recovery key. status and link status read the database only; refresh asks the background service for
+    // a check and answers at once (no cloud call on a ws thread); confirm only on a paired device's session
+    // (cloud_key_requires_device otherwise) with the keys step-up.
+    static json cloudKeyStatus(const json& payload, const std::shared_ptr<Session>& session);
+    static json cloudKeyConfirm(const json& payload, const std::shared_ptr<Session>& session);
+    static json cloudKeyRefresh(const json& payload, const std::shared_ptr<Session>& session);
+    static json cloudLinkStatus(const json& payload, const std::shared_ptr<Session>& session);
     static json remoteAbort(const json& payload, const std::shared_ptr<Session>& session);
 };
 

@@ -33,6 +33,7 @@
 #include "sync/Cloud.hpp"
 #include "sync/Controller.hpp"
 #include "sync/model/Event.hpp"
+#include "vault/EncryptionManager.hpp"
 #include "vault/RemoteDetach.hpp"
 #include "vault/model/S3Vault.hpp"
 
