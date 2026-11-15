@@ -1,5 +1,7 @@
 #include "ops/VaultRecover.hpp"
 
+#include "cloud/AccountPin.hpp"
+
 #include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "crypto/SecretKey.hpp"
@@ -111,7 +113,14 @@ std::vector<db::query::vault::RecoverGrant> grantsOf(const rec::Plan& plan, cons
             pk = kitKey;
         if (!pk || pk->size() != vl::keykit::kev1::kX25519KeySize || hexOf(vl::keykit::kev1::recipientId(*pk)) != g.recipient_id)
             continue;
-        out.push_back({g.grant_id, g.recipient_id, *pk, 1, g.label, g.added_at, g.authorized_by, g.revoked_at});
+        db::query::vault::RecoverGrant rg{g.grant_id, g.recipient_id, *pk, 1, g.label, g.added_at, g.authorized_by, g.revoked_at};
+        // A restored account-key grant stays one only if its key is this server's own pin of that generation
+        // (design/cloud/key-manager.md, "Restore onto a new server"); otherwise it is an ordinary customer grant.
+        if (g.account_key_generation) {
+            if (vh::cloud::pin::isPinnedKey(*g.account_key_generation, *pk)) rg.account_key_generation = g.account_key_generation;
+            else rg.account_key_unmatched = true;
+        }
+        out.push_back(std::move(rg));
     }
     return out;
 }

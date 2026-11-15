@@ -269,6 +269,9 @@ struct Grant {
     // base64 of the recipient's public key (32 bytes for suite 1), so a restore can re-enroll the grant: public, like
     // recipient_id (its hash). Absent in roots written before #371.
     std::optional<std::string> public_key;
+    // The grant of the linked account's pinned recovery key (design/cloud/key-manager.md): its generation. A restore
+    // keeps it as such only when the key equals the restoring server's own pin of that generation.
+    std::optional<uint32_t> account_key_generation{};
     [[nodiscard]] bool operator==(const Grant&) const = default;
     // Customer class, not revoked: the only grants a reader may unwrap envelopes for.
     [[nodiscard]] bool usableForDecryption() const;

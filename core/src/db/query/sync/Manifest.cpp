@@ -243,7 +243,8 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId, const Coll
         // Recovery recipients (#370, spec 03 §5.7): every grant, revoked ones too (with revoked_at), oldest first.
         mf::RecoveryPolicy policy;
         for (const auto row : txn.exec(
-                 fmt::format("SELECT grant_id, recipient_id, class, suite, label, {}, authorized_by, {}, public_key "
+                 fmt::format("SELECT grant_id, recipient_id, class, suite, label, {}, authorized_by, {}, public_key, "
+                             "account_key_generation "
                              "FROM vault_recovery_grant WHERE vault_id = $1 ORDER BY added_at, grant_id",
                              iso("added_at") + " AS added_at", iso("revoked_at") + " AS revoked_at"),
                  pqxx::params{vaultId})) {
@@ -257,6 +258,8 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId, const Coll
             g.authorized_by = optText(row["authorized_by"]);
             g.revoked_at = optText(row["revoked_at"]);
             g.public_key = crypto::util::b64_encode(encoding::from_hex_bytea(row["public_key"].as<std::string>()));
+            if (!row["account_key_generation"].is_null())
+                g.account_key_generation = row["account_key_generation"].as<uint32_t>();
             policy.grants.push_back(std::move(g));
         }
         c.recovery_policy = std::move(policy);

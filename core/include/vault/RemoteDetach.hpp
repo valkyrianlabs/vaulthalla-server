@@ -111,7 +111,7 @@ struct Row {
     Mode mode{Mode::Hydrate};
     // In place, from the cutover: the files that were held only in the bucket ([{file_id, path, size_bytes}]) and how
     // many envelope records only the bucket held (`envelopes_left_in_bucket`).
-    std::optional<nlohmann::json> lost;
+    std::optional<nlohmann::json> lost{};
     State state{State::Preparing};
     std::optional<uint32_t> started_by;
     std::time_t started_at{};

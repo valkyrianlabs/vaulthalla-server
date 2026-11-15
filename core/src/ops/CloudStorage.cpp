@@ -829,6 +829,13 @@ void stepVault(Row& r, const Ctx& ctx) {
     } catch (const cs::CallError& e) {
         // An unreachable cloud changes nothing: the step is retried.
         backoff(r, e.what());
+    } catch (const std::exception& e) {
+        // Anything else (a probe that failed, a database error) is this vault's: the others still step.
+        log::Registry::cloud()->warn("[CloudStorage] Vault {}: {}", r.vault_id, e.what());
+        try {
+            backoff(r, e.what());
+        } catch (const std::exception&) {
+        }
     }
 }
 
