@@ -3,6 +3,7 @@
 #include "concurrency/AsyncService.hpp"
 #include "device/Fwd.hpp"
 #include "protocols/device/Fwd.hpp"
+#include "protocols/device/Listener.hpp"
 #include "protocols/ws/Fwd.hpp"
 
 #include <cstddef>
@@ -55,6 +56,11 @@ public:
     // close (closeAllDeviceListenerSessions).
     void replaceIdentity(std::shared_ptr<const vh::device::ServerIdentity> identity);
 
+    // design/cloud/relay.md: runs one relayed stream (`fd`: this end of a local socketpair; owned from here on, closed
+    // when refused) as a listener connection on this service's io_context. False (fd closed) while the listener is
+    // switched off (device_server.enabled) or the service isn't running. The bound network sockets don't matter.
+    bool acceptRelayed(int fd, RelayedOrigin origin);
+
     // Tests: use this identity instead of unsealing (or generating and sealing) the daemon's.
     void setIdentityForTesting(std::shared_ptr<const vh::device::ServerIdentity> identity);
 
@@ -70,6 +76,7 @@ private:
     mutable std::mutex mutex_;
     std::shared_ptr<const vh::device::ServerIdentity> identity_;
     std::shared_ptr<boost::asio::ssl::context> tls_;
+    std::shared_ptr<boost::asio::ssl::context> relayedTls_;
     std::shared_ptr<boost::asio::io_context> ioc_;
     std::vector<std::thread> threads_;
     std::shared_ptr<ws::Router> router_;
@@ -82,11 +89,13 @@ private:
 };
 
 // Device-listener sessions, closed at once (safe from any thread). Revocation closes one device's; turning remote
-// connections off closes those that did not come from loopback; stopping the listener closes all of them.
+// connections off closes those that did not come from loopback (relayed ones stay: they never came in through the
+// network); turning the relay off closes the relayed ones; stopping the listener closes all of them.
 // Each returns how many it closed.
 // `spare`: a connection left open (the device revoking itself closes after its reply, Session::closeAfterReply).
 std::size_t closeDeviceSessions(uint32_t deviceRowId, const vh::device::Peer* spare = nullptr);
 std::size_t closeRemoteDeviceSessions();
+std::size_t closeRelayedDeviceSessions();
 std::size_t closeAllDeviceListenerSessions();
 
 }

@@ -1,6 +1,7 @@
 #include "protocols/device/Listener.hpp"
 
 #include "auth/session/Manager.hpp"
+#include "cloud/RelayProtocol.hpp"
 #include "device/Crypto.hpp"
 #include "device/Peer.hpp"
 #include "device/ServerIdentity.hpp"
@@ -13,7 +14,9 @@
 #include "protocols/ws/TlsTransport.hpp"
 #include "runtime/Deps.hpp"
 
+#include <boost/asio/read.hpp>
 #include <boost/asio/ssl.hpp>
+#include <boost/asio/write.hpp>
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/beast/core.hpp>
@@ -24,8 +27,10 @@
 #include <openssl/x509.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <string_view>
@@ -79,6 +84,14 @@ public:
           router_(std::move(router)),
           slot_(std::move(slot)) {}
 
+    // A relayed stream (startRelayedConnection only): no client certificate; the key is proven inside the stream.
+    Connection(tcp::socket&& socket, std::shared_ptr<ssl::context> tls, std::shared_ptr<ws::Router> router,
+               std::unique_ptr<ws::ConnectionSlot> slot, RelayedOrigin origin)
+        : Connection(std::move(socket), *tls, std::move(router), std::move(slot)) {
+        relayedTls_ = std::move(tls);
+        relayed_ = std::move(origin);
+    }
+
     void start() {
         armTimer();
         transport_->ws.next_layer().async_handshake(
@@ -99,6 +112,8 @@ private:
 
     void abort(const std::string_view why) {
         log::Registry::ws()->debug("[DeviceServer] Dropping a connection from {}: {}", address_, why);
+        // A relayed stream refused before its proof passed: the relay service closes it `refused` and audits it.
+        if (relayed_ && !proven_ && relayed_->refused) std::exchange(relayed_->refused, nullptr)(why);
         beast::error_code ignored;
         socket().shutdown(tcp::socket::shutdown_both, ignored);
         socket().close(ignored);
@@ -106,6 +121,7 @@ private:
 
     void onHandshake(const beast::error_code& ec) {
         if (ec) return abort("TLS handshake failed: " + ec.message());
+        if (relayed_) return sendChallenge();
         try {
             // A dual-stack socket reports IPv4 clients as ::ffff:a.b.c.d; everything downstream (last_ip, pairing
             // rate limits, the loopback test) sees the IPv4 address.
@@ -128,7 +144,58 @@ private:
             return abort("authorization failed");
         }
         if (authorization_.user) endpoints::noteDeviceHandshake(address_);
+        readRequest();
+    }
 
+    // ---- a relayed stream: the browser's key proof (cloud/RelayProtocol.hpp), before anything else -----------------
+
+    void sendChallenge() {
+        address_ = relayed_->address;
+        SSL* ssl = transport_->ws.next_layer().native_handle();
+        // Channel binding: the proof signs this TLS session's exporter, so it can't be carried into another session.
+        if (SSL_export_keying_material(ssl, exporter_.data(), exporter_.size(), cloud::relay::kExporterLabel.data(),
+                                       cloud::relay::kExporterLabel.size(), nullptr, 0, 0) != 1)
+            return abort("no TLS exporter");
+        fillNonce(nonce_);
+        challenge_ = cloud::relay::challengeRecord(nonce_);
+        asio::async_write(transport_->ws.next_layer(), asio::buffer(challenge_),
+                          [self = shared_from_this()](const beast::error_code& e, std::size_t) {
+                              if (e) return self->abort("challenge not sent: " + e.message());
+                              self->readProof();
+                          });
+    }
+
+    void readProof() {
+        asio::async_read(transport_->ws.next_layer(), asio::buffer(proof_),
+                         [self = shared_from_this()](const beast::error_code& e, std::size_t) {
+                             if (e) return self->abort("no key proof: " + e.message());
+                             self->onProof();
+                         });
+    }
+
+    void onProof() {
+        const auto check = cloud::relay::verifyProof(proof_, relayed_->spki_sha256, relayed_->jti, nonce_, exporter_);
+        if (!check.ok()) return abort(cloud::relay::toString(check.refusal));
+        try {
+            authorization_ = vh::device::authorize(*check.key, address_, true);
+        } catch (const std::exception& e) {
+            log::Registry::ws()->error("[DeviceServer] Refusing a relayed stream: authorization failed: {}", e.what());
+            return abort("authorization failed");
+        }
+        proven_ = true;
+        relayed_->refused = nullptr;
+        if (relayed_->proven) std::exchange(relayed_->proven, nullptr)();
+        log::Registry::ws()->debug("[DeviceServer] Relayed stream proved browser key {} ({})", authorization_.peer->shortId(),
+                                   authorization_.user ? "paired" : "pairing only");
+        readRequest();
+    }
+
+    static void fillNonce(std::array<uint8_t, cloud::relay::kNonceBytes>& out) {
+        const auto n = vh::device::crypto::randomNonce();
+        std::ranges::copy(n, out.begin());
+    }
+
+    void readRequest() {
         // The header only: an upload's body is the HTTP session's to stream.
         parser_ = std::make_unique<protocols::http::HeaderParser>();
         parser_->body_limit(std::numeric_limits<uint64_t>::max());
@@ -205,6 +272,14 @@ private:
     std::shared_ptr<RequestType> request_;
     std::string address_{"unknown"};
     vh::device::Authorization authorization_;
+    // Relayed streams only.
+    std::shared_ptr<ssl::context> relayedTls_;
+    std::optional<RelayedOrigin> relayed_;
+    bool proven_ = false;
+    std::array<uint8_t, cloud::relay::kNonceBytes> nonce_{};
+    std::array<uint8_t, cloud::relay::kExporterBytes> exporter_{};
+    std::array<uint8_t, cloud::relay::kChallengeRecordBytes> challenge_{};
+    std::array<uint8_t, cloud::relay::kProofRecordBytes> proof_{};
 };
 
 }
@@ -226,6 +301,38 @@ std::shared_ptr<ssl::context> makeServerContext(const vh::device::ServerIdentity
         throw std::runtime_error("device listener: cannot set the client signature algorithms");
     SSL_CTX_set_verify(native, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, acceptAnyChain);
     return ctx;
+}
+
+std::shared_ptr<ssl::context> makeRelayedServerContext(const vh::device::ServerIdentity& identity) {
+    auto ctx = std::make_shared<ssl::context>(ssl::context::tls_server);
+    SSL_CTX* native = ctx->native_handle();
+    if (SSL_CTX_set_min_proto_version(native, TLS1_3_VERSION) != 1 ||
+        SSL_CTX_set_max_proto_version(native, TLS1_3_VERSION) != 1)
+        throw std::runtime_error("relayed streams: cannot restrict TLS to 1.3");
+    SSL_CTX_set_options(native, SSL_OP_NO_TICKET | SSL_OP_NO_COMPRESSION);
+    SSL_CTX_set_num_tickets(native, 0);
+    SSL_CTX_set_session_cache_mode(native, SSL_SESS_CACHE_OFF);
+    if (SSL_CTX_use_certificate(native, identity.certificate()) != 1 ||
+        SSL_CTX_use_PrivateKey(native, identity.key()) != 1 || SSL_CTX_check_private_key(native) != 1)
+        throw std::runtime_error("relayed streams: cannot load the server identity");
+    // No certificate request: the browser proves its key inside the stream (cloud/RelayProtocol.hpp).
+    SSL_CTX_set_verify(native, SSL_VERIFY_NONE, nullptr);
+    return ctx;
+}
+
+void startRelayedConnection(tcp::socket&& socket, std::shared_ptr<ssl::context> tls, std::shared_ptr<ws::Router> router,
+                            const unsigned int maxConnections, RelayedOrigin origin) {
+    if (!tls || !router) throw std::invalid_argument("relayed streams: no TLS context or router");
+    auto slot = ws::ConnectionSlot::tryAcquire(maxConnections, ws::ConnectionSlot::Pool::Device);
+    if (!slot) {
+        warnRefused(std::max(1u, maxConnections));
+        if (origin.refused) origin.refused("connection limit");
+        beast::error_code ignored;
+        socket.close(ignored);
+        return;
+    }
+    std::make_shared<Connection>(std::move(socket), std::move(tls), std::move(router), std::move(slot), std::move(origin))
+        ->start();
 }
 
 Listener::Listener(asio::io_context& ioc, std::shared_ptr<ssl::context> tls, std::shared_ptr<ws::Router> router,

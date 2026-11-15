@@ -56,6 +56,10 @@ WsEnvelope envelope() {
                             "(device.pair.*) and say hello (meta.hello, meta.contract.get)."},
             {.code = "invalid", .description = "The request itself is malformed (a bad name, an out-of-range value)."},
             {.code = "not_found", .description = "What the request names doesn't exist (or isn't visible to the actor)."},
+            {.code = "relay_read_only",
+             .description = "A device session through the cloud relay (or a device paired that way) asked for a "
+                            "command outside the read-only set: browsing, metadata, downloads, the change feed, "
+                            "device.list and meta.*."},
             {.code = "unknown_command",
              .description = "No command by that name on this daemon (web and device sessions; the text stays "
                             "\"Unknown command\"). meta.hello's `commands` lists the ones it has."},

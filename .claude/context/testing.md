@@ -121,6 +121,15 @@ stream destructor, macOS "mutex lock failed", "terminate called without an activ
 re-run `sudo tools/harness/bootstrap.sh` (it never rotates an existing role's password; remove the settings file first
 to re-key).
 
+## Cloud relay suites
+
+`test_cloud_relay_protocol.cpp` is DB-free (tickets, the key proof, the read-only walk of every ws command);
+`test_cloud_relay_db.cpp` needs `VH_TEST_DB_*` (relayed streams through the real listener, `CloudRelayService` against
+a fake relay and a fake cloud over the http seam). `CloudRelayServiceTest.AgainstTheRealRelay` runs only with
+`VH_TEST_CLOUD_RELAY_BINARY=<vaulthalla-cloud-relay>` (built from valkyrianlabs/vaulthalla-cloud in a scratch copy:
+`meson setup <scratch>/build && ninja -C <scratch>/build vaulthalla-cloud-relay`); it spawns the relay on a free
+loopback port with a generated `relay.yaml` and carries a browser stream through it. Design: `design/cloud/relay.md`.
+
 ## File recovery suites
 
 DB-backed ones skip without `VH_TEST_DB_*` (run them with `make test ARGS="--gtest_filter='Recovery*:S3Versioned*'"`).

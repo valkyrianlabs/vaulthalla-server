@@ -72,7 +72,7 @@ a service after 500ms. Start order:
 ```
 FUSE → IdentityWatcher → SyncController → UpstreamEventService → DBJanitor → VaultRetentionService →
 LogRotationService → StatsSnapshotService → OperatorEmailService → ConnectionLifecycleManager → ProtocolService →
-DeviceServer → S3GatewayService (+ ShellServer)
+DeviceServer → CloudRelayService → S3GatewayService (+ ShellServer)
 ```
 
 Stop order is the reverse, with the ShellServer stopped right after ProtocolService.
@@ -364,6 +364,20 @@ Normative protocol: `docs/pairing.md` in `valkyrianlabs/vaulthalla-desktop` (its
   `approved_by` SET NULL; revoked rows stay (a revoked key never pairs again). `device_node` holds the node id
   Desktop records (created on first use).
 - Port 36972 (36971 is the macOS package's bundled PostgreSQL; the dev instance shifts both by +100).
+- **Relayed streams** (`design/cloud/relay.md`, the Vaulthalla Cloud relay, option (c)): the second way to authenticate
+  a peer, only through `startRelayedConnection` (`Listener.hpp`), which only `CloudRelayService` calls (via
+  `DeviceServer::acceptRelayed`, one end of a local socketpair; the `Listener` never builds one). Its TLS context
+  (`makeRelayedServerContext`) is the same identity without a certificate request; before any HTTP byte the server sends
+  `0x01 ‖ nonce[32]` and reads `0x01 ‖ spki[91] ‖ raw r‖s[64]`, an ECDSA signature over
+  `"vhc-relay-browser-proof-v1\n" + jti + "\n" + b64url(nonce) + "\n" + b64url(exporter)` (TLS exporter
+  `EXPORTER-vhc-relay-browser-v1`, 32 bytes), whose key must hash to the browser ticket's `spki`
+  (`cloud/RelayProtocol.hpp`, `verifyProof`); then `device::authorize(key, address, relayed = true)`. `Peer.relayed`
+  / `.pairedViaRelay` (`devices.paired_via = 'relay'`, migration 144) make `Peer::readOnly()`: the Router allows only
+  `isRelayedReadCommand` (an allowlist; ERROR `relay_read_only`) and `http::Session::serve` only GET/HEAD
+  `/preview*`/`/download*`, per request. Relayed sessions are never loopback, survive remote-off and close with the
+  relay (`closeRelayedDeviceSessions`). A relayed pairing request carries no `approval_key`; pending requests show
+  `via`; a relay-paired device gets no key-backup grant. Tests: `test_cloud_relay_protocol.cpp`,
+  `test_cloud_relay_db.cpp`.
 
 ### Super-admin initial credential
 
@@ -427,6 +441,16 @@ enrollment `cloud_recovery::enrollAutomatic`; the gate from `storage_access`; ro
 `detachForCloud`; moved; ejection in place; `ended` via the in-place detach). Operator attach/detach/abort/access refuse
 managed vaults (`managed_storage`); `vh cloud unlink` refuses while any is managed unless `--force`. Tests:
 `CloudStorageTest` in `test_cloud_storage_db.cpp` (a fake account service in the cloud's as-built shapes).
+The relay (`design/cloud/relay.md`, "As built"; migration 144): `cloud::RelayService` (`CloudRelayService`, after
+DeviceServer) does nothing unless linked, the `cloud_relay` row names this installation (`ops::cloud_relay`,
+`vh cloud relay status|enable|disable`, ws `cloud.relay.*`, capability `cloud.relay`; super admins switch, enable is a
+device.trust step-up, agents never; status for the admin cloud View permission) and `device_server.enabled`. Its
+service thread fetches signed `POST /v1/relay/server-tickets` and renews at `renew_after`; its I/O thread holds the
+WSS socket (TICKET, CHALLENGE, PROOF by the installation key, WELCOME, OPEN/DATA/CREDIT/CLOSE, RENEW), re-checks every
+browser ticket (`verifyBrowserTicket`, `JtiLedger`, `FailureLimiter`) and pumps each stream through a socketpair into
+the listener. Backoff 1 s-5 min with jitter; 401/404/other 403 → `stopped` until switched on again, 403
+`relay_disabled`/402/503 → `waiting`. Audit `cloud.relay.enable|disable|refused`. `CloudRelayServiceTest` drives it
+against a fake relay, and against the cloud's real `vaulthalla-cloud-relay` when `VH_TEST_CLOUD_RELAY_BINARY` names it.
 
 ### WebAuthn verifier (vl-webauthn, from #355)
 

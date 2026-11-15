@@ -23,10 +23,17 @@ struct Peer {
     // Authenticated by the row's previous key (the grace between a rotation and the first handshake with the new
     // key).
     bool viaPreviousKey = false;
+    // design/cloud/relay.md: the connection came through the Vaulthalla Cloud relay (the key was proven inside the
+    // relayed TLS stream, never by a client certificate), or the device was paired that way. Either one holds the
+    // session to the read-only capability set (Router::isRelayedReadCommand) on every connection. `address` is then
+    // the browser's address as the relay reports it: display and per-address limits only, never loopback.
+    bool relayed = false;
+    bool pairedViaRelay = false;
     // Last time last_seen_at was written for this connection (steady clock, seconds), for throttling.
     mutable std::atomic<int64_t> lastTouchSeconds{0};
 
     [[nodiscard]] bool paired() const noexcept { return deviceRowId.has_value(); }
+    [[nodiscard]] bool readOnly() const noexcept { return relayed || pairedViaRelay; }
     // The first 16 hex digits of the key: how log lines name a device.
     [[nodiscard]] std::string shortId() const { return spkiHex.substr(0, 16); }
 };
@@ -41,7 +48,8 @@ struct Authorization {
 // Device session as that row's user; anything else (unknown, revoked, an account that no longer exists) a
 // pairing-only one. A handshake with a rotated device's new key ends the old key's grace. Records last_seen_at/last_ip.
 // Throws only on a database failure (the listener then refuses the connection).
-[[nodiscard]] Authorization authorize(const crypto::PublicKey& key, const std::string& address);
+// `relayed`: the key was proven inside a relayed stream (design/cloud/relay.md); the peer is marked so.
+[[nodiscard]] Authorization authorize(const crypto::PublicKey& key, const std::string& address, bool relayed = false);
 
 // Writes last_seen_at/last_ip for a Device session at most every 5 minutes (called per command). Never throws.
 void touch(const Peer& peer);

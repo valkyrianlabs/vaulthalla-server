@@ -196,6 +196,7 @@ json Devices::pairingPending(const std::shared_ptr<Session>& session) {
                             {"device_id", r.device_id},
                             {"code_choices", r.code_choices},
                             {"approval_key_present", r.approval_key_present},
+                            {"via", r.relayed ? "relay" : "listener"},
                             {"created_at", static_cast<int64_t>(r.created_at)},
                             {"expires_at", static_cast<int64_t>(r.expires_at)}});
     return {{"window", list.window ? windowJson(*list.window) : json(nullptr)}, {"requests", std::move(requests)},

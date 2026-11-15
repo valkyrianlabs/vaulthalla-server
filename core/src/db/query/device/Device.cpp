@@ -17,7 +17,7 @@ constexpr const char* kColumns = R"SQL(
     d.id, d.user_id, COALESCE(u.name, '') AS user_name, d.name, d.platform, d.app_version, d.spki_sha256,
     d.previous_spki_sha256, d.approved_by, EXTRACT(EPOCH FROM d.created_at)::BIGINT AS created_at,
     EXTRACT(EPOCH FROM d.last_seen_at)::BIGINT AS last_seen_at, d.last_ip,
-    EXTRACT(EPOCH FROM d.revoked_at)::BIGINT AS revoked_at
+    EXTRACT(EPOCH FROM d.revoked_at)::BIGINT AS revoked_at, d.paired_via
 )SQL";
 
 std::string select(const std::string& where) {
@@ -45,6 +45,7 @@ Device fromRow(const pqxx::row_ref row) {
     if (const auto t = opt<int64_t>(row["last_seen_at"])) d.last_seen_at = static_cast<std::time_t>(*t);
     d.last_ip = opt<std::string>(row["last_ip"]);
     if (const auto t = opt<int64_t>(row["revoked_at"])) d.revoked_at = static_cast<std::time_t>(*t);
+    d.paired_via = row["paired_via"].as<std::string>();
     return d;
 }
 
@@ -108,9 +109,10 @@ Device Devices::insert(const NewDevice& d) {
             if (!txn.exec("SELECT 1 FROM devices WHERE previous_spki_sha256 = $1", pqxx::params{d.spki_sha256}).empty())
                 throw ops::Conflict("this device key is already known to this node");
             const auto res = txn.exec(
-                "INSERT INTO devices (user_id, approved_by, name, platform, app_version, spki_sha256, last_ip) "
-                "VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, '')) RETURNING id",
-                pqxx::params{d.user_id, d.approved_by, d.name, d.platform, d.app_version, d.spki_sha256, d.last_ip});
+                "INSERT INTO devices (user_id, approved_by, name, platform, app_version, spki_sha256, last_ip, paired_via) "
+                "VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8) RETURNING id",
+                pqxx::params{d.user_id, d.approved_by, d.name, d.platform, d.app_version, d.spki_sha256, d.last_ip,
+                             std::string(d.relayed ? "relay" : "listener")});
             const auto id = res.one_field_ref().as<uint32_t>();
             if (d.approval_key_spki) {
                 // A key no device has as its own (an approval key is a second key, never the mTLS one).

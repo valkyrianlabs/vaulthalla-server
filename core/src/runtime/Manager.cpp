@@ -22,6 +22,7 @@
 #include "vault/LayoutMigrationService.hpp"
 #include "vault/RemoteAttachService.hpp"
 #include "vault/RetentionService.hpp"
+#include "cloud/RelayService.hpp"
 #include "cloud/StorageService.hpp"
 #include "sync/events/Service.hpp"
 
@@ -57,11 +58,13 @@ constexpr std::array kBaseStartOrder{
     "ConnectionLifecycleManager",
     "ProtocolService",
     "DeviceServer",
+    "CloudRelayService",
     "S3GatewayService"
 };
 
 constexpr std::array kBaseStopOrder{
     "S3GatewayService",
+    "CloudRelayService",
     "DeviceServer",
     "ProtocolService",
     "ShellServer",
@@ -104,6 +107,7 @@ Manager::Manager()
       layoutMigrationService(std::make_shared<vault::LayoutMigrationService>()),
       remoteAttachService(std::make_shared<vault::RemoteAttachService>()),
       cloudStorageService(std::make_shared<cloud::StorageService>()),
+      cloudRelayService(std::make_shared<cloud::RelayService>()),
       statsSnapshotService(std::make_shared<stats::SnapshotService>()),
       operatorEmailService(std::make_shared<notifications::OperatorEmailService>()),
       upstreamEventService(std::make_shared<sync::events::Service>()),
@@ -124,6 +128,7 @@ Manager::Manager()
     services_["LayoutMigrationService"] = layoutMigrationService;
     services_["RemoteAttachService"] = remoteAttachService;
     services_["CloudStorageService"] = cloudStorageService;
+    services_["CloudRelayService"] = cloudRelayService;
     services_["StatsSnapshotService"] = statsSnapshotService;
     services_["OperatorEmailService"] = operatorEmailService;
     services_["UpstreamEventService"] = upstreamEventService;

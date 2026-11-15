@@ -152,6 +152,9 @@ vh::device::Device grantDeviceOf(const Actor& actor, const vh::device::Peer* sel
     }
     if (!row || row->revoked() || row->user_id != actor->id)
         throw NotFound("no paired device of yours " + (ref ? "'" + *ref + "'" : std::string("here")));
+    // design/cloud/relay.md: vault keys never pass through a browser, so one paired through Vaulthalla Cloud gets no grant.
+    if (row->paired_via == "relay")
+        throw Invalid("a browser paired through Vaulthalla Cloud never holds vault keys: it has no key-backup grant");
     return *row;
 }
 
