@@ -161,7 +161,8 @@ struct FakeCloud {
         unsigned retention = 30;
         std::string bucket;
         std::optional<std::string> detachedAt, convertedAt;
-        bool hidden = false;   // removed from this deployment's view (a move)
+        bool hidden = false;   // removed from this deployment's view
+        std::optional<std::string> movedTo;   // restored onto another deployment: listed with where it went
         // Replicated vaults (the cloud's src/storage/ManagedStorage.cpp vaultView): the servers holding it, the ones
         // removed lately, and `removed` once the account holder removed it from this server.
         json replicas = json::array(), formerReplicas = json::array();
@@ -178,7 +179,7 @@ struct FakeCloud {
     std::map<std::string, Key> keys;
     std::map<std::string, json> enrollments;
     std::optional<uint32_t> dropEnvelopeVersion;
-    bool base64urlEnvelopes = false;   // the cloud's announced switch to base64url
+    std::optional<std::string> portal = "https://app.vaulthalla.test/storage/leave";
     std::map<std::string, std::shared_ptr<VersionedBucket>>* buckets = nullptr;
     unsigned nextKey = 1;
 
@@ -219,6 +220,7 @@ struct FakeCloud {
                  {"region", visible ? json("us-west-004") : json(nullptr)},
                  {"content_retention_days", v.state == "none" ? json(nullptr) : json(v.retention)},
                  {"detached_at", nullptr}, {"converted_at", nullptr}};
+        if (v.movedTo) out["moved_to"] = {{"deployment_id", "dep-" + *v.movedTo}, {"name", *v.movedTo}};
         json key{{"state", "none"}};
         std::string a;
         if (const auto id = currentKeyOf(uid, &a); !id.empty())
@@ -328,8 +330,9 @@ struct FakeCloud {
                                                 {"storage_quota_bytes", quota}, {"storage_access", access}, {"cause", cause}}},
                                {"usage", {{"stored_bytes", stored ? json(*stored) : json(nullptr)},
                                           {"date", stored ? json("2026-11-13") : json(nullptr)}}},
-                               {"account_key_confirmed", offlineCopy},
+                               {"account_key_offline_copy_confirmed", offlineCopy},
                                {"ejection", nullptr},
+                               {"ejection_portal_url", portal ? json(*portal) : json(nullptr)},
                                {"provider", "fake"},
                                {"vaults", vaultList}});
         }
@@ -421,7 +424,7 @@ struct FakeCloud {
                 const auto h = vl::keykit::kev1::inspect(*bytes);
                 if (dropEnvelopeVersion && h.key_version == *dropEnvelopeVersion) continue;
                 list.push_back({{"key_version", h.key_version}, {"generation", 1}, {"fingerprint", "f"},
-                                {"envelope", base64urlEnvelopes ? vl::keykit::base64UrlEncode(*bytes) : e.get<std::string>()}});
+                                {"envelope", vl::keykit::base64UrlEncode(*bytes)}});
             }
             return reply(200, {{"vault_uid", uid}, {"envelopes", list}});
         }
@@ -956,10 +959,13 @@ TEST_F(CloudStorageTest, TheAccessGateFollowsTheAccountAndASupersededKeyIsAskedF
     cloud_.state = "active";
     cloud_.access = "full";
     cloud_.cause = "active";
-    cloud_.keys[cloud_.keys.rbegin()->first].state = "revoked";
-    cloud_.keys["Kactive0000"] = {.uid = uidOf(id), .state = "active", .access = "full", .secret = "s"};
-    (void)tick();
+    // As the cloud does: a revoked key is never reinstated, so the server asks for a new one (the drill's finding:
+    // the gate stayed closed after the account paid again).
+    const auto requestsBefore = callsTo("POST /v1/storage/vaults/");
+    for (int i = 0; i < 3 && storage::remote_access::mode(id) != storage::remote_access::Mode::Full; ++i) (void)tick();
     EXPECT_EQ(storage::remote_access::mode(id), storage::remote_access::Mode::Full);
+    EXPECT_GT(callsTo("POST /v1/storage/vaults/"), requestsBefore) << "a new bucket key was asked for";
+    EXPECT_EQ(DB::get(id)->key_state, "active");
     // An operator can't set a managed vault's access by hand.
     EXPECT_EQ(code([&] {
                   return ops::vault_remote::setAccess(superUser, {.vault_id = id, .mode = storage::remote_access::Mode::Full,
@@ -1023,6 +1029,40 @@ TEST_F(CloudStorageTest, AMovedVaultKeepsItsDataReadOnlyAndIsKeptLocalOnRequest)
     EXPECT_EQ(state(id), "off");
     EXPECT_EQ(db::query::vault::Vault::getVault(id)->type, vault::model::VaultType::Local);
     EXPECT_EQ(readLocal(id, "/a.txt"), "alpha");
+}
+
+TEST_F(CloudStorageTest, AVaultTheCloudListsAsMovedStopsAtOnceAndNamesWhereItWent) {
+    linkAndPin();
+    const auto id = activeVault();
+    cloud_.vaults[uidOf(id)].movedTo = "nas2";   // still listed to this deployment, with where it went
+    (void)tick();
+    EXPECT_EQ(state(id), "moved");
+    EXPECT_EQ(DB::get(id)->reason, std::optional<std::string>("restored on nas2"));
+    EXPECT_EQ(storage::remote_access::mode(id), storage::remote_access::Mode::None);
+    EXPECT_EQ(readLocal(id, "/a.txt"), "alpha");
+    // The portal page for leaving managed storage is the cloud's address; one that isn't https is refused.
+    EXPECT_EQ(cs::status(superUser).ejection.value("portal_url", ""), "https://app.vaulthalla.test/storage/leave");
+}
+
+TEST(CloudStorageContract, TheOverviewReadsTheCloudsNamesAndRefusesAnUnsafePortalAddress) {
+    const auto base = nlohmann::json{{"entitlement", {{"storage_access", "none"}}}, {"vaults", nlohmann::json::array()}};
+    auto body = base;
+    body["account_key_confirmed"] = true;   // the old name means nothing now
+    EXPECT_FALSE(::vh::cloud::storage::parseOverview(body).offline_copy_confirmed);
+    body["account_key_offline_copy_confirmed"] = true;
+    EXPECT_TRUE(::vh::cloud::storage::parseOverview(body).offline_copy_confirmed);
+    for (const auto* url : {"http://localhost.evil.test/x", "http://portal.test/storage/leave", "javascript:alert(1)"}) {
+        body["ejection_portal_url"] = url;
+        EXPECT_THROW((void)::vh::cloud::storage::parseOverview(body), std::runtime_error) << url;
+    }
+    body["ejection_portal_url"] = "http://localhost:3000/storage/leave";
+    EXPECT_EQ(::vh::cloud::storage::parseOverview(body).ejection_portal, std::optional<std::string>("http://localhost:3000/storage/leave"));
+    body["ejection_portal_url"] = nullptr;
+    EXPECT_FALSE(::vh::cloud::storage::parseOverview(body).ejection_portal);
+    body["vaults"] = nlohmann::json::array({{{"vault_uid", "x"}, {"moved_to", "somewhere"}}});
+    EXPECT_THROW((void)::vh::cloud::storage::parseOverview(body), std::runtime_error) << "moved_to is an object";
+    body["vaults"] = nlohmann::json::array({{{"vault_uid", "x"}, {"moved_to", {{"deployment_id", "d1"}, {"name", "nas2"}}}}});
+    EXPECT_EQ(::vh::cloud::storage::parseOverview(body).vaults.at(0).moved_to, std::optional<std::string>("nas2"));
 }
 
 TEST_F(CloudStorageTest, TheEndOfThePlanConvertsToLocalInPlaceAndListsWhatWasLostWithoutDeletingAnything) {
@@ -1189,21 +1229,78 @@ TEST_F(CloudStorageTest, VerifyComparesTheCloudsAccountKeyEnvelopesWithThisServe
     const auto id = activeVault();
     (void)tick();   // enrolled
     ASSERT_TRUE(cloud_.enrollments.contains(uidOf(id)));
-    for (const bool url : {false, true}) {
-        cloud_.base64urlEnvelopes = url;
-        const auto ok = ops::cloud_recovery::status(superUser, id, true);
-        ASSERT_EQ(ok.size(), 1u);
-        EXPECT_EQ(ok[0].state, "ready") << ok[0].verify.dump();
-        EXPECT_TRUE(ok[0].automatic);
-        EXPECT_TRUE(ok[0].verify["missing"].empty());
-        EXPECT_GE(ok[0].verify["versions_checked"].get<int>(), 1);
-    }
+    const auto ok = ops::cloud_recovery::status(superUser, id, true);
+    ASSERT_EQ(ok.size(), 1u);
+    EXPECT_EQ(ok[0].state, "ready") << ok[0].verify.dump();
+    EXPECT_TRUE(ok[0].automatic);
+    EXPECT_TRUE(ok[0].verify["missing"].empty());
+    EXPECT_GE(ok[0].verify["versions_checked"].get<int>(), 1);
     cloud_.dropEnvelopeVersion = 1;
     const auto behind = ops::cloud_recovery::status(superUser, id, true);
     EXPECT_EQ(behind[0].state, "behind");
     EXPECT_FALSE(behind[0].verify["missing"].empty());
     // Without --verify only the coverage report is compared.
     EXPECT_EQ(ops::cloud_recovery::status(superUser, id, false)[0].verify, nullptr);
+}
+
+
+TEST_F(CloudStorageTest, AManagedVaultRestoredHereGetsAKeyOfItsOwnAndIsAdoptedOnlyAfterTheRestore) {
+    linkAndPin();
+    const auto id = activeVault();
+    const auto uid = uidOf(id);
+    // As after a restore onto this server: the vault is here, without a managed-storage row yet.
+    DB::remove(id);
+    EXPECT_EQ(code([&] { return cs::keyForRestore(superUser, uid, superUser->id, cs::Channel::Agent); }), "denied");
+    const auto key = cs::keyForRestore(superUser, uid, superUser->id, cs::Channel::Cli);
+    EXPECT_EQ(cloud_.keys.at(key.key_id).state, "issued") << "never acknowledged before the restore wrote the vault";
+    const auto stored = db::query::vault::APIKey::getAPIKey(key.api_key_id);
+    ASSERT_TRUE(stored);
+    EXPECT_TRUE(stored->cloudIssued());
+    EXPECT_EQ(stored->name, "managed storage " + uid);
+
+    // A restore that stops: the key goes (the cloud revokes the unacknowledged one).
+    const auto dropped = cs::keyForRestore(superUser, uid, superUser->id, cs::Channel::Cli);
+    cs::discardRestoreKey(dropped);
+    EXPECT_FALSE(db::query::vault::APIKey::getAPIKey(dropped.api_key_id));
+    EXPECT_EQ(cloud_.keys.at(key.key_id).state, "revoked") << "a new request revoked the earlier unacknowledged key";
+
+    const auto again = cs::keyForRestore(superUser, uid, superUser->id, cs::Channel::Cli);
+    cs::adoptRestored(again, id);
+    const auto row = DB::get(id);
+    ASSERT_TRUE(row);
+    EXPECT_EQ(row->state, "active");
+    EXPECT_EQ(row->switch_state, "on");
+    EXPECT_EQ(row->key_state, "active");
+    EXPECT_EQ(row->api_key_id, std::optional<uint32_t>(again.api_key_id));
+    EXPECT_EQ(cloud_.keys.at(again.key_id).state, "active") << "acknowledged once adopted";
+    EXPECT_EQ(storage::remote_access::mode(id), storage::remote_access::Mode::Full);
+    DB::remove(id);   // later tests in the suite share the fake cloud buckets and API key manager
+}
+
+TEST_F(CloudStorageTest, NoRestoreKeyWithoutAConfirmedAccountKey) {
+    link();
+    EXPECT_EQ(code([&] { return cs::keyForRestore(superUser, vl::keykit::toBase32(vl::keykit::newUid()), superUser->id,
+                                                  cs::Channel::Cli); }),
+              "managed_storage_unavailable");
+}
+
+
+TEST_F(CloudStorageTest, ABucketTheCloudIsDeletingWhileThePlanIsActiveMakesTheVaultLocalInPlace) {
+    linkAndPin();
+    const auto id = activeVault();
+    const auto bucket = bucketOf(id);
+    const auto objectsBefore = bucket->keys();
+    // Paid again after `ended`: the plan is active, but the end began deleting the vault's bucket.
+    cloud_.vaults[uidOf(id)].state = "emptying";
+    (void)tick();
+    EXPECT_EQ(state(id), "detaching");
+    ASSERT_EQ(db::query::vault::RemoteDetach::get(id)->mode, rd::Mode::InPlace);
+    EXPECT_EQ(runDetach(id).state, rd::State::Done);
+    (void)tick();
+    EXPECT_EQ(state(id), "ended");
+    EXPECT_EQ(db::query::vault::Vault::getVault(id)->type, vault::model::VaultType::Local);
+    EXPECT_EQ(readLocal(id, "/a.txt"), "alpha");
+    EXPECT_EQ(bucket->keys(), objectsBefore) << "in place: nothing in the bucket is touched";
 }
 
 }

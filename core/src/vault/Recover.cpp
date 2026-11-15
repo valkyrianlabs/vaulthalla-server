@@ -222,7 +222,7 @@ std::vector<ExportedVault> parseExport(const nlohmann::json& doc) {
             return nullptr;
         };
         const auto add = [&](const nlohmann::json& keyField, const uint64_t version, const nlohmann::json* check,
-                             const nlohmann::json* att) {
+                             const nlohmann::json* att, const nlohmann::json* origin = nullptr) {
             if (version == 0 || version > UINT32_MAX) throw std::invalid_argument("a key version is not a positive integer");
             auto bytes = b64(keyField);
             if (!bytes || bytes->size() != crypto::util::AES_KEY_SIZE) {
@@ -247,6 +247,12 @@ std::vector<ExportedVault> parseExport(const nlohmann::json& doc) {
                     }
                 }
             }
+            if (origin && origin->is_object()) {
+                if (origin->contains("node_id") && origin->at("node_id").is_string())
+                    ev.origin_node_id = origin->at("node_id").get<std::string>();
+                if (origin->contains("vault_id") && origin->at("vault_id").is_number_unsigned())
+                    ev.origin_vault_id = origin->at("vault_id").get<uint64_t>();
+            }
             for (const auto& existing : v.versions)
                 if (existing.version == ev.version) {
                     if (!sameBytes(*existing.key, *ev.key))
@@ -260,14 +266,14 @@ std::vector<ExportedVault> parseExport(const nlohmann::json& doc) {
             !entry.at("key_info").contains("key_version") || !entry.at("key_info").at("key_version").is_number_unsigned())
             throw std::invalid_argument("an export entry lacks key or key_info.key_version");
         add(entry.at("key"), entry.at("key_info").at("key_version").get<uint64_t>(), fieldIn(entry, "key_check"),
-            fieldIn(entry, "attestation"));
+            fieldIn(entry, "attestation"), fieldIn(entry, "origin"));
         if (entry.contains("historical_keys") && entry.at("historical_keys").is_array())
             for (const auto& h : entry.at("historical_keys")) {
                 if (!h.is_object() || !h.contains("key") || !h.contains("key_version") ||
                     !h.at("key_version").is_number_unsigned())
                     throw std::invalid_argument("a historical key lacks key or key_version");
                 add(h.at("key"), h.at("key_version").get<uint64_t>(), h.contains("key_check") ? &h.at("key_check") : nullptr,
-                    h.contains("attestation") ? &h.at("attestation") : nullptr);
+                    h.contains("attestation") ? &h.at("attestation") : nullptr, h.contains("origin") ? &h.at("origin") : nullptr);
             }
         std::ranges::sort(v.versions, {}, &ExportedVersion::version);
         return v;
@@ -866,10 +872,12 @@ Plan plan(sync::manifest::ObjectStore& inner, const Material& material, const Op
         }
         if (exported)
             for (const auto& ev : exported->versions)
-                if (ev.version == v && exported->vault_id) {
-                    std::string node = exported->node_id.value_or("");
+                if (ev.version == v && (ev.origin_vault_id || exported->vault_id)) {
+                    // The version's own origin when the material names one, else the export's.
+                    std::string node = ev.origin_node_id.value_or(exported->node_id.value_or(""));
                     if (node.empty()) node = out.pins.node_id.value_or(out.origin_node_id);
-                    evidence.push_back(Evidence{"export", node, *exported->vault_id, ev.key_check, ev.attestation});
+                    evidence.push_back(Evidence{"export", node, ev.origin_vault_id.value_or(exported->vault_id.value_or(0)),
+                                                ev.key_check, ev.attestation});
                 }
         const auto c = candidates.find(v);
         if (c == candidates.end()) {

@@ -71,42 +71,40 @@ Reply call(const Linked& link, const std::string& method, const std::string& pat
 // ---- the contract's announced changes, one place each ----------------------------------------------------------------
 namespace contract {
 
-// Renamed to say it is the offline copy's confirmation: the old name until the cloud ships the new one.
+// The account key's offline copy is confirmed (the cloud's key manager): not this server's pin, which is its own gate.
 bool offlineCopyConfirmedOf(const json& body) {
-    for (const auto* name : {"offline_copy_confirmed", "account_key_offline_copy_confirmed", "account_key_confirmed"})
-        if (body.is_object() && body.contains(name) && body[name].is_boolean()) return body[name].get<bool>();
+    return optBool(body, "account_key_offline_copy_confirmed");
+}
+
+// An address a person opens from this server: https, or plain http only to this host (development).
+bool openableUrl(const std::string& url) {
+    if (url.starts_with("https://")) return url.size() > 8;
+    static constexpr std::array<std::string_view, 3> hosts{"http://localhost", "http://127.0.0.1", "http://[::1]"};
+    for (const auto host : hosts)
+        if (url.starts_with(host) && (url.size() == host.size() || url[host.size()] == ':' || url[host.size()] == '/'))
+            return true;
     return false;
 }
 
-// The ejection portal's address: absent until the cloud returns it.
+// The portal page for leaving managed storage; null while the cloud has no portal configured.
 std::optional<std::string> ejectionPortalOf(const json& body) {
-    for (const auto* name : {"ejection_portal_url", "eject_url"})
-        if (body.is_object() && body.contains(name) && body[name].is_string()) {
-            const auto url = body[name].get<std::string>();
-            if (url.starts_with("https://")) return url;
-        }
-    if (body.is_object() && body.contains("ejection") && body["ejection"].is_object() &&
-        body["ejection"].contains("portal_url") && body["ejection"]["portal_url"].is_string())
-        return body["ejection"]["portal_url"].get<std::string>();
-    return std::nullopt;
+    const auto url = optString(body, "ejection_portal_url");
+    if (url && !openableUrl(*url)) throw std::runtime_error("`ejection_portal_url` isn't an https address");
+    return url;
 }
 
-// Envelopes are base64 today and base64url once the cloud switches: either decodes.
+// The account key's envelopes, base64url like the rest of the API.
 std::optional<std::vector<uint8_t>> decodeEnvelope(const std::string& text) {
-    if (auto url = vl::keykit::base64UrlDecode(text)) return url;
-    return vl::keykit::base64Decode(text);
+    return vl::keykit::base64UrlDecode(text);
 }
 
-// Where a moved vault went: absent until the cloud lists it.
+// Where a moved vault went: {deployment_id, name} of the deployment that holds it now.
 std::optional<std::string> movedToOf(const json& v) {
     if (!v.is_object() || !v.contains("moved_to") || v["moved_to"].is_null()) return std::nullopt;
-    if (v["moved_to"].is_string()) return v["moved_to"].get<std::string>();
-    if (v["moved_to"].is_object()) {
-        const auto& m = v["moved_to"];
-        if (m.contains("name") && m["name"].is_string()) return m["name"].get<std::string>();
-        if (m.contains("deployment_id") && m["deployment_id"].is_string()) return m["deployment_id"].get<std::string>();
-    }
-    return std::string("another server");
+    const auto& m = v["moved_to"];
+    if (!m.is_object()) throw std::runtime_error("`moved_to` isn't an object");
+    if (auto name = optString(m, "name"); name && !name->empty()) return name;
+    return reqString(m, "deployment_id");
 }
 
 }
@@ -328,8 +326,7 @@ Handoff billingHandoff(const Linked& link, const std::string& kind, const std::o
     } catch (const std::runtime_error& e) {
         throw CallError(r.status, "malformed", "", std::string("the billing handoff is malformed: ") + e.what());
     }
-    if (!out.url.starts_with("https://") && !out.url.starts_with("http://localhost") &&
-        !out.url.starts_with("http://127.0.0.1"))
+    if (!d::contract::openableUrl(out.url))
         throw CallError(r.status, "malformed", "", "the billing handoff isn't an https address");
     return out;
 }

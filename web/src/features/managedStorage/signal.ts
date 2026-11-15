@@ -12,7 +12,10 @@ export const useCloudView = () => {
   return meets(user, { superAdmin: true }) || meets(user, { permission: 'admin.cloud.view' })
 }
 
+// Shown once managed storage is available, or once the server is linked at all: the page also holds the cloud relay's
+// switch, which needs a link but no storage plan.
 export const useManagedStorageSignal = () => {
   const canView = useCloudView()
-  return !!useWs('cloud.storage.status', null, { enabled: canView, staleTime: 60_000, retry: false }).data?.available && canView
+  const data = useWs('cloud.storage.status', null, { enabled: canView, staleTime: 60_000, retry: false }).data
+  return canView && !!(data?.available || data?.linked)
 }

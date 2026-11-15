@@ -199,9 +199,18 @@ and every relayed session at once; paired browsers stay paired.
 6. **Errors to show:** WebSocket close 4007 (`refused`: a bad proof, a revoked or unknown key on a paired path, or the
    server's limits), 4006 (`offline`), `device_unknown` (the key isn't paired: pair again with a new key).
 
+## The console
+
+The switch is a panel on the cloud page (`/managed-storage`, `features/cloudRelay`), shown with the `cloud.relay`
+capability to super admins and the admin cloud View permission; only super admins switch it. Until the service opens
+the console never names it (the claims lint; the convention of `managedStorage/copy.ts`): it is "the relay your account
+provides", and the device label is "Web browser (relay)". The pairing dialog marks a `via: relay` request that way and
+says it will be read-only, and its instructions say a browser is paired from the account's web page while the relay is
+on; the device lists mark `paired_via: relay` devices Read-only; revoking is unchanged. Proven against scripted ws
+answers (`web/tests/e2e/cloud.spec.ts`, `devices.spec.ts`), not against a linked daemon: the harness has no fake cloud
+that can link one.
+
 ## Not built
 
 - The 413 cap on `/download` from the ticket's `lim.stream_bytes` (the relay enforces it with `CLOSE limit`).
-- Console UI: the switch on the cloud settings page and "Web browser via Vaulthalla Cloud" in the pairing dialog and
-  device list (the ws data is there: `via`, `paired_via`, `cloud.relay.*`).
 - Uploads and changes from a relayed session (a later step).

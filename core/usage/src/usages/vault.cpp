@@ -324,13 +324,14 @@ static std::shared_ptr<CommandUsage> recover(const std::weak_ptr<CommandUsage>& 
         "the supplied keys. Nothing is downloaded beyond headers, the manifest and envelopes until a file is read (the "
         "vault starts in the cache strategy). The kit's checkpoint bounds rollback: an older root is refused unless "
         "--accept-rollback. Files are read by vh on your side (- for standard input). Writes nothing with --dry-run.";
-    cmd->required = {Option::OneToMany("s3_api_key", "Name or ID of the API key that reaches the bucket", "api-key",
-                                       {"name", "id"})
+    cmd->optional = {Optional::OneToMany("s3_api_key", "Name or ID of the API key that reaches the bucket (required "
+                                         "unless --from-cloud restores a vault kept in managed storage)", "api-key",
+                                         {"name", "id"})
                          .withGen("name", contract::gen::ref("api_key", {"name"}))
                          .withGen("id", contract::gen::ref("api_key", {"id"})),
-                     Option::Single("s3_bucket", "The bucket holding the vault", "bucket", "name")
-                         .withGen("name", contract::gen::pattern("vh-test-{a}{a}{a}{9}{9}"))};
-    cmd->optional = {Optional::Multi("recovery_kit",
+                     Optional::Single("s3_bucket", "The bucket holding the vault (with --api-key)", "bucket", "name")
+                         .withGen("name", contract::gen::pattern("vh-test-{a}{a}{a}{9}{9}")),
+                     Optional::Multi("recovery_kit",
                                      "The recovery kit (vh-recovery kit create): its seed unwraps the vault's key "
                                      "envelopes and its pinned attestation keys anchor them. Read on your side; - for "
                                      "standard input",
@@ -371,6 +372,8 @@ static std::shared_ptr<CommandUsage> recover(const std::weak_ptr<CommandUsage>& 
          "Restore it here (cache strategy; files are fetched when read)."},
         {"vh vault recover --api-key r2-main --bucket finance-vault --vault-uid 0123456789abcdefghjkmnpqrs --from-cloud",
          "Restore it with keys relayed through Vaulthalla Cloud from your own device (no kit file)."},
+        {"vh vault recover --vault-uid 0123456789abcdefghjkmnpqrs --from-cloud",
+         "Restore a vault kept in managed storage: this server gets its own key to the vault's bucket from the account."},
         {"vh vault recover --api-key 3 --bucket finance-vault --kit kit.json --export keys.json --into finance-restored",
          "Use a key export too, and give the restored vault another name."}
     };

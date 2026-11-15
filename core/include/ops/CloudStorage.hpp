@@ -191,6 +191,24 @@ void requestKeyCheck();
 // courtesy check. The service does this when it starts; tests call it.
 void installHooks();
 
+// A managed vault restored onto this server (`vh vault recover --from-cloud` without --api-key). Approving the restore
+// moved the vault to this server's deployment at the cloud, so this server may ask for a bucket key of its own: the
+// same sealed exchange as any managed vault's (keyForRestore), stored as a cloud key owned by `ownerId` and probed,
+// never acknowledged before the restore succeeds. The restore reads the bucket with it; adoptRestored() then makes the
+// restored vault managed (its row active on that key, the key acknowledged, the bucket bound), and discardRestoreKey()
+// removes the key when the restore stops (unacknowledged, the cloud revokes it). Needs the cloud Storage permission
+// (or super admin), a link and a confirmed account key; Refused managed_storage_unavailable, cloud_refused (with the
+// cloud's reason, e.g. bucket_not_ready), cloud_unreachable or key_probe_failed.
+struct RestoreKey {
+    std::string vault_uid{};
+    unsigned int api_key_id{};
+    std::string key_id{}, access{}, bucket{}, bucket_id{}, s3_endpoint{}, region{};
+};
+[[nodiscard]] RestoreKey keyForRestore(const Actor& actor, const std::string& vaultUid, unsigned int ownerId,
+                                       Channel channel);
+void adoptRestored(const RestoreKey& key, unsigned int vaultId);
+void discardRestoreKey(const RestoreKey& key) noexcept;
+
 // Vaults whose data is in managed storage now (`vh cloud unlink` refuses while any exists): their names.
 [[nodiscard]] std::vector<std::string> unlinkBlockers();
 // The link is gone (`vh cloud unlink`): the cloud revokes this installation's keys, so managed vaults lose access to

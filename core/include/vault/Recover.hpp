@@ -47,6 +47,11 @@ struct ExportedVersion {
     std::optional<std::string> key_check;                       // the export's own (consistency only)
     std::optional<attestation::Attestation> attestation;
     std::optional<std::vector<uint8_t>> attestation_public_key;  // customer-held: an anchor (spec 03 §5.4)
+    // The origin this version's check and attestation were made under, when it isn't the export's own (a cloud
+    // restore of a vault that was restored onto another node and rotated there). The attestation signs it, so it
+    // counts only where a pinned key's signature over it verifies.
+    std::optional<std::string> origin_node_id;
+    std::optional<uint64_t> origin_vault_id;
 };
 
 // One vault of an export. vault_id is the id it had on the node that exported it; node_id and vault_uid are present in

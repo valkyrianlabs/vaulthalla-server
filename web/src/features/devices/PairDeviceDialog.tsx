@@ -19,11 +19,14 @@ import {
   DEVICE_READS,
   deviceLabel,
   formatCode,
-  platformLabel,
+  pairedViaRelay,
+  requestLabel,
+  requestViaRelay,
   shortDeviceId,
   type PairingWindow,
   type PendingRequest,
 } from '@/features/devices/model'
+import { RELAY_LABELS } from '@/features/cloudRelay/labels'
 import { hostPort, KIND_LABELS, pairLink, readPairingBootstrap, type PairingBootstrap } from '@/features/devices/pairLink'
 
 // Pair a device by number matching (docs/pairing.md §3 in valkyrianlabs/vaulthalla-desktop). Opening the dialog opens this account's
@@ -36,8 +39,9 @@ const POLL_MS = 2_000
 type Phase = 'opening' | 'open' | 'conflict' | 'error'
 type Notice = { tone: 'danger' | 'info'; text: string }
 
-const WRONG_CODE = 'That code didn’t match, so the request was declined. Start pairing again on the Mac.'
-const EXPIRED_REQUEST = 'That request expired before it was approved. Start pairing again on the Mac.'
+const againOn = (request: PendingRequest) => (requestViaRelay(request) ? 'in the browser' : 'on the Mac')
+const WRONG_CODE = (request: PendingRequest) => `That code didn’t match, so the request was declined. Start pairing again ${againOn(request)}.`
+const EXPIRED_REQUEST = (request: PendingRequest) => `That request expired before it was approved. Start pairing again ${againOn(request)}.`
 
 const useNow = (active: boolean) => {
   const [now, setNow] = useState(() => Date.now())
@@ -163,10 +167,10 @@ export default function PairDeviceDialog({ open, onOpenChange }: { open: boolean
     } catch (error) {
       if (isWsError(error, 'invalid')) {
         hide(request)
-        setNotice({ tone: 'danger', text: WRONG_CODE })
+        setNotice({ tone: 'danger', text: WRONG_CODE(request) })
       } else if (isWsError(error, 'not_found')) {
         hide(request)
-        setNotice({ tone: 'danger', text: EXPIRED_REQUEST })
+        setNotice({ tone: 'danger', text: EXPIRED_REQUEST(request) })
       } else {
         setNotice({ tone: 'danger', text: errorMessage(error, 'The request was not approved') })
       }
@@ -322,6 +326,9 @@ const Instructions = ({
         <li>The Mac shows a six-digit code. Click the same code on its request below.</li>
         <li>A wrong code declines the request, so compare before you click.</li>
       </ol>
+      <p className="mt-2 text-xs text-fg-subtle" data-testid="pair-browser-hint">
+        {RELAY_LABELS.pairBrowser}
+      </p>
       {listener && !listener.remote && !local ? (
         <p className="mt-3 flex items-start gap-2 text-warn" data-testid="pair-remote-off">
           <TriangleExclamationIcon className="mt-0.5 size-4 shrink-0" aria-hidden />
@@ -409,19 +416,24 @@ const RequestCard = ({
           {request.name}
         </p>
         <p className="mt-0.5 text-xs text-fg-subtle">
-          {platformLabel(request.platform, request.app_version)} · from{' '}
+          <span data-testid="pair-request-kind">{requestLabel(request)}</span> · from{' '}
           <span className="font-mono text-fg-muted">{request.source_ip}</span> · device{' '}
           <span className="font-mono text-fg-muted" title={request.device_id}>
             {shortDeviceId(request.device_id)}
           </span>
         </p>
+        {requestViaRelay(request) ? (
+          <p className="mt-1 text-xs text-fg-muted" data-testid="pair-request-read-only">
+            {RELAY_LABELS.requestReadOnly}
+          </p>
+        ) : null}
       </div>
       <Button size="sm" variant="ghost" onClick={onDeny} disabled={disabled} data-testid="pair-deny">
         <XmarkIcon aria-hidden />
         Deny
       </Button>
     </div>
-    <p className="mt-4 mb-2 text-sm text-fg-muted">Which code does the Mac show?</p>
+    <p className="mt-4 mb-2 text-sm text-fg-muted">Which code does the {requestViaRelay(request) ? 'browser' : 'Mac'} show?</p>
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="group" aria-label={`Codes for ${request.name}`}>
       {request.code_choices.map(code => (
         <Button
@@ -465,7 +477,8 @@ const Paired = ({ device, onAnother }: { device: Device; onAnother: () => void }
     </div>
     <p className="text-lg font-semibold text-fg">Paired</p>
     <p className="mt-1 max-w-sm text-sm text-fg-subtle">
-      <span className="text-fg">{deviceLabel(device)}</span> is now paired with your account. Desktop finishes connecting on its own.
+      <span className="text-fg">{deviceLabel(device)}</span> is now paired with your account.{' '}
+      {pairedViaRelay(device) ? 'It is read-only and finishes connecting on its own.' : 'Desktop finishes connecting on its own.'}
     </p>
     <Button className="mt-5" variant="ghost" onClick={onAnother} data-testid="pair-another">
       Pair another device
