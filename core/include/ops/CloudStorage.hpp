@@ -45,26 +45,26 @@ using Channel = vault_keys::Channel;
 
 struct VaultEntry {
     unsigned int vault_id{};
-    std::string vault_name;
-    std::string vault_uid;
+    std::string vault_name{};
+    std::string vault_uid{};
     // managed (a row), own (an S3 vault on the customer's own storage), local (a local vault without a row: storage
     // isn't available yet, or the vault appeared before it was)
     std::string storage{"local"};
-    std::optional<std::string> switch_state;   // on | off | offered | declined
+    std::optional<std::string> switch_state{};   // on | off | offered | declined
     std::string state{"unregistered"};         // the row's state (managed), else "own" or "local"
-    std::optional<std::string> reason;
-    std::string summary;                       // the state in words
+    std::optional<std::string> reason{};
+    std::string summary{};                       // the state in words
     uint64_t local_bytes{};                    // the vault's content held here
-    std::optional<std::string> access;         // the remote access gate: full | read_only | none
+    std::optional<std::string> access{};         // the remote access gate: full | read_only | none
     std::string key_state{"none"};
-    std::optional<std::string> key_access;
-    std::optional<uint32_t> retention_days, retention_sent;
+    std::optional<std::string> key_access{};
+    std::optional<uint32_t> retention_days{}, retention_sent{};
     bool retention_pending{false};
-    std::optional<std::string> recovery;       // the automatic enrollment: ready | behind | none
-    nlohmann::json progress;                   // the attach's or detach's progress (vault.remote.status), or null
-    nlohmann::json lost;                       // an in-place conversion's lost files, or null
-    std::optional<std::string> last_error;
-    std::optional<std::time_t> active_at, moved_at, ejected_at, ended_at;
+    std::optional<std::string> recovery{};       // the automatic enrollment: ready | behind | none
+    nlohmann::json progress{};                   // the attach's or detach's progress (vault.remote.status), or null
+    nlohmann::json lost{};                       // an in-place conversion's lost files, or null
+    std::optional<std::string> last_error{};
+    std::optional<std::time_t> active_at{}, moved_at{}, ejected_at{}, ended_at{};
 };
 
 struct Status {
@@ -72,21 +72,21 @@ struct Status {
     std::string account_key{"unlinked"};       // unlinked | unconfirmed | pinned | tampered
     // Storage can be used: linked, the account key pinned, and the account entitled (an access other than none).
     bool available{false};
-    std::optional<std::string> entitlement;    // active | past_due | restricted | suspended | ended | null
-    std::optional<std::string> plan;
-    std::optional<uint64_t> quota_bytes, used_bytes;
-    std::optional<std::string> usage_day;
-    std::optional<std::string> storage_access, cause;
+    std::optional<std::string> entitlement{};    // active | past_due | restricted | suspended | ended | null
+    std::optional<std::string> plan{};
+    std::optional<uint64_t> quota_bytes{}, used_bytes{};
+    std::optional<std::string> usage_day{};
+    std::optional<std::string> storage_access{}, cause{};
     uint64_t managed_local_bytes{};            // this server's own figure: the managed vaults' content held here
     bool new_vaults{true};
     bool offer_open{false};
-    std::vector<VaultEntry> offered;           // the offer: vaults waiting for a person (with their sizes)
-    std::vector<VaultEntry> vaults;
-    nlohmann::json billing;                    // the billing summary as last fetched, or null
-    nlohmann::json ejection;
-    std::optional<std::time_t> fetched_at;
-    std::optional<std::string> fetch_error;
-    std::optional<std::string> next_step;
+    std::vector<VaultEntry> offered{};           // the offer: vaults waiting for a person (with their sizes)
+    std::vector<VaultEntry> vaults{};
+    nlohmann::json billing{};                    // the billing summary as last fetched, or null
+    nlohmann::json ejection{};
+    std::optional<std::time_t> fetched_at{};
+    std::optional<std::string> fetch_error{};
+    std::optional<std::string> next_step{};
 };
 [[nodiscard]] Status status(const Actor& actor);
 
@@ -100,7 +100,7 @@ VaultEntry setSwitch(const Actor& actor, unsigned int vaultId, bool on, const st
                      Channel channel);
 
 struct OfferResult {
-    std::vector<unsigned int> vaults;   // the vaults the answer changed
+    std::vector<unsigned int> vaults{};   // the vaults the answer changed
     bool offer_open{false};
 };
 // The offer (open question 1): vaults that existed when storage became available are listed once; a person accepts
@@ -115,9 +115,9 @@ VaultEntry rotate(const Actor& actor, unsigned int vaultId, Channel channel);
 bool setNewVaultsDefault(const Actor& actor, bool on, Channel channel);
 
 struct Handoff {
-    std::string kind;   // checkout | portal
-    std::string url;    // opens the account's billing page in a browser; never stored or logged
-    std::optional<std::time_t> expires_at;
+    std::string kind{};   // checkout | portal
+    std::string url{};    // opens the account's billing page in a browser; never stored or logged
+    std::optional<std::time_t> expires_at{};
 };
 // POST /v1/billing/handoffs on the caller's thread (bounded), then the service polls fast for a few minutes. The
 // cloud Billing permission; never an agent.
@@ -132,7 +132,7 @@ struct TickResult {
     bool linked{false};
     bool pinned{false};
     bool fetched{false};
-    std::optional<std::string> error;
+    std::optional<std::string> error{};
     unsigned int steps{};
 };
 TickResult tick(bool force = false);
@@ -162,10 +162,10 @@ void onUnlinked() noexcept;
 // account key; info), vault_cloud_moved (a managed vault was restored onto another server; this copy no longer syncs;
 // degraded), vault_cloud_failed (degraded).
 struct HealthIssue {
-    std::string code;
-    std::string severity;   // degraded | info
-    std::optional<unsigned int> vault_id;
-    std::string detail;
+    std::string code{};
+    std::string severity{};   // degraded | info
+    std::optional<unsigned int> vault_id{};
+    std::string detail{};
 };
 [[nodiscard]] std::vector<HealthIssue> health();
 
