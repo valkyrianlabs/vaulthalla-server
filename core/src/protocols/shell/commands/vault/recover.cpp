@@ -313,6 +313,8 @@ static CommandResult recoverOrJoin(const CommandCall& call, const bool join) {
             vh::ops::cloud_restore::complete(call.user, cloudRestore.id);
             cloudRestore.done = true;
         }
+        // The managed-storage pass's cached overview predates this vault: the next pass fetches a fresh one first.
+        if ((fromCloud || join) && result.written) vh::ops::cloud_storage::refreshSoon();
         if (managedKey && result.written && result.vault_id)
             vh::ops::cloud_storage::adoptJoinedVault(*result.vault_id, *req.vault_uid, *managedKey);
         if (json) return ok(recover_ops::toJson(result).dump(4));

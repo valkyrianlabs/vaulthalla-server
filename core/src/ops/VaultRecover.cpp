@@ -224,6 +224,7 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
     rec::Options options;
     options.accept_rollback = req.accept_rollback;
     options.self_keys = selfKeys();
+    options.join = req.join;
     if (req.vault_uid) {
         options.vault_uid = vl::keykit::fromBase32(*req.vault_uid);
         if (!options.vault_uid) throw Invalid("vault uid is not a vault uid (26 base32 symbols)");

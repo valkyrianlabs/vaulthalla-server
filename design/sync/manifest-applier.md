@@ -757,6 +757,17 @@ real cloud, moto checking every key), each fixed here with a test beside it:**
    holder, it only does the local part (sync off, keep or delete the copy) and doesn't report a leave
    (`CloudStorageTest.TheReplicaSetIsReadARemovedVaultStopsSyncingAndALeaveIsReported`; the drill). Undo: the
    `removed` branch in `vault_replicas::leave`.
+3. *A re-join was stopped by the overview from before it.* The managed-storage pass acts on the cloud's overview cached
+   between polls; right after R joined again, a pass used the one that still said the owner had removed R, stopped the
+   new copy and dropped its fresh key. A restore or join through the cloud now drops the cached overview and starts
+   fast polling (`cloud_storage::refreshSoon`); nothing acts on the vault before a fresh answer
+   (`CloudStorageTest.TheReplicaSetIsReadARemovedVaultStopsSyncingAndALeaveIsReported`). Undo: the call in
+   `vault/recover.cpp`.
+4. *A join placed other writers' objects under /Recovered.* An object no live entry names (a purged file's object the
+   shared purge keeps for the orphan collection, or a PUT whose root isn't out yet) became `/Recovered/<uid>` on the
+   joining server, which then failed to upload it on every pass and would have published it into the shared tree. A
+   join leaves such objects alone (`vault::recover::Options::join`); a restore still recovers them
+   (`VaultRecoverDb.AJoinIsARestoreThatAddsThisNodeToTheWritersAndKeepsTheOthers`). Undo: the `options.join` skip.
 
 **Not built here:** rotation across replicas (replica keys, pending versions), the cloud-side removal of a dead
 replica by the owner (`DELETE /v1/vaults/{uid}/replicas/{deployment_id}`; the server drops it through

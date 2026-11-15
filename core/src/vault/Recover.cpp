@@ -715,6 +715,7 @@ Plan plan(sync::manifest::ObjectStore& inner, const Material& material, const Op
             continue;
         }
         if (named.contains(mf::uidText(*u))) continue;
+        if (options.join) continue;  // the other writers' (Options::join)
         auto h = readHeader(store, o, *uid, *u, lookup);
         if (h.version) seen.insert(*h.version);
         if (!h.object) {

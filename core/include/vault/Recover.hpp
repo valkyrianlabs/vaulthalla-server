@@ -151,6 +151,10 @@ struct Options {
     std::optional<Uid> vault_uid;                 // which vault in the bucket (default: the kit's, else the bucket's hint)
     bool accept_rollback{false};
     std::vector<std::vector<uint8_t>> self_keys;  // this node's attestation public keys
+    // A join (vh vault join): the bucket is shared with the writers the root names, so an object no live entry names
+    // is theirs to account for (a purged file's object kept for the shared orphan collection, or a PUT whose root isn't
+    // published yet): it is left alone, never placed under /Recovered, and the joined tree is the root's.
+    bool join{false};
 };
 
 // Bytes fetched while planning, by what they were: the restore's download budget (spec 03 §7: nothing beyond

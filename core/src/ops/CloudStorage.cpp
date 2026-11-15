@@ -1344,6 +1344,16 @@ void adoptJoinedVault(const unsigned int vaultId, const std::string& vaultUid, c
              fmt::format("joined vault {} is in managed storage on this server's own key", vaultId));
 }
 
+void refreshSoon() {
+    namespace d = cloud_storage_ops_detail;
+    {
+        std::scoped_lock cache(d::cacheMutex);
+        d::cachedOverview.reset();
+    }
+    if (d::DB::account()) d::DB::setFastUntil(d::now() + d::kFastWindow);
+    wake();
+}
+
 bool reportLeft(const std::string& vaultUid, std::string& error) {
     namespace d = cloud_storage_ops_detail;
     const auto link = d::cs::linked();

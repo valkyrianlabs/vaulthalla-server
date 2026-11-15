@@ -813,6 +813,24 @@ TEST_F(CloudStorageTest, TheReplicaSetIsReadARemovedVaultStopsSyncingAndALeaveIs
     EXPECT_TRUE(cs::removedAtCloud(uid)) << "the last poll's word when the cloud can't answer";
     cloud_.reachable = true;
 
+    // Joined again (the drill: the pass between fetches used the overview from before the join and stopped the new
+    // copy): a cloud restore or join drops the cached overview, and nothing acts on the vault before a fresh one.
+    const auto resume = [&] {
+        ops::vaults::SyncPatch on;
+        on.enabled = true;
+        (void)ops::vaults::updateSync(superUser, id, on);
+    };
+    v.removedByOwner = false;
+    resume();
+    (void)cs::tick(false);
+    EXPECT_FALSE(db::query::sync::Policy::getSync(id)->enabled) << "the stale overview still says removed";
+    resume();
+    cs::refreshSoon();
+    (void)cs::tick(false);
+    EXPECT_TRUE(db::query::sync::Policy::getSync(id)->enabled) << "no pass acts on the cache from before the join";
+    (void)tick();
+    EXPECT_TRUE(db::query::sync::Policy::getSync(id)->enabled) << "the fresh overview lists it as held";
+
     std::string error;
     EXPECT_TRUE(cs::reportLeft(uid, error)) << error;
     EXPECT_EQ(callsTo("DELETE /v1/vaults/" + uid + "/replica"), 1u);

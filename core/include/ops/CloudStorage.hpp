@@ -167,6 +167,10 @@ struct JoinedBucket {
 [[nodiscard]] std::optional<JoinedBucket> joinBucketKey(const Actor& actor, const std::string& vaultUid);
 // After the join wrote the vault: its managed-storage row, active on that key, the bucket bound as a managed one.
 void adoptJoinedVault(unsigned int vaultId, const std::string& vaultUid, const JoinedBucket& key);
+// After a restore or join through the cloud wrote a vault here: the overview the passes use between fetches predates
+// it (it may still say the account holder removed this server's earlier copy, or name an older key), so it is dropped
+// and the next pass fetches a fresh one (fast polling, woken now). Nothing acts on the vault before that.
+void refreshSoon();
 // `vh vault leave`: DELETE /v1/vaults/{uid}/replica when this server is linked (6). True: the cloud was told (or this
 // server isn't linked, or the cloud didn't hold it); false with `error` when the call failed.
 [[nodiscard]] bool reportLeft(const std::string& vaultUid, std::string& error);

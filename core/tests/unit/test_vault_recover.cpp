@@ -710,6 +710,20 @@ TEST_F(VaultRecoverDb, OnABackblazeLikeBucketTheRestoreTakesTheCanonicalHeadAndP
 TEST_F(VaultRecoverDb, AJoinIsARestoreThatAddsThisNodeToTheWritersAndKeepsTheOthers) {
     auto o = populated();
     const auto kit = kitOf(o);
+    // An object no live entry names (here: a purged file's, put back as a shared purge keeps it for the orphan
+    // collection): a restore places it under /Recovered, a join leaves it to the writers (the cloud drill found joined
+    // servers uploading /Recovered/<uid> into the shared vault).
+    write(o, "/purged.txt", bytes("purged on A, kept in the bucket"));
+    pass(o.engine);
+    const auto purged = db::query::fs::File::getFileByPath(o.id, "/purged.txt");
+    ASSERT_TRUE(purged && purged->object_uid);
+    const auto purgedKey = storage::object_keys::contentKey(*purged->object_uid);
+    const auto kept = o.bucket->current(purgedKey);
+    ASSERT_TRUE(kept);
+    fs::Filesystem::remove(o.engine->vaultPathToFusePath("/purged.txt"), superUser->id);
+    o.files.erase("/purged.txt");
+    pass(o.engine);
+    (void)o.bucket->seed(purgedKey, kept->body);
     const auto nodeA = db::query::device::Devices::nodeId();
     becomeAnotherNode(o.id);
     const auto nodeB = db::query::device::Devices::nodeId();
@@ -732,6 +746,8 @@ TEST_F(VaultRecoverDb, AJoinIsARestoreThatAddsThisNodeToTheWritersAndKeepsTheOth
     auto dry = req;
     dry.dry_run = true;
     EXPECT_EQ(code([&] { return ops::vault_replicas::join(superUser, dry, keys::Channel::Cli); }), "ok");
+    EXPECT_TRUE(ops::vault_replicas::join(superUser, dry, keys::Channel::Cli).report.at("orphans").empty());
+    EXPECT_FALSE(recover(o, &kit, nullptr, dry).report.at("orphans").empty()) << "a restore still recovers it";
 
     const auto r = ops::vault_replicas::join(superUser, req, keys::Channel::Cli);
     ASSERT_TRUE(r.written) << r.report.dump(2);
@@ -743,6 +759,9 @@ TEST_F(VaultRecoverDb, AJoinIsARestoreThatAddsThisNodeToTheWritersAndKeepsTheOth
     EXPECT_TRUE(sync::replicas::replicated(*r.vault_id));
     const auto engine = runtime::Deps::get().storageManager->getEngine(*r.vault_id);
     for (const auto& [path, content] : o.files) EXPECT_EQ(readFile(engine, path), content) << path;
+    EXPECT_TRUE(r.report.at("orphans").empty());
+    EXPECT_TRUE(db::query::fs::File::listFilesInDir(*r.vault_id, "/Recovered").empty()) << "nothing placed";
+    EXPECT_FALSE(db::query::fs::File::getFileByPath(*r.vault_id, "/purged.txt"));
 
     EXPECT_EQ(code([&] { return ops::vault_replicas::join(superUser, req, keys::Channel::Cli); }), "conflict")
         << "the bucket is held here with that key already";
