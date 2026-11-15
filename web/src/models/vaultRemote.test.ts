@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { activeOperation, canAbort, isRunning, lastError, phaseLabel, progressRatio, remoteSummaryLabel, type VaultRemoteStatus } from './vaultRemote.ts'
+import { accessNotice, activeOperation, canAbort, isRunning, lastError, phaseLabel, progressRatio, remoteSummaryLabel, type VaultRemoteStatus } from './vaultRemote.ts'
 
 const base = (): VaultRemoteStatus =>
   ({
@@ -55,4 +55,11 @@ test('labels', () => {
   assert.equal(phaseLabel('something-new'), 'something-new')
   assert.equal(remoteSummaryLabel('none'), 'Local storage only')
   assert.equal(remoteSummaryLabel('detaching:hydrating'), 'Detaching remote storage (fetching and verifying the files on this server)')
+})
+
+test('the access notice says nothing while access is full', () => {
+  assert.equal(accessNotice(null), null)
+  assert.equal(accessNotice({ mode: 'full', reason: null, set_by: null, set_at: null }), null)
+  assert.match(accessNotice({ mode: 'read_only', reason: 'over quota', set_by: 'system:storage', set_at: 1 }) ?? '', /^Read-only \(over quota\)/)
+  assert.match(accessNotice({ mode: 'none', reason: null, set_by: 'user:admin', set_at: 1 }) ?? '', /^Unavailable:/)
 })

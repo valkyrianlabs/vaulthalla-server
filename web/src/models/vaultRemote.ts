@@ -64,6 +64,17 @@ export const progressRatio = (p: VaultRemoteProgress | null | undefined): number
   return Math.min(1, p.bytes_done / p.bytes_total)
 }
 
+export type VaultRemoteAccess = WsModels['VaultRemoteAccess']
+
+// An S3 vault's remote access gate, in words; null while it is full (nothing to say).
+export const accessNotice = (access: VaultRemoteAccess | null | undefined): string | null => {
+  if (!access || access.mode === 'full') return null
+  const why = access.reason ? ` (${access.reason})` : ''
+  if (access.mode === 'read_only')
+    return `Read-only${why}: files are read and fetched as before, but nothing is uploaded, deleted or published to the bucket. Changes made here wait and go up once access is full again.`
+  return `Unavailable${why}: no request goes to the bucket. Files with a copy on this server keep working; files without one can’t be opened.`
+}
+
 // What the remote summary of storage.vault.get says, in words.
 export const remoteSummaryLabel = (remote: string | null | undefined): string => {
   if (!remote || remote === 'none') return 'Local storage only'

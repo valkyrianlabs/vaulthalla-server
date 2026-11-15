@@ -20,6 +20,7 @@ import { useCredentials, VAULT_EDIT } from '@/features/vaults/hooks'
 import { storageTierOptions } from '@/features/vaults/fields'
 import type { VaultDetail } from '@/features/vaults/model'
 import {
+  accessNotice,
   activeOperation,
   canAbort,
   isRunning,
@@ -90,9 +91,22 @@ const OperationBadge = ({ status }: { status: VaultRemoteStatus }) => {
 
 const Body = ({ vault, status }: { vault: VaultDetail; status: VaultRemoteStatus | null }) => {
   const op = activeOperation(status)
-  if (op && status) return <Progress vault={vault} status={status} op={op} />
+  const notice = accessNotice(status?.access)
+  const access = notice ?
+      <div role="status" data-testid="remote-access-notice" className="rounded-control border border-warn-line bg-warn-soft px-3 py-2 text-sm text-warn">
+        {notice}
+      </div>
+    : null
+  if (op && status)
+    return (
+      <div className="space-y-4">
+        {access}
+        <Progress vault={vault} status={status} op={op} />
+      </div>
+    )
   return (
     <div className="space-y-4">
+      {access}
       <LastOutcome status={status} />
       {vault.type === 'local' ? <AttachForm vault={vault} /> : <DetachSection vault={vault} />}
     </div>
