@@ -1028,6 +1028,16 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   root's `writers` (a trash is purged locally only while another writer exists), and the last apply
   (`manifest_apply_report`, `ManifestApply::status`: `storage.vault.get` `manifest`, `vh vault sync info`; a stopped
   apply alerts once, `manifest_apply_stopped`).
+- **Two writers on one bucket** (design "As built: the mirror drill"; migrations 148, 149). Theirs' key checks are
+  recomputed over the producer's vault id (`reconcile(..., SameKey)`). `Session::publishIfChanged` publishes nothing
+  when the merged result equals the recorded root up to producer-specific values (`differsFromRecorded`). With another
+  writer and a bucket that keeps no versions, a content edit/edit is forced to an open conflict (`Cloud::askTwoSided`).
+  `Manifest::collect` takes a file's size and hash from its generation's index row. mtimes: the fs_entry trigger
+  keeps an explicit `updated_at` (and any, under `set_config('vh.keep_mtime', 'on', true)`), the applier writes the
+  target's mtime on moves and attributes, an opaque_v1 download keeps the row's, reconcile carries an mtime one side
+  changed. Shared trash: purges remembered (`manifest_shared_purge`), deleted from the bucket by
+  `Service::collectSharedOrphans` after 7 days while nothing names them. Test-only seams (test mode only):
+  `VH_TEST_MANIFEST_WRITERS`, `VH_TEST_FAULT_DIR/crash-after-root-put`.
 - **`vh vault recover`** (#371, spec 03 §6.4): `vault::recover` (plan: envelopes, export, `loadForRestore` with the
   kit's checkpoint or blind, D1 `prove` against the customer's pinned attestation keys, reconciliation, `MeteredStore`
   download budget), `db::query::vault::Recover` (one transaction: vault, tree with inodes, trash, index, provider

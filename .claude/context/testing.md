@@ -131,6 +131,10 @@ seeds each, ~5 s at -O0, print the failing seed, and `VH_RECONCILE_SEED=<n>` rer
 pass's one HEAD, compare-and-set skips, crashes between operations, deferral of open files, the real trash form, lost
 rounds, union without a base copy, share links), `VaultRecoverDb.ARestoreKeepsEachSnapshotsUid`. The interleaving
 suite's `ManifestVersionLogFaults.WithTheApplier*` runs writers with model databases (`Scenario::model_db`).
+The mirror drill (`vhh drill mirror`, `vhh/drill_mirror.py`): two daemons on one versioned fake bucket, B restored
+from A's with a kit and made a writer by the test-only `VH_TEST_MANIFEST_WRITERS`; every phase requires one recorded
+root and equal FUSE views on both (~6 min on dev; 37 checks). Its findings are DB tests in `ManifestApplyDb*`,
+`ManifestReconcile*`, `VaultRecoverDb.RestoresTheVault*`, `SqlDeployerHistoryDb.FsEntryMtimeMigration149*`.
 
 ## Cloud relay suites
 
@@ -305,6 +309,7 @@ sudo tools/harness/vhh.sh scenario hang|crash --build build        # daemon stop
 sudo tools/harness/vhh.sh drill recover --build build [--files 2000] # spec 03 §7 restore drill (#371), fake S3
 sudo tools/harness/drill_recover_r2.sh --build build --files 300    # the same drill on live R2 (vh-test-recover-drill)
 sudo tools/harness/vhh.sh drill migrate --build build --files 300    # layout migration path_v0 -> opaque_v1 (#373)
+sudo tools/harness/vhh.sh drill mirror --build build                 # two writers on one bucket (design/sync/manifest-applier.md)
 tools/harness/vhh.sh world oracle-check                            # RBAC model vs the fixture's 59 expectations
 bash tools/dev/verify.sh harness                                   # unit + self tests (CI tooling job)
 ```
