@@ -82,15 +82,18 @@ Pick threeWay(const std::optional<T>& base, const T& theirs, const T& ours) {
     return Pick::Conflict;
 }
 
-// History union: theirs' first, then ours' that theirs doesn't hold.
+// History union: theirs' first, then ours' that theirs doesn't hold. A version both hold keeps when it became
+// noncurrent if either side knows (the writer whose PUT replaced it does; the other learns it here).
 void unionHistory(Entry& r, const Entry* t, const Entry* o) {
     std::vector<FileVersion> versions;
     std::vector<PriorName> names;
     for (const auto* side : {t, o}) {
         if (!side) continue;
-        for (const auto& v : side->versions)
-            if (std::ranges::none_of(versions, [&](const FileVersion& x) { return x.version_id == v.version_id; }))
-                versions.push_back(v);
+        for (const auto& v : side->versions) {
+            const auto held = std::ranges::find_if(versions, [&](const FileVersion& x) { return x.version_id == v.version_id; });
+            if (held == versions.end()) versions.push_back(v);
+            else if (!held->noncurrent_at && v.noncurrent_at) held->noncurrent_at = v.noncurrent_at;
+        }
         for (const auto& n : side->names)
             if (std::ranges::find(names, n) == names.end()) names.push_back(n);
     }
@@ -102,10 +105,11 @@ void unionHistory(Entry& r, const Entry* t, const Entry* o) {
 // The history a database holds: provider versions, as a set (it lists them in its own order). Prior names and a
 // tombstone's last place are not the database's: the publisher carries them from the previous root (carryHistory), so
 // they never make an operation.
+// A version that became noncurrent counts as history too (whether, not when: each writer dates what it observed).
 bool sameHistory(const Entry& a, const Entry& b) {
     const auto ids = [](const Entry& e) {
-        std::set<std::string> out;
-        for (const auto& v : e.versions) out.insert(v.version_id);
+        std::set<std::pair<std::string, bool>> out;
+        for (const auto& v : e.versions) out.emplace(v.version_id, v.noncurrent_at.has_value());
         return out;
     };
     return ids(a) == ids(b);
@@ -146,12 +150,21 @@ Decided mergeLive(const std::string& uid, const Entry* b, const Entry& t, const 
     using ContentKey = decltype(contentOf(t));
     using AttrKey = decltype(attributesOf(t));
     const auto baseContent = isLive(b) ? std::optional<ContentKey>(contentOf(*b)) : std::nullopt;
-    switch (threeWay(baseContent, contentOf(t), contentOf(o))) {
+    const auto contentPick = threeWay(baseContent, contentOf(t), contentOf(o));
+    switch (contentPick) {
     case Pick::Theirs: takeContent(r, t); break;
     case Pick::Conflict:
         ctx.report(ConflictKind::ContentEditEdit, uid, &t, &o, "content changed on both sides", true);
         break;
     default: break;
+    }
+    // mtime on its own (a rename or a chmod restamps a file here): theirs when only they changed it, the head's when
+    // both did; under an open content conflict ours stays with our content. Never a directory's (each server's own).
+    if (contentPick == Pick::Same && t.kind != EntryKind::Dir) {
+        using Mtime = std::optional<std::string>;
+        const auto baseMtime = isLive(b) ? std::optional<Mtime>(b->mtime) : std::nullopt;
+        if (const auto pick = threeWay(baseMtime, t.mtime, o.mtime); pick == Pick::Theirs || pick == Pick::Conflict)
+            r.mtime = t.mtime;
     }
     const auto baseAttrs = isLive(b) ? std::optional<AttrKey>(attributesOf(*b)) : std::nullopt;
     switch (threeWay(baseAttrs, attributesOf(t), attributesOf(o))) {
@@ -480,6 +493,10 @@ std::string recoveredDirUid(const std::string& rootUid) {
 }
 
 Reconciliation reconcile(const Content& base, const Content& theirs, const Content& ours) {
+    return reconcile(base, theirs, ours, {});
+}
+
+Reconciliation reconcile(const Content& base, const Content& theirs, const Content& ours, const SameKey& sameKey) {
     using namespace reconcile_detail;
     Reconciliation out;
     out.result = ours;
@@ -488,7 +505,8 @@ Reconciliation reconcile(const Content& base, const Content& theirs, const Conte
     for (const auto& k : theirs.keys) {
         const auto held = std::ranges::find(ours.keys, k.version, &KeyRecord::version);
         if (held == ours.keys.end()) out.key_problems.push_back({k.version, "manifest_key_missing"});
-        else if (k.key_check && held->key_check && *k.key_check != *held->key_check)
+        else if (k.key_check && held->key_check &&
+                 !(sameKey ? sameKey(k, *held, theirs.producer) : *k.key_check == *held->key_check))
             out.key_problems.push_back({k.version, "manifest_key_mismatch"});
     }
     if (out.stopped()) return out;
@@ -597,8 +615,11 @@ Reconciliation reconcile(const Content& base, const Content& theirs, const Conte
             else if (isTrashed(oe)) add(OpKind::Restore);
             else {
                 if (placementOf(*oe) != placementOf(*re)) add(OpKind::Move);
-                if (contentOf(*oe) != contentOf(*re) || oe->mtime != re->mtime) add(OpKind::ReplaceContent);
-                if (attributesOf(*oe) != attributesOf(*re) || oe->kind != re->kind || oe->ctime != re->ctime)
+                if (contentOf(*oe) != contentOf(*re)) add(OpKind::ReplaceContent);
+                // An mtime alone travels with a move, else as an attribute (the executors write the target's mtime).
+                const bool mtimeOnly = oe->mtime != re->mtime && contentOf(*oe) == contentOf(*re) &&
+                                       placementOf(*oe) == placementOf(*re) && re->kind != EntryKind::Dir;
+                if (attributesOf(*oe) != attributesOf(*re) || oe->kind != re->kind || oe->ctime != re->ctime || mtimeOnly)
                     add(OpKind::SetAttributes);
             }
         } else if (isTrashed(re)) {

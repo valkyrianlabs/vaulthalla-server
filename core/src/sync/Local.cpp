@@ -26,6 +26,7 @@
 #include "sync/tasks/Delete.hpp"
 #include "storage/s3/Controller.hpp"
 #include "db/query/sync/RemoteObjectIndex.hpp"
+#include "db/query/sync/ManifestApply.hpp"
 #include "preview/cache/Store.hpp"
 
 #include <algorithm>
@@ -424,8 +425,12 @@ void Local::removeTrashedFiles() {
                 if (!file) throw std::runtime_error("null trashed file");
                 scoped->start(file->size_bytes);
                 const auto key = cloud->objectKeyOf(*file);   // o/<uid> under opaque_v1, else the path
-                if (shared) cloud->removeLocally(file);
-                else cloud->purge(file);
+                if (shared) {
+                    cloud->removeLocally(file);
+                    db::query::sync::ManifestApply::notePurgedLocally(file->vault_id, key);   // collected later
+                } else {
+                    cloud->purge(file);
+                }
                 db::query::sync::RemoteObjectIndex::deleteKey(file->vault_id, key);
                 purged.push_back({file, scoped});
                 remoteIndexMutated = true;

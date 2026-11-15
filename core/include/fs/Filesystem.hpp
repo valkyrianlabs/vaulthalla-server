@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -79,6 +80,9 @@ struct NewFileContext {
     // Why an overwrite replaces the content, as local versioning records the replaced generation (default overwrite):
     // a sync download, a restore, a conflict resolution.
     std::optional<recovery::local::Reason> version_reason{};
+    // The modification time an overwritten row keeps (a sync download of content the row already dates: opaque_v1's
+    // manifest mtime); nullopt: now.
+    std::optional<std::time_t> mtime{};
     // Commits content that is already sealed instead of buffer/source_path (nothing is encrypted, no plaintext is
     // produced) through the same overwrite and new-file branches: content lock, CAS, refusals, rows, cache. The
     // writer runs under the content lock on an overwrite.

@@ -143,6 +143,29 @@ TEST(ManifestReconcile, AChangeOnOneSideTakesThatSide) {
     EXPECT_EQ(kindsFor(r, kNotes), std::vector{OpKind::ReplaceContent});
 }
 
+// Found by the mirror drill: a rename restamps the file on the writer that made it, and the mtime only followed
+// content, so the other writer kept its own and the roots differed on every pass. An mtime one side changed travels
+// on its own: with the move, else as an attribute (never a ReplaceContent, which would fetch the content again).
+TEST(ManifestReconcile, AnMtimeOnlyOneSideChangedTravelsWithoutTheContent) {
+    const auto base = baseVault();
+    auto theirs = base, ours = base;
+    at(theirs, kReport).name = "moved.pdf";
+    at(theirs, kReport).mtime = "2026-11-15T10:00:00Z";   // restamped by the rename there
+    at(theirs, kNotes).mtime = "2026-11-15T10:00:01Z";    // restamped by a chmod there
+    auto r = checked(base, theirs, ours);
+    EXPECT_EQ(find(r.result, kReport)->mtime, "2026-11-15T10:00:00Z");
+    EXPECT_EQ(kindsFor(r, kReport), std::vector{OpKind::Move});
+    EXPECT_EQ(find(r.result, kNotes)->mtime, "2026-11-15T10:00:01Z");
+    EXPECT_EQ(kindsFor(r, kNotes), std::vector{OpKind::SetAttributes});
+    // Both restamped it: the head's. Ours alone: ours, nothing to do.
+    at(ours, kNotes).mtime = "2026-11-15T10:00:02Z";
+    r = checked(base, theirs, ours);
+    EXPECT_EQ(find(r.result, kNotes)->mtime, "2026-11-15T10:00:01Z");
+    r = checked(base, base, ours);
+    EXPECT_EQ(find(r.result, kNotes)->mtime, "2026-11-15T10:00:02Z");
+    EXPECT_TRUE(kindsFor(r, kNotes).empty());
+}
+
 TEST(ManifestReconcile, TheSameChangeOnBothSidesIsInSync) {
     const auto base = baseVault();
     auto theirs = base, ours = base;
@@ -451,6 +474,30 @@ TEST(ManifestReconcile, HistoryIsAUnionAndTombstonesStay) {
     ASSERT_TRUE(find(p.result, kReport));
     EXPECT_EQ(find(p.result, kReport)->kind, EntryKind::Tombstone);
     EXPECT_EQ(kindsFor(p, kReport), (std::vector{OpKind::Delete, OpKind::AddHistory}));
+}
+
+// Found by the mirror drill: the writer whose PUT replaced a version knows when it became noncurrent, the other held
+// it as current; the union kept the other's record, so their roots differed on every pass. The union takes the
+// noncurrent date either side knows (AddHistory then writes it), and holding it already is no further operation.
+TEST(ManifestReconcile, AVersionTheOtherWriterKnowsIsNoncurrentIsTakenOnce) {
+    auto base = baseVault();
+    const FileVersion current{"v1", std::nullopt, 1, 146, "\"e1\"", "2026-11-01T00:00:00Z", std::nullopt, false,
+                              std::nullopt};
+    auto noncurrent = current;
+    noncurrent.noncurrent_at = "2026-11-02T00:00:00Z";
+    at(base, kReport).versions = {current};
+    auto theirs = base, ours = base;
+    at(theirs, kReport).versions = {noncurrent};
+    const auto r = checked(base, theirs, ours);
+    EXPECT_EQ(find(r.result, kReport)->versions, std::vector{noncurrent});
+    EXPECT_EQ(kindsFor(r, kReport), std::vector{OpKind::AddHistory});
+    // Ours knew it (another date): kept, nothing to do; theirs not knowing it takes nothing away.
+    auto later = noncurrent;
+    later.noncurrent_at = "2026-11-03T00:00:00Z";
+    at(ours, kReport).versions = {later};
+    EXPECT_TRUE(kindsFor(checked(base, theirs, ours), kReport).empty());
+    EXPECT_TRUE(kindsFor(checked(base, base, ours), kReport).empty());
+    EXPECT_EQ(find(checked(base, base, ours).result, kReport)->versions, std::vector{later});
 }
 
 TEST(ManifestReconcile, AKeyVersionNotHeldOrWithAnotherKeyCheckStopsEverything) {

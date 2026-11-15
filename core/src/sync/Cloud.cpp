@@ -373,6 +373,7 @@ void Cloud::sync() {
 void Cloud::initBins() {
     const auto cloud = cloudEngine();
     opaque = cloud->opaqueLayout();
+    askTwoSided = opaque && cloud->manifestNamesOtherWriters() && !cloud->bucketKeepsVersions();
     opaqueTally = {};
     const auto policy = cloud->remote_policy();
     const auto hooks = eventHooks();
@@ -675,7 +676,7 @@ std::shared_ptr<Conflict> Cloud::maybeBuildConflict(
 }
 
 bool Cloud::handleConflict(const std::shared_ptr<Conflict>& c) {
-    const bool ok = engine->sync->resolve_conflict(c);
+    const bool ok = askTwoSided ? false : engine->sync->resolve_conflict(c);
     if (event) event->conflicts.push_back(c);
 
     const auto open = openConflicts.find(c->file_id);

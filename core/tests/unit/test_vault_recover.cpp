@@ -490,6 +490,12 @@ protected:
 
 TEST_F(VaultRecoverDb, RestoresTheVaultOnANodeThatNeverHeldItFromTheKit) {
     auto o = populated();
+    // Created long before the restore (found by the mirror drill: the restored row took the restore's time, so the two
+    // writers' roots disagreed on it and each republished the other's root every pass).
+    db::Transactions::exec("backdate", [&](pqxx::work& txn) {
+        txn.exec("UPDATE vault SET created_at = '2025-03-04T05:06:07Z' WHERE id = $1", pqxx::params{o.id});
+    });
+    o.engine->publishRemoteIndexManifest();
     const auto kit = kitOf(o);
     const auto expected = db::query::sync::Manifest::collect(o.id);
     const auto epochBefore = db::query::sync::Manifest::state(o.id).epoch;
@@ -497,9 +503,25 @@ TEST_F(VaultRecoverDb, RestoresTheVaultOnANodeThatNeverHeldItFromTheKit) {
     const auto keysBefore = keys::status(superUser, o.id).front();
     becomeAnotherNode(o.id);
 
+    const auto fsRootFiles = [] {
+        return db::Transactions::exec("fs root", [](pqxx::work& txn) {
+            return txn.exec("SELECT d.file_count FROM directories d JOIN fs_entry e ON e.id = d.fs_entry_id "
+                            "WHERE e.parent_id IS NULL AND e.vault_id IS NULL AND e.path = '/' AND e.name = '/'")
+                .one_field_ref().as<int64_t>();
+        });
+    };
+    const auto rootFilesBefore = fsRootFiles();
     o.bucket->clearRequests();
     const auto r = recover(o, &kit, nullptr);
     ASSERT_TRUE(r.written) << r.report.dump(2);
+    // The filesystem root counts the restored files, as a written vault's (found by the mirror drill: it went below
+    // zero on the restored node's first deletes).
+    const auto vaultRootFiles = db::Transactions::exec("vault root", [&](pqxx::work& txn) {
+        return txn.exec("SELECT d.file_count FROM directories d JOIN fs_entry e ON e.id = d.fs_entry_id "
+                        "WHERE e.vault_id = $1 AND e.path = '/'", pqxx::params{*r.vault_id}).one_field_ref().as<int64_t>();
+    });
+    EXPECT_GT(vaultRootFiles, 0);
+    EXPECT_EQ(fsRootFiles() - rootFilesBefore, vaultRootFiles);
     ASSERT_TRUE(r.vault_id);
     EXPECT_EQ(r.mode, "canonical");
     EXPECT_TRUE(r.key_available) << r.note.value_or("");
@@ -519,6 +541,7 @@ TEST_F(VaultRecoverDb, RestoresTheVaultOnANodeThatNeverHeldItFromTheKit) {
     const auto restored = db::query::sync::Manifest::collect(*r.vault_id);
     EXPECT_EQ(shape(restored), shape(expected));
     EXPECT_EQ(restored.vault->name, expected.vault->name);
+    EXPECT_EQ(restored.vault->created_at, std::optional<std::string>("2025-03-04T05:06:07Z")) << "the vault's creation";
     ASSERT_TRUE(restored.recovery_policy);
     EXPECT_EQ(restored.recovery_policy->grants.size(), 1u) << "the recipient is enrolled again";
 

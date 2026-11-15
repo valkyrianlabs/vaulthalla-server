@@ -47,6 +47,10 @@ namespace vh::sync {
         // .vaulthalla/ are foreign: reported (foreign_objects = ignore, the default) or imported once as
         // /Imported/<key> (import).
         bool opaque = false;
+        // Another writer is named in the vault's root and the bucket keeps no versions (design/sync/manifest-applier.md,
+        // "Content edit/edit across replicas"): a two-sided content change is never decided by the policy (the loser's
+        // bytes would be lost); it stays an open conflict, both sides kept, as under `ask`.
+        bool askTwoSided = false;
         struct OpaqueTally {
             uint64_t orphans{};
             uint64_t foreign_ignored{};

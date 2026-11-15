@@ -18,6 +18,9 @@ namespace vh::db::query::sync {
 
 namespace manifest_apply_detail {
 
+// The transaction writes fs_entry times itself (migration 149): the trigger keeps them, equal to the old one too.
+void keepMtimes(pqxx::work& txn) { txn.exec("SELECT set_config('vh.keep_mtime', 'on', true)"); }
+
 namespace mf = vh::sync::manifest;
 
 std::string uuidOf(const std::string& uid) { return vh::crypto::id::toUuid(mf::parseUid(uid, "bad_segment", "entry uid")); }
@@ -196,6 +199,7 @@ bool ManifestApply::replaceContent(pqxx::work& txn, const unsigned int fileId, c
              "  encryption_iv = $5, encrypted_with_key_version = $6 WHERE fs_entry_id = $1",
              pqxx::params{fileId, static_cast<int64_t>(e.size.value_or(0)), e.mime, e.content_hash, gen.value_or(""),
                           static_cast<int>(gen ? e.key_version.value_or(0) : 0)});
+    manifest_apply_detail::keepMtimes(txn);
     txn.exec("UPDATE fs_entry SET updated_at = COALESCE($2::timestamptz, NOW()) WHERE id = $1",
              pqxx::params{fileId, e.mtime});
     if (!before[0][2].is_null())
@@ -204,14 +208,21 @@ bool ManifestApply::replaceContent(pqxx::work& txn, const unsigned int fileId, c
     return true;
 }
 
+void ManifestApply::setMtime(pqxx::work& txn, const unsigned int entryId, const std::string& mtime) {
+    manifest_apply_detail::keepMtimes(txn);
+    txn.exec("UPDATE fs_entry SET updated_at = $2::timestamptz WHERE id = $1", pqxx::params{entryId, mtime});
+}
+
 bool ManifestApply::moveRow(pqxx::work& txn, const unsigned int id, const unsigned int fromParentId,
                             const std::string& fromName, const unsigned int toParentId, const std::string& toName,
-                            const std::string& toPath) {
+                            const std::string& toPath, const std::optional<std::string>& mtime) {
     const auto totals = db::query::fs::Directory::subtreeTotalsOf(txn, id);
     if (!totals) return false;
-    const auto moved = txn.exec("UPDATE fs_entry SET parent_id = $2, name = $3, path = $4, updated_at = NOW() "
+    manifest_apply_detail::keepMtimes(txn);
+    const auto moved = txn.exec("UPDATE fs_entry SET parent_id = $2, name = $3, path = $4, "
+                                "  updated_at = COALESCE($7::timestamptz, NOW()) "
                                 "WHERE id = $1 AND parent_id = $5 AND name = $6 RETURNING id",
-                                pqxx::params{id, toParentId, toName, toPath, fromParentId, fromName});
+                                pqxx::params{id, toParentId, toName, toPath, fromParentId, fromName, mtime});
     if (moved.empty()) return false;
     db::query::fs::Directory::shiftSubtreeTotals(txn, fromParentId, toParentId, *totals);
     return true;
@@ -222,14 +233,18 @@ bool ManifestApply::setAttributes(pqxx::work& txn, const unsigned int entryId, c
     const auto opt = [](const auto& o) {
         return o ? std::optional<int64_t>(static_cast<int64_t>(*o)) : std::nullopt;
     };
+    manifest_apply_detail::keepMtimes(txn);
     const auto updated = txn.exec(
-        "UPDATE fs_entry SET mode = COALESCE($2, mode), owner_uid = $3, group_gid = $4 WHERE id = $1 "
-        "AND mode IS NOT DISTINCT FROM COALESCE($5, mode) AND owner_uid IS NOT DISTINCT FROM $6 "
-        "AND group_gid IS NOT DISTINCT FROM $7 RETURNING id",
+        "UPDATE fs_entry SET mode = COALESCE($2, mode), owner_uid = $3, group_gid = $4, "
+        "  updated_at = COALESCE($8::timestamptz, NOW()) WHERE id = $1 "
+        // ours.owner as the collector reads it: present when either id is set, a missing one as 0.
+        "AND mode IS NOT DISTINCT FROM COALESCE($5, mode) "
+        "AND ((owner_uid IS NULL AND group_gid IS NULL AND $6::bigint IS NULL) "
+        "     OR (COALESCE(owner_uid, 0) = $6 AND COALESCE(group_gid, 0) = $7)) RETURNING id",
         pqxx::params{entryId, opt(target.mode), target.owner ? std::optional(target.owner->uid) : std::nullopt,
                      target.owner ? std::optional(target.owner->gid) : std::nullopt, opt(ours.mode),
                      ours.owner ? std::optional(ours.owner->uid) : std::nullopt,
-                     ours.owner ? std::optional(ours.owner->gid) : std::nullopt});
+                     ours.owner ? std::optional(ours.owner->gid) : std::nullopt, target.mtime});
     if (updated.empty()) return false;
     if (target.kind == vh::sync::manifest::EntryKind::Symlink && target.target != ours.target)
         txn.exec("UPDATE symlinks SET target = $2 WHERE fs_entry_id = $1 AND target IS NOT DISTINCT FROM $3",
@@ -249,7 +264,10 @@ void ManifestApply::addHistory(pqxx::work& txn, const uint32_t vaultId, const vh
         txn.exec("INSERT INTO upstream_object_version (vault_id, object_key, version_id, is_delete_marker, is_latest, "
                  "  etag, size_bytes, last_modified, origin, encrypted, encryption_iv, key_version, plaintext_bytes, "
                  "  became_noncurrent_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, 'observed', $9, $10, "
-                 "  $11, $12, $13::timestamptz) ON CONFLICT (vault_id, object_key, version_id) DO NOTHING",
+                 "  $11, $12, $13::timestamptz) ON CONFLICT (vault_id, object_key, version_id) DO UPDATE SET "
+                 "  became_noncurrent_at = EXCLUDED.became_noncurrent_at, is_latest = false "
+                 "  WHERE upstream_object_version.became_noncurrent_at IS NULL "
+                 "    AND EXCLUDED.became_noncurrent_at IS NOT NULL",
                  pqxx::params{vaultId, objectKey(e.uid), v.version_id, v.delete_marker, latest, v.etag,
                               v.size ? std::optional<int64_t>(static_cast<int64_t>(*v.size)) : std::nullopt,
                               v.last_modified, !v.delete_marker, vgen,
@@ -429,6 +447,32 @@ nlohmann::json ManifestApply::status(const uint32_t vaultId) {
                                                                : nlohmann::json(row[12].as<std::string>())}};
         }
         return out;
+    });
+}
+
+void ManifestApply::notePurgedLocally(const uint32_t vaultId, const std::string& objectKey) {
+    Transactions::exec("ManifestApply::notePurgedLocally", [&](pqxx::work& txn) {
+        txn.exec("INSERT INTO manifest_shared_purge (vault_id, object_key) VALUES ($1, $2) "
+                 "ON CONFLICT (vault_id, object_key) DO NOTHING",
+                 pqxx::params{vaultId, objectKey});
+    });
+}
+
+std::vector<std::string> ManifestApply::purgedLocallyBefore(const uint32_t vaultId, const std::time_t cutoff) {
+    return Transactions::exec("ManifestApply::purgedLocallyBefore", [&](pqxx::work& txn) {
+        std::vector<std::string> out;
+        for (const auto r : txn.exec("SELECT object_key FROM manifest_shared_purge WHERE vault_id = $1 "
+                                     "AND purged_at < to_timestamp($2) ORDER BY purged_at",
+                                     pqxx::params{vaultId, static_cast<int64_t>(cutoff)}))
+            out.push_back(r[0].as<std::string>());
+        return out;
+    });
+}
+
+void ManifestApply::dropPurgedLocally(const uint32_t vaultId, const std::string& objectKey) {
+    Transactions::exec("ManifestApply::dropPurgedLocally", [&](pqxx::work& txn) {
+        txn.exec("DELETE FROM manifest_shared_purge WHERE vault_id = $1 AND object_key = $2",
+                 pqxx::params{vaultId, objectKey});
     });
 }
 

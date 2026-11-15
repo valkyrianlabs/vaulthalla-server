@@ -15,6 +15,7 @@
 #include "../helpers/db_suite.hpp"
 #include "../helpers/versioned_bucket.hpp"
 #include "crypto/id/ObjectUid.hpp"
+#include "db/query/fs/Entry.hpp"
 #include "db/query/fs/File.hpp"
 #include "fs/model/File.hpp"
 #include "db/query/device/Device.hpp"
@@ -24,6 +25,8 @@
 #include "fs/cache/Registry.hpp"
 #include "crypto/vhf1/Format.hpp"
 #include "crypto/vhf1/Writer.hpp"
+#include "crypto/vhf1/Reader.hpp"
+#include "vault/KeyCheck.hpp"
 #include "notifications/OperatorNotificationBus.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "sync/model/RemotePolicy.hpp"
@@ -677,6 +680,9 @@ TEST_F(ManifestApplyDb, ARootThatOnlyNamesThisNodeIsNotTakenForItsOwn) {
     auto beside = head().content;
     at(beside, "top.txt").name = "beside.txt";
     beside.producer.vault_id = id() + 100000;
+    for (auto& key : beside.keys)   // its key checks are over its own vault id (vault/KeyCheck.hpp)
+        if (const auto held = v.engine->encryptionManager->historicalKeySnapshot(key.version))
+            key.key_check = vault::keyCheck(held->bytes(), id() + 100000, key.version);
     (void)publishAs(beside, db::query::device::Devices::nodeId());
     const auto r = service->applyRemote();
     ASSERT_TRUE(r);
@@ -1037,6 +1043,39 @@ TEST_F(ManifestApplyDb, WithAnotherWriterATrashIsPurgedWithoutARemoteDelete) {
 
 // Remote-only files (no local bytes, as under cache) after an applied move and an applied content replacement: the
 // next read hydrates the right object at the right place.
+// Found by the drill: a file whose group is unset (NULL) collects as owner {uid, 0}, and the attribute write's
+// compare-and-set compared that 0 with NULL: the root was skipped on every pass and never recorded.
+TEST_F(ManifestApplyDb, AnAttributeChangeAppliesToAFileWithoutAGroup) {
+    seed();
+    db::Transactions::exec("no group", [&](pqxx::work& txn) {
+        txn.exec("UPDATE fs_entry SET owner_uid = 1000, group_gid = NULL WHERE vault_id = $1 AND path = '/Photos/a.jpg'",
+                 pqxx::params{id()});
+    });
+    auto theirs = head().content;
+    at(theirs, "a.jpg").owner = mf::Owner{1000, 0};
+    at(theirs, "a.jpg").mode = 0600;
+    (void)publishAs(theirs);
+    const auto r = service->applyRemote();
+    ASSERT_TRUE(r);
+    EXPECT_EQ(r->skipped, 0u);
+    EXPECT_TRUE(r->recorded);
+    EXPECT_EQ(db::query::fs::Entry::getFSEntryByPath(id(), "/Photos/a.jpg")->mode.value_or(0) & 0777, 0600u);
+}
+
+// Found by the drill: an empty folder a restore created has no backing directory, and moving it through FUSE failed
+// with ENOENT ("source backing path does not exist").
+TEST_F(ManifestApplyDb, AFolderWithoutABackingDirectoryMovesThroughTheFilesystem) {
+    seed();
+    mkdir("/Empty");
+    const auto entry = db::query::fs::Entry::getFSEntryByPath(id(), "/Empty");
+    ASSERT_TRUE(entry);
+    std::filesystem::remove(entry->backing_path);   // as a restore leaves it
+    ASSERT_EQ(fs::Filesystem::rename(v.engine->vaultPathToFusePath("/Empty"), v.engine->vaultPathToFusePath("/Docs/Empty"),
+                                     nullptr, v.engine, fs::RenameMode::NoReplace), 0);
+    EXPECT_TRUE(db::query::fs::Entry::getFSEntryByPath(id(), "/Docs/Empty"));
+    EXPECT_FALSE(db::query::fs::Entry::getFSEntryByPath(id(), "/Empty"));
+}
+
 TEST_F(ManifestApplyDb, RemoteOnlyFilesHydrateAfterAnAppliedMoveAndReplacement) {
     seed();
     for (const auto* p : {"/Docs/report.pdf", "/Docs/notes.txt"}) {
@@ -1067,6 +1106,267 @@ TEST_F(ManifestApplyDb, RemoteOnlyFilesHydrateAfterAnAppliedMoveAndReplacement) 
     ASSERT_TRUE(r && r->recorded);
     EXPECT_EQ(readAllOf(v.engine, "/Photos/notes.txt"), "notes");
     EXPECT_EQ(readAllOf(v.engine, "/Docs/report.pdf"), v2);
+}
+
+
+// ── The mirror drill's findings and the shared-vault rules (design: "As built: the mirror drill") ───────────────────
+
+namespace {
+
+// Theirs' new content for `uid`, sealed as its writer seals it and stored in the bucket; the entry says so.
+std::vector<uint8_t> sealTheirs(test_support::versioned::CloudVault& v, mf::Entry& e, const std::string& text) {
+    const auto k = v.engine->encryptionManager->currentKey();
+    crypto::vhf1::HeaderParams hp;
+    hp.kind = crypto::vhf1::Kind::FileContent;
+    hp.keyVersion = k.version;
+    hp.vaultUid = *v.engine->vault->uid;
+    hp.objectUid = mf::parseUid(e.uid, "x", "x");
+    hp.salt = crypto::vhf1::freshSalt();
+    auto sealed = crypto::vhf1::seal(std::vector<uint8_t>(text.begin(), text.end()), hp, *k.key);
+    (void)v.bucket->seed("o/" + e.uid, sealed);
+    e.generation = hexOf(hp.salt);
+    e.key_version = k.version;
+    e.size = text.size();
+    e.content_hash.reset();
+    e.object = mf::ObjectRef{v.bucket->current("o/" + e.uid)->etag, sealed.size(), std::nullopt, std::nullopt};
+    return sealed;
+}
+
+std::string openSealed(test_support::versioned::CloudVault& v, const std::vector<uint8_t>& object, const std::string& uid) {
+    crypto::vhf1::Expectation ex;
+    ex.vaultUid = *v.engine->vault->uid;
+    ex.objectUid = mf::parseUid(uid, "x", "x");
+    const auto keys = [em = v.engine->encryptionManager](const uint32_t ver) -> crypto::vhf1::KeyPtr {
+        return em->historicalKeySnapshot(ver);
+    };
+    const auto plain = crypto::vhf1::open(object, ex, keys);
+    return {reinterpret_cast<const char*>(plain.data()), plain.size()};
+}
+
+}
+
+// Found by the drill: a key check is computed over the producing server's vault id, so a replica's root carries other
+// checks than this server's for the same key. They are recomputed with this server's key and the producer's vault id:
+// the same key is accepted, another key is still a mismatch (the apply stops).
+TEST_F(ManifestApplyDb, AnotherServersKeyChecksAreRecomputedOverItsVaultId) {
+    seed();
+    const auto k = v.engine->encryptionManager->currentKey();
+    auto theirs = head().content;
+    const unsigned otherVault = id() + 4242;
+    theirs.producer.vault_id = otherVault;
+    for (auto& key : theirs.keys)
+        if (const auto held = v.engine->encryptionManager->historicalKeySnapshot(key.version))
+            key.key_check = vault::keyCheck(held->bytes(), otherVault, key.version);
+    at(theirs, "top.txt").name = "renamed.txt";
+    {   // without the recompute (the plain text comparison) the same key under another vault id is a mismatch
+        const auto ours = head().content;
+        const auto plain = mf::reconcile(ours, theirs, ours);
+        ASSERT_TRUE(plain.stopped());
+        EXPECT_EQ(plain.key_problems.front().code, "manifest_key_mismatch");
+    }
+    (void)publishAs(theirs);
+    const auto r = service->applyRemote();
+    ASSERT_TRUE(r && r->recorded) << "the same key under another vault id";
+
+    fresh();
+    seed();
+    auto wrong = head().content;
+    wrong.producer.vault_id = otherVault;
+    for (auto& key : wrong.keys) key.key_check = std::string(32, 'a');
+    at(wrong, "top.txt").name = "wrong.txt";
+    (void)publishAs(wrong);
+    EXPECT_THROW((void)service->applyRemote(), sync::vault_manifest::ApplyStopped);
+    EXPECT_EQ(db::query::sync::ManifestApply::status(id())["last_apply"]["stopped"], "manifest_key_mismatch");
+    EXPECT_TRUE(db::query::fs::File::getFileByPath(id(), "/top.txt") != nullptr) << "nothing of the wrong-key root applied";
+    EXPECT_TRUE(db::query::fs::File::getFileByPath(id(), "/wrong.txt") == nullptr);
+    (void)k;
+}
+
+// Found by the drill: after applying another writer's root that already says what this server holds, a pass
+// published anyway (its producer, key checks and attestations are this server's), the other writer applied that and
+// did the same: two writers alternating roots every pass. Nothing changed: nothing is published, until a change.
+// Both under another vault id and under the same one (independent servers may well share an id): another node.
+TEST_F(ManifestApplyDb, AnotherWritersRootThatSaysWhatThisServerHoldsIsNotRestamped) {
+    for (const bool sameId : {false, true}) {
+        SCOPED_TRACE(sameId ? "the same vault id" : "another vault id");
+        if (sameId) fresh();
+        seed();
+        share();
+        auto theirs = head().content;
+        const unsigned otherVault = sameId ? id() : id() + 4242;
+        theirs.producer.vault_id = otherVault;
+        for (auto& key : theirs.keys) {
+            if (const auto held = v.engine->encryptionManager->historicalKeySnapshot(key.version))
+                key.key_check = vault::keyCheck(held->bytes(), otherVault, key.version);
+            key.attestation.reset();   // its own TPM's, or none
+        }
+        (void)publishAs(theirs, "another-node", true);
+        ASSERT_TRUE(service->applyRemote());
+        const auto applied = db::query::sync::Manifest::state(id()).epoch;
+        EXPECT_FALSE(service->publishIfChanged()) << "nothing to say: no root";
+        EXPECT_FALSE(service->publishIfChanged());
+        EXPECT_EQ(head().acceptance.epoch, *applied);
+        EXPECT_EQ(db::query::sync::Manifest::state(id()).epoch, applied);
+
+        mkdir("/Later");
+        const auto r = service->publishIfChanged();
+        ASSERT_TRUE(r) << "a change here: published";
+        EXPECT_EQ(head().acceptance.epoch, *applied + 1);
+        EXPECT_TRUE(byName(head().content, "Later"));
+        EXPECT_TRUE(byName(head().content, "top.txt")) << "built on the applied root";
+        EXPECT_FALSE(service->publishIfChanged()) << "its own publish: unchanged after it";
+    }
+}
+
+// Found by the drill: another writer's edit, applied, lost its mtime three ways (the fs_entry trigger stamped every
+// update, the apply's cache refresh wrote the row back, a download stamped the download's time); the two writers'
+// roots then differed on it every pass. The row keeps the mtime the manifest gave it, downloaded too.
+TEST_F(ManifestApplyDb, ADownloadKeepsTheMtimeTheManifestGaveTheFile) {
+    seed();
+    auto theirs = head().content;
+    auto& report = at(theirs, "report.pdf");
+    (void)sealTheirs(v, report, "theirs, dated in January");
+    report.mtime = "2026-01-02T03:04:05Z";
+    (void)publishAs(theirs);
+    ASSERT_TRUE(service->applyRemote());
+    EXPECT_EQ(db::query::fs::File::getFileByPath(id(), "/Docs/report.pdf")->updated_at, 1767323045);
+    v.engine->remote_policy()->strategy = sync::model::RemotePolicy::Strategy::Sync;
+    (void)test_support::versioned::runSyncPass(v.engine, {.purgeTrash = false, .downloads = true, .expectOk = true});
+    EXPECT_EQ(readAllOf(v.engine, "/Docs/report.pdf"), "theirs, dated in January");
+    EXPECT_EQ(db::query::fs::File::getFileByPath(id(), "/Docs/report.pdf")->updated_at, 1767323045) << "downloaded";
+    EXPECT_EQ(byName(db::query::sync::Manifest::collect(id()), "report.pdf")->mtime, "2026-01-02T03:04:05Z");
+}
+
+// Found by the edit/edit test: the collector took a file's size and content hash from the files row and its object
+// from the index, so a local edit not uploaded yet read as a change of ours to the object, the root that replaced the
+// object as an edit/edit already decided for ours, and the planner saw only a local change (its upload overwrote
+// theirs). An entry describes the object it names: size, hash and key version come from the index row.
+TEST_F(ManifestApplyDb, TheCollectorDescribesTheObjectNotALocalEditWaitingForUpload) {
+    seed();
+    const auto before = *byName(db::query::sync::Manifest::collect(id()), "report.pdf");
+    write("/Docs/report.pdf", "edited here, not uploaded");
+    const auto local = db::query::fs::File::getFileByPath(id(), "/Docs/report.pdf");
+    ASSERT_NE(local->size_bytes, before.size);
+    const auto after = *byName(db::query::sync::Manifest::collect(id()), "report.pdf");
+    EXPECT_EQ(after.generation, before.generation);
+    EXPECT_EQ(after.size, before.size) << "the object's plaintext size, not the local edit's";
+    EXPECT_EQ(after.content_hash, before.content_hash);
+    EXPECT_EQ(after.object, before.object);
+    pass();
+    const auto uploaded = *byName(db::query::sync::Manifest::collect(id()), "report.pdf");
+    EXPECT_NE(uploaded.generation, before.generation) << "uploaded: the new object";
+    EXPECT_EQ(uploaded.size, local->size_bytes);
+    EXPECT_EQ(uploaded.content_hash, local->content_hash);
+}
+
+// Content edit/edit with another writer: never decided by a policy that would lose a side. Unversioned bucket (the
+// loser would be overwritten): the conflict stays open whatever the policy (keep_local here), ours is the local copy
+// (read through the engine), theirs the bucket's current object (read back and opened). A bucket that keeps versions:
+// the policy decides (keep_local uploads ours) and theirs survives as the object's previous version, read back too.
+TEST_F(ManifestApplyDb, AContentEditOnBothSidesWithAnotherWriterKeepsBothGenerations) {
+    for (const bool versioned : {false, true}) {
+        SCOPED_TRACE(versioned ? "a bucket that keeps versions" : "an unversioned bucket");
+        v = test_support::versioned::makeCloudVault(superUser, "ma", versioned ? Versioning::Enabled : Versioning::Unversioned,
+                                                    true, sync::model::RemotePolicy::Strategy::Cache);
+        store = std::make_shared<storage::s3::ManifestStore>(v.bucket);
+        restart();
+        if (versioned)
+            db::Transactions::exec("versions", [&](pqxx::work& txn) {
+                txn.exec("INSERT INTO vault_recovery_policy (vault_id, mode) VALUES ($1, 'provider_versioning') "
+                         "ON CONFLICT (vault_id) DO UPDATE SET mode = 'provider_versioning'",
+                         pqxx::params{id()});
+            });
+        seed();
+        share();
+        v.engine->remote_policy()->conflict_policy = sync::model::RemotePolicy::ConflictPolicy::KeepLocal;
+        write("/Docs/report.pdf", "ours, edited here");
+        auto theirs = head().content;
+        auto& report = at(theirs, "report.pdf");
+        const auto uid = report.uid;
+        const auto sealed = sealTheirs(v, report, "theirs, edited there");
+        (void)publishAs(theirs, "another-node", true);
+        (void)test_support::versioned::runSyncPass(v.engine, {.purgeTrash = false, .downloads = false, .expectOk = false});
+
+        const auto open = count("SELECT count(*) FROM sync_conflicts WHERE vault_id = $1 AND resolved_at IS NULL", id());
+        if (!versioned) {
+            EXPECT_EQ(open, 1) << "recorded and open, whatever the policy";
+            EXPECT_EQ(readAllOf(v.engine, "/Docs/report.pdf"), "ours, edited here") << "ours: the local copy";
+            const auto current = v.bucket->current("o/" + uid);
+            ASSERT_TRUE(current);
+            EXPECT_EQ(current->body, sealed) << "theirs: the bucket's object, not overwritten";
+            EXPECT_EQ(openSealed(v, current->body, uid), "theirs, edited there");
+        } else {
+            EXPECT_EQ(open, 0) << "the policy decides: the loser survives as a provider version";
+            bool theirsKept = false;
+            for (const auto& ver : v.bucket->history("o/" + uid))
+                if (!ver.delete_marker && ver.body == sealed) theirsKept = openSealed(v, ver.body, uid) == "theirs, edited there";
+            EXPECT_TRUE(theirsKept) << "theirs: a provider version of the object, read back";
+            EXPECT_EQ(readAllOf(v.engine, "/Docs/report.pdf"), "ours, edited here");
+        }
+    }
+}
+
+// Orphan collection for shared-vault trash: an object this server purged locally is deleted from the bucket after the
+// grace period when no root names it; one the other writer restored in between is kept (and forgotten); one named
+// again between the checks and the DELETE is kept (the head is read again right before it).
+TEST_F(ManifestApplyDb, SharedTrashObjectsAreCollectedOnlyAfterTheGraceAndWhenNoRootNamesThem) {
+    seed();
+    share();
+    const auto now = std::time(nullptr);
+    const auto week = sync::vault_manifest::Service::kSharedOrphanGrace;
+    const auto purgeHere = [&](const std::string& name) {
+        auto theirs = head().content;
+        at(theirs, name).trashed = mf::Trashed{"2026-11-15T00:00:00Z", "admin", std::nullopt};
+        (void)publishAs(theirs, "another-node", true);
+        ASSERT_TRUE(service->applyRemote());
+        (void)test_support::versioned::runSyncPass(v.engine, {.purgeTrash = true, .downloads = false, .expectOk = false});
+    };
+    const auto aUid = byName(head().content, "a.jpg")->uid, bUid = byName(head().content, "b.jpg")->uid;
+    const mf::Entry bLive = *byName(head().content, "b.jpg");   // this server's purge drops it from its next root
+    purgeHere("a.jpg");
+    purgeHere("b.jpg");
+    EXPECT_EQ(count("SELECT count(*) FROM manifest_shared_purge WHERE vault_id = $1", id()), 2);
+    // The other writer purged a.jpg too (its root drops it); b.jpg it restored.
+    auto theirs = head().content;
+    std::erase_if(theirs.entries, [&](const mf::Entry& e) { return e.uid == aUid; });
+    ASSERT_FALSE(byName(theirs, "b.jpg")) << "purged here: no longer named by this server's root";
+    std::erase_if(theirs.entries, [&](const mf::Entry& e) { return e.uid == bUid; });
+    theirs.entries.push_back(bLive);
+    mf::normalize(theirs);
+    (void)publishAs(theirs, "another-node", true);
+    ASSERT_TRUE(service->applyRemote());
+
+    EXPECT_EQ(service->collectSharedOrphans(now), 0u) << "within the grace period";
+    EXPECT_TRUE(v.bucket->current("o/" + aUid));
+
+    // Named again between the checks and the DELETE: the head moved, nothing goes.
+    const auto again = service->collectSharedOrphans(now + week + 60, week, [&](const std::string&) {
+        auto named = head().content;
+        const auto* live = byName(named, "b.jpg");
+        ASSERT_TRUE(live);
+        mf::Entry back = *live;
+        back.uid = aUid;
+        back.name = "a-again.jpg";
+        named.entries.push_back(back);
+        mf::normalize(named);
+        (void)publishAs(named, "another-node", true);
+    });
+    EXPECT_EQ(again, 0u);
+    EXPECT_TRUE(v.bucket->current("o/" + aUid));
+    ASSERT_TRUE(service->applyRemote());
+    EXPECT_EQ(service->collectSharedOrphans(now + week + 60), 0u) << "named live again: forgotten, not deleted";
+    EXPECT_TRUE(v.bucket->current("o/" + aUid));
+    EXPECT_TRUE(v.bucket->current("o/" + bUid)) << "restored in between: kept";
+    EXPECT_EQ(count("SELECT count(*) FROM manifest_shared_purge WHERE vault_id = $1", id()), 0);
+
+    // Unnamed after the grace: deleted.
+    auto gone = head().content;
+    std::erase_if(gone.entries, [&](const mf::Entry& e) { return e.uid == aUid; });
+    (void)publishAs(gone, "another-node", true);
+    ASSERT_TRUE(service->applyRemote());
+    db::query::sync::ManifestApply::notePurgedLocally(id(), "o/" + aUid);
+    EXPECT_EQ(service->collectSharedOrphans(now + week + 60), 1u);
+    EXPECT_FALSE(v.bucket->current("o/" + aUid));
 }
 
 }

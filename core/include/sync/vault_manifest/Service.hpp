@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <ctime>
 #include <memory>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -50,6 +51,15 @@ public:
     // open are finished once it closed, then the head is verified and, when it moved, applied (Applier.hpp). nullopt
     // when nothing was applied; a solo vault's pass costs its one HEAD. Rethrows ChainRejected and ApplyStopped.
     std::optional<ApplyReport> applyRemote(const ApplyOptions& options = {});
+
+    // Shared-vault trash this server purged locally (migration 148): each object older than `grace` is deleted from the
+    // bucket when the recorded root is still the bucket's head (HEAD, again right before each DELETE), and neither it,
+    // a deferred entry nor a pending own root names the object (live, trashed or as history); one named again is
+    // forgotten (it is live). Never an object this server didn't purge. `beforeDelete` is a test hook. How many were
+    // deleted.
+    std::size_t collectSharedOrphans(std::time_t now, std::time_t grace = kSharedOrphanGrace,
+                                     const std::function<void(const std::string& key)>& beforeDelete = {});
+    static constexpr std::time_t kSharedOrphanGrace = 7 * 24 * 60 * 60;
 
     // GC when the last one was more than a day ago (remote_manifest_state.gc_at); nullopt when not due.
     std::optional<manifest::GcReport> collectGarbageIfDue(std::time_t now = std::time(nullptr));

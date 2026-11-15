@@ -144,7 +144,8 @@ std::vector<Action> Planner::build(
 
                 // Under `ask`, only a change on both sides is a conflict. A change on one side syncs in that
                 // direction; a file with an open conflict waits for its decision. keep_* settle any real difference.
-                if (policy->conflict_policy == RemotePolicy::ConflictPolicy::Ask && !ctx->hasOpenConflict(L->id)) {
+                if ((policy->conflict_policy == RemotePolicy::ConflictPolicy::Ask || ctx->askTwoSided) &&
+                    !ctx->hasOpenConflict(L->id)) {
                     switch (divergence) {
                     case Divergence::InSync:
                         continue;

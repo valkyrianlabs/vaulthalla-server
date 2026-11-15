@@ -470,15 +470,25 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId, const Coll
         // ---- the current object of each file (remote_object_index under its o/<uid> key). A row Vaulthalla's own
         //      upload wrote (#369) names the object's generation (its size is then the plaintext's: the object's is
         //      the sealed size of that generation); a listed row has the object's size and no generation.
+        //      Such a row also says what the object holds (plaintext size, content hash): the entry takes
+        //      those, not the files row's, so a local edit not uploaded yet never names the object (it would read as
+        //      a change of ours against a root that names another writer's new generation, and hide theirs).
         std::map<std::string, mf::ObjectRef> objects;
         std::map<std::string, std::string> objectGenerations;   // uid → hex salt of the current object (VHF1)
-        for (const auto row : txn.exec("SELECT object_key, size_bytes, etag, version_id, storage_class, encryption_iv "
+        struct ObjectContent {
+            uint64_t size{};
+            std::optional<std::string> content_hash;
+        };
+        std::map<std::string, ObjectContent> objectContents;    // uid → what the current generation holds
+        for (const auto row : txn.exec("SELECT object_key, size_bytes, etag, version_id, storage_class, encryption_iv, "
+                                       "       content_hash "
                                        "FROM remote_object_index WHERE vault_id = $1 AND object_key LIKE 'o/%'",
                                        pqxx::params{vaultId})) {
             const auto uid = mf::uidOfObjectKey(row["object_key"].as<std::string>());
             if (!uid) continue;
             auto size = row["size_bytes"].as<uint64_t>();
             if (const auto iv = optText(row["encryption_iv"]); iv && vault::content::isVhf1(*iv)) {
+                objectContents[mf::uidText(*uid)] = {size, optText(row["content_hash"])};
                 size = vault::content::sealedSizeOf(size, *iv);
                 objectGenerations[mf::uidText(*uid)] = manifest_query_detail::hexOf(crypto::util::b64_decode(*iv));
             }
@@ -490,6 +500,7 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId, const Coll
             const auto uid = mf::uidOfObjectKey(staged.object_key);
             if (!uid || !vault::content::isVhf1(staged.generation)) continue;
             objectGenerations[mf::uidText(*uid)] = manifest_query_detail::hexOf(crypto::util::b64_decode(staged.generation));
+            objectContents.erase(mf::uidText(*uid));   // the staged generation is the files row's content
             objects[mf::uidText(*uid)] = {staged.etag, vault::content::sealedSizeOf(staged.plaintext_bytes, staged.generation),
                                           staged.version_id, staged.storage_class};
         }
@@ -561,6 +572,10 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId, const Coll
                 if (const auto g = objectGenerations.find(e.uid); g != objectGenerations.end()) {
                     e.format = 1;
                     e.generation = g->second;
+                    if (const auto oc = objectContents.find(e.uid); oc != objectContents.end()) {
+                        e.size = oc->second.size;
+                        e.content_hash = oc->second.content_hash;
+                    }
                 }
                 if (const auto v = versionsByUid.find(e.uid); v != versionsByUid.end()) e.versions = v->second;
             } else {

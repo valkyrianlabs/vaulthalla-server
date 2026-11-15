@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <ctime>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -30,7 +31,8 @@ public:
 
     static void updateFile(const FilePtr& file);
     // In the caller's transaction (content writers that retain the prior generation in the same transaction).
-    static void updateFile(pqxx::work& txn, const FilePtr& file);
+    // `mtime`: the modification time the row keeps (a download of content the manifest already dated); nullopt: now.
+    static void updateFile(pqxx::work& txn, const FilePtr& file, std::optional<std::time_t> mtime = std::nullopt);
 
     static void markTrashedFileDeleted(unsigned int id);
 

@@ -3,6 +3,8 @@
 #include "storage/s3/ManifestStore.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/sync/Manifest.hpp"
+#include "db/query/recovery/Policy.hpp"
+#include "recovery/Model.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "storage/s3/Controller.hpp"
 #include "storage/BucketCapability.hpp"
@@ -389,13 +391,20 @@ std::shared_ptr<File> CloudEngine::downloadFileWithRemoteMetadata(
     const auto owner = vh::identities::manager().user(vault->owner_id);
     if (!owner) throw std::runtime_error("[CloudStorageEngine] Vault owner not found for file creation");
 
+    // opaque_v1: the row dates the content (the manifest's mtime, set by the apply or the restore); fetching it keeps
+    // that date. path_v0 records none: the download's time.
+    std::optional<std::time_t> mtime;
+    if (opaqueLayout())
+        if (const auto row = db::query::fs::File::getFileByPath(vault->id, makeAbsolute(rel_path))) mtime = row->updated_at;
+
     const auto f = Filesystem::createFile({
             .path = makeAbsolute(rel_path),
             .fuse_path = vaultPathToFusePath(makeAbsolute(rel_path)),
             .buffer = buffer,
             .engine = shared_from_this(),
             .user = owner,
-            .overwrite = true
+            .overwrite = true,
+            .mtime = mtime
         });
 
     preview::render::enqueueThumbnails(shared_from_this(), f, buffer);
@@ -452,13 +461,16 @@ std::shared_ptr<File> CloudEngine::indexAndDeleteFile(const std::shared_ptr<File
         indexed->encryption_iv = remoteFile->encryption_iv;
     if (remoteFile->encrypted_with_key_version > 0)
         indexed->encrypted_with_key_version = remoteFile->encrypted_with_key_version;
+    // opaque_v1: the row already holds the file's modification time (the manifest's, set by the apply or the
+    // restore); fetching its content doesn't change it. path_v0 has no such record: the time of this download.
+    const auto mtime = opaqueLayout() && existed ? std::optional<std::time_t>(indexed->updated_at) : std::nullopt;
     indexed->updated_at = remoteFile->updated_at;
     indexed->last_modified_by = vault->owner_id;
     auto kept = replaced ? vh::recovery::local::versions::retain(*this, *replaced, vh::recovery::local::Reason::Download)
                          : vh::recovery::local::versions::Pending{};
     vh::db::Transactions::exec("CloudEngine::indexAndDeleteFile", [&](pqxx::work& txn) {
         kept.attach(txn);
-        db::query::fs::File::updateFile(txn, indexed);
+        db::query::fs::File::updateFile(txn, indexed, mtime);
     });
     kept.committed();
 
@@ -481,6 +493,11 @@ CloudEngine::getGroupedFilesFromS3(const fs::path& prefix) const {
 }
 
 bool CloudEngine::usesManifestV2() const { return opaqueLayout(); }
+
+bool CloudEngine::bucketKeepsVersions() const {
+    if (writeCapability() == sync::manifest::WriteCapability::VersionLog) return true;
+    return db::query::recovery::Policy::get(vault->id).mode == recovery::Mode::ProviderVersioning;
+}
 
 bool CloudEngine::manifestNamesOtherWriters() const {
     if (!usesManifestV2()) return false;
@@ -536,6 +553,12 @@ void CloudEngine::publishManifestV2(const bool onlyIfChanged) const {
         throw SyncStalled(e.what());
     } catch (const vh::sync::vault_manifest::ApplyStopped& e) {
         throw SyncStalled(std::string("manifest_apply_stopped: ") + e.what());
+    }
+    try {
+        (void)manifestV2()->collectSharedOrphans(std::time(nullptr));
+    } catch (const std::exception& e) {
+        log::Registry::cloud()->warn("[CloudStorageEngine] Shared-trash collection failed for vault {}: {}", vault->id,
+                                     e.what());
     }
     try {
         (void)manifestV2()->collectGarbageIfDue();

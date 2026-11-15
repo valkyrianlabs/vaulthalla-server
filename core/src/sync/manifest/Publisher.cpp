@@ -240,7 +240,11 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
         root.recovery_policy = merged.recovery_policy;
         root.stats = statsOf(merged);
         root.publish = std::string(modeName(store.mode()));
-        if (!options.self_node.empty()) root.writers = writersFor(base, options.self_node);
+        if (!options.self_node.empty()) {
+            root.writers = writersFor(base, options.self_node);
+            for (const auto& w : options.extra_writers)
+                if (!w.empty() && std::ranges::find(*root.writers, w) == root.writers->end()) root.writers->push_back(w);
+        }
 
         Published next;
         next.content = merged;

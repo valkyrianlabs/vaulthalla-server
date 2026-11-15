@@ -11,6 +11,8 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 // Manifest v2 for one opaque_v1 vault as a writer runs it (spec 03 §3.4, §4.1; spec 06 §5): publish what the vault
@@ -145,6 +147,10 @@ struct SessionHost {
     crypto::vhf1::KeyLookup keys;                     // every key version this writer holds
     std::function<std::string()> nodeId;              // this writer's name in a root's `writers`
     std::optional<uint64_t> vaultId{};                // this writer's id of the vault (a root's producer.vault_id)
+    // Test instances only (the server sets them in test mode): writers the next publish names beside this one (the
+    // harness's stand-in for the join), and a hook between a root's PUT and its record (a crash drill).
+    std::function<std::vector<std::string>()> extraWriters{};
+    std::function<void()> afterRootPut{};
     std::function<std::time_t()> now;                 // the clock a publish stamps its root with
     std::function<void(const Refusal&)> alert;        // a root was refused: called once per refused root
     std::function<void(Notice, const std::string&)> note;   // what happened, for a log (one sentence, no prefix)
@@ -201,6 +207,13 @@ private:
     SessionHost host_;
     std::mutex mutex_;
     PublisherCache cache_;
+    std::optional<std::pair<Known, Content>> unchanged_;   // publishIfChanged: another writer's root already says this
 };
+
+// What a publish would change in `recorded` (the recorded root's content): "" when nothing, else the first section
+// that differs ("vault", "keys", "recovery_policy", "entries", "snapshots"). The producer never counts, nor, when
+// `recorded` is another server's, its key records' check, attestation and origin (made over its own vault id and TPM);
+// nor a directory's mtime or when a provider version became noncurrent (each server's own observations).
+[[nodiscard]] std::string_view differsFromRecorded(const Content& produced, const Content& recorded);
 
 }
