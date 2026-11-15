@@ -9,7 +9,7 @@ export const WS_CONTRACT_VERSION = 3
 export const WS_CONTRACT_HASH = 'f14dec94b0ad564ea133841b91b99eaf8b78e8f4dc6cb64f9157e73f6b0e67e3'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'e77334ae7a52b498d9c759e8b454eaf9b18c46bfda692cba4fdd8afd9986ef43'
+export const WS_MODELS_HASH = '177da2887ae16bdbc7cce6758c07fc977d253ac9805685961327699ecfeafe67'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -806,7 +806,7 @@ export interface WsModels {
     stopped: string | null
   }
   /**
-   * A server of the vault at Vaulthalla Cloud that isn't one of its writers.
+   * A server the linked account lists for the vault that isn't one of its writers.
    */
   'ManifestCloudOnly': { deployment_id: string; name: string; node_id: string; unlisted_by: string | null }
   /**

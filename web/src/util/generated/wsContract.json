@@ -5360,7 +5360,7 @@
       "name": "ManifestApplyReport"
     },
     {
-      "description": "A server of the vault at Vaulthalla Cloud that isn't one of its writers.",
+      "description": "A server the linked account lists for the vault that isn't one of its writers.",
       "fields": [
         {
           "name": "deployment_id",
@@ -5441,7 +5441,7 @@
           ]
         },
         {
-          "description": "Vaulthalla Cloud's replica set at the last poll: listed, listed but reported removed from the manifest (unlisted), removed there (former: the next publish drops it), or not listed; null: not linked or not polled yet.",
+          "description": "The linked account's replica set at the last poll: listed, listed but reported removed from the manifest (unlisted), removed there (former: the next publish drops it), or not listed; null: not linked or not polled yet.",
           "enum": [
             "listed",
             "unlisted",
@@ -19886,7 +19886,7 @@
           ]
         },
         {
-          "description": "Servers Vaulthalla Cloud lists as holding the vault that the recorded root doesn't name (joining, or removed here and not yet by the account holder); empty when unlinked.",
+          "description": "Servers the linked account's replica set lists as holding the vault that the recorded root doesn't name (joining, or removed here and not yet by the account holder); empty when unlinked.",
           "items": "object",
           "model": "ManifestCloudOnly",
           "name": "cloud_only",
@@ -23711,7 +23711,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "e77334ae7a52b498d9c759e8b454eaf9b18c46bfda692cba4fdd8afd9986ef43",
+  "models_hash": "177da2887ae16bdbc7cce6758c07fc977d253ac9805685961327699ecfeafe67",
   "protocol": {
     "min": 1,
     "version": 1

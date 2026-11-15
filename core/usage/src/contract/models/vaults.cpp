@@ -71,10 +71,10 @@ std::vector<WsModel> vaultModels() {
                                 "progress, skipped or stopped, entries waiting for an open file, or a writers change "
                                 "not published yet."),
          objectArray("cloud_only", "ManifestCloudOnly").desc(
-             "Servers Vaulthalla Cloud lists as holding the vault that the recorded root doesn't name (joining, or "
-             "removed here and not yet by the account holder); empty when unlinked.")}));
+             "Servers the linked account's replica set lists as holding the vault that the recorded root doesn't name "
+             "(joining, or removed here and not yet by the account holder); empty when unlinked.")}));
 
-    out.push_back(model("ManifestCloudOnly", "A server of the vault at Vaulthalla Cloud that isn't one of its writers.",
+    out.push_back(model("ManifestCloudOnly", "A server the linked account lists for the vault that isn't one of its writers.",
         {str("deployment_id"), str("name"), str("node_id"),
          str("unlisted_by").nullable().desc("The server that reported removing it from the manifest; null: none did.")}));
 
@@ -86,7 +86,7 @@ std::vector<WsModel> vaultModels() {
          str("last_root_sha256").nullable(),
          str("last_published_at").nullable().desc("ISO-8601 UTC, as the root says."),
          str("cloud").nullable().oneOf({"listed", "unlisted", "former", "not_listed"}).desc(
-             "Vaulthalla Cloud's replica set at the last poll: listed, listed but reported removed from the manifest "
+             "The linked account's replica set at the last poll: listed, listed but reported removed from the manifest "
              "(unlisted), removed there (former: the next publish drops it), or not listed; null: not linked or not "
              "polled yet.")}));
 
