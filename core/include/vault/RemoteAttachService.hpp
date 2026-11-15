@@ -13,7 +13,9 @@ namespace vh::vault {
 // thread, never a FUSE, sync or request thread: an attach before its cutover runs until it cut over or failed (resumed
 // after a restart), a cut over one finishes (engine swap, orphan cleanup, first pass), a requested abort deletes what
 // the attach recorded (retried while the provider refuses a delete), and a key rotation that was asked for meanwhile
-// starts once the attach ended. Nothing starts without an operator: a vault without a vault_remote_attach row is never
+// starts once the attach ended. It runs the detaches the same way (vault/RemoteDetach.hpp): a detach before its cutover
+// hydrates and verifies until it cut over or failed, a cut over one finishes its engine swap, a requested abort ends
+// it. Nothing starts without an operator: a vault without a vault_remote_attach or vault_remote_detach row is never
 // touched.
 class RemoteAttachService final : public concurrency::AsyncService {
 public:
@@ -23,7 +25,7 @@ public:
     RemoteAttachService();
     ~RemoteAttachService() override = default;
 
-    // One pass over the attach rows (what runLoop does every kPollInterval). Public for tests and ops.
+    // One pass over the attach and detach rows (what runLoop does every kPollInterval). Public for tests and ops.
     void runOnce();
 
 protected:
