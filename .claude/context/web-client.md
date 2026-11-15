@@ -170,7 +170,20 @@ vault uploads or becomes local; the `meta.hello` capability `cloud.storage.manag
 (`ManagedStoragePage.tsx`: plan sentence, usage meter against the quota with this server's own figure, new-vault
 default, the ended confirmation, the offer banner, each vault's switch; off on a vault with a bucket types the name),
 and `NewVaultSwitch.tsx` for `NewVaultPage`. The shell's nav signal is `signal.ts` (kept tiny: it is in every
-route's first load). Keys, endpoints, bucket names and providers are never shown.
+route's first load; shown to cloud viewers once storage is `available` or the server is `linked`, since the page also
+holds the relay switch). Keys, endpoints, bucket names and providers are never shown.
+
+**Relay for web browsers** (`features/cloudRelay`, design/cloud/relay.md "The switch"): `RelayPanel.tsx`, `next/dynamic`
+from `ManagedStoragePage` and mounted only when `meta.hello` lists `cloud.relay` (the same cached hello query,
+`useHelloCapability` in `queries.ts`) for super admins or `admin.cloud.view` (the server's status rule).
+`cloud.relay.status` every 30 s (5 s while `connecting`); the state in words with a tone, the last error (backoff,
+waiting, stopped), "Switched on by X on DATE" (the server keeps who switched it on, not who switched it off), open /
+accepted / refused streams. Super admins get the switch: `confirm()`, then `cloud.relay.enable` (the device.trust
+step-up through the shell's dialog) or `.disable`, whose answer replaces the cached status; off on a `not_linked` server;
+"Try again" on `stopped` resends enable (no step-up: it is already on). Every sentence is in `copy.ts`; the device
+pages' words in `labels.ts` (small, in `/devices`' first load). The claims lint allows the names "Vaulthalla Cloud's
+relay" and "Web browser via Vaulthalla Cloud" only (`RELAY_MENTION`), and the panel says the service isn't offered to
+the public yet.
 
 ## Sync conflicts (#187)
 
@@ -227,6 +240,10 @@ permission bits (D3): any signed-in user, super-admin parts gated with `useCan({
   `vaulthalla://pair?node=&spki=&endpoints=` (`pairLink.ts`; node omitted while the open carries no `node_id`; list
   percent-encoded), and warns everyone when `endpoints.listening` is false. Until the contract is regenerated these
   members are read through `readPairingBootstrap`, a narrow guard.
+- **Relay-paired browsers** (design/cloud/relay.md): a pending request with `via: relay` reads "Web browser via
+  Vaulthalla Cloud", says it will be read-only and asks which code the browser shows; a device with `paired_via:
+  relay` gets a Read-only badge in the name cell (shown at every width), that label in the Platform column and "This
+  browser" in the revoke confirmation. Decided by `via` / `paired_via`, never the platform string.
 - **Remote connections** (`RemoteConnectionsCard`, `/devices/all#remote-connections`): `device.remote.status` (30 s
   poll) → status badge, bind address, port (always the daemon's, never a console constant), connections, bind error,
   server key fingerprint (grouped, copyable); `Switch` → `confirm()` → `device.remote.enable|disable`, whose answer
@@ -393,7 +410,16 @@ never closed, countdown by `server_time`, the open's port in the instructions, s
 non-default port, advertised endpoints and the `vaulthalla://pair` link, none from an older server) and patches the `auth.refresh` user to a super admin
 where needed (UI gating only). With `VAULTHALLA_E2E_OFFLINE=1` it needs no daemon at all: `globalSetup` skips
 provisioning, a dummy `refresh` cookie passes the middleware, `auth.refresh` is answered with a scripted user and every
-other command is refused (`pnpm exec playwright test tests/e2e/devices.spec.ts` starts `pnpm dev:e2e`).
+other command is refused (`pnpm exec playwright test tests/e2e/devices.spec.ts` starts `pnpm dev:e2e`; against a
+production build, `next start` and `VAULTHALLA_E2E_NO_WEB_SERVER=1 VAULTHALLA_E2E_BASE_URL=http://127.0.0.1:<port>`).
+The scripting lives in `helpers/scriptedWs.ts` (`scriptWs(page, owns, answer, {superAdmin})`; `superAdmin` may also be
+a list of admin permission bits; `errorData` adds refusal data such as a step-up's family and methods).
+`cloud.spec.ts` scripts `meta.hello`, `cloud.*` and `auth.stepup.*` the same way for the cloud page: managed storage
+(plan, usage, new-vault default, offer accept/decline, each vault's switch with the typed name, the ended notice), the
+relay switch through a scripted step-up, every relay state's words, viewer and non-viewer gating, no panel without the
+capability; each layout is screenshotted at 1280 and 390 px into `test-results/` and fails on sideways scrolling or a
+control past its panel's edge. No harness daemon can be linked to a fake cloud yet, so these never ran against a real
+linked server.
 
 ## Packaging
 

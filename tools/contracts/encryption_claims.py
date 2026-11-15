@@ -35,6 +35,13 @@ _I = re.IGNORECASE
 SEALED = r"\bsealed[- ]vaults?\b"
 NEGATED = r"\b(not|isn't|aren't|wasn't|never|no|nor|neither|without|cannot|can't|doesn't|don't)\b"
 PLANNED = r"\b(planned|not (yet )?(implemented|available|offered)|isn't (yet )?(implemented|available|offered)|future)\b"
+# The cloud relay's two console names (design/cloud/relay.md: the switch on the cloud page, the device label), allowed
+# only in a sentence that says nothing of recovery, custody, escrow or availability. The console says in its own
+# sentence that the service isn't offered to the public yet (web/src/features/cloudRelay/copy.ts).
+RELAY_MENTION = (
+    r"^(?![\s\S]*\b(recover\w*|restor\w*|custod\w*|escrow\w*|available|public|sign[- ]?up|subscri\w*)\b)"
+    r"[\s\S]*(\bvaulthalla cloud's relay\b|\bweb browser via vaulthalla cloud\b)"
+)
 NAME_CAVEAT = (
     r"\bnames?\b[^.]{0,60}\b(visible|exposed|readable|see|sees)\b"
     r"|\bvisible to (the|your) (bucket|storage|provider)"
@@ -169,7 +176,7 @@ RULES: tuple[Rule, ...] = (
         ),
         "Vaulthalla Cloud Assisted and Custodial Recovery (Tiers B and C) are planned and not implemented: never "
         "describe them as available, and never tie an account, payment or managed storage to custody (spec 05 §3.1)",
-        allow_in_sentence=(_rx(PLANNED), _rx(NEGATED + r"[^.]{0,40}\bescrow")),
+        allow_in_sentence=(_rx(PLANNED), _rx(NEGATED + r"[^.]{0,40}\bescrow"), _rx(RELAY_MENTION)),
     ),
     Rule(
         "custody-tie",

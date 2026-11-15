@@ -350,7 +350,8 @@ each small to change:
     from `GET /v1/keys/vaults/{uid}/envelopes`, and `moved_to: {deployment_id, name}` on a vault moved off this
     deployment (state `moved` at once, the reason naming the server).
 16. **The console** (item 8): `/managed-storage` (`features/managedStorage`, copy in `copy.ts`), a nav item under
-    "Storage & cost" with `NavSignal` `cloudStorage` (the view permission and `available`; a server without the
+    "Storage & cost" with `NavSignal` `cloudStorage` (the view permission and `available` or `linked`, since the page
+    also holds the relay switch, `relay.md` "The console"; a server without the
     capability has no `cloud.storage.status`), and the new-vault switch (shown with the `meta.hello` capability;
     a choice that differs from the server's default is sent after the vault is created).
 17. **Not built:** the `403`-from-Backblaze wake, `pending_upload_bytes`/`pending_files` and throughput in

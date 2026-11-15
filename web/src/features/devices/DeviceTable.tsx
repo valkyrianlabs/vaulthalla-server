@@ -13,7 +13,8 @@ import { confirm } from '@/components/ui/Confirm'
 import { notify } from '@/components/ui/Toast'
 import { BanIcon, CheckIcon, CopyIcon, PenIcon } from '@/components/ui/icons'
 import type { Device } from '@/models/device'
-import { DEVICE_READS, byStatus, deviceLabel, shortDeviceId, type KeyBackupGrant } from '@/features/devices/model'
+import { DEVICE_READS, byStatus, deviceLabel, devicePlatform, pairedViaRelay, shortDeviceId, type KeyBackupGrant } from '@/features/devices/model'
+import { RELAY_LABELS } from '@/features/cloudRelay/labels'
 import { KeyBackupCell } from '@/features/devices/KeyBackupCell'
 
 // Mounted only while renaming (Radix Dialog stays out of the route's first load).
@@ -47,7 +48,7 @@ const CopyDeviceId = ({ deviceId }: { deviceId: string }) => {
   )
 }
 
-const thisDevice = (device: Device) => (/mac/i.test(device.platform) ? 'This Mac' : 'This device')
+const thisDevice = (device: Device) => (pairedViaRelay(device) ? 'This browser' : /mac/i.test(device.platform) ? 'This Mac' : 'This device')
 
 // One table for "your devices" and a super admin's "all devices" (`showOwner`): rename, revoke, copyable id.
 export const DeviceTable = ({
@@ -102,6 +103,13 @@ export const DeviceTable = ({
           <span className="truncate font-medium text-fg" data-testid="device-name">
             {deviceLabel(d)}
           </span>
+          {pairedViaRelay(d) ? (
+            <span className="inline-flex shrink-0" data-testid="device-read-only">
+              <Badge tone="info" className="h-5 px-2 text-[11px]" title={RELAY_LABELS.readOnlyHint}>
+                {RELAY_LABELS.readOnly}
+              </Badge>
+            </span>
+          ) : null}
           {d.revoked ? (
             <Badge tone="neutral" className="h-5 px-2 text-[11px]" title={`Revoked ${formatDateTime(d.revoked_at)}`}>
               Revoked
@@ -113,7 +121,13 @@ export const DeviceTable = ({
     ...(showOwner
       ? [{ key: 'owner', header: 'Owner', sortValue: (d: Device) => d.user_name, cell: (d: Device) => d.user_name } satisfies Column<Device>]
       : []),
-    { key: 'platform', header: 'Platform', sortValue: d => d.platform, cell: d => d.platform || '—', hideBelow: 'sm' },
+    {
+      key: 'platform',
+      header: 'Platform',
+      sortValue: d => devicePlatform(d),
+      cell: d => <span data-testid="device-platform">{devicePlatform(d)}</span>,
+      hideBelow: 'sm',
+    },
     {
       key: 'version',
       header: 'App version',
@@ -170,7 +184,7 @@ export const DeviceTable = ({
         rowKey={d => d.id}
         empty={empty}
         filter={(d, q) =>
-          [d.name, d.platform, d.app_version, d.last_ip ?? '', d.device_id, showOwner ? d.user_name : '']
+          [d.name, devicePlatform(d), d.app_version, d.last_ip ?? '', d.device_id, showOwner ? d.user_name : '']
             .some(v => v.toLowerCase().includes(q))
         }
         filterPlaceholder="Filter devices…"

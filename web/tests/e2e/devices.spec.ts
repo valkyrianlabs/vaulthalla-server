@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { armStepUp, authenticateAndSaveState, authStatePath, explicitSkipRequested } from './helpers/auth'
+import { NOW, OFFLINE, count, scriptWs, type Answer, type Frame } from './helpers/scriptedWs'
 
 // Paired devices (Vaulthalla Desktop): the Devices pages, the "Pair a device" dialog's number matching, and the super
 // admin's remote-connections switch. The device.* answers are scripted on the console socket (page.routeWebSocket), so
@@ -14,8 +15,6 @@ import { armStepUp, authenticateAndSaveState, authStatePath, explicitSkipRequest
 // - offline, with no daemon at all (`pnpm dev:e2e` is started for you; every command is scripted, others refused):
 //     VAULTHALLA_E2E_OFFLINE=1 pnpm exec playwright test tests/e2e/devices.spec.ts
 
-const OFFLINE = process.env.VAULTHALLA_E2E_OFFLINE === '1' || process.env.VAULTHALLA_E2E_OFFLINE === 'true'
-
 test.skip(explicitSkipRequested(), 'VAULTHALLA_E2E_SKIP set')
 test.use({ ignoreHTTPSErrors: true, ...(OFFLINE ? {} : { storageState: authStatePath }) })
 // Step-up dialogs (#359) are answered with the e2e account's password and TOTP code.
@@ -24,12 +23,6 @@ test.beforeEach(({ page }) => armStepUp(page))
 test.beforeAll(async ({ browser }) => {
   if (!OFFLINE) await authenticateAndSaveState(browser)
 })
-
-type Frame = { command: string; payload: Record<string, unknown> | null; requestId: string }
-type Answer = { data?: unknown; error?: string; code?: string }
-
-const NOW = Math.floor(Date.now() / 1000)
-const SUPER_ADMIN_PERMISSIONS = ['admin.identities.admins.delete', 'admin.vaults.admin.remove', 'admin.keys.encryption.rotate']
 
 const hex = (seed: string) => seed.repeat(64).slice(0, 64)
 
@@ -48,6 +41,7 @@ const device = (over: Record<string, unknown> = {}) => ({
   last_ip: '192.168.1.42',
   revoked_at: null as number | null,
   revoked: false,
+  paired_via: 'listener',
   ...over,
 })
 
@@ -68,6 +62,8 @@ const request = (over: Record<string, unknown> = {}) => ({
   source_ip: '192.168.1.57',
   device_id: hex('9c1d'),
   code_choices: ['019337', '482913', '760001'],
+  approval_key_present: false,
+  via: 'listener',
   created_at: NOW,
   expires_at: NOW + 300,
   ...over,
@@ -86,93 +82,9 @@ const listener = (over: Record<string, unknown> = {}) => ({
   ...over,
 })
 
-const superAdminRole = (role: Record<string, unknown> | undefined) => ({
-  ...(role ?? {}),
-  id: (role?.id as number | undefined) ?? 1,
-  name: 'super_admin',
-  permissions: [
-    ...(((role?.permissions as { qualified: string }[] | undefined) ?? []).filter(p => !SUPER_ADMIN_PERMISSIONS.includes(p.qualified))),
-    ...SUPER_ADMIN_PERMISSIONS.map(qualified => ({ qualified, value: true })),
-  ],
-})
-
-const offlineUser = (superAdmin: boolean) => ({
-  id: 7,
-  name: 'e2e-user',
-  email: 'e2e@example.invalid',
-  permissions: {},
-  created_at: new Date((NOW - 86_400 * 30) * 1000).toISOString(),
-  last_login: new Date(NOW * 1000).toISOString(),
-  is_active: true,
-  admin_role: superAdmin ? superAdminRole(undefined) : { id: 2, name: 'user', permissions: [] },
-  vault_roles: [],
-})
-
-const reply = (frame: Frame, a: Answer) =>
-  JSON.stringify(
-    a.error ?
-      { command: frame.command, requestId: frame.requestId, status: 'ERROR', error: a.error, data: { code: a.code } }
-    : { command: frame.command, requestId: frame.requestId, status: 'OK', data: a.data },
-  )
-
-// Scripts device.* on the console socket and records every device frame the console sent. Offline, auth.refresh signs
-// in a scripted user and every other command is refused (the shell copes with refusals); online, other commands reach
-// the real daemon and only the session user's role is patched when `superAdmin`.
-const scriptDevices = async (page: Page, answer: (frame: Frame) => Answer | undefined, { superAdmin = false } = {}) => {
-  const sent: Frame[] = []
-  if (OFFLINE) {
-    const base = new URL(test.info().project.use.baseURL ?? 'http://127.0.0.1:3000')
-    await page.context().addCookies([{ name: 'refresh', value: 'e2e-offline', url: base.origin }])
-  }
-  await page.routeWebSocket(
-    url => url.pathname === '/ws',
-    ws => {
-      const server = OFFLINE ? null : ws.connectToServer()
-      const refreshes = new Set<string>()
-      ws.onMessage(message => {
-        let frame: Frame | null = null
-        if (typeof message === 'string') {
-          try {
-            frame = JSON.parse(message)
-          } catch {
-            frame = null
-          }
-        }
-        if (frame && frame.command.startsWith('device.')) {
-          sent.push(frame)
-          ws.send(reply(frame, answer(frame) ?? { error: 'not scripted', code: 'invalid' }))
-          return
-        }
-        if (!server) {
-          if (frame?.command === 'auth.refresh')
-            ws.send(JSON.stringify({ ...JSON.parse(reply(frame, { data: { user: offlineUser(superAdmin) } })), token: 'e2e-token' }))
-          else if (frame) ws.send(reply(frame, { error: 'Unknown command (offline e2e)', code: 'denied' }))
-          return
-        }
-        if (frame?.command === 'auth.refresh' || frame?.command === 'auth.login') refreshes.add(frame.requestId)
-        server.send(message)
-      })
-      server?.onMessage(message => {
-        if (superAdmin && typeof message === 'string' && refreshes.size) {
-          try {
-            const frame = JSON.parse(message)
-            if (refreshes.has(frame.requestId) && frame.data?.user) {
-              refreshes.delete(frame.requestId)
-              frame.data.user.admin_role = superAdminRole(frame.data.user.admin_role)
-              message = JSON.stringify(frame)
-            }
-          } catch {
-            // not JSON: pass through
-          }
-        }
-        ws.send(message)
-      })
-    },
-  )
-  return sent
-}
-
-const count = (sent: Frame[], command: string) => sent.filter(f => f.command === command).length
+// Scripts device.* (helpers/scriptedWs.ts): offline every other command is refused, online it reaches the daemon.
+const scriptDevices = (page: Page, answer: (frame: Frame) => Answer | undefined, opts: { superAdmin?: boolean } = {}) =>
+  scriptWs(page, command => command.startsWith('device.'), answer, opts)
 
 test.describe.serial('devices', () => {
   test('your devices: list, rename and revoke', async ({ page }) => {
@@ -430,6 +342,73 @@ test.describe.serial('devices', () => {
     await page.getByRole('dialog', { name: 'Turn off remote connections?' }).getByRole('button', { name: 'Turn off' }).click()
     await expect(toggle).toHaveAttribute('aria-checked', 'false')
     expect(count(sent, 'device.remote.disable')).toBe(1)
+  })
+
+  test('pairing: a web browser via the relay is labelled and read-only', async ({ page }) => {
+    const browser = request({
+      request_id: 'a1b2c3d4e5f60718',
+      name: 'Firefox on a laptop',
+      platform: 'web',
+      app_version: '0.1.0',
+      source_ip: '203.0.113.9',
+      device_id: hex('beef'),
+      via: 'relay',
+    })
+    let requests = [browser, request()]
+    const sent = await scriptDevices(page, frame => {
+      if (frame.command === 'device.list') return { data: { devices: [] } }
+      if (frame.command === 'device.pairing.open') return { data: opened() }
+      if (frame.command === 'device.pairing.pending') return { data: pendingAnswer(requests) }
+      if (frame.command === 'device.pairing.approve') {
+        requests = requests.filter(r => r.request_id !== frame.payload?.request_id)
+        return { data: { device: device({ id: 12, name: 'Firefox on a laptop', platform: 'web', device_id: hex('beef'), paired_via: 'relay' }) } }
+      }
+      if (frame.command === 'device.pairing.close') return { data: { closed: true } }
+      return undefined
+    })
+    await page.goto('/devices')
+    await page.getByTestId('pair-open').click()
+    const dialog = page.getByTestId('pair-dialog')
+    const relayed = dialog.locator('[data-testid="pair-request"][data-request-id="a1b2c3d4e5f60718"]')
+    await expect(relayed.getByTestId('pair-request-kind')).toHaveText('Web browser via Vaulthalla Cloud')
+    await expect(relayed.getByTestId('pair-request-read-only')).toContainText('It will be read-only')
+    await expect(relayed).toContainText('Which code does the browser show?')
+    await expect(relayed).toContainText('203.0.113.9')
+    // A request from the listener keeps the Desktop wording.
+    const desktop = dialog.locator('[data-testid="pair-request"][data-request-id="7f3a9c1d2e4b6a80"]')
+    await expect(desktop.getByTestId('pair-request-kind')).toHaveText('macOS · Desktop 1.0.2')
+    await expect(desktop.getByTestId('pair-request-read-only')).toHaveCount(0)
+    await expect(desktop).toContainText('Which code does the Mac show?')
+
+    await relayed.getByRole('button', { name: '482 913' }).click()
+    await expect(dialog.getByTestId('pair-success')).toContainText('It is read-only and finishes connecting on its own.')
+    expect(sent.find(f => f.command === 'device.pairing.approve')?.payload).toEqual({ request_id: 'a1b2c3d4e5f60718', code: '482913' })
+  })
+
+  test('devices: a browser paired via the relay is marked read-only and revokes like any device', async ({ page }) => {
+    let devices = [device(), device({ id: 12, name: 'Firefox on a laptop', platform: 'web', app_version: '0.1.0', device_id: hex('beef'), paired_via: 'relay' })]
+    const sent = await scriptDevices(page, frame => {
+      if (frame.command === 'device.list') return { data: { devices } }
+      if (frame.command === 'device.revoke') {
+        devices = devices.map(d => (d.device_id === frame.payload?.device_id ? { ...d, revoked: true, revoked_at: NOW } : d))
+        return { data: { device: devices.find(d => d.device_id === frame.payload?.device_id) } }
+      }
+      return undefined
+    })
+    await page.goto('/devices')
+    const relayed = page.getByRole('row', { name: /Firefox on a laptop/ })
+    await expect(relayed.getByTestId('device-read-only')).toHaveText('Read-only')
+    await expect(relayed.getByTestId('device-platform')).toHaveText('Web browser via Vaulthalla Cloud')
+    const mac = page.getByRole('row', { name: /Studio Mac/ })
+    await expect(mac.getByTestId('device-read-only')).toHaveCount(0)
+    await expect(mac.getByTestId('device-platform')).toHaveText('macOS')
+
+    await page.getByTestId('device-revoke-12').click()
+    const confirmDialog = page.getByRole('dialog', { name: 'Revoke Firefox on a laptop?' })
+    await expect(confirmDialog).toContainText('This browser loses access immediately and must pair again')
+    await confirmDialog.getByRole('button', { name: 'Revoke' }).click()
+    await expect(relayed).toHaveCount(0)
+    expect(sent.find(f => f.command === 'device.revoke')?.payload).toEqual({ device_id: hex('beef') })
   })
 
   test('the All devices tab is for super admins only', async ({ page }) => {
