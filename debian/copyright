@@ -31,15 +31,16 @@ Comment:
  pinned in subprojects/vl-sigv4.wrap.
 
 Files: subprojects/packagecache/vl-keykit-*.tar.xz
+       subprojects/packagefiles/vl-keykit-*.patch
        subprojects/vl-keykit-*/*
 Copyright:
   2026 Valkyrian Labs LLC <cooper@valkyrianlabs.com>
 License: MIT
 Comment:
  vl-keykit (https://github.com/valkyrianlabs/vl-keykit), the KEV1 key envelope,
- recovery seed and recovery kit library statically linked into vaulthalla-server
- and vh-recovery, built from the release tarball pinned in
- subprojects/vl-keykit.wrap.
+ recovery seed, recovery kit and account key format library statically linked into
+ vaulthalla-server and vh-recovery, built from the release tarball pinned in
+ subprojects/vl-keykit.wrap (with the build patch it lists).
 
 Files: subprojects/packagecache/vl-webauthn-*.tar.xz
        subprojects/vl-webauthn-*/*
