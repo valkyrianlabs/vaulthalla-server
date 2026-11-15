@@ -1043,7 +1043,11 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   refuseIfReplicated), `WritersChange` carried by every publish until a recorded root shows it
   (`remote_manifest_state.writers_change`), `manifest_writer_root` for the replica status. Through the cloud:
   `cloud_restore::start(Intent::Join)`, `cloud_storage::joinBucketKey/adoptJoinedVault/reportLeft`, the pass's
-  `stepReplicas` (removed → sync off; former replicas → writers change).
+  `stepReplicas` (removed → sync off; former replicas, matched by the cloud's `node_id` → writers change),
+  `reportWriterRemoved` (replica remove → `POST /v1/vaults/{uid}/replicas/unlisted`; the cloud's set stays the
+  owner's), `describeReplicas` (the status's `cloud` per writer and `cloud_only`, from the cached overview),
+  `removedAtCloud` (leave after the owner's removal is local only), `refreshSoon` (a cloud restore or join drops the
+  cached overview). A join leaves objects no live entry names alone (`vault::recover::Options::join`).
 - **`vh vault recover`** (#371, spec 03 §6.4): `vault::recover` (plan: envelopes, export, `loadForRestore` with the
   kit's checkpoint or blind, D1 `prove` against the customer's pinned attestation keys, reconciliation, `MeteredStore`
   download budget), `db::query::vault::Recover` (one transaction: vault, tree with inodes, trash, index, provider
