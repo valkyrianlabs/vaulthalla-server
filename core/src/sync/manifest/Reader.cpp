@@ -15,6 +15,7 @@ struct RootCandidate {
     RootDocument root;
     std::string sha;
     std::optional<std::string> etag;
+    std::vector<uint8_t> bytes;
 };
 
 std::optional<RootDocument> tryOpenRoot(const std::vector<uint8_t>& bytes, const Uid& vaultUid,
@@ -53,7 +54,7 @@ public:
             const auto obj = store_.get(std::string(kRootKey), v.version_id);
             if (!obj) continue;
             if (auto root = tryOpenRoot(obj->bytes, vaultUid_, keys_))
-                roots_.push_back({std::move(*root), sha256Hex(obj->bytes), std::nullopt});
+                roots_.push_back({std::move(*root), sha256Hex(obj->bytes), std::nullopt, obj->bytes});
         }
         return roots_;
     }
@@ -222,6 +223,7 @@ void chooseVersionLogRoot(ObjectStore& store, const Uid& vaultUid, const crypto:
     const auto& versions = log.versions();
     const auto* head = log.open(w->head);
     out.root = head->root;
+    out.root_bytes = head->bytes;
     out.etag = versions[w->head].etag;
     out.source = RootSource::Current;
     out.version_id = versions[w->head].version_id;
@@ -265,7 +267,7 @@ Loaded load(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLook
         if (!current) current = options.root_object ? options.root_object : store.get(std::string(kRootKey));
         if (current)
             if (auto root = tryOpenRoot(current->bytes, vaultUid, keys))
-                cand = RootCandidate{std::move(*root), sha256Hex(current->bytes), current->etag};
+                cand = RootCandidate{std::move(*root), sha256Hex(current->bytes), current->etag, current->bytes};
         if (!cand) {
             if (const auto& all = retained.all(); !all.empty()) {
                 cand = all.front();
@@ -278,6 +280,7 @@ Loaded load(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLook
         out.acceptance = checkChain(cand->root, cand->sha, options.known,
                                     [&](const std::string& sha) { return retained.bySha(sha); });
         out.root = cand->root;
+        out.root_bytes = cand->bytes;
         out.etag = source == RootSource::Current ? cand->etag : std::nullopt;
         out.source = source;
     }
@@ -286,9 +289,10 @@ Loaded load(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLook
     for (const auto& ref : out.root.segments) {
         const auto key = segmentKey(ref.sid);
         const auto open = [&](const std::optional<StoredObject>& obj) { return openPinned(ref, obj, vaultUid, keys); };
-        auto attempt = open(store.get(key));
+        auto object = store.get(key);
+        auto attempt = open(object);
         if (attempt.doc) {
-            out.segments[ref.range] = {ref, canonicalJson(toJson(*attempt.doc))};
+            out.segments[ref.range] = {ref, canonicalJson(toJson(*attempt.doc)), std::move(object->bytes)};
             docs.push_back(std::move(*attempt.doc));
             continue;
         }
@@ -298,7 +302,7 @@ Loaded load(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLook
             if (auto v = fromVersions<SegmentAttempt>(store, key, ref.size, open); v.doc) {
                 issue.resolution = Resolution::ProviderVersion;
                 out.issues.push_back(issue);
-                out.segments[ref.range] = {ref, canonicalJson(toJson(*v.doc))};
+                out.segments[ref.range] = {ref, canonicalJson(toJson(*v.doc)), {}};
                 docs.push_back(std::move(*v.doc));
                 continue;
             }
@@ -333,7 +337,10 @@ Loaded load(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLook
         const auto open = [&](const std::optional<StoredObject>& obj) {
             return openPinnedSnapshot(ref, obj, vaultUid, keys);
         };
-        auto attempt = open(store.get(key));
+        auto object = store.get(key);
+        auto attempt = open(object);
+        std::vector<uint8_t> sealed;
+        if (attempt.doc) sealed = std::move(object->bytes);
         if (!attempt.doc && options.use_provider_versions) {
             auto v = fromVersions<SnapshotAttempt>(store, key, ref.size, open);
             if (v.doc) {
@@ -345,12 +352,60 @@ Loaded load(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLook
             out.issues.push_back({ref.sid, std::nullopt, attempt.problem, Resolution::Blind, {}});
             continue;
         }
-        out.snapshots[attempt.doc->snapshot.id] = {ref, canonicalJson(toJson(*attempt.doc))};
+        out.snapshots[snapshotKey(attempt.doc->snapshot)] = {ref, canonicalJson(toJson(*attempt.doc)), std::move(sealed)};
         snaps.push_back(std::move(*attempt.doc));
     }
 
     out.content = contentOf(out.root, docs, snaps);
     return out;
+}
+
+std::optional<BaseCopy> baseCopyOf(const RootDocument& root, const std::vector<uint8_t>& rootBytes,
+                                   const std::map<Range, LoadedSegment>& segments,
+                                   const std::map<std::string, LoadedSnapshot>& snapshots) {
+    if (rootBytes.empty()) return std::nullopt;
+    BaseCopy copy;
+    copy.root = rootBytes;
+    for (const auto& [_, s] : segments)
+        if (!s.sealed.empty() && std::ranges::any_of(root.segments, [&](const SegmentRef& r) { return r.sid == s.ref.sid; }))
+            copy.objects[s.ref.sid] = s.sealed;
+    for (const auto& [_, s] : snapshots)
+        if (!s.sealed.empty() && std::ranges::any_of(root.snapshots, [&](const SnapshotRef& r) { return r.sid == s.ref.sid; }))
+            copy.objects[s.ref.sid] = s.sealed;
+    return copy;
+}
+
+std::optional<Content> openBaseCopy(const BaseCopy& copy, const Uid& vaultUid, const crypto::vhf1::KeyLookup& keys,
+                                    const Known& known, std::string* why) {
+    using namespace reader_detail;
+    const auto fail = [&](std::string reason) -> std::optional<Content> {
+        if (why) *why = std::move(reason);
+        return std::nullopt;
+    };
+    if (copy.root.empty()) return fail("no root bytes");
+    if (sha256Hex(copy.root) != known.root_sha256) return fail("the copy is of another root than the recorded one");
+    const auto root = tryOpenRoot(copy.root, vaultUid, keys);
+    if (!root) return fail("the root does not authenticate");
+    if (root->epoch != known.epoch) return fail("the root's epoch is not the recorded one");
+    std::vector<SegmentDocument> docs;
+    for (const auto& ref : root->segments) {
+        const auto it = copy.objects.find(ref.sid);
+        if (it == copy.objects.end()) return fail("segment " + ref.sid + " is missing");
+        const std::optional<StoredObject> obj = StoredObject{it->second, std::nullopt, std::nullopt};
+        auto attempt = openPinned(ref, obj, vaultUid, keys);
+        if (!attempt.doc) return fail("segment " + ref.sid + ": " + attempt.problem);
+        docs.push_back(std::move(*attempt.doc));
+    }
+    std::vector<SnapshotDocument> snaps;
+    for (const auto& ref : root->snapshots) {
+        const auto it = copy.objects.find(ref.sid);
+        if (it == copy.objects.end()) return fail("snapshot segment " + ref.sid + " is missing");
+        const std::optional<StoredObject> obj = StoredObject{it->second, std::nullopt, std::nullopt};
+        auto attempt = openPinnedSnapshot(ref, obj, vaultUid, keys);
+        if (!attempt.doc) return fail("snapshot segment " + ref.sid + ": " + attempt.problem);
+        snaps.push_back(std::move(*attempt.doc));
+    }
+    return contentOf(*root, docs, snaps);
 }
 
 BlindReport blindRebuild(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLookup& keys,

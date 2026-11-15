@@ -44,15 +44,19 @@ struct SegmentIssue {
     std::optional<uint64_t> from_epoch;  // OlderRoot: the epoch of the root the range came from
 };
 
-// One segment as loaded: its pin and plaintext, which the publisher compares to reuse it unchanged.
+// One segment as loaded: its pin and plaintext, which the publisher compares to reuse it unchanged, and its sealed
+// bytes while this writer has them in hand (loaded or written by this call; empty in a cached base once recorded: the
+// local base copy, migration 145, already holds them by sid).
 struct LoadedSegment {
     SegmentRef ref;
     std::string plaintext;
+    std::vector<uint8_t> sealed;
 };
 
 struct LoadedSnapshot {
     SnapshotRef ref;
     std::string plaintext;
+    std::vector<uint8_t> sealed;
 };
 
 struct Loaded {
@@ -64,7 +68,8 @@ struct Loaded {
     std::vector<SegmentIssue> issues;
     std::vector<Range> blind_ranges;  // uid ranges no intact segment covers
     std::map<Range, LoadedSegment> segments;          // the pinned segments that loaded as pinned
-    std::map<uint64_t, LoadedSnapshot> snapshots;     // by snapshot id
+    std::map<std::string, LoadedSnapshot> snapshots;  // by snapshotKey
+    std::vector<uint8_t> root_bytes;                  // the root object as read
     // version_log buckets (spec 06 §5.3): the canonical head's provider version, the version of the root before it on
     // the chain with the ids listed between the two (its settle window), the versions newer than the head that are
     // not on the chain (repair deletes them), and how many root versions this read fetched.
@@ -98,6 +103,30 @@ struct LoadOptions {
 // Throws ChainRejected (rollback, fork), NoUsableRoot, or the store's errors (transport, budget).
 [[nodiscard]] Loaded load(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLookup& keys,
                           const LoadOptions& options = {});
+
+// ---- the local base copy (design/sync/manifest-applier.md, "The merge base"; migration 145) ---------------------------
+
+// The sealed bytes of the known root and of the segments and snapshot segments it names (by sid), kept in the
+// database so the content of `known` is available after a restart and after the bucket collected that root.
+struct BaseCopy {
+    std::vector<uint8_t> root;
+    std::map<std::string, std::vector<uint8_t>> objects;   // sid → sealed bytes
+};
+
+// The base copy of what `known` names: every sid the root names, from what this writer has in hand (sealed bytes
+// loaded or written by this call). The store keeps the bytes of a named sid it already holds when `objects` lacks it.
+// nullopt when the root's bytes aren't in hand (a synthetic base).
+[[nodiscard]] std::optional<BaseCopy> baseCopyOf(const RootDocument& root, const std::vector<uint8_t>& rootBytes,
+                                                 const std::map<Range, LoadedSegment>& segments,
+                                                 const std::map<std::string, LoadedSnapshot>& snapshots);
+
+// Opens a base copy with the reader's own checks: the root's bytes hash to known.root_sha256 and authenticate (kind 3,
+// this vault, a held key), and every segment and snapshot segment it names is present, matches its pin (SHA-256,
+// size) and authenticates. The content of `known`, or nullopt with the reason in *why (a copy written before an
+// incomplete load, a key no longer held, a copy of another root): the caller then does what it did without one.
+[[nodiscard]] std::optional<Content> openBaseCopy(const BaseCopy& copy, const Uid& vaultUid,
+                                                  const crypto::vhf1::KeyLookup& keys, const Known& known,
+                                                  std::string* why = nullptr);
 
 // Content from loaded root + segments (entries in uid order).
 [[nodiscard]] Content contentOf(const RootDocument& root, const std::vector<SegmentDocument>& segments,

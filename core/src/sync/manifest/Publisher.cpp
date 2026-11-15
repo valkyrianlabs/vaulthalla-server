@@ -28,6 +28,7 @@ Published fromLoaded(Loaded&& l) {
     p.content = std::move(l.content);
     p.segments = std::move(l.segments);
     p.snapshots = std::move(l.snapshots);
+    p.root_bytes = std::move(l.root_bytes);
     return p;
 }
 
@@ -181,9 +182,10 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
     std::optional<Known> verifyAgainst = known;
     std::map<std::string, SegmentRef> writtenSegments;   // plaintext → ref, written by an earlier attempt
     std::map<std::string, SnapshotRef> writtenSnapshots;
+    std::map<std::string, std::vector<uint8_t>> writtenBytes;   // sid → the sealed bytes this call wrote
     // The base of our pending changes: what we produced for our previous publish. A first publish that lost the race
     // to another writer's first root has produced nothing before: all of ours is pending, all of theirs kept.
-    std::optional<Content> pendingBase = cache.last_produced;
+    std::optional<Content> pendingBase = cache.last_produced ? cache.last_produced : options.pending_base;
 
     // spec 06 §5.2: max(3, writers + 1) attempts; each round has one winner (I7), so a loser retries at once.
     unsigned attempts = std::max(1u, options.max_attempts);
@@ -228,47 +230,63 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
                                     options.limits);
         for (const auto& p : plan) {
             SegmentRef ref;
+            std::vector<uint8_t> sealed;
             if (base)
                 if (const auto it = base->segments.find(p.doc.range);
-                    it != base->segments.end() && it->second.plaintext == p.plaintext)
+                    it != base->segments.end() && it->second.plaintext == p.plaintext) {
                     ref = it->second.ref;
+                    sealed = it->second.sealed;
+                }
             if (ref.sid.empty())
-                if (const auto it = writtenSegments.find(p.plaintext); it != writtenSegments.end()) ref = it->second;
+                if (const auto it = writtenSegments.find(p.plaintext); it != writtenSegments.end()) {
+                    ref = it->second;
+                    sealed = writtenBytes[ref.sid];
+                }
             if (ref.sid.empty()) {
                 const auto sid = vl::keykit::newUid();
-                const auto bytes = sealDocument(Json::parse(p.plaintext), crypto::vhf1::Kind::ManifestSegment, vaultUid,
-                                                sid, sealing);
+                auto bytes = sealDocument(Json::parse(p.plaintext), crypto::vhf1::Kind::ManifestSegment, vaultUid, sid,
+                                          sealing);
                 ref = {uidText(sid), p.doc.range, p.doc.entries.size(), sha256Hex(bytes), bytes.size()};
                 (void)store.putOnce(segmentKey(ref.sid), bytes);  // a fresh 128-bit sid: never exists
                 writtenSegments.emplace(p.plaintext, ref);
+                writtenBytes[ref.sid] = bytes;
+                sealed = std::move(bytes);
                 ++report.segments_written;
             } else {
                 ++report.segments_reused;
             }
             root.segments.push_back(ref);
-            next.segments[p.doc.range] = {ref, p.plaintext};
+            next.segments[p.doc.range] = {ref, p.plaintext, std::move(sealed)};
         }
 
         for (const auto& snap : merged.snapshots) {
             const SnapshotDocument doc{vaultUidText, snap};
             auto plaintext = canonicalJson(toJson(doc));
             SnapshotRef ref;
+            std::vector<uint8_t> sealed;
             if (base)
-                if (const auto it = base->snapshots.find(snap.id);
-                    it != base->snapshots.end() && it->second.plaintext == plaintext)
+                if (const auto it = base->snapshots.find(snapshotKey(snap));
+                    it != base->snapshots.end() && it->second.plaintext == plaintext) {
                     ref = it->second.ref;
+                    sealed = it->second.sealed;
+                }
             if (ref.sid.empty())
-                if (const auto it = writtenSnapshots.find(plaintext); it != writtenSnapshots.end()) ref = it->second;
+                if (const auto it = writtenSnapshots.find(plaintext); it != writtenSnapshots.end()) {
+                    ref = it->second;
+                    sealed = writtenBytes[ref.sid];
+                }
             if (ref.sid.empty()) {
                 const auto sid = vl::keykit::newUid();
-                const auto bytes = sealSnapshot(doc, vaultUid, sid, sealing);
+                auto bytes = sealSnapshot(doc, vaultUid, sid, sealing);
                 ref = {uidText(sid), sha256Hex(bytes), bytes.size()};
                 (void)store.putOnce(segmentKey(ref.sid), bytes);
                 writtenSnapshots.emplace(plaintext, ref);
+                writtenBytes[ref.sid] = bytes;
+                sealed = std::move(bytes);
                 ++report.snapshots_written;
             }
             root.snapshots.push_back(ref);
-            next.snapshots[snap.id] = {ref, std::move(plaintext)};
+            next.snapshots[snapshotKey(snap)] = {ref, std::move(plaintext), std::move(sealed)};
         }
 
         if (!base) {
@@ -290,7 +308,7 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
                 if (!ourId)
                     throw std::runtime_error("the bucket returned no version id for the manifest root: it doesn't keep "
                                              "versions, so the root can't be arbitrated (re-probe the bucket)");
-                cache.roots.put(*ourId, OpenedRoot{root, ourSha});
+                cache.roots.put(*ourId, OpenedRoot{root, ourSha, rootBytes});
             } catch (const PutOutcomeUnknown& e) {
                 unknownOutcome = e.what();   // the PUT may have been applied: find our version before deciding
             }
@@ -344,7 +362,7 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
             }
             if (!ourId) {
                 ourId = log.versions()[*ours].version_id;
-                cache.roots.put(*ourId, OpenedRoot{root, ourSha});
+                cache.roots.put(*ourId, OpenedRoot{root, ourSha, rootBytes});
             }
             if (base && !baseIdx && !report.root_rebuilt) {
                 // The base we built on is gone from the bucket since we loaded it: load the head again.
@@ -385,6 +403,7 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
                                      baseIdx ? idsBetween(log, *baseIdx, *ours) : std::vector<std::string>{}};
             next.etag = log.versions()[*ours].etag;
             next.known = Known{root.epoch, ourSha, ourId};
+            next.root_bytes = rootBytes;
             next.settled = report.settled;
             next.root = std::move(root);
             cache.base = next;
@@ -403,6 +422,7 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
         }
 
         next.known = {root.epoch, sha256Hex(rootBytes)};
+        next.root_bytes = rootBytes;
         next.root = std::move(root);
         cache.base = next;
         cache.last_produced = produced;

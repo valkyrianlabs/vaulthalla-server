@@ -993,6 +993,19 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   settled one, else load from the settled anchor, record, repair. Tests: `ManifestPublishVersionLog*`,
   `ManifestChainVersionLog*` (test_manifest.cpp), `ManifestVersionLog*` (test_manifest_interleavings.cpp: scheduler,
   faults, broken order), DB `BucketCapabilityDbTest`, `VaultRecoverDb.OnABackblazeLike*`, live `LiveB2.*`.
+- **Manifest applier, items 1-3** (`design/sync/manifest-applier.md`, "As built"; migration 145): snapshot records
+  are named by `uid` (`recovery_snapshot.uid`, given by the collector like `directories.uid`, kept by a restore);
+  `SnapshotRecord::id` is only read from roots written before uids (key `snapshotKey`: uid, or `id:<n>`), so the first
+  publish after the upgrade replaces those records with the same snapshots by uid. `sync/manifest/Reconcile.hpp`:
+  the pure `reconcile(base, theirs, ours)` (result tree, ordered plan of `Op`s with `ours` for compare-and-set,
+  conflicts, key problems that stop it), `applyPlan` (the model executor), `treeProblems`; no DB, no server include.
+  The local base copy: `remote_manifest_state.base_root` + `remote_manifest_base` (sealed bytes by sid), written by
+  `Manifest::recordRoot` in the recording transaction (a publish and `verifyRemote` both pass `RootRecord::base`), read
+  by `StateStore::base()` and checked by `openBaseCopy`; a cold `Session` publishes with the copy's content as
+  `PublishOptions::pending_base` (the mergePending base) instead of the head. `applying_epoch` /
+  `applying_root_sha256` (`Manifest::markApplying`, cleared by recording that root) make `publish` throw
+  `ApplyIncomplete`. Nothing sets the marker or applies a head yet (items 4-5). Tests `ManifestReconcile*`,
+  `ManifestReconcileProperty*` (test_manifest_reconcile.cpp), `ManifestBaseCopy.*`, DB `ManifestDbTest.*`.
 - **`vh vault recover`** (#371, spec 03 §6.4): `vault::recover` (plan: envelopes, export, `loadForRestore` with the
   kit's checkpoint or blind, D1 `prove` against the customer's pinned attestation keys, reconciliation, `MeteredStore`
   download budget), `db::query::vault::Recover` (one transaction: vault, tree with inodes, trash, index, provider

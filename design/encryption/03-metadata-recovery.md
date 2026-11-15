@@ -150,6 +150,11 @@ exceeds 8,192 entries or 4 MiB of plaintext and merges with a neighbor below 1,0
   may be gone). Since #370 `recovery_policy.grants` lists every recovery grant of the vault (revoked ones with
   `revoked_at`, oldest first) and `keys[].envelopes` names the kids of each version's KEV1 envelopes (absent for a
   version without any); see §5.8.
+- Amended 2026-11-15 ([`manifest-applier.md`](../sync/manifest-applier.md), work item 1): a snapshot record is named
+  by `"uid": "<b32>"`, 16 random bytes per snapshot (`recovery_snapshot.uid`, migration 145), the same on every server
+  that holds it, and records merge by uid. `id` (the producing server's `recovery_snapshot.id`, a per-server
+  sequence) is no longer written; a reader still accepts a record with `id` only (written before) and keys it as
+  `id:<n>`; a record with neither is `bad_snapshot`.
 - No field holds plaintext content or a plaintext digest. `content_hash` is the sealed bytes' hash (spec 02 §3.8).
 
 ### 3.4 Publish protocol

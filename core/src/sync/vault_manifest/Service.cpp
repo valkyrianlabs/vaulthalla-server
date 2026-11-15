@@ -23,6 +23,10 @@ public:
     void recordRoot(const manifest::RootRecord& record) override {
         db::query::sync::Manifest::recordRoot(vaultId_, record);
     }
+    std::optional<manifest::BaseCopy> base() override { return db::query::sync::Manifest::base(vaultId_); }
+    void markApplying(const uint64_t epoch, const std::string& rootSha256) override {
+        db::query::sync::Manifest::markApplying(vaultId_, epoch, rootSha256);
+    }
     bool recordRefused(const std::string& reason, const uint64_t epoch, const std::string& rootSha256) override {
         return db::query::sync::Manifest::recordRefused(vaultId_, reason, epoch, rootSha256);
     }

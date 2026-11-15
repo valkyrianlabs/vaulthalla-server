@@ -121,6 +121,14 @@ stream destructor, macOS "mutex lock failed", "terminate called without an activ
 re-run `sudo tools/harness/bootstrap.sh` (it never rotates an existing role's password; remove the settings file first
 to re-key).
 
+## Manifest applier suites
+
+DB-free: `ManifestReconcile*:ManifestReconcileProperty*` (test_manifest_reconcile.cpp; the property tests run 300
+seeds each, ~5 s at -O0, print the failing seed, and `VH_RECONCILE_SEED=<n>` reruns one), `ManifestBaseCopy*`,
+`ManifestDocument.*Snapshot*`, `ManifestContent.*Snapshot*`, `ManifestPublish.AColdStart*`. DB-backed:
+`ManifestDbTest*` (base copy, cold start, applying marker, snapshot uids), `SqlDeployerHistoryDb.ManifestApplier*`
+(migration 145).
+
 ## Cloud relay suites
 
 `test_cloud_relay_protocol.cpp` is DB-free (tickets, the key proof, the read-only walk of every ws command);

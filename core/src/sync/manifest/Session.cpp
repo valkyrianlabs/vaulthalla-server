@@ -20,6 +20,15 @@ bool refusal(const ChainError code) {
            code == ChainError::Superseded || code == ChainError::PublishModeMismatch;
 }
 
+// What a cached base holds once its root is recorded: the sealed bytes went into the base copy, so the cache drops them
+// (a large vault would otherwise keep its segments twice in memory).
+void dropSealed(PublisherCache& cache) {
+    if (!cache.base) return;
+    for (auto& [_, s] : cache.base->segments) std::vector<uint8_t>().swap(s.sealed);
+    for (auto& [_, s] : cache.base->snapshots) std::vector<uint8_t>().swap(s.sealed);
+    std::vector<uint8_t>().swap(cache.base->root_bytes);
+}
+
 std::vector<std::string> sidsOf(const RootDocument& root) {
     std::vector<std::string> sids;
     for (const auto& s : root.segments) sids.push_back(s.sid);
@@ -73,10 +82,25 @@ std::optional<PublishReport> Session::publishIfChanged() {
 
 PublishReport Session::publishLocked(const Content& produced) {
     namespace d = session_detail;
-    const auto current = host_.currentKey();
     const auto state = state_->state();
+    if (state.applying_epoch)
+        throw ApplyIncomplete(std::format("an apply of the root of epoch {} is incomplete: the database is between two "
+                                          "roots, and a partial state is never published",
+                                          *state.applying_epoch));
+    const auto current = host_.currentKey();
     const auto knownState = known();
     PublishOptions options;
+    if (!cache_.last_produced && knownState) {
+        // A cold start: the base of our pending changes is the content of `known`, from the local copy.
+        if (const auto copy = state_->base()) {
+            std::string why;
+            options.pending_base = openBaseCopy(*copy, vaultUid_, host_.keys, *knownState, &why);
+            if (!options.pending_base)
+                note(Notice::Warning, std::format("the local base copy of epoch {} is not usable ({}); merging on the "
+                                                  "bucket's head",
+                                                  knownState->epoch, why));
+        }
+    }
     options.now = isoTime(host_.now());
     options.self_node = produced.producer.node_id;
     options.own_epoch = state.own_epoch;
@@ -90,7 +114,10 @@ PublishReport Session::publishLocked(const Content& produced) {
                             .version_id = report.settled.version_id,
                             .base_version_id = report.settled.base_version_id,
                             .settle_window = report.settled.window,
-                            .own = true});
+                            .own = true,
+                            .base = baseCopyOf(report.published.root, report.published.root_bytes,
+                                               report.published.segments, report.published.snapshots)});
+        d::dropSealed(cache_);
         if (report.lost)
             note(Notice::Info, std::format("another writer's root won {} round(s) of this publish; merged onto it "
                                            "(spec 06 §5.2)",
@@ -143,7 +170,8 @@ std::optional<Acceptance> Session::verifyRemoteVersionLog() {
                                 .version_id = loaded.version_id,
                                 .base_version_id = loaded.base_version_id,
                                 .settle_window = loaded.settle_window,
-                                .own = false});
+                                .own = false,
+                                .base = baseCopyOf(loaded.root, loaded.root_bytes, loaded.segments, loaded.snapshots)});
             cache_.base.reset();
         } else if (loaded.version_id && loaded.version_id != state.root_version_id) {
             // The same root, found by its hash (a state from before version ids were recorded, or recorded by a
@@ -155,7 +183,8 @@ std::optional<Acceptance> Session::verifyRemoteVersionLog() {
                                 .version_id = loaded.version_id,
                                 .base_version_id = loaded.base_version_id,
                                 .settle_window = loaded.settle_window,
-                                .own = false});
+                                .own = false,
+                                .base = baseCopyOf(loaded.root, loaded.root_bytes, loaded.segments, loaded.snapshots)});
         }
         // Repair (spec 06 §5.4): versions newer than the head that aren't on the chain.
         for (const auto& id : loaded.strays) {
@@ -205,7 +234,8 @@ std::optional<Acceptance> Session::verifyRemote() {
                                 .version_id = std::nullopt,
                                 .base_version_id = std::nullopt,
                                 .settle_window = {},
-                                .own = false});
+                                .own = false,
+                                .base = baseCopyOf(loaded.root, loaded.root_bytes, loaded.segments, loaded.snapshots)});
             cache_.base.reset();
         }
         return loaded.acceptance;

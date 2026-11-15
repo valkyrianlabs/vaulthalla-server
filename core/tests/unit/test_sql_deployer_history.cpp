@@ -910,6 +910,9 @@ TEST_F(SqlDeployerHistoryDb, StorageLayoutMigrationBackfillsUidsAndLayoutsAndIsI
         txn.exec("DROP TRIGGER IF EXISTS vh_uid_immutable ON directories");
         txn.exec("DROP TRIGGER IF EXISTS vh_uid_immutable ON symlinks");
         txn.exec("DELETE FROM schema_migrations WHERE filename = '125_manifest_v2.sql'");
+        // 145 hangs the snapshot uid's trigger on it too.
+        txn.exec("DROP TRIGGER IF EXISTS vh_uid_immutable ON recovery_snapshot");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '145_manifest_applier_base.sql'");
         txn.exec("DROP FUNCTION IF EXISTS vh_uid_immutable()");
         txn.exec("ALTER TABLE s3 DROP CONSTRAINT IF EXISTS s3_storage_layout_check");
         txn.exec("ALTER TABLE s3 DROP COLUMN IF EXISTS storage_layout");
@@ -1113,6 +1116,77 @@ TEST_F(SqlDeployerHistoryDb, ManifestV2MigrationIsAdditiveAndIdempotent) {
         ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
         EXPECT_TRUE(again.applied.empty());
         ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "125_manifest_v2.sql")));
+    });
+}
+
+// 145 (the manifest applier's base copy and snapshot uids) on a 144-era database: additive (a nullable snapshot uid,
+// the base root and applying marker on remote_manifest_state, the base table), existing rows keep their values and get
+// no uid from PostgreSQL (the collector gives one), the CHECKs and the uid immutability hold, and running the file again
+// changes nothing.
+TEST_F(SqlDeployerHistoryDb, ManifestApplierBaseMigrationIsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("DROP TABLE IF EXISTS remote_manifest_base");
+        txn.exec("DROP TRIGGER IF EXISTS vh_uid_immutable ON recovery_snapshot");
+        txn.exec("DROP INDEX IF EXISTS uq_recovery_snapshot_uid");
+        txn.exec("ALTER TABLE remote_manifest_state DROP CONSTRAINT IF EXISTS remote_manifest_state_applying_check");
+        for (const auto* column : {"base_root", "applying_epoch", "applying_root_sha256"})
+            txn.exec(std::string("ALTER TABLE remote_manifest_state DROP COLUMN IF EXISTS ") + column);
+        txn.exec("ALTER TABLE recovery_snapshot DROP COLUMN IF EXISTS uid");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '145_manifest_applier_base.sql'");
+        ASSERT_FALSE(columnExists(txn, "recovery_snapshot", "uid"));
+
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_145_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES "
+                                    "('claude_test_145', $1, 's3', 'claude_test_145', gen_random_uuid()) RETURNING id",
+                                    pqxx::params{owner}).one_field_ref().as<int>();
+        txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, etag, epoch, root_sha256) VALUES "
+                 "($1, '.vaulthalla/root', '\"e1\"', 4, repeat('b', 64))", pqxx::params{vault});
+        const auto snap = txn.exec("INSERT INTO recovery_snapshot (vault_id, name, root_path, root_type, state) "
+                                   "VALUES ($1, 'kept', '/', 'directory', 'ready') RETURNING id",
+                                   pqxx::params{vault}).one_field_ref().as<int64_t>();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "145_manifest_applier_base.sql"));
+        EXPECT_EQ(recordedHash(txn, "145_manifest_applier_base.sql"), currentHash("145_manifest_applier_base.sql"));
+        EXPECT_TRUE(columnExists(txn, "recovery_snapshot", "uid"));
+        for (const auto* column : {"base_root", "applying_epoch", "applying_root_sha256"})
+            EXPECT_TRUE(columnExists(txn, "remote_manifest_state", column)) << column;
+        const auto row = txn.exec("SELECT etag, epoch, base_root IS NULL, applying_epoch IS NULL FROM remote_manifest_state "
+                                  "WHERE vault_id = $1", pqxx::params{vault}).one_row();
+        EXPECT_EQ(row[0].as<std::string>(), "\"e1\"") << "existing rows keep their values";
+        EXPECT_EQ(row[1].as<int>(), 4);
+        EXPECT_TRUE(row[2].as<bool>()) << "no base copy until the next recorded root";
+        EXPECT_TRUE(row[3].as<bool>());
+        EXPECT_TRUE(txn.exec("SELECT uid IS NULL FROM recovery_snapshot WHERE id = $1", pqxx::params{snap})
+                        .one_field_ref().as<bool>()) << "the collector gives the uid, never PostgreSQL";
+
+        const auto refused = [&](const std::string& sql) {
+            pqxx::subtransaction sub(txn, "check");
+            try {
+                sub.exec(sql, pqxx::params{vault});
+            } catch (const pqxx::sql_error&) {
+                return true;
+            }
+            return false;
+        };
+        EXPECT_TRUE(refused("UPDATE remote_manifest_state SET applying_epoch = 5 WHERE vault_id = $1"))
+            << "epoch and hash go together";
+        EXPECT_TRUE(refused("UPDATE remote_manifest_state SET applying_epoch = 5, applying_root_sha256 = 'x' "
+                            "WHERE vault_id = $1"));
+        EXPECT_FALSE(refused("UPDATE remote_manifest_state SET applying_epoch = 5, applying_root_sha256 = repeat('c', 64) "
+                             "WHERE vault_id = $1"));
+        EXPECT_TRUE(refused("INSERT INTO remote_manifest_base (vault_id, sid, object_sha256, bytes) "
+                            "VALUES ($1, 's', 'nothex', '\\x00')"));
+        txn.exec("UPDATE recovery_snapshot SET uid = gen_random_uuid() WHERE vault_id = $1", pqxx::params{vault});
+        EXPECT_TRUE(refused("UPDATE recovery_snapshot SET uid = gen_random_uuid() WHERE vault_id = $1"))
+            << "and never changes";
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "145_manifest_applier_base.sql")));
     });
 }
 

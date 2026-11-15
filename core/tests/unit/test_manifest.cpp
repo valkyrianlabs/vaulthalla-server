@@ -169,7 +169,7 @@ Content richContent() {
     tomb.name = "purged.bin";
     tomb.versions = {FileVersion{"v9", std::nullopt, 1, 200, "\"e9\"", "2026-11-03T00:00:00Z", std::nullopt, false, std::nullopt}};
     c.entries.push_back(tomb);
-    c.snapshots = {SnapshotRecord{7, "before audit", "2026-11-05T10:00:00Z", "/Reports",
+    c.snapshots = {SnapshotRecord{uidT(0x70, 0x77), std::nullopt, "before audit", "2026-11-05T10:00:00Z", "/Reports",
                                   {SnapshotMember{uidT(0x40, 0x33), "/Reports/Q3 board pack.pdf", std::nullopt, 1, "v1", true},
                                    SnapshotMember{std::nullopt, "/Reports/gone.txt", std::nullopt, 1, std::nullopt, false}}}};
     normalize(c);
@@ -1758,6 +1758,151 @@ TEST(ManifestChainVersionLog, AHeadThatALifecycleRuleExpiresUnderACrashedLoserFa
         ADD_FAILURE() << "the loser was taken for the expired head";
     } catch (const ChainRejected& e) {
         EXPECT_EQ(e.code(), ChainError::Fork);
+    }
+}
+
+
+// ── Snapshot uids and the local base copy (design/sync/manifest-applier.md, work items 1 and 3) ─────────────────────
+
+TEST(ManifestDocument, SnapshotRecordsAreNamedByUidAndNoLongerByAServersId) {
+    const Uid vault = uidOf(0x56, 0x48);
+    SnapshotDocument doc{uidText(vault), richContent().snapshots[0]};
+    const auto j = toJson(doc);
+    EXPECT_TRUE(j["snapshot"].contains("uid"));
+    EXPECT_FALSE(j["snapshot"].contains("id")) << "a per-server sequence is no identity across servers";
+    EXPECT_EQ(snapshotFromJson(Json::parse(canonicalJson(j)), vault), doc);
+    EXPECT_EQ(snapshotKey(doc.snapshot), doc.snapshot.uid);
+}
+
+// A snapshot segment written before uids: still read, re-encoded to the bytes it was parsed from, keyed by its id.
+TEST(ManifestDocument, ASnapshotSegmentFromBeforeUidsStillReadsAndReencodesToItsBytes) {
+    const Uid vault = uidOf(0x56, 0x48);
+    const std::string legacy =
+        "{\"snapshot\":{\"created_at\":\"2026-11-05T10:00:00Z\",\"id\":7,\"members\":[{\"generation\":\"ab\","
+        "\"key_version\":1,\"path_at_capture\":\"/Reports/q3.pdf\",\"provider_version_id\":\"v1\","
+        "\"restorable_from_bucket\":true,\"uid\":\"" + uidT(0x40, 0x33) + "\"}],\"name\":\"before audit\","
+        "\"root_path\":\"/Reports\"},\"type\":\"vh.manifest.snapshot\",\"v\":1,\"vault_uid\":\"" + uidText(vault) + "\"}";
+    const auto doc = snapshotFromJson(Json::parse(legacy), vault);
+    EXPECT_TRUE(doc.snapshot.uid.empty());
+    EXPECT_EQ(doc.snapshot.id, 7u);
+    EXPECT_EQ(snapshotKey(doc.snapshot), "id:7");
+    ASSERT_EQ(doc.snapshot.members.size(), 1u);
+    EXPECT_EQ(canonicalJson(toJson(doc)), legacy);
+
+    auto neither = Json::parse(legacy);
+    neither["snapshot"].erase("id");
+    try {
+        (void)snapshotFromJson(neither, vault);
+        ADD_FAILURE() << "a snapshot with neither a uid nor an id was accepted";
+    } catch (const FormatError& e) {
+        EXPECT_EQ(e.code(), "bad_snapshot");
+    }
+}
+
+// What happens to a manifest written before this change: its snapshot records carry an id only. A restore reads them
+// (above); the first publish after the upgrade (a cold cache: the upgrade restarts the daemon) replaces each with the
+// same snapshot under its new uid, members intact, and nothing else in the root changes.
+TEST(ManifestContent, APreUidRootsSnapshotsAreReplacedByTheSameSnapshotsWithUids) {
+    Writer w;
+    auto before = richContent();
+    auto legacy = before;
+    legacy.snapshots[0].uid.clear();
+    legacy.snapshots[0].id = 7;
+    normalize(legacy);
+    (void)w.publish(legacy);
+    {
+        const auto old = w.loadKnown();
+        ASSERT_EQ(old.content.snapshots.size(), 1u);
+        EXPECT_TRUE(old.content.snapshots[0].uid.empty());
+    }
+    w.cache = {};   // the upgrade's restart
+    const auto report = w.publish(before);
+    EXPECT_EQ(report.snapshots_written, 1u);
+    const auto loaded = w.loadKnown();
+    ASSERT_EQ(loaded.content.snapshots.size(), 1u) << "replaced, not duplicated";
+    EXPECT_EQ(loaded.content.snapshots[0], before.snapshots[0]);
+    EXPECT_EQ(loaded.content.entries, before.entries);
+}
+
+// Two servers' snapshot 7 are two snapshots: merged by uid, both stay.
+TEST(ManifestContent, TwoServersSnapshotsWithOneLocalIdAreBothKept) {
+    auto theirs = richContent(), ours = richContent();
+    theirs.snapshots[0].uid = uidT(0x71, 0x01);
+    ours.snapshots[0].uid = uidT(0x72, 0x02);
+    Content before = theirs;   // the base of our pending changes: their snapshot not yet, ours not yet
+    before.snapshots.clear();
+    const auto both = mergePending(theirs, before, ours);
+    EXPECT_EQ(both.snapshots.size(), 2u);
+}
+
+TEST(ManifestBaseCopy, OpensToTheContentOfKnownAndRefusesAnythingElse) {
+    Writer w;
+    const auto c = smallVault(20);
+    const auto report = w.publish(c);
+    const auto copy = baseCopyOf(report.published.root, report.published.root_bytes, report.published.segments,
+                                 report.published.snapshots);
+    ASSERT_TRUE(copy);
+    const auto loaded = w.loadKnown();
+    std::string why;
+    const auto opened = openBaseCopy(*copy, w.vault, w.lookup(), report.published.known, &why);
+    ASSERT_TRUE(opened) << why;
+    EXPECT_EQ(*opened, loaded.content);
+
+    // A second publish reuses the unchanged segments: the copy still names every sid with its bytes.
+    auto next = c;
+    nthFile(next, 3).size = 999;
+    const auto second = w.publish(next);
+    const auto copy2 = baseCopyOf(second.published.root, second.published.root_bytes, second.published.segments,
+                                  second.published.snapshots);
+    ASSERT_TRUE(copy2);
+    EXPECT_EQ(copy2->objects.size(), second.published.root.segments.size() + second.published.root.snapshots.size());
+    EXPECT_TRUE(openBaseCopy(*copy2, w.vault, w.lookup(), second.published.known));
+
+    EXPECT_FALSE(openBaseCopy(*copy, w.vault, w.lookup(), second.published.known, &why)) << "a copy of another root";
+    EXPECT_NE(why.find("another root"), std::string::npos);
+    auto tampered = *copy2;
+    tampered.objects.begin()->second[100] ^= 1;
+    EXPECT_FALSE(openBaseCopy(tampered, w.vault, w.lookup(), second.published.known, &why));
+    auto missing = *copy2;
+    missing.objects.erase(missing.objects.begin());
+    EXPECT_FALSE(openBaseCopy(missing, w.vault, w.lookup(), second.published.known, &why));
+    EXPECT_NE(why.find("missing"), std::string::npos);
+    const auto noKeys = [](uint32_t) -> crypto::vhf1::KeyPtr { return nullptr; };
+    EXPECT_FALSE(openBaseCopy(*copy2, w.vault, noKeys, second.published.known));
+}
+
+// Spec 06 §5.5's gap, the publisher's half: a writer restarted from its database alone merges on the head, so every
+// entry another writer added that its database lacks counts as "deleted by us". With the content of its known root
+// as the base (the local copy) it keeps them.
+TEST(ManifestPublish, AColdStartOnTheLocalBaseCopyKeepsWhatAnotherWriterAdded) {
+    for (const bool withCopy : {false, true}) {
+        SCOPED_TRACE(withCopy);
+        auto bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
+        Writer a(bucket), b(bucket);
+        const auto c = smallVault(5);
+        const auto first = a.publish(c);
+        const auto copy = baseCopyOf(first.published.root, first.published.root_bytes, first.published.segments,
+                                     first.published.snapshots);
+        ASSERT_TRUE(copy);
+
+        b.known = a.known;   // another writer on the same root adds a file
+        auto theirs = c;
+        theirs.entries.push_back(fileEntry(uidT(0xf0, 0x99), kRootUid, "added-by-b", 7));
+        normalize(theirs);
+        (void)b.publish(theirs);
+
+        a.cache = {};        // a restarts: its database is still `c`, its known root is the first one
+        auto produced = c;
+        nthFile(produced, 0).size = 4242;   // and a local change of its own
+        PublishOptions o;
+        o.now = isoTime(1793890000);
+        if (withCopy) o.pending_base = openBaseCopy(*copy, a.vault, a.lookup(), *a.known);
+        const auto r = manifest::publish(*a.store, a.vault, a.lookup(), {a.current, a.keys.at(a.current)}, produced,
+                                         a.known, a.cache, o);
+        const bool kept = std::ranges::any_of(r.published.content.entries,
+                                              [](const Entry& e) { return e.name == "added-by-b"; });
+        EXPECT_EQ(kept, withCopy) << (withCopy ? "kept on the base copy" : "today's gap without one");
+        EXPECT_EQ(nthFile(const_cast<Content&>(r.published.content), 0).size, 4242u);
     }
 }
 

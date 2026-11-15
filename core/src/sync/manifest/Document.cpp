@@ -316,6 +316,11 @@ SegmentDocument segmentFromJson(const Json& j, const Uid& expectedVaultUid) {
 
 // ---- snapshots --------------------------------------------------------------------------------------------------
 
+std::string snapshotKey(const SnapshotRecord& record) {
+    if (!record.uid.empty()) return record.uid;
+    return "id:" + std::to_string(record.id.value_or(0));
+}
+
 Json toJson(const SnapshotDocument& doc) {
     using namespace document_detail;
     Json members = Json::array();
@@ -327,8 +332,10 @@ Json toJson(const SnapshotDocument& doc) {
         putIfNum(mj, "key_version", m.key_version);
         members.push_back(std::move(mj));
     }
-    Json snap = {{"id", doc.snapshot.id}, {"name", nullable(doc.snapshot.name)}, {"created_at", doc.snapshot.created_at},
+    Json snap = {{"name", nullable(doc.snapshot.name)}, {"created_at", doc.snapshot.created_at},
                  {"root_path", doc.snapshot.root_path}, {"members", std::move(members)}};
+    if (!doc.snapshot.uid.empty()) snap["uid"] = doc.snapshot.uid;
+    putIfNum(snap, "id", doc.snapshot.id);
     return {{"type", std::string(kSnapshotType)}, {"v", kDocumentVersion}, {"vault_uid", doc.vault_uid},
             {"snapshot", std::move(snap)}};
 }
@@ -341,7 +348,13 @@ SnapshotDocument snapshotFromJson(const Json& j, const Uid& expectedVaultUid) {
     doc.vault_uid = f.str("vault_uid");
     checkVaultUid(f, doc.vault_uid, expectedVaultUid);
     const Fields s(f.at("snapshot"), kBadSnapshot, "snapshot");
-    doc.snapshot.id = s.u64("id");
+    // A uid (this format), an id (a record from before uids), or both; never neither (nothing would name it).
+    if (const auto uid = s.optStr("uid")) {
+        (void)parseUid(*uid, kBadSnapshot, "snapshot uid");
+        doc.snapshot.uid = *uid;
+    }
+    doc.snapshot.id = s.optU64("id");
+    if (doc.snapshot.uid.empty() && !doc.snapshot.id) s.fail("has neither a uid nor an id");
     doc.snapshot.name = s.optStr("name");
     doc.snapshot.created_at = s.str("created_at");
     doc.snapshot.root_path = s.str("root_path");

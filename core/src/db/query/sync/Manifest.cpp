@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 #include <version.h>
 
+#include <algorithm>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -98,7 +99,8 @@ vh::sync::manifest::ChainState Manifest::state(const uint32_t vaultId) {
         const auto res = txn.exec(
             "SELECT epoch, root_sha256, etag, refused_reason, refused_epoch, refused_root_sha256, "
             "       EXTRACT(EPOCH FROM refused_at)::bigint AS refused_at, EXTRACT(EPOCH FROM gc_at)::bigint AS gc_at, "
-            "       root_version_id, base_version_id, array_to_json(settle_window)::text AS settle_window, own_epoch "
+            "       root_version_id, base_version_id, array_to_json(settle_window)::text AS settle_window, own_epoch, "
+            "       applying_epoch, applying_root_sha256 "
             "FROM remote_manifest_state WHERE vault_id = $1 AND manifest_key = $2",
             pqxx::params{vaultId, kRootStateKey});
         if (res.empty()) return s;
@@ -116,6 +118,8 @@ vh::sync::manifest::ChainState Manifest::state(const uint32_t vaultId) {
         if (const auto w = optText(row["settle_window"]))
             for (const auto& id : nlohmann::json::parse(*w)) s.settle_window.push_back(id.get<std::string>());
         s.own_epoch = optNum<uint64_t>(row["own_epoch"]);
+        s.applying_epoch = optNum<uint64_t>(row["applying_epoch"]);
+        s.applying_root_sha256 = optText(row["applying_root_sha256"]);
         return s;
     });
 }
@@ -132,19 +136,26 @@ void Manifest::recordRoot(pqxx::work& txn, const uint32_t vaultId, const vh::syn
     {
         // The window travels as JSON: version ids may hold '+', '/' and '='.
         txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, etag, epoch, root_sha256, root_version_id, "
-                 "  base_version_id, settle_window, own_epoch, updated_at) "
+                 "  base_version_id, settle_window, own_epoch, base_root, updated_at) "
                  "VALUES ($1, $2, $3, $4::bigint, $5, $6, $7, ARRAY(SELECT json_array_elements_text($8::json)), "
-                 "  CASE WHEN $9::boolean THEN $4::bigint END, "
+                 "  CASE WHEN $9::boolean THEN $4::bigint END, $10::bytea, "
                  "  CURRENT_TIMESTAMP) "
                  "ON CONFLICT (vault_id, manifest_key) DO UPDATE SET etag = EXCLUDED.etag, epoch = EXCLUDED.epoch, "
                  "  root_sha256 = EXCLUDED.root_sha256, root_version_id = EXCLUDED.root_version_id, "
                  "  base_version_id = EXCLUDED.base_version_id, settle_window = EXCLUDED.settle_window, "
                  "  own_epoch = COALESCE(EXCLUDED.own_epoch, remote_manifest_state.own_epoch), "
+                 "  base_root = EXCLUDED.base_root, "
+                 "  applying_epoch = CASE WHEN remote_manifest_state.applying_root_sha256 = EXCLUDED.root_sha256 "
+                 "    THEN NULL ELSE remote_manifest_state.applying_epoch END, "
+                 "  applying_root_sha256 = CASE WHEN remote_manifest_state.applying_root_sha256 = EXCLUDED.root_sha256 "
+                 "    THEN NULL ELSE remote_manifest_state.applying_root_sha256 END, "
                  "  refused_reason = NULL, refused_epoch = NULL, "
                  "  refused_root_sha256 = NULL, refused_at = NULL, updated_at = CURRENT_TIMESTAMP",
                  pqxx::params{vaultId, kRootStateKey, rec.etag, static_cast<int64_t>(epoch), rootSha256,
                               rec.version_id, rec.base_version_id,
-                              nlohmann::json(rec.settle_window).dump(), rec.own});
+                              nlohmann::json(rec.settle_window).dump(), rec.own,
+                              rec.base ? std::optional<std::string>(encoding::to_hex_bytea(rec.base->root))
+                                       : std::nullopt});
         std::string array = "{";
         for (std::size_t i = 0; i < sids.size(); ++i) {
             if (i) array += ',';
@@ -158,7 +169,47 @@ void Manifest::recordRoot(pqxx::work& txn, const uint32_t vaultId, const vh::syn
         txn.exec("DELETE FROM remote_manifest_root WHERE vault_id = $1 AND epoch NOT IN "
                  "(SELECT epoch FROM remote_manifest_root WHERE vault_id = $1 ORDER BY epoch DESC LIMIT $2)",
                  pqxx::params{vaultId, static_cast<int64_t>(kRetainedRoots)});
+
+        // The base copy follows `known` (design/sync/manifest-applier.md, "The merge base"): the named sids' bytes,
+        // nothing else. A sid's bytes never change (a fresh random name per object), so stored ones are kept.
+        if (!rec.base) {
+            txn.exec("DELETE FROM remote_manifest_base WHERE vault_id = $1", pqxx::params{vaultId});
+        } else {
+            txn.exec("DELETE FROM remote_manifest_base WHERE vault_id = $1 AND sid <> ALL ($2::text[])",
+                     pqxx::params{vaultId, array});
+            for (const auto& [sid, bytes] : rec.base->objects) {
+                if (std::ranges::find(sids, sid) == sids.end()) continue;
+                txn.exec("INSERT INTO remote_manifest_base (vault_id, sid, object_sha256, bytes) "
+                         "VALUES ($1, $2, $3, $4::bytea) ON CONFLICT (vault_id, sid) DO NOTHING",
+                         pqxx::params{vaultId, sid, mf::sha256Hex(bytes), encoding::to_hex_bytea(bytes)});
+            }
+        }
     }
+}
+
+std::optional<vh::sync::manifest::BaseCopy> Manifest::base(const uint32_t vaultId) {
+    using namespace manifest_query_detail;
+    return Transactions::exec("Manifest::base", [&](pqxx::work& txn) -> std::optional<mf::BaseCopy> {
+        const auto root = txn.exec("SELECT base_root FROM remote_manifest_state WHERE vault_id = $1 AND manifest_key = $2 "
+                                   "AND base_root IS NOT NULL",
+                                   pqxx::params{vaultId, kRootStateKey});
+        if (root.empty()) return std::nullopt;
+        mf::BaseCopy copy;
+        copy.root = encoding::from_hex_bytea(root[0][0].as<std::string>());
+        for (const auto row : txn.exec("SELECT sid, bytes FROM remote_manifest_base WHERE vault_id = $1",
+                                       pqxx::params{vaultId}))
+            copy.objects[row[0].as<std::string>()] = encoding::from_hex_bytea(row[1].as<std::string>());
+        return copy;
+    });
+}
+
+void Manifest::markApplying(const uint32_t vaultId, const uint64_t epoch, const std::string& rootSha256) {
+    using namespace manifest_query_detail;
+    Transactions::exec("Manifest::markApplying", [&](pqxx::work& txn) {
+        txn.exec("UPDATE remote_manifest_state SET applying_epoch = $3, applying_root_sha256 = $4, "
+                 "  updated_at = CURRENT_TIMESTAMP WHERE vault_id = $1 AND manifest_key = $2",
+                 pqxx::params{vaultId, kRootStateKey, static_cast<int64_t>(epoch), rootSha256});
+    });
 }
 
 bool Manifest::recordRefused(const uint32_t vaultId, const std::string& reason, const uint64_t epoch,
@@ -499,18 +550,28 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId, const Coll
             c.entries.push_back(std::move(e));
         }
 
-        // ---- snapshots
+        // ---- snapshots, by uid (migration 145): one is given here the first time it is listed (libsodium), like
+        // directories; recovery_snapshot.id is this server's and stays out of the manifest.
+        {
+            const auto missing = txn.exec("SELECT id FROM recovery_snapshot WHERE vault_id = $1 AND state = 'ready' "
+                                          "AND uid IS NULL",
+                                          pqxx::params{vaultId});
+            for (const auto row : missing)
+                txn.exec("UPDATE recovery_snapshot SET uid = $2::uuid WHERE id = $1 AND uid IS NULL",
+                         pqxx::params{row[0].as<int64_t>(), crypto::id::toUuid(crypto::id::newObjectUid())});
+        }
         std::map<uint64_t, mf::SnapshotRecord> snapshots;
         for (const auto row : txn.exec(
-                 fmt::format("SELECT id, name, root_path, {} FROM recovery_snapshot WHERE vault_id = $1 AND state = 'ready'",
+                 fmt::format("SELECT id, uid, name, root_path, {} FROM recovery_snapshot WHERE vault_id = $1 AND "
+                             "state = 'ready'",
                              iso("created_at") + " AS created_at"),
                  pqxx::params{vaultId})) {
             mf::SnapshotRecord s;
-            s.id = row["id"].as<uint64_t>();
+            s.uid = uidFromUuid(row["uid"]);
             s.name = optText(row["name"]);
             s.created_at = optText(row["created_at"]).value_or("");
             s.root_path = row["root_path"].as<std::string>();
-            snapshots.emplace(s.id, std::move(s));
+            snapshots.emplace(row["id"].as<uint64_t>(), std::move(s));
         }
         for (const auto row : txn.exec(
                  "SELECT fv.snapshot_id, fv.path, f.object_uid, b.key_version, b.encryption_iv, fv.upstream_version_id "

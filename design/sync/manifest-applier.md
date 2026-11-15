@@ -1,7 +1,8 @@
 # Applying another writer's manifest to the local database
 
 Status: design for review (managed storage plan of 2026-11-12, workstream I, "a manifest applier that merges another
-server's changes into the local database"); nothing here is implemented. It covers how a running server takes a
+server's changes into the local database"); work items 1 to 3 are built (see "As built: items 1 to 3"), items 4 to 7
+are not. It covers how a running server takes a
 canonical `opaque_v1` root that another writer published into its database, FUSE view, cache and change journal, and
 how that closes the restart gap of [spec 06](../encryption/06-publish-without-preconditions.md) §5.5. It does not cover
 the publish protocol (spec 03 §3.4, spec 06 §5), joining a node to `writers`, key hand-over or rotation between
@@ -282,3 +283,90 @@ recovery policy"; the applier's part is to carry `recovery_policy.account_policy
 sequence wins) and hand it to the cloud service, never to write grants itself.
 
 **Also decided (Cooper, 2026-11-14):** the applier is built as the first piece of the mirrors wave, not before.
+
+## As built: items 1 to 3 (branch `feat/manifest-applier`)
+
+**Item 1, snapshot uids** (migration 145). `SnapshotRecord` is named by `uid` (`recovery_snapshot.uid`, a UUID
+column given by the collector the first time it lists a ready snapshot, like `directories.uid`; immutable through
+`vh_uid_immutable`; unique per vault, not globally, so a restore beside the original on one server keeps its uids;
+`Recover::apply` writes the manifest's uid). Every collection keys snapshots by `snapshotKey` (the uid, or `id:<n>`),
+so `mergePending`, `normalize`, the publisher's and reader's snapshot maps merge by uid. Spec 03 §3.3 is amended
+accordingly (the snapshot member list there is the as-built form).
+
+- *A manifest written before this change:* its snapshot documents carry `id` and no `uid`. They still read (a
+  document needs a uid or an id, never neither), re-encode to their bytes, and a restore from such a root restores
+  them (uid NULL, given at the first publish). On the first publish after the upgrade (a cold cache) those records are
+  "ours deleted" against the head and ours, the same snapshots under their new uids, replace them; nothing else in the
+  root changes (`ManifestContent.APreUidRootsSnapshotsAreReplacedByTheSameSnapshotsWithUids`).
+- *Not written any more:* `id`. A per-server id written by every replica would make each server's publish rewrite the
+  other's snapshot segments. An older package restoring a newer root reports its snapshot segments as unreadable
+  (`bad_snapshot`, a segment issue) and restores the tree and files.
+- *Vectors:* unchanged (`--check` passes). No vector holds a snapshot document, and `vectors.json` must stay byte
+  for byte vl-keykit's copy (`KeykitVectors.TheLibrarysCopyIsThisRepositorysVectors`); a snapshot vector belongs to the
+  format library's extraction, with a vl-keykit release first. The C++ tests pin both forms.
+
+**Item 2, `reconcile`** (`sync/manifest/Reconcile.hpp`, includes only the manifest format code). It returns the
+resulting `Content`, an ordered plan of `Op`s (each with `ours`, the entry as collected, for the executor's
+compare-and-set, and `target`), the conflicts, key problems that stop it, and an incoming account recovery policy to
+hand on. `applyPlan` is the model executor; `treeProblems` the soundness check. Choices the rules left open, each the
+simplest that loses no data:
+
+1. *"Edit"* in edit/delete and edit/trash is a content change since base (or a restore from the trash); a rename,
+   move or attribute change is not, so a delete or trash on the other side wins over it.
+2. *Trash against purge* converges on gone (both sides deleted, nothing was edited; local versioning keeps the last
+   generation). Undo: keep the trashed side in `decide`.
+3. *Content edit/edit* keeps ours in the result (the files row stays) and opens a conflict carrying theirs for the
+   index row; the planner decides it, as designed.
+4. *Symlink `target`* is an attribute (head wins), not content.
+5. *`mtime`* travels with the content; `ctime` is always ours (a per-server time).
+6. *Cycle rule:* the least uid among the cycle's entries whose placement came from the head is put back to ours; a
+   cycle the head made alone (no such entry) and an entry whose folder is gone on every side go under `/Recovered`, a
+   directory whose uid is the first 16 bytes of SHA-256(`vh.manifest.recovered/` + the root's uid), so every writer
+   makes the same one and the repair converges.
+7. *Name clash:* every live entry of one name in one folder but the least uid is renamed `name (<uid[0..8]>)`,
+   repeated until none clash.
+8. *Trashed entries* name their folder only while it is live in the result (the collector's form).
+9. *Snapshots:* created where theirs added one, deleted where theirs deleted one base had; ours otherwise (records are
+   immutable; per-server fields such as `restorable_from_bucket` stay ours); records without a uid are left alone.
+10. *Two sides holding a uid base lacks* (only a re-apply, or an own unrecorded root): groups compare without a base,
+    so a difference is a conflict decided by the head's rule.
+
+Tests (DB-free): `ManifestReconcile.*`, one per rule row; `ManifestReconcileProperty.*`, 300 seeds each of two
+replicas doing random local operations (create, mkdir, rename, move, edit, chmod, trash, restore, purge, recursive
+delete; names from a pool of four, so clashes are common) for 6 rounds in a random publish order, then quiescence:
+both replicas end on the head; changes that don't overlap end on the same tree in either order; at every apply the
+plan takes ours to the result, the result is a sound tree, and the same head again (before and after its record) plans
+nothing. The run asserts that each of content edit/edit, placement, attributes, edit/delete, edit/trash, folder kept,
+name clash and cycle was reached (2026-11-15: 84, 21, 11, 115, 102, 217, 87, 4).
+
+**Item 3, the local base copy** (migration 145). The root's sealed bytes are `remote_manifest_state.base_root`, the
+named segments' and snapshot segments' sealed bytes are `remote_manifest_base` rows by sid; `Manifest::recordRoot`
+writes both in its transaction from `RootRecord::base` (nullopt drops the copy), keeps a named sid's stored bytes
+when the record lacks them, and drops sids no longer named. The publisher and the reader keep each object's sealed
+bytes (`LoadedSegment::sealed`, `Loaded::root_bytes`, `OpenedRoot::bytes`); the session drops them from its cache once
+recorded. `openBaseCopy` checks the copy as a load would (root hash = known, authenticity, every pin) and returns the
+content of `known`, or nothing with a reason. A cold `Session::publish` (no `last_produced`) passes that content as
+`PublishOptions::pending_base`, the base of its pending changes, instead of the head. `applying_epoch` /
+`applying_root_sha256` (`Manifest::markApplying`) make `publish` throw `ApplyIncomplete` before any request; recording
+that same root clears them, recording another leaves them.
+
+- *Written wherever `known` advances today:* by a publish and by `verifyRemote` (both modes). Until item 5 stops the
+  read from advancing `known`, the copy can be of a root the database never applied, so the cold start is fixed for
+  "another writer published after our known root" (`ManifestDbTest.AColdStartPublishKeepsWhatAnotherWriterAdded*`,
+  `ManifestPublish.AColdStartOnTheLocalBaseCopy*`) and no worse than before otherwise; the interleaving suite's
+  `reverted_by_restart` is unchanged (it drives `manifest::publish` directly) until item 6 gives its writers model
+  databases.
+- *Not written:* by attach-remote's cutover and by a restore (both record the chain position in their own
+  transaction). A cold start after them merges on the head as before, which is right for both (a solo vault; a
+  restore takes the vault over); the next recorded root writes the copy. Existing vaults get it at their next record.
+- *Not done:* the cold start still GETs the head and its segments; seeding the cache from the copy when the head's
+  ETag is the recorded one would save them (spec 06 §5.7) and is left for item 5.
+
+**What item 4 needs from this:** run `reconcile(openBaseCopy(state.base()), loaded head, collect())`; stall when the
+copy is missing or refused (pre-145 states, attach, restore: decide then whether to apply against the head as base or
+to wait for an own publish to write the copy); call `markApplying` before the first batch; execute the plan's `Op`s
+in order with `ours` as the compare-and-set; for each open `ContentEditEdit` write `theirs.object` into the uid's
+`remote_object_index` row and leave the files row; hand `incoming_account_policy` to the cloud service; finish with
+`recordRoot` of the head with `.base = baseCopyOf(loaded...)` in the last transaction. Deferral of open files needs
+its own table (`manifest_apply_deferred`, the next migration).
+

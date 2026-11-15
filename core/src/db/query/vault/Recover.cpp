@@ -265,16 +265,19 @@ RecoverResult Recover::apply(const RecoverInput& in) {
                                       ? "directory"
                                       : "file";
             uint64_t bytes = 0;
+            // The snapshot keeps its uid (a record from before uids gets one at the first publish).
+            const auto snapUid = s.uid.empty() ? std::optional<std::string>()
+                                               : std::optional(vh::crypto::id::toUuid(mf::parseUid(s.uid, "bad_snapshot", "snapshot uid")));
             const auto sid = txn.exec("INSERT INTO recovery_snapshot (vault_id, name, root_path, root_type, root_entry_id, "
-                                      "state, file_count, directory_count, plaintext_bytes, created_at, completed_at) "
+                                      "state, file_count, directory_count, plaintext_bytes, created_at, completed_at, uid) "
                                       "VALUES ($1, $2, $3, $4, $5, 'ready', $6, 0, 0, "
                                       "COALESCE(NULLIF($7, '')::timestamptz, NOW()), COALESCE(NULLIF($7, '')::timestamptz, "
-                                      "NOW())) RETURNING id",
+                                      "NOW()), $8::uuid) RETURNING id",
                                       pqxx::params{vid, s.name, s.root_path.empty() ? "/" : s.root_path, rootType,
                                                    rootEntry != placed.end()
                                                        ? std::optional<unsigned int>(rootEntry->second.first)
                                                        : std::nullopt,
-                                                   static_cast<int64_t>(s.members.size()), s.created_at})
+                                                   static_cast<int64_t>(s.members.size()), s.created_at, snapUid})
                                  .one_field_ref()
                                  .as<int64_t>();
             std::map<unsigned int, int> numbers;

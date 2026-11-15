@@ -73,7 +73,8 @@ struct Published {
     RootDocument root;
     Content content;
     std::map<Range, LoadedSegment> segments;
-    std::map<uint64_t, LoadedSnapshot> snapshots;
+    std::map<std::string, LoadedSnapshot> snapshots;   // by snapshotKey
+    std::vector<uint8_t> root_bytes;                   // the sealed root (empty for a synthetic base)
     Settled settled;   // version_log
 
     // Every segment and snapshot sid the root names (what GC must keep for it).
@@ -102,6 +103,10 @@ struct PublishOptions {
     std::vector<std::chrono::milliseconds> listing_retries{std::chrono::seconds(1), std::chrono::seconds(2),
                                                            std::chrono::seconds(4), std::chrono::seconds(8)};
     std::function<void(std::chrono::milliseconds)> sleep{};
+    // The content of `known` (the local base copy, design/sync/manifest-applier.md): the base of the pending changes
+    // when the cache holds no last_produced (a cold start). Without either, the base is the bucket's head, which drops
+    // every entry another writer added that this writer's database lacks (spec 06 §5.5).
+    std::optional<Content> pending_base{};
 };
 
 struct PublishReport {
