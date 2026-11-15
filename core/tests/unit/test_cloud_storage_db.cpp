@@ -804,9 +804,14 @@ TEST_F(CloudStorageTest, TheReplicaSetIsReadARemovedVaultStopsSyncingAndALeaveIs
     v.replicas = json::array({{{"deployment_id", "dep-a"}, {"name", "A"}}});
     (void)tick();
     EXPECT_TRUE(db::query::sync::Policy::getSync(id)->enabled) << "listed as held: syncs";
+    EXPECT_FALSE(cs::removedAtCloud(uid));
     v.removedByOwner = true;
+    EXPECT_TRUE(cs::removedAtCloud(uid)) << "asked live: vh vault leave then only changes the copy here";
     (void)tick();
     EXPECT_FALSE(db::query::sync::Policy::getSync(id)->enabled) << "removed by the account holder: stops syncing";
+    cloud_.reachable = false;
+    EXPECT_TRUE(cs::removedAtCloud(uid)) << "the last poll's word when the cloud can't answer";
+    cloud_.reachable = true;
 
     std::string error;
     EXPECT_TRUE(cs::reportLeft(uid, error)) << error;

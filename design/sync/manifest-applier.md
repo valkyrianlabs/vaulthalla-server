@@ -750,6 +750,13 @@ real cloud, moto checking every key), each fixed here with a test beside it:**
    bucket key, and only then refused `replicas_experimental` (cleaning up with a cancel and a leave). The flag, the
    channel and the caller are now checked before anything is asked (`vault_replicas::requireJoinAllowed`;
    `VaultRecoverFromCloud.AJoinIsRefusedBeforeAnythingIsAskedWithTheFlagOffOrForAnAgent`).
+2. *A server the owner removed couldn't leave.* Its sync stopped before it applied the others' root without it, so its
+   own state still named it and `vh vault leave` tried to publish with a revoked key (`remote_unavailable`; nothing
+   changed, and a re-join was then refused because the old copy stayed). Leave now asks the cloud first
+   (`cloud_storage::removedAtCloud`, the last poll's answer when the cloud can't be reached): removed by the account
+   holder, it only does the local part (sync off, keep or delete the copy) and doesn't report a leave
+   (`CloudStorageTest.TheReplicaSetIsReadARemovedVaultStopsSyncingAndALeaveIsReported`; the drill). Undo: the
+   `removed` branch in `vault_replicas::leave`.
 
 **Not built here:** rotation across replicas (replica keys, pending versions), the cloud-side removal of a dead
 replica by the owner (`DELETE /v1/vaults/{uid}/replicas/{deployment_id}`; the server drops it through

@@ -174,6 +174,10 @@ void adoptJoinedVault(unsigned int vaultId, const std::string& vaultUid, const J
 // reports that the manifest dropped `node` (POST /v1/vaults/{uid}/replicas/unlisted) and returns what to tell the
 // operator (empty when this server isn't linked).
 [[nodiscard]] std::string reportWriterRemoved(const std::string& vaultUid, const std::string& node);
+// Whether the account holder removed this server's replica of the vault at Vaulthalla Cloud (`removed: {reason:
+// "owner"}`): its bucket key is revoked and the other writers drop it, so leaving only changes the copy here. Asks the
+// cloud when linked (the last poll's answer when it can't); false when unlinked.
+[[nodiscard]] bool removedAtCloud(const std::string& vaultUid);
 // The manifest status (db::query::sync::ManifestApply::status) with the cloud's view from the last poll: each writer's
 // `cloud` (listed | unlisted | former | not_listed, or null when unknown) and `cloud_only`, the servers the cloud lists
 // that the manifest doesn't name. The two sides never disagree silently.

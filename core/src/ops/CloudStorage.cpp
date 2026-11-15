@@ -1393,6 +1393,21 @@ std::string reportWriterRemoved(const std::string& vaultUid, const std::string& 
                        name, told);
 }
 
+bool removedAtCloud(const std::string& vaultUid) {
+    namespace d = cloud_storage_ops_detail;
+    const auto link = d::cs::linked();
+    if (!link) return false;
+    const auto removedIn = [&](const d::cs::Overview& ov) {
+        return std::ranges::any_of(ov.vaults, [&](const auto& v) { return v.vault_uid == vaultUid && v.removed_reason; });
+    };
+    try {
+        return removedIn(d::cs::overview(*link));
+    } catch (const std::exception&) {
+        std::lock_guard lock(d::cacheMutex);
+        return d::cachedOverview && removedIn(*d::cachedOverview);   // the last poll's word, when the cloud can't answer
+    }
+}
+
 nlohmann::json describeReplicas(const std::string& vaultUid, const nlohmann::json& manifest) {
     namespace d = cloud_storage_ops_detail;
     nlohmann::json out = manifest;

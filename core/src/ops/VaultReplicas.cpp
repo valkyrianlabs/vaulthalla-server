@@ -87,7 +87,14 @@ LeaveResult leave(const Actor& actor, const unsigned int vaultId, const bool del
     const auto state = db::query::sync::Manifest::state(vaultId);
     LeaveResult r;
     r.vault_id = vaultId;
-    if (named(state.writers, self)) {
+    // The account holder removed this server at the cloud: its key is revoked (no root can be published with it) and
+    // the other writers drop it from their roots; only the copy here changes.
+    const bool removed = engine->vault && engine->vault->uid &&
+                         cloud_storage::removedAtCloud(vl::keykit::toBase32(*engine->vault->uid));
+    if (removed) {
+        r.note = "the account holder removed this server from the vault at Vaulthalla Cloud; the other writers drop it "
+                 "from the manifest, so only its copy here changes";
+    } else if (named(state.writers, self)) {
         if (state.writers.size() < 2)
             throw Refused("last_writer", fmt::format("vault {} has no other writer: the last one can't leave; delete it "
                                                      "(vh vault delete) or detach it (vh vault remote detach) as a solo "
@@ -102,7 +109,7 @@ LeaveResult leave(const Actor& actor, const unsigned int vaultId, const bool del
     off.enabled = false;
     (void)vaults::updateSync(actor, vaultId, off);
     // The cloud's replica set (the join contract, 6), when this server is linked.
-    if (engine->vault && engine->vault->uid) {
+    if (!removed && engine->vault && engine->vault->uid) {
         std::string error;
         if (!cloud_storage::reportLeft(vl::keykit::toBase32(*engine->vault->uid), error))
             r.note += (r.note.empty() ? "" : "; ") +
