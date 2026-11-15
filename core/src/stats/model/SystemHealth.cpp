@@ -1,4 +1,5 @@
 #include "stats/model/SystemHealth.hpp"
+#include "ops/CloudKeys.hpp"
 
 #include "crypto/secrets/KeyProvider.hpp"
 #include "ops/MasterSecrets.hpp"
@@ -130,6 +131,7 @@ SystemHealthStatus computeOverallStatus(const SystemHealth& health) {
         && health.remoteDetachFailed.empty()
         && health.vaultsRemoteRestricted.empty()
         && health.vaultsRemoteUnavailable.empty()
+        && !health.cloudAccountKey
         && health.deps.secretsWarning.empty()
         && health.database->brokenIdle == 0
         && protocolsHealthy(health.protocols, health.s3Gateway)
@@ -299,6 +301,12 @@ SystemHealth SystemHealth::snapshot() {
             }
         } catch (const std::exception& e) {
             log::Registry::vaulthalla()->warn("[SystemHealth] remote access check failed: {}", e.what());
+        }
+        try {
+            if (const auto issue = ops::cloud_keys::health())
+                out.cloudAccountKey = CloudAccountKeyHealth{.issue = issue->code, .detail = issue->detail};
+        } catch (const std::exception& e) {
+            log::Registry::vaulthalla()->warn("[SystemHealth] account recovery key check failed: {}", e.what());
         }
     }
 
@@ -486,6 +494,13 @@ void to_json(nlohmann::json& j, const VaultRemoteAccessHealth& health) {
     };
 }
 
+void to_json(nlohmann::json& j, const CloudAccountKeyHealth& health) {
+    j = nlohmann::json{
+        {"issue", health.issue},
+        {"detail", health.detail},
+    };
+}
+
 void to_json(nlohmann::json& j, const LegacyContentHealth& health) {
     j = nlohmann::json{
         {"remaining", health.remaining},
@@ -516,6 +531,7 @@ void to_json(nlohmann::json& j, const SystemHealth& health) {
         {"remote_detaches_unfinished", health.remoteDetachesUnfinished},
         {"vault_remote_restricted", health.vaultsRemoteRestricted},
         {"vault_remote_unavailable", health.vaultsRemoteUnavailable},
+        {"cloud_account_key", health.cloudAccountKey ? nlohmann::json(*health.cloudAccountKey) : nlohmann::json(nullptr)},
         {"summary", health.summary},
     };
 }

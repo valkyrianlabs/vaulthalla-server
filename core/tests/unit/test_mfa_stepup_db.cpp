@@ -157,6 +157,8 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
                                       "RecoveryRecipient.EnrollmentIsForTheCliAndPairedDevicesWithTheExportPermission"},
         {"vault.keys.recipients.revoke", "console: recipient_requires_device first; same gate as .add (an S3 vault and "
                                          "its bucket: test_recovery_recipients)"},
+        {"cloud.key.confirm", "console: cloud_key_requires_device first; needs a linked server with a waiting key "
+                              "(AccountKeyPin.ConfirmIsForSuperAdminsOnTheCliOrAPairedDevice)"},
         {"device.remote.enable", "writes the daemon's config file: refusal in AStolenBrowserSessionCantApprove..."},
         {"device.approval.key.register", "a paired device's own session: test_device_approvals_db.cpp"},
         {"device.backup.grant.create", "needs a paired device and an exportable vault: test_key_backup_grants_db.cpp"},

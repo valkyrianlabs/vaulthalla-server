@@ -154,6 +154,14 @@ struct VaultRemoteAccessHealth {
     std::time_t since = 0;
 };
 
+// The linked account's recovery key as this server pinned it (ops/CloudKeys.hpp): a stored row that fails its MAC
+// (cloud_account_key_tampered: nothing is wrapped to the account key) or a replacement waiting for a person's
+// confirmation (cloud_account_key_change_pending). Absent otherwise; either one degrades health.
+struct CloudAccountKeyHealth {
+    std::string issue;
+    std::string detail;
+};
+
 // Whether legacy-format content remains on this host (#373/#376): encrypting S3 vaults still on path_v0, cut-over
 // layout migrations whose path-named objects are not all gone yet, and legacy (gcm0) live files, recovery blobs and
 // unfinished resumable uploads. The gcm0 readers have no other callers once `remaining` is false; the next release's
@@ -197,6 +205,7 @@ struct SystemHealth {
     std::vector<unsigned int> remoteDetachesUnfinished;             // informational: detaches still running
     std::vector<VaultRemoteAccessHealth> vaultsRemoteRestricted;    // degraded: access read_only
     std::vector<VaultRemoteAccessHealth> vaultsRemoteUnavailable;   // degraded: access none
+    std::optional<CloudAccountKeyHealth> cloudAccountKey;           // degraded when set
     HealthSummary summary;
 
     [[nodiscard]] bool healthy() const noexcept;
@@ -221,6 +230,7 @@ void to_json(nlohmann::json& j, const VaultManifestUnpublishableHealth& health);
 void to_json(nlohmann::json& j, const LegacyContentHealth& health);
 void to_json(nlohmann::json& j, const RemoteAttachFailedHealth& health);
 void to_json(nlohmann::json& j, const VaultRemoteAccessHealth& health);
+void to_json(nlohmann::json& j, const CloudAccountKeyHealth& health);
 void to_json(nlohmann::json& j, const SystemHealth& health);
 
 }

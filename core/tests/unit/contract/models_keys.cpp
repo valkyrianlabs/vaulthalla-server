@@ -5,6 +5,8 @@
 
 #include "crypto/SecretKey.hpp"
 #include "crypto/util/encrypt.hpp"
+#include "ops/Cloud.hpp"
+#include "ops/CloudKeys.hpp"
 #include "ops/Error.hpp"
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
@@ -113,8 +115,41 @@ ops::recovery_recipients::Recipient recipient(const bool revoked) {
         r.label = std::nullopt;
         r.revoked_at = 1770000100;
         r.revoked_by = "user:1 via device";
+        r.account_policy_sequence = 3;
+    } else {
+        r.account_key_generation = 2;
     }
     return r;
+}
+
+ops::cloud_keys::Generation generation(const uint32_t n, const std::string& state) {
+    return {.generation = n, .fingerprint = "741a-97c7-d21a-4099-45fd-efcb-4ad4-825c", .state = state,
+            .link = n == 1 ? "initial" : "rotation", .reason = n == 1 ? "initial" : "routine",
+            .x25519_public = std::string(43, 'A'),
+            .confirmed_by = state == "pending" ? std::optional<std::string>{} : std::optional<std::string>("user:1 via cli"),
+            .confirmed_at = state == "pending" ? std::optional<std::time_t>{} : std::optional<std::time_t>(1770000000)};
+}
+
+ops::cloud_keys::Status keyStatus() {
+    ops::cloud_keys::Status s;
+    s.state = "change_pending";
+    s.account_public_id = "5f0c3a3e-8d1b-4c2a-9e47-6b1d2f3a4c5e";
+    s.pinned = generation(1, "pinned");
+    s.waiting = generation(2, "refused");
+    s.generations = {*s.pinned, *s.waiting};
+    s.policy = ops::cloud_keys::Policy{.sequence = 2, .generation = 1, .sha256 = std::string(64, 'a'),
+                                       .issued_at = "2026-11-14T00:00:00Z",
+                                       .recipients = {{.recipient_id = std::string(64, 'b'), .label = "kit"}}};
+    s.vaults = {{.vault_id = 3, .vault_name = "photos", .account_key_generation = 1, .policy_grants = 1,
+                 .applied_sequence = 2}};
+    s.offline_copy = "confirmed";
+    s.offline_copy_at = 1770000000;
+    s.checked_at = 1770000100;
+    s.check = "ok";
+    s.check_detail = "replacement: generation 2 isn't signed by the pin";
+    s.issue = "cloud_account_key_change_pending";
+    s.next_step = "confirm it";
+    return s;
 }
 
 // A deleted vault mid-rotation whose recovery-referenced version 1 is gone: every optional member present.
@@ -292,6 +327,21 @@ void checkVaultKeyModels(Checker& c) {
             "VaultRecoveryRecipientAdd", "vault.keys.recipients.add");
     c.check(rr::toJson(rr::RevokeResult{.recipient = t::recipient(true), .recovery = t::missingMaterial()}),
             "VaultRecoveryRecipientRevoke", "vault.keys.recipients.revoke");
+
+    // design/cloud/key-manager.md: the linked account's recovery key.
+    namespace ck = ops::cloud_keys;
+    c.check(ck::toJson(t::keyStatus()), "CloudKeyStatus", "cloud.key.status (a replacement pending)");
+    c.check(ck::toJson(ck::Status{}), "CloudKeyStatus", "cloud.key.status (unlinked)");
+    c.check(ck::toJson(ck::Confirmed{.generation = t::generation(2, "pinned"), .replacement = true, .vaults = {3}}),
+            "CloudKeyConfirm", "cloud.key.confirm");
+    c.check(ops::cloud::toJson(ops::cloud::LinkStatus{.linked = true, .detailed = true,
+                                                     .installation_id = "kceypk9vfn5tv6yx5c6qpfebdm",
+                                                     .deployment_id = "kceypk9vfn5tv6yx5c6qpfebdm",
+                                                     .account_public_id = "5f0c3a3e-8d1b-4c2a-9e47-6b1d2f3a4c5e",
+                                                     .account_key_generation = 1,
+                                                     .account_key_fingerprint = "741a-97c7-d21a-4099-45fd-efcb-4ad4-825c"}),
+            "CloudLinkStatus", "cloud.link.status (super admin)");
+    c.check(ops::cloud::toJson(ops::cloud::LinkStatus{.linked = true}), "CloudLinkStatus", "cloud.link.status (a user)");
 
     // Spec 06 §7: the bucket capability probe.
     namespace vs = ops::vault_storage;

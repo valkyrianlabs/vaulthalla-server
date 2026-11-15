@@ -128,6 +128,8 @@ CommandResult handleStatus(const CommandCall& call) {
                 << " — set by " << v.setBy << "\n";
         out << "  lift: vh vault remote access <vault> --set full\n";
     }
+    if (health.cloudAccountKey)
+        out << "account recovery key (" << health.cloudAccountKey->issue << "): " << health.cloudAccountKey->detail << "\n";
     if (!health.remoteDetachesUnfinished.empty())
         out << "remote detaches running: " << health.remoteDetachesUnfinished.size() << " (vh vault remote status all)\n";
 

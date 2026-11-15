@@ -1,5 +1,8 @@
 #include "protocols/ws/handler/vault/Keys.hpp"
 
+#include "cloud/KeyService.hpp"
+#include "ops/Cloud.hpp"
+#include "ops/CloudKeys.hpp"
 #include "ops/Error.hpp"
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
@@ -97,15 +100,24 @@ json VaultKeys::listRecipients(const json& payload, const std::shared_ptr<Sessio
 json VaultKeys::addRecipient(const json& payload, const std::shared_ptr<Session>& session) {
     const auto channel = channelOf(session);
     const auto vaultId = requiredVaultId(payload);
-    if (!payload.contains("public_key") || !payload.at("public_key").is_string())
-        throw ops::Invalid("public_key is required (an X25519 public key: base64 or hex)");
+    bool accountKey = false;
+    if (payload.contains("account_key") && !payload.at("account_key").is_null()) {
+        if (!payload.at("account_key").is_boolean()) throw ops::Invalid("account_key must be true or false");
+        accountKey = payload.at("account_key").get<bool>();
+    }
+    const bool hasKey = payload.contains("public_key") && !payload.at("public_key").is_null();
+    if (hasKey && !payload.at("public_key").is_string()) throw ops::Invalid("public_key must be a string");
+    if (!accountKey && !hasKey)
+        throw ops::Invalid("public_key is required (an X25519 public key: base64 or hex), or account_key: true");
     std::optional<std::string> label;
     if (payload.contains("label") && !payload.at("label").is_null()) {
         if (!payload.at("label").is_string()) throw ops::Invalid("label must be a string");
         label = payload.at("label").get<std::string>();
     }
     return ops::recovery_recipients::toJson(ops::recovery_recipients::add(
-        actorOf(session), {.vault_id = vaultId, .public_key = payload.at("public_key").get<std::string>(), .label = label},
+        actorOf(session),
+        {.vault_id = vaultId, .public_key = hasKey ? payload.at("public_key").get<std::string>() : std::string{},
+         .label = label, .account_key = accountKey},
         channel));
 }
 
@@ -234,6 +246,32 @@ json VaultKeys::layoutCleanup(const json& payload, const std::shared_ptr<Session
     }
     return ops::vault_layout::toJson(
         ops::vault_layout::cleanup(actorOf(session), {.vault_id = requiredVaultId(payload), .confirm = confirm}));
+}
+
+json VaultKeys::cloudKeyStatus(const json&, const std::shared_ptr<Session>& session) {
+    return ops::cloud_keys::toJson(ops::cloud_keys::status(actorOf(session)));
+}
+
+json VaultKeys::cloudKeyConfirm(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto channel = channelOf(session);
+    if (!payload.contains("fingerprint") || !payload.at("fingerprint").is_string())
+        throw ops::Invalid("fingerprint is required (eight groups of four hex digits)");
+    return ops::cloud_keys::toJson(
+        ops::cloud_keys::confirm(actorOf(session), payload.at("fingerprint").get<std::string>(), channel));
+}
+
+json VaultKeys::cloudKeyRefresh(const json&, const std::shared_ptr<Session>& session) {
+    const auto& actor = actorOf(session);
+    if (!actor->isSuperAdmin()) throw ops::Denied("only a super admin can refresh the account recovery key");
+    const auto s = ops::cloud_keys::status(actor);
+    if (s.state == "unlinked") throw ops::Conflict("this server isn't linked to an account");
+    // The network check runs on the background service's thread, never this one.
+    ::vh::cloud::KeyService::requestCheck();
+    return ops::cloud_keys::toJson(s);
+}
+
+json VaultKeys::cloudLinkStatus(const json&, const std::shared_ptr<Session>& session) {
+    return ops::cloud::toJson(ops::cloud::linkStatus(actorOf(session)));
 }
 
 }
