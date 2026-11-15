@@ -9,15 +9,19 @@ export { useCloudView } from '@/features/managedStorage/signal'
 
 const HELLO = { client: { name: 'Vaulthalla Web' } } as const
 
-// Whether this server offers managed storage (meta.hello capability), cached 10 min like the upload probe.
-export const useManagedStorageCapability = (enabled = true) =>
+// Whether this server announces a meta.hello capability, cached 10 min like the upload probe (one request per page:
+// every caller shares the query).
+export const useHelloCapability = (capability: string, enabled = true) =>
   !!useQuery({
     queryKey: wsKey('meta.hello', HELLO),
     queryFn: ({ signal }) => api.send('meta.hello', HELLO, { signal }),
     staleTime: 10 * 60_000,
     enabled,
     retry: false,
-  }).data?.capabilities.includes(MANAGED_STORAGE_CAPABILITY)
+  }).data?.capabilities.includes(capability)
+
+// Whether this server offers managed storage.
+export const useManagedStorageCapability = (enabled = true) => useHelloCapability(MANAGED_STORAGE_CAPABILITY, enabled)
 
 // cloud.storage.status, polled every 30 s (every 3 s while something uploads or becomes local).
 export const useManagedStorageStatus = (enabled: boolean) =>

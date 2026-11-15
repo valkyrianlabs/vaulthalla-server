@@ -31,7 +31,8 @@ export const Panel = ({
           ) : null}
           {description ? <p className="mt-0.5 text-sm text-fg-subtle">{description}</p> : null}
         </div>
-        {actions ? <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div> : null}
+        {/* max-w-full, not shrink-0: on a phone the buttons wrap inside the panel instead of running past its edge. */}
+        {actions ? <div className="flex max-w-full flex-wrap items-center gap-2">{actions}</div> : null}
       </header>
     ) : null}
     <div className={cn(padded && 'px-5 pt-3 pb-5', !title && !actions && padded && 'pt-5', bodyClassName)}>{children}</div>

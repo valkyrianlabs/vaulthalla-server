@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useState } from 'react'
+import dynamic from 'next/dynamic'
 import { api } from '@/lib/session'
 import { useCan } from '@/lib/permissions'
 import { formatBytes } from '@/lib/format'
@@ -27,9 +28,15 @@ import {
 import {
   refreshManagedStorage,
   useCloudView,
+  useHelloCapability,
   useManagedStorageCapability,
   useManagedStorageStatus,
 } from '@/features/managedStorage/queries'
+
+// The cloud relay's switch (design/cloud/relay.md) lives on this page, the server's cloud page; loaded only when the
+// server announces it, so it stays out of the route's first load.
+const RELAY_CAPABILITY = 'cloud.relay'
+const RelayPanel = dynamic(() => import('@/features/cloudRelay/RelayPanel'), { ssr: false })
 
 const when = (seconds: number | null | undefined) => (seconds ? new Date(seconds * 1000).toLocaleString() : '—')
 
@@ -55,6 +62,7 @@ const useAction = () => {
 export const ManagedStoragePage = () => {
   const canView = useCloudView()
   const capable = useManagedStorageCapability(canView)
+  const relay = useHelloCapability(RELAY_CAPABILITY, canView)
   const status = useManagedStorageStatus(canView && capable)
   return (
     <div className="space-y-6">
@@ -64,6 +72,7 @@ export const ManagedStoragePage = () => {
       ) : (
         <QueryState query={status}>{data => <Body status={data} />}</QueryState>
       )}
+      {canView && relay ? <RelayPanel /> : null}
     </div>
   )
 }
@@ -123,9 +132,9 @@ const Body = ({ status }: { status: StorageStatus }) => {
         <div className="space-y-3">
           {status.quota_bytes ? (
             <div className="space-y-1">
-              <div className="flex justify-between text-sm text-fg-muted">
+              <div className="flex flex-wrap justify-between gap-x-3 text-sm text-fg-muted">
                 <span>{COPY.usageCaption(status.usage_day)}</span>
-                <span>
+                <span className="tabular whitespace-nowrap">
                   {formatBytes(status.used_bytes)} / {formatBytes(status.quota_bytes)}
                 </span>
               </div>

@@ -1,5 +1,6 @@
 import type { Response } from '@/lib/ws/client'
 import type { Device } from '@/models/device'
+import { RELAY_LABELS } from '@/features/cloudRelay/labels'
 
 // Paired devices (Vaulthalla Desktop). Normative protocol: docs/pairing.md in valkyrianlabs/vaulthalla-desktop (§3 number matching,
 // §6 revocation); the daemon side is ops::devices (ws device.*).
@@ -28,6 +29,19 @@ export const deviceLabel = (device: Pick<Device, 'name'>) => device.name || 'Unn
 
 export const platformLabel = (platform: string, appVersion?: string | null) =>
   [platform || 'Unknown platform', appVersion ? `Desktop ${appVersion}` : null].filter(Boolean).join(' · ')
+
+// A pairing request or a device that came through the cloud relay (a web browser, read-only), from the server's
+// `via` / `paired_via`, never from the platform string.
+export const requestViaRelay = (request: Pick<PendingRequest, 'via'>) => request.via === 'relay'
+export const pairedViaRelay = (device: Pick<Device, 'paired_via'>) => device.paired_via === 'relay'
+
+// What a request is, in the dialog's subtitle.
+export const requestLabel = (request: Pick<PendingRequest, 'via' | 'platform' | 'app_version'>) =>
+  requestViaRelay(request) ? RELAY_LABELS.viaRelay : platformLabel(request.platform, request.app_version)
+
+// The platform column: a relay-paired device is a web browser via the relay whatever it calls itself.
+export const devicePlatform = (device: Pick<Device, 'paired_via' | 'platform'>) =>
+  pairedViaRelay(device) ? RELAY_LABELS.viaRelay : device.platform || '—'
 
 // Live devices first (newest pairing first), revoked ones after.
 export const byStatus = (a: Device, b: Device) => Number(a.revoked) - Number(b.revoked) || b.created_at - a.created_at
