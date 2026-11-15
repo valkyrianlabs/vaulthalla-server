@@ -13,6 +13,7 @@
 #include "../helpers/device_client.hpp"
 #include "../helpers/identities.hpp"
 #include "../helpers/relay_browser.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "cloud/Identity.hpp"
 #include "cloud/RelayProtocol.hpp"
 #include "cloud/RelayService.hpp"
@@ -28,6 +29,7 @@
 #include "identities/User.hpp"
 #include "ops/CloudRelay.hpp"
 #include "ops/Devices.hpp"
+#include "ops/Error.hpp"
 #include "protocols/device/Listener.hpp"
 #include "protocols/device/Service.hpp"
 #include "protocols/ws/Handler.hpp"
@@ -945,6 +947,29 @@ TEST_F(CloudRelayServiceTest, AgainstTheRealRelay) {
     EXPECT_GE(service->snapshot().streams_refused, 1u);
     EXPECT_GE(service->snapshot().streams_accepted, 2u);
     service->stop();
+}
+
+TEST_F(CloudRelayServiceTest, SwitchingItOnFromTheConsoleIsAStepUp) {
+    // A request in scope (here a paired Desktop's session, with no approval key or grant) is refused the device.trust
+    // step-up, like remote device connections; the daemon's own callers (no scope) are not asked.
+    auto peer = std::make_shared<vh::device::Peer>();
+    peer->spki.fill(0x5c);
+    peer->spkiHex = crypto::toHex(peer->spki);
+    peer->address = "127.0.0.1";
+    peer->deviceRowId = 1;
+    const auto s = protocols::ws::Session::devicePrincipal(std::move(peer), owner, [] {});
+    {
+        const auth::stepup::Scope scope(s);
+        try {
+            (void)ops::cloud_relay::enable(owner, ops::cloud_relay::Channel::Web);
+            ADD_FAILURE() << "enabled without a step-up";
+        } catch (const ops::Refused& e) {
+            EXPECT_TRUE(e.code == "step_up_required" || e.code == "console_approval_required") << e.code;
+        }
+    }
+    EXPECT_FALSE(db::query::cloud::RelaySwitch::get());
+    s->close();
+    (void)runtime::Deps::releaseSessions();
 }
 
 TEST_F(CloudRelayServiceTest, OnlyASuperAdminSwitchesItAndNeverAnAgent) {

@@ -610,11 +610,14 @@ void Link::listenerRefused(const std::shared_ptr<Stream>& s, std::string why) {
 
 void Link::refuse(const uint32_t stream, const std::string& why, const std::string& keyId, const std::string& remote,
                   const std::optional<std::string>& countAgainst) {
-    send(relay::closeStream(stream, relay::toString(relay::Reason::Refused)));
+    {
+        // Counted before the CLOSE goes out: whoever sees the CLOSE sees the count.
+        const std::scoped_lock lock(shared_->mutex);
+        ++shared_->refused;
+    }
     if (countAgainst) failures_->fail(*countAgainst, unixNow());
     audit(why, keyId, remote);
-    const std::scoped_lock lock(shared_->mutex);
-    ++shared_->refused;
+    send(relay::closeStream(stream, relay::toString(relay::Reason::Refused)));
 }
 
 void Link::audit(const std::string& why, const std::string& keyId, const std::string& remote) {
