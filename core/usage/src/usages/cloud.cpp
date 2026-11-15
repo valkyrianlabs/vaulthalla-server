@@ -84,9 +84,12 @@ std::shared_ptr<CommandUsage> recovery(const std::weak_ptr<CommandUsage>& parent
     status->aliases = {"status"};
     status->description = "The enrolled vaults, and whether the cloud covers every key version each one needs.";
     status->optional = {Optional::ManyToOne("vault", "Only this vault (name or ID)", {"vault"}, "vault"), owner};
-    status->optional_flags = {jsonFlag};
+    status->optional_flags = {jsonFlag,
+                              Flag::WithAliases("verify", "Also compare the account-key envelopes the cloud holds with "
+                                                          "this server's records", {"verify"})};
     status->examples = {{"vh cloud recovery status", "Every vault enrolled from this server."},
-                        {"vh cloud recovery status --vault 12 --json", "One vault, as JSON."}};
+                        {"vh cloud recovery status --vault 12 --json", "One vault, as JSON."},
+                        {"vh cloud recovery status --verify", "Check the cloud's envelopes against this server's."}};
 
     auto unenroll = build(self);
     unenroll->effect = CommandEffect::Destructive;
@@ -152,6 +155,92 @@ std::shared_ptr<CommandUsage> key(const std::weak_ptr<CommandUsage>& parent) {
     return cmd;
 }
 
+// `vh cloud storage ...`: managed storage (design/cloud/managed-remotes.md).
+std::shared_ptr<CommandUsage> storage(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->aliases = {"storage"};
+    cmd->description = "Managed storage: on a linked server whose account includes storage, each vault can be kept in "
+                       "a bucket of its own that the account provides. The vault stays encrypted on this server, which "
+                       "holds its keys; nothing unencrypted leaves it. Per vault, with a switch.";
+    const auto self = cmd->weak_from_this();
+
+    auto status = build(self);
+    status->effect = CommandEffect::Read;
+    status->aliases = {"status"};
+    status->description = "The account's plan state, usage against the quota, the vaults waiting for a decision (with "
+                          "their sizes) and every vault's switch and state.";
+    status->optional_flags = {jsonFlag};
+    status->examples = {{"vh cloud storage status", "Show managed storage."},
+                        {"vh cloud storage status --json", "The same as JSON."}};
+
+    auto enable = build(self);
+    enable->effect = CommandEffect::Write;
+    enable->aliases = {"enable", "on"};
+    enable->description = "Switch managed storage on for a vault: it is uploaded once its bucket is ready (an empty "
+                          "vault waits for its first file). Its account recovery key becomes a recovery recipient.";
+    enable->positionals = {vaultPos};
+    enable->optional = {owner};
+    enable->examples = {{"vh cloud storage enable 12", "Keep vault 12 in managed storage."}};
+
+    auto disable = build(self);
+    disable->effect = CommandEffect::Destructive;
+    disable->aliases = {"disable", "off"};
+    disable->description = "Switch managed storage off for a vault: every file is fetched and verified here, then the "
+                           "vault is a local vault again. Its bucket is left in place (deleting it is the account "
+                           "holder's step). A vault restored onto another server is kept here as a local vault.";
+    disable->positionals = {vaultPos};
+    disable->optional = {owner, Optional::ManyToOne("confirm", "The vault's name, typed", {"confirm"}, "name")};
+    disable->examples = {{"vh cloud storage disable 12 --confirm photos", "Make vault 12 (photos) local again."}};
+
+    auto accept = build(self);
+    accept->effect = CommandEffect::Write;
+    accept->aliases = {"accept"};
+    accept->description = "Accept the offer for vaults that existed when managed storage became available: the named "
+                          "ones, or every offered vault with --all. Nothing is uploaded before this.";
+    accept->optional = {Optional::ManyToOne("vaults", "Vault IDs, comma-separated", {"vaults"}, "ids")};
+    accept->optional_flags = {Flag::WithAliases("all", "Every offered vault", {"all"})};
+    accept->examples = {{"vh cloud storage accept --all", "Keep every offered vault in managed storage."},
+                        {"vh cloud storage accept --vaults 3,7", "Only vaults 3 and 7."}};
+
+    auto decline = build(self);
+    decline->effect = CommandEffect::Write;
+    decline->aliases = {"decline"};
+    decline->description = "Decline the offer for the vaults still offered: they stay local (each can be switched on "
+                           "later).";
+    decline->examples = {{"vh cloud storage decline", "Keep the remaining offered vaults local."}};
+
+    auto rotate = build(self);
+    rotate->effect = CommandEffect::Write;
+    rotate->aliases = {"rotate"};
+    rotate->description = "Ask for a new bucket key for a vault in managed storage; the old one is revoked once the new "
+                          "one works.";
+    rotate->positionals = {vaultPos};
+    rotate->optional = {owner};
+    rotate->examples = {{"vh cloud storage rotate 12", "Replace vault 12's bucket key."}};
+
+    auto newVaults = build(self);
+    newVaults->effect = CommandEffect::Write;
+    newVaults->aliases = {"new-vaults"};
+    newVaults->description = "Whether vaults created from now on use managed storage by default (on unless turned "
+                             "off). Each vault keeps its own switch.";
+    newVaults->positionals = {Positional::Same("setting", "on or off")};
+    newVaults->examples = {{"vh cloud storage new-vaults off", "Keep new vaults local unless switched on."}};
+
+    auto billing = build(self);
+    billing->effect = CommandEffect::Write;
+    billing->aliases = {"billing"};
+    billing->description = "Print the address of the account's billing page (checkout to choose a plan, portal to "
+                           "manage it), to open in a browser. Nothing of it is stored.";
+    billing->optional = {Optional::ManyToOne("kind", "checkout or portal (default: portal)", {"kind"}, "kind"),
+                         Optional::ManyToOne("plan", "The plan to check out", {"plan"}, "plan")};
+    billing->examples = {{"vh cloud storage billing", "The billing portal's address."},
+                         {"vh cloud storage billing --kind checkout --plan storage-1tb", "Choose a plan."}};
+
+    cmd->subcommands = {status, enable, disable, accept, decline, rotate, newVaults, billing};
+    cmd->examples = {{"vh cloud storage status", "Show managed storage."}};
+    return cmd;
+}
+
 std::shared_ptr<CommandUsage> unlink(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->effect = CommandEffect::Destructive;
@@ -159,7 +248,8 @@ std::shared_ptr<CommandUsage> unlink(const std::weak_ptr<CommandUsage>& parent) 
     cmd->description = "Revoke this server's link in Vaulthalla Cloud and forget it here, with its identity key. A "
                        "pending request is discarded.";
     cmd->optional_flags = {Flag::WithAliases("force", "Forget the link here even when the cloud can't confirm it "
-                                                      "(then revoke this server on vaulthalla.cloud)",
+                                                      "(then revoke this server on vaulthalla.cloud), or while vaults "
+                                                      "are in managed storage (their bucket keys are revoked)",
                                              {"force"})};
     cmd->examples = {{"vh cloud unlink", "Unlink this server from its Vaulthalla Cloud account."},
                      {"vh cloud unlink --force", "Forget the link here although the cloud can't be reached."}};
@@ -176,7 +266,8 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
     root->description = "Link this server to a vaulthalla.cloud account (optional; Vaulthalla never needs it). "
                         "vaulthalla.cloud isn't open yet.";
     root->subcommands = {link(root->weak_from_this()), status(root->weak_from_this()), unlink(root->weak_from_this()),
-                         recovery(root->weak_from_this()), key(root->weak_from_this())};
+                         recovery(root->weak_from_this()), key(root->weak_from_this()),
+                         storage(root->weak_from_this())};
     root->examples = {
         {"vh cloud link", "Link this server to your vaulthalla.cloud account."},
         {"vh cloud status", "Show the link."},

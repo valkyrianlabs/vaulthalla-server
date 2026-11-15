@@ -30,6 +30,7 @@ public:
         std::optional<uint32_t> api_key_id;
         std::string bucket;
         std::optional<uint32_t> started_by;
+        ::vh::vault::remote::detach::Mode mode{::vh::vault::remote::detach::Mode::Hydrate};
     };
     enum class StartOutcome { Started, Resumed, Busy };
     struct Started {
@@ -88,7 +89,12 @@ public:
     // the vault deleted, a gateway binding remote_cache/remote_proxy -> local, the bucket row unbound (ownership kept), pending
     // upstream backlog -> skipped ('detached'), recovery mode provider_versioning -> local_snapshots, the attach row and
     // its items deleted, and the detach row cutover.
+    // In place: the cutover also drops the records of envelopes only the bucket held once the database holds an
+    // envelope of the same grant and version (or the grant is revoked), and counts them in lost.
     [[nodiscard]] static CutoverOutcome cutover(uint32_t vaultId);
+    // In place: a file held only in the bucket ({file_id, path, size_bytes}), appended to the row's lost list before it
+    // is moved to the trash.
+    static void addLost(uint32_t vaultId, const nlohmann::json& file);
 
     // ---- health
     struct FailedDetach {

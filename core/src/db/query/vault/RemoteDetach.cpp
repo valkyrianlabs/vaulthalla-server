@@ -35,7 +35,8 @@ constexpr const char* rdKRowColumns =
     "extract(epoch from cutover_at)::BIGINT AS cutover_at, extract(epoch from done_at)::BIGINT AS done_at, "
     "extract(epoch from aborted_at)::BIGINT AS aborted_at, "
     "extract(epoch from abort_requested_at)::BIGINT AS abort_requested_at, abort_requested_by, "
-    "estimate::TEXT AS estimate, last_error, extract(epoch from updated_at)::BIGINT AS updated_at";
+    "estimate::TEXT AS estimate, last_error, extract(epoch from updated_at)::BIGINT AS updated_at, mode, "
+    "lost::TEXT AS lost";
 
 rd::Row rdRowFrom(const pqxx::row_ref r) {
     rd::Row row;
@@ -56,6 +57,8 @@ rd::Row rdRowFrom(const pqxx::row_ref r) {
     if (!r["estimate"].is_null()) row.estimate = nlohmann::json::parse(r["estimate"].as<std::string>());
     row.last_error = rdOpt<std::string>(r["last_error"]);
     row.updated_at = static_cast<std::time_t>(r["updated_at"].as<int64_t>());
+    row.mode = rd::modeFromString(r["mode"].as<std::string>());
+    if (!r["lost"].is_null()) row.lost = nlohmann::json::parse(r["lost"].as<std::string>());
     return row;
 }
 
@@ -129,15 +132,17 @@ RemoteDetach::Started RemoteDetach::start(const StartRequest& request) {
                 txn.exec("DELETE FROM vault_remote_detach_item WHERE vault_id = $1", pqxx::params{request.vault_id});
                 txn.exec("DELETE FROM vault_remote_detach WHERE vault_id = $1", pqxx::params{request.vault_id});
             }
-            txn.exec("INSERT INTO vault_remote_detach (vault_id, api_key_id, bucket, state, started_by) "
-                     "VALUES ($1, $2, $3, 'preparing', $4)",
-                     pqxx::params{request.vault_id, request.api_key_id, request.bucket, request.started_by});
+            txn.exec("INSERT INTO vault_remote_detach (vault_id, api_key_id, bucket, state, started_by, mode) "
+                     "VALUES ($1, $2, $3, 'preparing', $4, $5)",
+                     pqxx::params{request.vault_id, request.api_key_id, request.bucket, request.started_by,
+                                  std::string(rd::to_string(request.mode))});
             out.outcome = StartOutcome::Started;
         } else if (existing->state == State::Failed) {
+            // A resumed detach takes the mode asked now: in place when the bucket became unusable meanwhile.
             txn.exec("UPDATE vault_remote_detach SET state = 'preparing', started_by = $2, attempts = attempts + 1, "
                      "  passes = 0, verified_at = NULL, last_error = NULL, abort_requested_at = NULL, "
-                     "  abort_requested_by = NULL, updated_at = now() WHERE vault_id = $1",
-                     pqxx::params{request.vault_id, request.started_by});
+                     "  abort_requested_by = NULL, mode = $3, updated_at = now() WHERE vault_id = $1",
+                     pqxx::params{request.vault_id, request.started_by, std::string(rd::to_string(request.mode))});
             txn.exec("UPDATE vault_remote_detach_item SET state = 'pending', error = NULL, updated_at = now() "
                      "WHERE vault_id = $1 AND state = 'failed'",
                      pqxx::params{request.vault_id});
@@ -294,6 +299,15 @@ bool RemoteDetach::layoutMigrationRunning(const uint32_t vaultId) {
     });
 }
 
+void RemoteDetach::addLost(const uint32_t vaultId, const nlohmann::json& file) {
+    Transactions::exec("RemoteDetach::addLost", [&](pqxx::work& txn) {
+        txn.exec("UPDATE vault_remote_detach SET lost = jsonb_set(COALESCE(lost, '{\"files\": []}'::jsonb), '{files}', "
+                 "COALESCE(lost->'files', '[]'::jsonb) || jsonb_build_array($2::jsonb)), updated_at = now() "
+                 "WHERE vault_id = $1",
+                 pqxx::params{vaultId, file.dump()});
+    });
+}
+
 RemoteDetach::CutoverOutcome RemoteDetach::cutover(const uint32_t vaultId) {
     return Transactions::exec("RemoteDetach::cutover", [&](pqxx::work& txn) {
         CutoverOutcome out;
@@ -307,7 +321,7 @@ RemoteDetach::CutoverOutcome RemoteDetach::cutover(const uint32_t vaultId) {
             out.refused = "the vault is not an S3 vault";
             return out;
         }
-        const auto detach = txn.exec("SELECT state, verified_at IS NOT NULL, abort_requested_at IS NOT NULL "
+        const auto detach = txn.exec("SELECT state, verified_at IS NOT NULL, abort_requested_at IS NOT NULL, mode "
                                      "FROM vault_remote_detach WHERE vault_id = $1 FOR UPDATE",
                                      pqxx::params{vaultId});
         if (detach.empty() || detach[0][0].as<std::string>() != "verifying" || !detach[0][1].as<bool>()) {
@@ -318,7 +332,9 @@ RemoteDetach::CutoverOutcome RemoteDetach::cutover(const uint32_t vaultId) {
             out.refused = "an abort was requested";
             return out;
         }
-        // Every live file with content is held here at the generation the catalog records, verified.
+        const bool inPlace = detach[0][3].as<std::string>() == "in_place";
+        // Every live file with content is held here at the generation the catalog records, verified. (In place, a
+        // file held only in the bucket was listed as lost and moved to the trash before this: it isn't live.)
         const auto unverified = txn.exec(
             "SELECT count(*) FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id "
             "WHERE e.vault_id = $1 AND f.encryption_iv <> '' AND NOT EXISTS (SELECT 1 FROM vault_remote_detach_item i "
@@ -329,6 +345,17 @@ RemoteDetach::CutoverOutcome RemoteDetach::cutover(const uint32_t vaultId) {
             out.refused = std::to_string(unverified) + " file(s) changed since they were verified locally";
             return out;
         }
+        // In place, the bucket is out of reach: every usable grant's envelope was wrapped again into the database
+        // before this (wrapIntoDatabase replaced the records that pointed into the bucket). A revoked grant gets no new
+        // envelope, so the record of one only the bucket held goes (counted in lost). Anything else refuses below, so
+        // coverage never shrinks.
+        uint64_t envelopesLeft = 0;
+        if (inPlace)
+            envelopesLeft = txn.exec(
+                "DELETE FROM vault_key_envelope e WHERE e.vault_id = $1 AND e.envelope IS NULL AND EXISTS (SELECT 1 FROM "
+                "vault_recovery_grant g WHERE g.vault_id = e.vault_id AND g.grant_id = e.grant_id AND g.revoked_at IS NOT "
+                "NULL)",
+                pqxx::params{vaultId}).affected_rows();
         // Recovery material is never left behind: a local vault keeps its envelopes in the database, so every row
         // must hold its bytes (a version wrapped since the copy is copied and verified first).
         if (!txn.exec("SELECT 1 FROM vault_key_envelope WHERE vault_id = $1 AND envelope IS NULL LIMIT 1",
@@ -342,6 +369,11 @@ RemoteDetach::CutoverOutcome RemoteDetach::cutover(const uint32_t vaultId) {
             out.refused = "legacy (gcm0 or plain) content appeared";
             return out;
         }
+
+        if (inPlace)
+            txn.exec("UPDATE vault_remote_detach SET lost = jsonb_set(COALESCE(lost, '{\"files\": []}'::jsonb), "
+                     "'{envelopes_left_in_bucket}', to_jsonb($2::BIGINT)) WHERE vault_id = $1",
+                     pqxx::params{vaultId, static_cast<int64_t>(envelopesLeft)});
 
         // The vault becomes a local vault: its S3 binding, remote index, baselines and manifest position go.
         txn.exec("UPDATE vault SET type = 'local', updated_at = CURRENT_TIMESTAMP WHERE id = $1", pqxx::params{vaultId});

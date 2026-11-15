@@ -21,7 +21,7 @@
 //
 // Nothing here runs unless the server is linked, and nothing sends a vault key, the account key's private half (the
 // server never has it) or anything unwrapped: the cloud receives only what it already serves back. The network check
-// runs on the CLI's thread (`vh cloud key refresh`, `vh cloud link`) or the background service (cloud::KeyService),
+// runs on the CLI's thread (`vh cloud key refresh`, `vh cloud link`) or the background service (cloud::StorageService),
 // never on a FUSE, sync or ws path; a failed check changes nothing and is retried.
 namespace vh::ops::cloud_keys {
 

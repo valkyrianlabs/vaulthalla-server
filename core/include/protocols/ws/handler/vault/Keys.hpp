@@ -46,6 +46,17 @@ struct VaultKeys {
     static json cloudKeyConfirm(const json& payload, const std::shared_ptr<Session>& session);
     static json cloudKeyRefresh(const json& payload, const std::shared_ptr<Session>& session);
     static json cloudLinkStatus(const json& payload, const std::shared_ptr<Session>& session);
+    // cloud.storage.* (ops::cloud_storage; design/cloud/managed-remotes.md): managed storage. Status reads the
+    // database; the switch, the offer, rotation and the default record intents the background service carries out (no
+    // cloud call on a ws thread); billing.handoff asks the cloud for a billing page address on the handler's worker,
+    // bounded. No step-up: managed storage adds no decryption path.
+    static json cloudStorageStatus(const json& payload, const std::shared_ptr<Session>& session);
+    static json cloudStorageSwitch(const json& payload, const std::shared_ptr<Session>& session);
+    static json cloudStorageOfferAccept(const json& payload, const std::shared_ptr<Session>& session);
+    static json cloudStorageOfferDecline(const json& payload, const std::shared_ptr<Session>& session);
+    static json cloudStorageRotate(const json& payload, const std::shared_ptr<Session>& session);
+    static json cloudStorageNewVaults(const json& payload, const std::shared_ptr<Session>& session);
+    static json cloudStorageBillingHandoff(const json& payload, const std::shared_ptr<Session>& session);
     static json remoteAbort(const json& payload, const std::shared_ptr<Session>& session);
 };
 

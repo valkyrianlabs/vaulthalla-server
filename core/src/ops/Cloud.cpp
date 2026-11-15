@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <chrono>
 
+#include "ops/CloudStorage.hpp"
+
 namespace vh::ops::cloud {
 
 // Named, not anonymous: the unity build joins this file with others.
@@ -287,6 +289,19 @@ Unlinked unlink(const Actor& actor, const Channel channel, const bool force) {
         return out;
     }
     out.was = row->status;
+    // Managed vaults keep their data in the account's buckets through keys this installation holds: unlinking would
+    // revoke them, so it waits until each one is switched off, moved or ejected, unless forced.
+    if (row->status == "linked" && !force) {
+        const auto blocking = ops::cloud_storage::unlinkBlockers();
+        if (!blocking.empty()) {
+            std::string names;
+            for (const auto& n : blocking) names += (names.empty() ? "" : ", ") + n;
+            throw Refused("managed_vaults",
+                          std::to_string(blocking.size()) + " vault(s) keep their data in managed storage (" + names +
+                              "): switch them off first (`vh cloud storage disable <vault>`), or unlink with --force, "
+                              "after which the account's service revokes this server's bucket keys");
+        }
+    }
     if (row->status == "linked") {
         const auto seed = vh::cloud::identity::load();
         if (seed) {
@@ -303,6 +318,7 @@ Unlinked unlink(const Actor& actor, const Channel channel, const bool force) {
         }
     }
     forget();
+    ops::cloud_storage::onUnlinked();
     ::vh::audit::record({.action = "cloud.unlink", .outcome = ::vh::audit::Outcome::Success, .actor_id = actor->id,
                    .actor = actor->name(),
                    .details = {{"was", out.was}, {"cloud_revoked", out.cloud_revoked}, {"forced", force}}},
@@ -316,7 +332,7 @@ LinkStatus linkStatus(const Actor& actor) {
     LinkStatus out;
     const auto row = cloud_ops_detail::Link::get();
     out.linked = row && row->status == "linked";
-    if (!actor->isSuperAdmin() && !actor->encryptionKeysPerms().canView()) return out;
+    if (!actor->isSuperAdmin() && !actor->encryptionKeysPerms().canView() && !actor->cloudPerms().canView()) return out;
     out.detailed = true;
     if (!out.linked) return out;
     out.installation_id = row->installation_id;

@@ -172,6 +172,14 @@ void Handler::registerVaultKeyHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("cloud.key.confirm", &handler::VaultKeys::cloudKeyConfirm);
     r->registerPayload("cloud.key.refresh", &handler::VaultKeys::cloudKeyRefresh);
     r->registerPayload("cloud.link.status", &handler::VaultKeys::cloudLinkStatus);
+    // design/cloud/managed-remotes.md: managed storage (intents only; the background service talks to the cloud).
+    r->registerPayload("cloud.storage.status", &handler::VaultKeys::cloudStorageStatus);
+    r->registerPayload("cloud.storage.switch", &handler::VaultKeys::cloudStorageSwitch);
+    r->registerPayload("cloud.storage.offer.accept", &handler::VaultKeys::cloudStorageOfferAccept);
+    r->registerPayload("cloud.storage.offer.decline", &handler::VaultKeys::cloudStorageOfferDecline);
+    r->registerPayload("cloud.storage.rotate", &handler::VaultKeys::cloudStorageRotate);
+    r->registerPayload("cloud.storage.new_vaults", &handler::VaultKeys::cloudStorageNewVaults);
+    r->registerPayload("cloud.storage.billing.handoff", &handler::VaultKeys::cloudStorageBillingHandoff);
 }
 
 void Handler::registerMetaHandlers(const std::shared_ptr<Router>& r) {

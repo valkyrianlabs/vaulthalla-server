@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 
 namespace vh::vault::envelopes {
@@ -198,6 +199,27 @@ void discard(const Pending& pending) noexcept {
                                           pending.vault_id, e.kid, ex.what());
         }
     }
+}
+
+unsigned wrapIntoDatabase(const uint32_t vaultId, const uint32_t version, const crypto::SecretKey& key) {
+    std::set<std::string> heldFor;
+    for (const auto& e : db::query::vault::RemoteAttach::envelopes(vaultId))
+        if (e.key_version == version && !e.bytes.empty()) heldFor.insert(e.grant_id);
+    const auto uid = envelopes_detail::vaultUidOf(vaultId);
+    std::vector<db::query::vault::KeyEnvelope> written;
+    for (const auto& g : db::query::vault::RecoveryGrants::usable(vaultId)) {
+        if (heldFor.contains(g.grant_id) || !envelopes_detail::wrapAllowed(g) ||
+            g.suite != static_cast<uint16_t>(vl::keykit::kev1::Suite::X25519))
+            continue;
+        auto env = vl::keykit::kev1::wrap(key.bytes(), vl::keykit::kev1::Suite::X25519, version, uid, g.public_key);
+        const auto kid = vl::keykit::kev1::kid(env);
+        written.push_back({g.grant_id, version, kid, std::move(env)});
+    }
+    if (written.empty()) return 0;
+    for (const auto& e : written) db::query::vault::RecoveryGrants::holdEnvelope(vaultId, e);
+    log::Registry::crypto()->info("[vault::envelopes] Vault {}: wrapped {} recovery envelope(s) of key version {} into "
+                                  "the database", vaultId, written.size(), version);
+    return static_cast<unsigned>(written.size());
 }
 
 unsigned writeFor(const uint32_t vaultId, const uint32_t version, const crypto::SecretKey& key) {

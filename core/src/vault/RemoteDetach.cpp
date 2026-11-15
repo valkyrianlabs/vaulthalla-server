@@ -11,6 +11,7 @@
 #include "db/query/vault/RecoveryGrants.hpp"
 #include "db/query/vault/RemoteAttach.hpp"
 #include "db/query/vault/RemoteDetach.hpp"
+#include "fs/Filesystem.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
 #include "log/Registry.hpp"
@@ -23,6 +24,7 @@
 #include "sync/Controller.hpp"
 #include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
+#include "vault/RecoveryEnvelopes.hpp"
 #include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
 
@@ -85,12 +87,21 @@ std::string_view to_string(const ItemState state) {
     case ItemState::Pending: return "pending";
     case ItemState::Verified: return "verified";
     case ItemState::Failed: return "failed";
+    case ItemState::Lost: return "lost";
     }
     return "pending";
 }
 
+std::string_view to_string(const Mode mode) { return mode == Mode::InPlace ? "in_place" : "hydrate"; }
+
+Mode modeFromString(const std::string_view text) {
+    if (text == "hydrate") return Mode::Hydrate;
+    if (text == "in_place") return Mode::InPlace;
+    throw std::invalid_argument("unknown remote detach mode: " + std::string(text));
+}
+
 ItemState itemStateFromString(const std::string_view text) {
-    for (const auto s : {ItemState::Pending, ItemState::Verified, ItemState::Failed})
+    for (const auto s : {ItemState::Pending, ItemState::Verified, ItemState::Failed, ItemState::Lost})
         if (to_string(s) == text) return s;
     throw std::invalid_argument("unknown remote detach item state: " + std::string(text));
 }
@@ -238,6 +249,16 @@ uint64_t planItems(Ctx& ctx) {
 bool holdLocally(Ctx& ctx, Item& it) {
     auto file = db::query::fs::File::getFileById(*it.file_id);
     if (!file || !hasContent(*file)) return false;
+    if (!localCopyExists(*ctx.cloud, *file) && ctx.row.mode == Mode::InPlace) {
+        // In place: the bucket is out of reach, so a file held only there is lost. It is listed first, then moved to
+        // the trash (it has no local bytes, so nothing local goes); the trash keeps its name.
+        Q::addLost(ctx.vaultId, {{"file_id", file->id}, {"path", file->path.string()}, {"size_bytes", file->size_bytes}});
+        it.state = ItemState::Lost;
+        it.generation = file->encryption_iv;
+        Q::updateItem(it);
+        fs::Filesystem::remove(ctx.cloud->vaultPathToFusePath(file->path), ctx.cloud->vault->owner_id);
+        return false;
+    }
     if (!localCopyExists(*ctx.cloud, *file)) {
         file = ctx.cloud->hydrate(file);   // price-preflighted, metered, authenticated before it becomes visible
         if (!file) return false;
@@ -308,6 +329,7 @@ unsigned copyEnvelopes(Ctx& ctx) {
         held.insert(e.kid);
         auto bytes = e.bytes;
         bool fromBucket = false;
+        if (bytes.empty() && ctx.row.mode == Mode::InPlace) continue;   // the bucket's own: rewrapped below
         if (bytes.empty()) {
             ctx.checkpoint();
             if (!store) store.emplace(ctx.cloud->s3Controller());
@@ -363,6 +385,14 @@ unsigned copyEnvelopes(Ctx& ctx) {
     }
     for (const auto& [kid, item] : byKid)
         if (!held.contains(kid)) Q::deleteItem(item.id);
+    if (ctx.row.mode == Mode::InPlace) {
+        // Every usable grant gets a database-held envelope of every version it covers in the bucket only: wrapped
+        // again here (the vault holds every key version), so the local vault is never less recoverable.
+        std::set<uint32_t> versions;
+        for (const auto& e : AttachQ::envelopes(ctx.vaultId))
+            if (e.bytes.empty()) versions.insert(e.key_version);
+        for (const auto v : versions) copied += envelopes::wrapIntoDatabase(ctx.vaultId, v, *ctx.keyOf(v));
+    }
     return copied;
 }
 

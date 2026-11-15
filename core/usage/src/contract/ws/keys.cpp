@@ -402,6 +402,89 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
         .client_timeout = kDefaultTimeout,
     });
 
+    // ---- managed storage (design/cloud/managed-remotes.md; ops::cloud_storage) ------------------------------------------
+    const std::vector<std::string> storageRefusals = {"denied", "invalid", "not_found", "conflict", "unauthorized"};
+    out.push_back({
+        .command = "cloud.storage.status",
+        .description = "Managed storage on this server: whether it is available (linked, the account recovery key "
+                       "confirmed, the account entitled), the plan state, usage against the quota (the account's figure, "
+                       "with its date) beside this server's own, the offer for vaults that existed before it was "
+                       "available, and every vault's switch and state in words. Reads the database only. Super admins "
+                       "or the admin cloud View permission.",
+        .response = modelFields("CloudStorageStatus"),
+        .refusal_codes = {"denied", "unauthorized"},
+        .response_model = "CloudStorageStatus",
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "cloud.storage.switch",
+        .description = "A vault's managed-storage switch. On: the vault is uploaded to a bucket of its own once it is "
+                       "ready (an empty vault waits for its first file); off: before a bucket exists the request stops, "
+                       "with one every file is fetched and verified locally and the vault becomes local again (the "
+                       "bucket is left in place; `confirm` with the vault's name is required then). Records the intent: "
+                       "the background service carries it out, and cloud.storage.status follows it. No step-up. The "
+                       "admin cloud Storage permission and the vault's admin Edit permission.",
+        .payload = {vaultId(), boolean("enabled").gen(gen::boolean()).desc("On or off."),
+                    str("confirm").opt().nullable().desc("Off on a vault with a bucket: the vault's name.")},
+        .response = modelFields("CloudStorageVault"),
+        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "managed_storage_unavailable"},
+        .response_model = "CloudStorageVault",
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "cloud.storage.offer.accept",
+        .description = "Accept the offer for vaults that existed when managed storage became available: the listed ones "
+                       "or, without vault_ids, every offered vault (their switches go on). Nothing is uploaded before "
+                       "this. The admin cloud Storage permission and each vault's admin Edit permission.",
+        .payload = {intArray("vault_ids").opt().nullable().desc("The vaults to accept; absent for every offered one.")},
+        .response = modelFields("CloudStorageOffer"),
+        .refusal_codes = storageRefusals,
+        .response_model = "CloudStorageOffer",
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "cloud.storage.offer.decline",
+        .description = "Decline the offer for the listed vaults (or every one still offered): they stay local; each can "
+                       "be switched on later. The admin cloud Storage permission.",
+        .payload = {intArray("vault_ids").opt().nullable().desc("The vaults to decline; absent for every offered one.")},
+        .response = modelFields("CloudStorageOffer"),
+        .refusal_codes = storageRefusals,
+        .response_model = "CloudStorageOffer",
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "cloud.storage.rotate",
+        .description = "Ask for a new bucket key for a vault in managed storage (the service exchanges, probes and "
+                       "acknowledges it; the old key is revoked then). The admin cloud Storage permission and the "
+                       "vault's admin Edit permission.",
+        .payload = {vaultId()},
+        .response = modelFields("CloudStorageVault"),
+        .refusal_codes = storageRefusals,
+        .response_model = "CloudStorageVault",
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "cloud.storage.new_vaults",
+        .description = "Whether vaults created from now on use managed storage by default (on unless turned off). The "
+                       "admin cloud Storage permission.",
+        .payload = {boolean("enabled").gen(gen::boolean()).desc("On or off.")},
+        .response = {boolean("new_vaults")},
+        .refusal_codes = {"denied", "invalid", "unauthorized"},
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "cloud.storage.billing.handoff",
+        .description = "The address of the account's billing page (checkout: choose a plan; portal: manage it), to open "
+                       "in a browser; short-lived and never stored. The service polls the account's state fast for a "
+                       "few minutes afterwards. The admin cloud Billing permission.",
+        .payload = {str("kind").gen(gen::constant("portal")).desc("checkout or portal."),
+                    str("plan").opt().nullable().desc("checkout: the plan.")},
+        .response = modelFields("CloudStorageHandoff"),
+        .refusal_codes = {"denied", "invalid", "conflict", "unauthorized", "cloud_unreachable", "cloud_refused"},
+        .response_model = "CloudStorageHandoff",
+        .client_timeout = kDefaultTimeout,
+    });
+
     return out;
 }
 

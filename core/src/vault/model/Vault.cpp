@@ -177,7 +177,10 @@ void vh::vault::model::to_json(nlohmann::json& j, const Vault& v) {
         {"mount_point", v.mount_point.string()},
         {"allow_fs_write", v.allow_fs_write},
         {"is_active", v.is_active},
-        {"created_at", timestampToString(v.created_at)}
+        {"created_at", timestampToString(v.created_at)},
+        // The vault's uid (26 base32 symbols), as recovery kits, the bucket's layout hint and managed storage name it:
+        // an identifier, not a secret, and it gives no access.
+        {"vault_uid", v.uid ? nlohmann::json(vl::keykit::toBase32(*v.uid)) : nlohmann::json(nullptr)}
     };
 }
 

@@ -62,6 +62,9 @@ public:
     [[nodiscard]] static std::vector<KeyEnvelope> envelopes(uint32_t vaultId);
     // Records the envelopes written for keyVersion, with their bytes where `written` carries them (a local vault).
     static void recordEnvelopes(uint32_t vaultId, uint32_t keyVersion, const std::vector<KeyEnvelope>& written);
+    // A database-held envelope for the grant and version: recorded, or replacing a record whose bytes only a bucket
+    // held (an in-place detach; vault/RecoveryEnvelopes.hpp wrapIntoDatabase). A record that holds bytes is kept.
+    static void holdEnvelope(uint32_t vaultId, const KeyEnvelope& envelope);
     // Usable grants without an envelope for `keyVersion`.
     [[nodiscard]] static std::vector<RecoveryGrant> missingFor(uint32_t vaultId, uint32_t keyVersion);
     // Key versions among `versions` for which no usable grant holds an envelope.

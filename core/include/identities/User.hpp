@@ -22,6 +22,7 @@ namespace vh::rbac::permission::admin {
     struct S3Gateway;
     struct Stats;
     struct Upstream;
+    struct Cloud;
     struct Vaults;
     struct VaultGlobals;
 

@@ -158,6 +158,57 @@ std::vector<WsModel> vaultKeyModels() {
              .nullable()
              .desc("The pinned account recovery key, or null.")}));
 
+    out.push_back(model("CloudStorageVault",
+        "A vault as managed storage sees it: ops::cloud_storage::toJson(VaultEntry).",
+        {vaultId(), str("vault_name"), str("vault_uid").desc("26 base32 symbols."),
+         str("storage").oneOf({"managed", "own", "local"})
+             .desc("managed: it has a managed-storage row; own: an S3 vault on the customer's own storage; local: a "
+                   "local vault managed storage hasn't considered."),
+         str("switch").nullable().oneOf({"on", "off", "offered", "declined"}),
+         str("state").desc("managed: unregistered | registered | waiting | keyed | attaching | active | detaching | "
+                           "off | moved | ejected | ended | failed; otherwise own or local."),
+         str("reason").nullable().desc("Why it waits (e.g. empty, payment_required, over_quota, bucket_limit)."),
+         str("summary").desc("The state in words."),
+         uinteger("local_bytes").desc("The vault's content held on this server."),
+         str("access").nullable().oneOf({"full", "read_only", "none"}).desc("An S3 vault's remote access gate."),
+         str("key_state").oneOf({"none", "issued", "active", "superseded"}),
+         str("key_access").nullable().oneOf({"full", "read_delete"}),
+         uinteger("retention_days").nullable().desc("The noncurrent-version retention the vault asks for."),
+         uinteger("retention_sent").nullable().desc("What the account's service holds."),
+         boolean("retention_pending"),
+         str("recovery").nullable().oneOf({"ready", "behind", "none"}).desc("The automatic recovery enrollment."),
+         object("progress", "VaultRemoteProgress").nullable().desc("While uploading or making it local again."),
+         object("lost", "", {objectArray("files", "", {uinteger("file_id"), str("path"), uinteger("size_bytes")}),
+                             uinteger("envelopes_left_in_bucket").opt()})
+             .nullable()
+             .desc("After a conversion in place: the files that were held only in the bucket."),
+         str("last_error").nullable(), vaultKeyTime("active_at").nullable(), vaultKeyTime("moved_at").nullable(),
+         vaultKeyTime("ejected_at").nullable(), vaultKeyTime("ended_at").nullable()}));
+
+    out.push_back(model("CloudStorageStatus",
+        "Managed storage on this server: ops::cloud_storage::toJson(Status). Reads the database only.",
+        {boolean("linked"), str("account_key").oneOf({"unlinked", "unconfirmed", "pinned", "tampered"}),
+         boolean("available").desc("Linked, the account recovery key confirmed and the account entitled."),
+         str("entitlement").nullable().desc("active | past_due | restricted | suspended | ended; null: no plan."),
+         str("plan").nullable(), uinteger("quota_bytes").nullable(),
+         uinteger("used_bytes").nullable().desc("The account's figure, as of usage_day."), str("usage_day").nullable(),
+         str("storage_access").nullable().oneOf({"full", "read_delete", "none"}), str("cause").nullable(),
+         uinteger("managed_local_bytes").desc("This server's own figure: the managed vaults' content held here."),
+         boolean("new_vaults"), boolean("offer_open"),
+         objectArray("offered", "CloudStorageVault").desc("Vaults waiting for a person's decision."),
+         objectArray("vaults", "CloudStorageVault"),
+         object("billing").nullable().desc("The account's billing summary as last fetched."),
+         object("ejection").nullable().desc("An ejection's progress, as the service reports it."),
+         vaultKeyTime("fetched_at").nullable().desc("When the account's state was last confirmed."),
+         str("fetch_error").nullable(), str("next_step").nullable()}));
+
+    out.push_back(model("CloudStorageOffer", "An answer to the offer: ops::cloud_storage::toJson(OfferResult).",
+        {intArray("vaults").desc("The vaults the answer changed."), boolean("offer_open")}));
+
+    out.push_back(model("CloudStorageHandoff", "A billing page address: ops::cloud_storage::toJson(Handoff).",
+        {str("kind").oneOf({"checkout", "portal"}), str("url").desc("Open it in a browser; never stored."),
+         vaultKeyTime("expires_at").nullable()}));
+
     out.push_back(model("VaultRecoveryRecipientList",
         "A vault's recovery recipients: ops::recovery_recipients::toJson(RecipientList).",
         {vaultId(), str("vault_name"),
@@ -320,6 +371,14 @@ std::vector<WsModel> vaultKeyModels() {
              .desc("preparing to verifying: the vault is an S3 vault and in use while every file is held and verified "
                    "locally; cutover: the vault is local and its engine is switched; done; failed: something failed "
                    "before the cutover, the vault is still an S3 vault (start the detach again to resume); aborted."),
+         str("mode").oneOf({"hydrate", "in_place"})
+             .desc("hydrate: every file is fetched and verified first; in_place (managed storage, the bucket out of "
+                   "reach): no request to the bucket, files held only there are listed in lost."),
+         object("lost", "", {objectArray("files", "", {uinteger("file_id"), str("path"), uinteger("size_bytes")}),
+                             uinteger("envelopes_left_in_bucket").opt()})
+             .nullable()
+             .desc("In place: the files held only in the bucket (moved to the trash; nothing local was deleted) and the "
+                   "records of revoked grants' envelopes only the bucket held."),
          uinteger("api_key_id").nullable().desc("The binding the vault had (null when the key was deleted)."),
          str("bucket").desc("The bucket the vault used: left in place."), vaultKeyTime("started_at"),
          uinteger("started_by").nullable(), uinteger("attempts"), vaultKeyTime("verified_at").nullable(),

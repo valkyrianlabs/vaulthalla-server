@@ -1205,8 +1205,10 @@ void saveUsage(const Ctx& ctx) {
 }
 
 // preparing: the vault and the bucket as they are now, the recipients' envelopes, the items, and on a fresh start the
-// estimate and the price preflight.
+// estimate and the price preflight (managed storage: the account key's grant first, and the quota instead of a price).
 void prepare(Ctx& ctx) {
+    const bool managed = ctx.row.origin == "cloud";
+    if (managed) requireManagedReady(ctx.vaultId, std::nullopt);
     requireVaultReady(*ctx.engine);
     const auto check = requireBucketUsable(ctx.vaultId, *ctx.row.api_key_id, ctx.row.bucket, *ctx.ctl,
                                            storedProbeOf(ctx.row));
@@ -1223,7 +1225,9 @@ void prepare(Ctx& ctx) {
 
     if (ctx.row.state == State::Preparing) {
         auto estimate = estimateOf(ctx, Q::items(ctx.vaultId), ctx.deps->sampleMinimum);
-        if (ctx.deps->pricePreflight)
+        if (managed)
+            requireManagedReady(ctx.vaultId, estimate);
+        else if (ctx.deps->pricePreflight)
             ctx.deps->pricePreflight({.vault_id = ctx.vaultId, .api_key_id = *ctx.row.api_key_id,
                                       .storage_tier_id = ctx.row.storage_tier_id,
                                       .accept_unpriced = ctx.row.accept_unpriced},
@@ -1419,6 +1423,30 @@ std::shared_ptr<storage::s3::Controller> controllerFor(const uint32_t vaultId, c
     // opaque_v1 from the first request (spec 01 §4.3): no name, no metadata, only o/<uid> and .vaulthalla/ keys.
     controller->setOpaqueLayout(true);
     return controller;
+}
+
+// ---- managed storage ----------------------------------------------------------------------------------------------------
+
+namespace remote_managed_detail {
+std::mutex hooksMutex;
+ManagedHooks hooks;
+}
+
+void setManagedHooks(ManagedHooks h) {
+    std::scoped_lock lock(remote_managed_detail::hooksMutex);
+    remote_managed_detail::hooks = std::move(h);
+}
+
+void requireManagedReady(const uint32_t vaultId, const std::optional<Estimate>& estimate) {
+    ManagedHooks h;
+    {
+        std::scoped_lock lock(remote_managed_detail::hooksMutex);
+        h = remote_managed_detail::hooks;
+    }
+    if (!h.accountKeyGrant)
+        throw Refusal("account_key_unconfirmed", "managed storage needs the account recovery key confirmed on this server");
+    if (!estimate) h.accountKeyGrant(vaultId);
+    else if (h.quotaPreflight) h.quotaPreflight(vaultId, *estimate);
 }
 
 // ---- preconditions --------------------------------------------------------------------------------------------------

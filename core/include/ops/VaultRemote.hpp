@@ -109,4 +109,20 @@ struct AbortRequest {
 // local copies it fetched stay). Records the request; the service carries it out.
 [[nodiscard]] Status abort(const Actor& actor, const AbortRequest& request);
 
+// ---- managed storage (ops::cloud_storage only) -------------------------------------------------------------------------
+// The managed-storage service's own path (design/cloud/managed-remotes.md): no actor, permission or step-up, because
+// the decision is the vault's managed-storage switch, which a person turned on (or the server's default for new
+// vaults), and the bucket is the account's. Never reachable from a transport. An operator's attach, detach, abort and
+// access changes refuse a vault in managed storage (managed_storage): its switch is the one control.
+
+// Starts (or resumes) an attach with origin cloud to the managed bucket with the cloud-issued key: the same checks as
+// attach (the managed hooks add the account key's grant first). Refusals as attach's (vault::remote::Refusal codes),
+// Conflict for a vault that isn't a loaded local vault.
+void attachForCloud(unsigned int vaultId, unsigned int apiKeyId, const std::string& bucket);
+// Starts (or resumes) a detach: `inPlace` for a bucket out of reach (no request to it; files held only there are
+// listed as lost). Refusals as detach's.
+void detachForCloud(unsigned int vaultId, bool inPlace);
+// Asks the attach of a managed vault to abort (the switch turned off before the cutover). False when none runs.
+bool abortForCloud(unsigned int vaultId);
+
 }

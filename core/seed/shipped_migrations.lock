@@ -93,3 +93,4 @@ current    e78b86f4d54276cc70a61dcd1352c4b03a7547c62d9d9a086008c1d2e53e2d25  138
 current    bebbe4522322056ebb8376a9f2a27976b58f059e5dc5cfd41c4a5a2124871890  139_remote_detach.sql  unreleased
 current    b58920aadcc8c9af29f9de698b3c92cecb90bc2d1a26b8b8688186c33eb230d3  140_remote_access.sql  unreleased
 current    000b1760544f193e76ecaf906ee71ea426ebbe9e967228f189efd055c682273c  141_cloud_account_key.sql  unreleased
+current    8498749fb2864c977bd31810c49200be930a3f9242339ea6b0445d6dcd9ffddf  142_managed_remotes.sql  unreleased

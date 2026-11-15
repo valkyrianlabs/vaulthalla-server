@@ -45,6 +45,13 @@
 //   aborted      an operator aborted before the cutover: nothing changed but the local copies it fetched, which stay
 //                as cached copies; envelope bytes it copied are cleared again once the bucket's copy reads back equal.
 //
+// In place (Mode::InPlace, managed storage only: the bucket is gone or no longer this server's to use, design/cloud/
+// managed-remotes.md "Entitlement states" and "Credentials and restores"): the same states without any request to the
+// bucket. A file held here is verified and kept; a file held only in the bucket is recorded `lost` (path and size, in
+// the row's `lost` list) and leaves the catalog at the cutover; nothing local is deleted. Recovery envelopes whose
+// bytes only the bucket held are wrapped again into the database (every usable grant, every held version) before the
+// switch, so recovery coverage is never smaller here than it was.
+//
 // Refusals (remote::Refusal codes): not_s3, vault_unavailable, attach_running, layout_migration_running,
 // key_rotation_running, key_salvage_running, legacy_content, key_version_missing, event_sync_active,
 // sync_conflicts_open.
@@ -61,7 +68,11 @@ enum class ItemKind { Content, Envelope };
 [[nodiscard]] std::string_view to_string(ItemKind kind);
 [[nodiscard]] ItemKind itemKindFromString(std::string_view text);
 
-enum class ItemState { Pending, Verified, Failed };
+enum class ItemState { Pending, Verified, Failed, Lost };
+
+enum class Mode { Hydrate, InPlace };
+[[nodiscard]] std::string_view to_string(Mode mode);
+[[nodiscard]] Mode modeFromString(std::string_view text);
 [[nodiscard]] std::string_view to_string(ItemState state);
 [[nodiscard]] ItemState itemStateFromString(std::string_view text);
 
@@ -97,6 +108,10 @@ struct Row {
     uint32_t vault_id{};
     std::optional<uint32_t> api_key_id;
     std::string bucket;
+    Mode mode{Mode::Hydrate};
+    // In place, from the cutover: the files that were held only in the bucket ([{file_id, path, size_bytes}]) and how
+    // many envelope records only the bucket held (`envelopes_left_in_bucket`).
+    std::optional<nlohmann::json> lost;
     State state{State::Preparing};
     std::optional<uint32_t> started_by;
     std::time_t started_at{};

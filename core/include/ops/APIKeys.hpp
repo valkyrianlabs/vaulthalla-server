@@ -48,6 +48,7 @@ struct Update {
 // Edits the key in place (admin keys.api edit) and re-checks the resulting credentials against the provider like
 // create (skipped in test mode). Live engines of the vaults using the key are rebuilt with the new credentials.
 [[nodiscard]] APIKeyPtr update(const Actor& actor, const Ref& key, const Update& req);
+// update and remove refuse a key managed storage issued (origin "cloud": Conflict); people never change it.
 // Returns the removed key's metadata. Refused (Invalid, naming the vaults) while any vault is bound to the key.
 APIKeyPtr remove(const Actor& actor, const Ref& key);
 // Metadata only; the secret stays sealed.

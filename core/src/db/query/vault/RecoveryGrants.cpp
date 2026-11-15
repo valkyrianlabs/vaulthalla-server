@@ -132,6 +132,15 @@ void RecoveryGrants::recordEnvelopes(const uint32_t vaultId, const uint32_t keyV
     });
 }
 
+void RecoveryGrants::holdEnvelope(const uint32_t vaultId, const KeyEnvelope& e) {
+    Transactions::exec("RecoveryGrants::holdEnvelope", [&](pqxx::work& txn) {
+        txn.exec("INSERT INTO vault_key_envelope (vault_id, grant_id, key_version, kid, envelope) VALUES ($1, $2, $3, $4, "
+                 "$5) ON CONFLICT (vault_id, grant_id, key_version) DO UPDATE SET kid = EXCLUDED.kid, envelope = "
+                 "EXCLUDED.envelope WHERE vault_key_envelope.envelope IS NULL",
+                 pqxx::params{vaultId, e.grant_id, e.key_version, e.kid, encoding::to_hex_bytea(e.envelope)});
+    });
+}
+
 std::vector<RecoveryGrant> RecoveryGrants::missingFor(const uint32_t vaultId, const uint32_t keyVersion) {
     using namespace recovery_grants_detail;
     return Transactions::exec("RecoveryGrants::missingFor", [&](pqxx::work& txn) {

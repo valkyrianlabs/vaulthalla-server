@@ -73,6 +73,15 @@ struct AddResult {
 
 [[nodiscard]] AddResult add(const Actor& actor, const AddRequest& request, vault_keys::Channel channel);
 
+// The system's grant (design/cloud/key-manager.md, "When the server adds it on its own"): the pinned account recovery
+// key becomes a recipient of a vault becoming managed, the only case a recipient is added without a person at the
+// terminal. The decryption path was chosen once, by the super admin who confirmed the key's fingerprint on this
+// server; the managed choice is the vault's managed-storage switch, on. Refused (Refused code
+// account_key_unconfirmed) without a pin, and (Conflict) for a vault whose switch isn't on: BYOS and local vaults stay
+// explicit (add with account_key). A vault that already has an active account-key grant keeps it (nullopt). Audited
+// as `system:cloud` with automatic: true and the confirmation the pin rests on. Never reachable from a transport.
+[[nodiscard]] std::optional<AddResult> addAccountKeyForManagedVault(unsigned int vaultId);
+
 struct RevokeResult {
     Recipient recipient{};
     Material recovery{};

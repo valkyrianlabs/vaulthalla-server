@@ -483,6 +483,11 @@ struct LoggingConfig {
 // through settings. Linking is never required; nothing contacts the endpoint until a super admin runs `vh cloud link`.
 struct CloudConfig {
     std::string endpoint = "https://api.vaulthalla.cloud";  // https, or http only to localhost (development)
+    // Managed storage (design/cloud/managed-remotes.md): how often the background service asks the account's storage
+    // state while linked (minutes, 1-1440), and the noncurrent-version retention a newly managed vault starts with
+    // (days, 1-36500; shown when storage is switched on and changed through the vault's recovery policy).
+    unsigned int storage_poll_minutes = 15;
+    unsigned int storage_default_retention_days = 30;
 };
 
 struct SecretsConfig {

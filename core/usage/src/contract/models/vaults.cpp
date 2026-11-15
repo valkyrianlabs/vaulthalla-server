@@ -35,6 +35,8 @@ std::vector<WsModel> vaultModels() {
          boolean("allow_fs_write"),
          boolean("is_active"),
          vaultModelTimestamp("created_at"),
+         str("vault_uid").nullable().desc("The vault's uid (26 base32 symbols), as recovery kits and managed storage "
+                                          "name it: an identifier, not a secret."),
          uinteger("api_key_id").opt().desc("S3 vaults."),
          str("bucket").opt().desc("S3 vaults."),
          str("storage_tier_id").opt().nullable().desc("S3 vaults."),
@@ -72,7 +74,8 @@ std::vector<WsModel> vaultModels() {
          strArray("via", {"owner", "vault_role", "group_role", "admin_policy", "super_admin"})
              .desc("Every path by which the caller reaches the vault, in this order; never empty. admin_policy: the "
                    "admin role's vault permissions grant manage, or its global vault filesystem policy grants browse "
-                   "where no vault role applies.")}));
+                   "where no vault role applies."),
+         str("vault_uid").nullable().desc("The vault's uid (26 base32 symbols): an identifier, not a secret.")}));
 
     out.push_back(model("RemoteSyncPolicy",
         "An S3 vault's sync policy (sync::model::to_json(RemotePolicy), core/src/sync/model/RemotePolicy.cpp, over "
@@ -159,7 +162,11 @@ std::vector<WsModel> vaultModels() {
          boolean("admin_enabled").desc("Provider administration (#237) is on."),
          str("provider_account_id").nullable(),
          boolean("has_provider_token"),
-         vaultModelTimestamp("admin_validated_at").nullable()}));
+         vaultModelTimestamp("admin_validated_at").nullable(),
+         str("origin").oneOf({"customer", "cloud"})
+             .desc("Who issued the key: a person (customer) or managed storage for a vault's bucket (cloud)."),
+         boolean("editable").desc("False for a key managed storage issued: shown, never changed by people (its "
+                                  "update and removal are refused).")}));
 
     return out;
 }

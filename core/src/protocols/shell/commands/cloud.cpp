@@ -4,6 +4,7 @@
 #include "ops/Cloud.hpp"
 #include "ops/CloudKeys.hpp"
 #include "ops/CloudRecovery.hpp"
+#include "ops/CloudStorage.hpp"
 #include "protocols/shell/commands/vault.hpp"
 #include "vault/model/Vault.hpp"
 #include "ops/Error.hpp"
@@ -270,7 +271,8 @@ CommandResult handleRecoveryStatus(const CommandCall& call) {
         vaultId = recoveryVault(call, *arg, "status", error);
         if (!vaultId) return invalid(error);
     }
-    return runOp("cloud recovery status", [&] { return recovery::status(call.user, vaultId); },
+    const bool verify = hasFlag(call, "verify");
+    return runOp("cloud recovery status", [&] { return recovery::status(call.user, vaultId, verify); },
                  [&](const std::vector<recovery::VaultCoverage>& list) {
         if (json) {
             auto vaults = nlohmann::json::array();
@@ -278,6 +280,7 @@ CommandResult handleRecoveryStatus(const CommandCall& call) {
                 vaults.push_back({{"vault_id", c.vault_id}, {"vault_name", c.vault_name}, {"vault_uid", c.vault_uid},
                                   {"state", c.state}, {"not_in_cloud", c.not_in_cloud}, {"enrolled_at", c.enrolled_at},
                                   {"last_upload_at", c.last_upload_at}, {"cloud", c.cloud},
+                                  {"automatic", c.automatic}, {"verify", c.verify},
                                   {"detail", c.detail ? nlohmann::json(*c.detail) : nlohmann::json(nullptr)}});
             return jsonText({{"vaults", vaults}});
         }
@@ -287,6 +290,14 @@ CommandResult handleRecoveryStatus(const CommandCall& call) {
             out += fmt::format("Vault {} {} ({}): {}", c.vault_id, c.vault_name, c.vault_uid, c.state);
             if (!c.not_in_cloud.empty()) out += "; not in the cloud: version(s) " + versionList(c.not_in_cloud);
             if (c.detail) out += " (" + *c.detail + ")";
+            if (c.automatic) out += "; automatic (managed storage)";
+            if (c.verify.is_object()) {
+                if (c.verify.contains("error")) out += "; verify failed: " + c.verify["error"].get<std::string>();
+                else
+                    out += fmt::format("; verified {} version(s) in the cloud, {} missing, {} mismatched",
+                                       c.verify.value("versions_checked", 0), c.verify["missing"].size(),
+                                       c.verify["mismatched"].size());
+            }
             out += fmt::format("; enrolled {}, last sent {}\n", utc(c.enrolled_at), utc(c.last_upload_at));
         }
         return out;
@@ -360,6 +371,146 @@ CommandResult handleKey(const CommandCall& call) {
     return invalid(call.constructFullArgs(), "Unknown cloud key subcommand: '" + std::string(sub) + "'");
 }
 
+namespace storage = ::vh::ops::cloud_storage;
+
+storage::Channel storageChannel() {
+    return AgentCallScope::active() ? storage::Channel::Agent : storage::Channel::Cli;
+}
+
+std::string bytesText(const uint64_t b) {
+    constexpr const char* units[] = {"B", "KB", "MB", "GB", "TB", "PB"};
+    double v = static_cast<double>(b);
+    int u = 0;
+    while (v >= 1000.0 && u < 5) {
+        v /= 1000.0;
+        ++u;
+    }
+    return u == 0 ? fmt::format("{} B", b) : fmt::format("{:.1f} {}", v, units[u]);
+}
+
+std::string storageVaultLine(const storage::VaultEntry& v) {
+    std::string out = fmt::format("  {:>4}  {:<24} {:<10} {}", v.vault_id, v.vault_name, bytesText(v.local_bytes), v.summary);
+    if (v.retention_pending) out += "; retention pending";
+    if (v.recovery == std::optional<std::string>("behind")) out += "; recovery enrollment behind";
+    if (v.progress.is_object() && v.progress.contains("bytes_total") && v.progress["bytes_total"].get<uint64_t>() > 0)
+        out += fmt::format(" ({}%)", v.progress["bytes_done"].get<uint64_t>() * 100 / v.progress["bytes_total"].get<uint64_t>());
+    if (v.lost.is_object() && v.lost.contains("files") && !v.lost["files"].empty())
+        out += fmt::format("; {} file(s) held only in the bucket were lost", v.lost["files"].size());
+    return out + "\n";
+}
+
+std::string storageStatusText(const storage::Status& s) {
+    std::string out;
+    if (!s.linked) return "This server isn't linked to an account; managed storage needs a link (`vh cloud link`).\n";
+    out += fmt::format("Account key   {}\n", s.account_key);
+    out += fmt::format("Plan          {}{}\n", s.entitlement.value_or("none"),
+                       s.plan && !s.plan->empty() ? " (" + *s.plan + ")" : "");
+    if (s.storage_access) out += "Access        " + *s.storage_access + (s.cause ? " (" + *s.cause + ")" : "") + "\n";
+    if (s.quota_bytes)
+        out += fmt::format("Usage         {} of {}{} (the account's figure); {} held here in managed vaults\n",
+                           s.used_bytes ? bytesText(*s.used_bytes) : "?", bytesText(*s.quota_bytes),
+                           s.usage_day ? " as of " + *s.usage_day : "", bytesText(s.managed_local_bytes));
+    out += std::string("New vaults    ") + (s.new_vaults ? "managed by default" : "local by default") + "\n";
+    if (s.fetched_at) out += "Last checked  " + utc(*s.fetched_at) + (s.fetch_error ? " (" + *s.fetch_error + ")" : "") + "\n";
+    if (!s.offered.empty()) {
+        out += fmt::format("\n{} vault(s) existed before managed storage was available and wait for a decision (`vh cloud "
+                           "storage accept --all|--vaults <ids>` or `decline`):\n", s.offered.size());
+        for (const auto& v : s.offered) out += storageVaultLine(v);
+    }
+    out += "\nVaults:\n";
+    for (const auto& v : s.vaults)
+        if (v.switch_state != std::optional<std::string>("offered")) out += storageVaultLine(v);
+    if (s.next_step) out += "\nNext: " + *s.next_step + "\n";
+    return out;
+}
+
+std::optional<unsigned int> storageVault(const CommandCall& call, const std::string& leaf, std::string& error) {
+    const auto lookup = ::vh::protocols::shell::commands::vault::resolveVault(
+        call, call.positionals.at(0), resolveUsage({"cloud", "storage", leaf}), "cloud storage " + leaf);
+    if (!lookup || !lookup.ptr) {
+        error = lookup.error;
+        return std::nullopt;
+    }
+    return lookup.ptr->id;
+}
+
+CommandResult handleStorage(const CommandCall& call) {
+    if (call.positionals.empty()) return usage(call.constructFullArgs());
+    const auto [sub, subcall] = descend(call);
+    const auto is = [&](const char* name) { return isCommandMatch({"cloud", "storage", name}, sub); };
+    const auto entryText = [](const storage::VaultEntry& v) { return storageVaultLine(v); };
+    if (is("status")) {
+        validatePositionals(subcall, resolveUsage({"cloud", "storage", "status"}));
+        const bool json = hasFlag(subcall, "json");
+        return runOp("cloud storage status", [&] { return storage::status(subcall.user); },
+                     [&](const storage::Status& s) { return json ? jsonText(storage::toJson(s)) : storageStatusText(s); });
+    }
+    if (is("enable") || is("disable") || is("rotate")) {
+        const std::string leaf = is("enable") ? "enable" : is("disable") ? "disable" : "rotate";
+        validatePositionals(subcall, resolveUsage({"cloud", "storage", leaf}));
+        std::string error;
+        const auto vaultId = storageVault(subcall, leaf, error);
+        if (!vaultId) return invalid(error);
+        if (leaf == "rotate")
+            return runOp("cloud storage rotate", [&] { return storage::rotate(subcall.user, *vaultId, storageChannel()); },
+                         entryText);
+        const auto confirm = optVal(subcall, "confirm");
+        return runOp("cloud storage " + leaf,
+                     [&] { return storage::setSwitch(subcall.user, *vaultId, leaf == "enable", confirm, storageChannel()); },
+                     entryText);
+    }
+    if (is("accept") || is("decline")) {
+        const bool accept = is("accept");
+        validatePositionals(subcall, resolveUsage({"cloud", "storage", accept ? "accept" : "decline"}));
+        std::optional<std::vector<unsigned int>> vaults;
+        if (const auto list = optVal(subcall, "vaults")) {
+            vaults.emplace();
+            std::size_t pos = 0;
+            while (pos <= list->size()) {
+                const auto end = std::min(list->find(',', pos), list->size());
+                const auto part = list->substr(pos, end - pos);
+                try {
+                    if (!part.empty()) vaults->push_back(static_cast<unsigned int>(std::stoul(part)));
+                } catch (const std::exception&) {
+                    return invalid("--vaults takes vault IDs, comma-separated");
+                }
+                pos = end + 1;
+            }
+        } else if (accept && !hasFlag(subcall, "all")) {
+            return invalid("name the vaults (--vaults 3,7) or accept every offered vault (--all)");
+        }
+        return runOp(accept ? "cloud storage accept" : "cloud storage decline",
+                     [&] {
+                         return accept ? storage::acceptOffer(subcall.user, vaults, storageChannel())
+                                       : storage::declineOffer(subcall.user, vaults, storageChannel());
+                     },
+                     [&](const storage::OfferResult& r) {
+                         return fmt::format("{} {} vault(s){}.\n", accept ? "Accepted" : "Declined", r.vaults.size(),
+                                            r.offer_open ? "; others are still offered" : "");
+                     });
+    }
+    if (is("new-vaults")) {
+        validatePositionals(subcall, resolveUsage({"cloud", "storage", "new-vaults"}));
+        const auto& v = subcall.positionals.at(0);
+        if (v != "on" && v != "off") return invalid("new-vaults takes on or off");
+        return runOp("cloud storage new-vaults",
+                     [&] { return storage::setNewVaultsDefault(subcall.user, v == "on", storageChannel()); },
+                     [](const bool on) {
+                         return std::string(on ? "New vaults use managed storage by default.\n"
+                                               : "New vaults stay local unless switched on.\n");
+                     });
+    }
+    if (is("billing")) {
+        validatePositionals(subcall, resolveUsage({"cloud", "storage", "billing"}));
+        const auto kind = optVal(subcall, "kind").value_or("portal");
+        const auto plan = optVal(subcall, "plan");
+        return runOp("cloud storage billing",
+                     [&] { return storage::billingHandoff(subcall.user, kind, plan, storageChannel()); },
+                     [](const storage::Handoff& h) { return "Open this address in a browser:\n" + h.url + "\n"; });
+    }
+    return invalid(call.constructFullArgs(), "Unknown cloud storage subcommand: '" + std::string(sub) + "'");
+}
+
 CommandResult handleCloud(const CommandCall& call) {
     if (call.positionals.empty()) return usage(call.constructFullArgs());
     const auto [sub, subcall] = descend(call);
@@ -369,6 +520,7 @@ CommandResult handleCloud(const CommandCall& call) {
     if (is("unlink")) return handleUnlink(subcall);
     if (is("recovery")) return handleRecovery(subcall);
     if (is("key")) return handleKey(subcall);
+    if (is("storage")) return handleStorage(subcall);
     return invalid(call.constructFullArgs(), "Unknown cloud subcommand: '" + std::string(sub) + "'");
 }
 

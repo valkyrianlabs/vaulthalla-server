@@ -4,7 +4,10 @@
 #include "auth/stepup/StepUp.hpp"
 #include "cloud/Client.hpp"
 #include "cloud/Identity.hpp"
+#include "cloud/Storage.hpp"
 #include "db/query/cloud/Link.hpp"
+#include "db/query/cloud/Storage.hpp"
+#include "ops/CloudKeys.hpp"
 #include "db/query/cloud/RecoveryVault.hpp"
 #include "db/query/vault/RecoveryGrants.hpp"
 #include "db/query/vault/Vault.hpp"
@@ -140,6 +143,21 @@ std::vector<std::vector<uint8_t>> bucketEnvelopes(const vault::model::Vault& vau
 
 std::string uidPath(const std::string& vaultUid) { return "/v1/recovery/vaults/" + vaultUid; }
 
+// The request body of an enrollment (PUT /v1/recovery/vaults/{uid}).
+nlohmann::json bodyOf(const vault_keys::KeyStatus& ks, const unsigned int vaultId,
+                      const std::vector<std::vector<uint8_t>>& envelopes) {
+    auto encoded = nlohmann::json::array();
+    for (const auto& e : envelopes) encoded.push_back(vl::keykit::base64Encode(e));
+    auto anchors = nlohmann::json::array();
+    for (const auto& k : ks.attestation_public_keys) anchors.push_back({{"key_id", k.key_id}, {"public_key", k.public_key}});
+    nlohmann::json body{{"origin", {{"node_id", ks.node_id}, {"vault_id", vaultId}}},
+                        {"attestation_public_keys", anchors},
+                        {"key_versions", versionsJson(ks)},
+                        {"envelopes", encoded}};
+    if (ks.checkpoint) body["checkpoint"] = {{"epoch", ks.checkpoint->epoch}, {"root_sha256", ks.checkpoint->root_sha256}};
+    return body;
+}
+
 }
 
 Enrolled enroll(const Actor& actor, const unsigned int vaultId, const Channel channel, const bool accountKey) {
@@ -209,7 +227,62 @@ Enrolled enroll(const Actor& actor, const unsigned int vaultId, const Channel ch
     return out;
 }
 
-std::vector<VaultCoverage> status(const Actor& actor, const std::optional<unsigned int> vaultId) {
+Enrolled enrollAutomatic(const unsigned int vaultId, const std::string& reason) {
+    using namespace cloud_recovery_detail;
+    const auto vault = liveVault(vaultId);
+    if (!db::query::cloud::CloudStorage::managed(vaultId))
+        throw Conflict("vault '" + vault->name + "' isn't in managed storage: its enrollment is a person's (vh cloud "
+                       "recovery enroll)");
+    const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(vault);
+    if (!s3 || s3->bucket.empty()) throw Conflict("vault '" + vault->name + "' has no bucket yet");
+    auto link = linked();
+    const auto pinned = ops::cloud_keys::pinnedKey();
+    if (!pinned) throw Refused("account_key_unconfirmed", "this server has no confirmed account recovery key");
+    // Only the account-key grant's envelopes (open question 5): the explicit enroll sends every recipient's.
+    std::set<std::string> grants;
+    for (const auto& g : db::query::vault::RecoveryGrants::usable(vaultId))
+        if (g.account_key_generation &&
+            std::equal(g.public_key.begin(), g.public_key.end(), pinned->x25519_public.begin(), pinned->x25519_public.end()))
+            grants.insert(g.grant_id);
+    if (grants.empty()) throw Conflict("vault '" + vault->name + "' has no account-key recovery grant yet");
+    const auto ks = vault_keys::systemStatus(vaultId);
+    if (!ks.vault_uid) throw Conflict("vault '" + vault->name + "' has no uid");
+    std::set<unsigned int> covered;
+    for (const auto& e : db::query::vault::RecoveryGrants::envelopes(vaultId))
+        if (grants.contains(e.grant_id)) covered.insert(e.key_version);
+    for (const auto& v : ks.needed_versions)
+        if (!covered.contains(v.version))
+            throw Conflict("key version " + std::to_string(v.version) + " of vault '" + vault->name + "' has no "
+                           "account-key envelope yet; the next sync pass writes it");
+    auto envelopes = bucketEnvelopes(*vault, *ks.vault_uid);
+    // bucketEnvelopes read every usable grant's: keep the account key's only.
+    std::set<std::string> kids;
+    for (const auto& e : db::query::vault::RecoveryGrants::envelopes(vaultId))
+        if (grants.contains(e.grant_id)) kids.insert(e.kid);
+    std::erase_if(envelopes, [&](const std::vector<uint8_t>& bytes) { return !kids.contains(kev1::kid(bytes)); });
+    const auto reply = vh::cloud::signedCall(link.endpoint, link.installation, link.seed.bytes(), "PUT",
+                                             uidPath(*ks.vault_uid), bodyOf(ks, vaultId, envelopes));
+    if (!reply.ok()) refused(reply);
+    const auto r = reply.body.is_object() ? reply.body : nlohmann::json::object();
+    Enrolled out{.vault_id = vaultId, .vault_uid = *ks.vault_uid,
+                 .created = r.value("created", false), .envelopes_sent = envelopes.size(),
+                 .envelopes_added = r.value("envelopes_added", uint64_t{0}),
+                 .versions_added = r.value("versions_added", uint64_t{0}),
+                 .coverage = r.contains("coverage") ? r["coverage"] : nlohmann::json(nullptr)};
+    RecoveryVaults::upsert({.vault_id = vaultId, .vault_uid = *ks.vault_uid, .installation_id = link.installation,
+                            .enrolled_by = "system:cloud"});
+    ::vh::audit::record({.action = "cloud.recovery.enroll", .outcome = ::vh::audit::Outcome::Success,
+                         .actor_id = std::nullopt, .actor = "system:cloud", .vault_id = vaultId,
+                         .details = {{"created", out.created}, {"envelopes_sent", out.envelopes_sent},
+                                     {"envelopes_added", out.envelopes_added}, {"versions_added", out.versions_added},
+                                     {"automatic", true}, {"reason", reason}}},
+                        "[ops::cloud_recovery] system:cloud " + std::string(out.created ? "enrolled" : "updated") +
+                            " managed vault " + std::to_string(vaultId) + " in Vaulthalla Cloud recovery (" + reason +
+                            "; " + std::to_string(out.envelopes_sent) + " account-key envelope(s), no keys)");
+    return out;
+}
+
+std::vector<VaultCoverage> status(const Actor& actor, const std::optional<unsigned int> vaultId, const bool verify) {
     using namespace cloud_recovery_detail;
     requireView(actor);
     std::vector<VaultCoverage> out;
@@ -229,7 +302,8 @@ std::vector<VaultCoverage> status(const Actor& actor, const std::optional<unsign
     for (const auto& row : rows) {
         VaultCoverage c{.vault_id = row.vault_id, .vault_name = {}, .vault_uid = row.vault_uid,
                         .enrolled_at = row.enrolled_at, .last_upload_at = row.last_upload_at, .state = "unreachable",
-                        .not_in_cloud = {}, .cloud = nullptr, .detail = std::nullopt};
+                        .not_in_cloud = {}, .cloud = nullptr, .detail = std::nullopt,
+                        .automatic = row.enrolled_by == "system:cloud", .verify = nullptr};
         std::vector<unsigned int> needed;
         try {
             const auto ks = keyStatus(actor, row.vault_id);
@@ -263,6 +337,42 @@ std::vector<VaultCoverage> status(const Actor& actor, const std::optional<unsign
             c.state = c.not_in_cloud.empty() ? "ready" : "behind";
             if (!c.not_in_cloud.empty())
                 c.detail = "newer key versions aren't in the cloud yet; `vh cloud recovery enroll` sends them";
+        }
+        if (verify && c.state != "unreachable" && c.state != "missing") {
+            // The scoped fetch (GET /v1/keys/vaults/{uid}/envelopes): the cloud's account-key envelopes against this
+            // server's records. Each must open to this vault and its version (kev1::inspect), and every needed
+            // version of the account-key grant must be there.
+            nlohmann::json v{{"versions_checked", 0}, {"missing", nlohmann::json::array()},
+                             {"mismatched", nlohmann::json::array()}};
+            try {
+                const auto storageLink = vh::cloud::storage::linked();
+                if (!storageLink) throw std::runtime_error("this server isn't linked");
+                const auto envelopes = vh::cloud::storage::vaultEnvelopes(*storageLink, row.vault_uid);
+                const auto uid = vl::keykit::fromBase32(row.vault_uid);
+                std::set<unsigned int> present;
+                for (const auto& e : envelopes) {
+                    try {
+                        const auto h = kev1::inspect(e.envelope);
+                        if (!uid || h.vault_uid != *uid || h.key_version != e.key_version) {
+                            v["mismatched"].push_back(e.key_version);
+                            continue;
+                        }
+                        present.insert(e.key_version);
+                    } catch (const kev1::Error&) {
+                        v["mismatched"].push_back(e.key_version);
+                    }
+                }
+                v["versions_checked"] = present.size();
+                for (const auto n : needed)
+                    if (!present.contains(n)) v["missing"].push_back(n);
+                if (!v["missing"].empty() || !v["mismatched"].empty()) {
+                    c.state = "behind";
+                    c.detail = "the cloud's account-key envelopes don't cover every needed version";
+                }
+            } catch (const std::exception& e) {
+                v["error"] = e.what();
+            }
+            c.verify = std::move(v);
         }
         out.push_back(std::move(c));
     }

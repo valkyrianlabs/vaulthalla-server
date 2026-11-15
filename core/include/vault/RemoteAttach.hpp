@@ -219,6 +219,24 @@ RunResult run(uint32_t vaultId, const RunDeps& deps);
 // sync events and vaults.remote_attach.max_passes.
 [[nodiscard]] RunDeps runtimeRunDeps();
 
+// ---- managed storage (origin "cloud") ----------------------------------------------------------------------------------
+
+// What an attach to a managed bucket (design/cloud/managed-remotes.md, step 5) does beside a BYOS attach, installed by
+// the managed-storage operations (ops::cloud_storage) so this layer needs nothing above it:
+//   accountKeyGrant  precondition 6 for managed storage: the pinned account recovery key becomes the vault's recovery
+//                    recipient (the system's grant, audited as such) before the material check, in `preparing` and
+//                    again before the cutover. Throws Refusal account_key_unconfirmed without a pin.
+//   quotaPreflight   instead of the price preflight: the vault's bytes against the quota left in the cached
+//                    entitlement (a courtesy check; the service enforces through the key). Throws Refusal over_quota.
+// Without hooks (a server that never links) a cloud attach is refused as account_key_unconfirmed.
+struct ManagedHooks {
+    std::function<void(uint32_t vaultId)> accountKeyGrant;
+    std::function<void(uint32_t vaultId, const Estimate& estimate)> quotaPreflight;
+};
+void setManagedHooks(ManagedHooks hooks);
+// Runs the hooks for a cloud attach (start and preparing). Throws Refusal.
+void requireManagedReady(uint32_t vaultId, const std::optional<Estimate>& estimate);
+
 // ---- abort -------------------------------------------------------------------------------------------------------------
 
 struct AbortResult {

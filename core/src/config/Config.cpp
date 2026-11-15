@@ -188,6 +188,15 @@ Config& Config::operator=(Config&&) noexcept = default;
         // Read-only like `secrets`: config.yaml only (design/cloud/server-link.md).
         if (auto node = root["cloud"]; node && node.IsMap()) {
             if (node["endpoint"]) cfg.cloud.endpoint = node["endpoint"].as<std::string>();
+            if (auto storage = node["storage"]; storage && storage.IsMap()) {
+                if (storage["poll_minutes"]) cfg.cloud.storage_poll_minutes = storage["poll_minutes"].as<unsigned int>();
+                if (storage["default_retention_days"])
+                    cfg.cloud.storage_default_retention_days = storage["default_retention_days"].as<unsigned int>();
+                if (cfg.cloud.storage_poll_minutes < 1 || cfg.cloud.storage_poll_minutes > 1440)
+                    throw std::invalid_argument("config.yaml: cloud.storage.poll_minutes is 1 to 1440");
+                if (cfg.cloud.storage_default_retention_days < 1 || cfg.cloud.storage_default_retention_days > 36500)
+                    throw std::invalid_argument("config.yaml: cloud.storage.default_retention_days is 1 to 36500");
+            }
             try {
                 (void)vh::cloud::endpoint(cfg.cloud.endpoint);
             } catch (const std::invalid_argument& e) {
