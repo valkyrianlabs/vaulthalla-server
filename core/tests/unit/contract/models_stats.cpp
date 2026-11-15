@@ -351,6 +351,11 @@ void checkSystemStats(vh::test::contract_models::Checker& c) {
                                          .detail = "sync_conflicts_open: the vault has 1 open sync conflict(s)"});
     health.remoteDetachesUnfinished = {20};
     c.check(json(health), "SystemHealth", "a failed and a running remote detach");
+    health.vaultsRemoteRestricted.push_back({.vaultId = 21, .vaultName = "media", .reason = "payment overdue",
+                                             .setBy = "system:storage", .since = 1'763'000'000});
+    health.vaultsRemoteUnavailable.push_back({.vaultId = 22, .vaultName = "old", .reason = "",
+                                              .setBy = "user:admin", .since = 1'763'000'100});
+    c.check(json(health), "SystemHealth", "a read-only and an unavailable remote");
     health.deps.secretsWarning = "6 sealed secret(s) are bound to TPM PCR 7 and no `vh secret export all` was ever taken";
     c.check(json(health), "SystemHealth", "PCR-bound secrets with no recent export");
     c.check(json(sm::SystemHealth{}), "SystemHealth", "system before the pool exists");

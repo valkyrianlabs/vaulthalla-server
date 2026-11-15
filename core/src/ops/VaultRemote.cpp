@@ -83,8 +83,10 @@ std::string summaryOf(const bool s3Vault, const std::optional<ra::Row>& row, con
 Status statusOf(const vault::model::Vault& v) {
     const bool s3 = v.type == vault::model::VaultType::S3;
     Status s{.vault_id = v.id, .vault_name = v.name, .type = s3 ? "s3" : "local", .remote = {}, .attach = Q::get(v.id),
-             .detach = DQ::get(v.id), .progress = std::nullopt, .items = {}, .detach_items = {}};
+             .detach = DQ::get(v.id), .progress = std::nullopt, .items = {}, .detach_items = {},
+             .access = std::nullopt};
     s.remote = summaryOf(s3, s.attach, s.detach);
+    if (s3) s.access = storage::remote_access::state(v.id);
     if (s.detach) {
         const auto detachItems = DQ::items(v.id);
         for (const auto& it : detachItems) {
@@ -213,10 +215,17 @@ nlohmann::json toJson(const Status& s) {
                              {"envelopes_copied", s.detach_items.envelopes_copied}}},
                   {"last_error", d::opt(r.last_error)}};
     }
+    nlohmann::json access = nullptr;
+    if (s.access)
+        access = {{"mode", std::string(storage::remote_access::to_string(s.access->mode))},
+                  {"reason", d::opt(s.access->reason)},
+                  {"set_by", d::opt(s.access->set_by)},
+                  {"set_at", d::optTime(s.access->set_at)}};
     return {{"vault_id", s.vault_id},
             {"vault_name", s.vault_name},
             {"type", s.type},
             {"remote", s.remote},
+            {"access", access},
             {"attach", attach},
             {"detach", detach},
             {"progress", s.progress ? vault::remote::toJson(*s.progress) : nlohmann::json(nullptr)},
@@ -345,6 +354,18 @@ Status detach(const Actor& actor, const DetachRequest& request) {
                       fmt::format("[ops::vault_remote] {} {} detaching the remote of vault {}; the vault stays an S3 "
                                   "vault until every file is held and verified locally, and its bucket is left in place",
                                   actor->name(), resumed ? "resumed" : "started", vault->id));
+    return d::statusOf(*vault);
+}
+
+Status setAccess(const Actor& actor, const AccessRequest& request) {
+    namespace d = vault_remote_detail;
+    requireActor(actor);
+    const auto vault = d::liveVault(request.vault_id);
+    d::requireAttach(actor, vault, std::nullopt);
+    if (vault->type != vault::model::VaultType::S3)
+        throw Conflict("vault '" + vault->name + "' is a local vault: it has no remote storage whose access to set");
+    if (request.reason && request.reason->size() > 500) throw Invalid("the reason is longer than 500 characters");
+    (void)storage::remote_access::set(vault->id, request.mode, request.reason, "user:" + actor->name());
     return d::statusOf(*vault);
 }
 

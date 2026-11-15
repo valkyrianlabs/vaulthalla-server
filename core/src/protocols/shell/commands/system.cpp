@@ -118,6 +118,16 @@ CommandResult handleStatus(const CommandCall& call) {
         out << "  resume: vh vault remote detach <vault> --confirm <name>, or vh vault remote abort <vault> --confirm "
                "<name>\n";
     }
+    for (const auto* list : {&health.vaultsRemoteRestricted, &health.vaultsRemoteUnavailable}) {
+        if (list->empty()) continue;
+        out << (list == &health.vaultsRemoteRestricted
+                    ? "vaults whose remote is read-only (nothing is uploaded, deleted or published; local changes wait):\n"
+                    : "vaults whose remote is unavailable (no request to the bucket; remote-only files fail):\n");
+        for (const auto& v : *list)
+            out << "  - " << v.vaultName << " (ID " << v.vaultId << ")" << (v.reason.empty() ? "" : ": " + v.reason)
+                << " — set by " << v.setBy << "\n";
+        out << "  lift: vh vault remote access <vault> --set full\n";
+    }
     if (!health.remoteDetachesUnfinished.empty())
         out << "remote detaches running: " << health.remoteDetachesUnfinished.size() << " (vh vault remote status all)\n";
 

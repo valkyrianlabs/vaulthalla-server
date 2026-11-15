@@ -932,6 +932,31 @@ static std::shared_ptr<CommandUsage> remote_detach(const std::weak_ptr<CommandUs
     return cmd;
 }
 
+static std::shared_ptr<CommandUsage> remote_access(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"access"};
+    cmd->effect = CommandEffect::Write;
+    cmd->description =
+        "Set what an S3 or R2 vault may still do with its bucket. read-only: files are read and fetched as before, but "
+        "nothing is uploaded, deleted or published to the bucket; the vault's sync passes are skipped (recorded as "
+        "\"skipped: remote read-only\") and changes made here wait, to go up on the first pass once access is full "
+        "again; a key rotation waits too. none: no request goes to the bucket at all; files with a copy on this "
+        "server keep working, files without one fail as unavailable. full lifts either. vh vault remote status and "
+        "vh status show the vault's access and why.";
+    cmd->positionals = {vaultPos};
+    cmd->required = {Option::Single("access_mode", "full, read-only or none", "set", "mode")
+                         .withGen("mode", contract::gen::oneOf({"full", "read-only", "none"}))};
+    cmd->optional = {owner, Optional::Single("access_reason", "Why (shown in the status and the audit trail)", "reason",
+                                           "text")};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {
+        {"vh vault remote access finance --set read-only --reason \"provider maintenance\"",
+         "Stop every write to the bucket of vault 'finance' until access is set back to full."},
+        {"vh vault remote access finance --set full", "Lift the restriction; the next sync pass uploads what waited."}
+    };
+    return cmd;
+}
+
 static std::shared_ptr<CommandUsage> remote_status(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"status"};
@@ -982,7 +1007,8 @@ static std::shared_ptr<CommandUsage> vault_remote(const std::weak_ptr<CommandUsa
     cmd->description = "Attach an S3 or R2 bucket to an existing local vault, or detach it again.";
     cmd->examples = {{"vh vault remote status all", "Every vault with an attach or detach."}};
     cmd->subcommands = {remote_attach(cmd->weak_from_this()), remote_detach(cmd->weak_from_this()),
-                        remote_status(cmd->weak_from_this()), remote_abort(cmd->weak_from_this())};
+                        remote_access(cmd->weak_from_this()), remote_status(cmd->weak_from_this()),
+                        remote_abort(cmd->weak_from_this())};
     return cmd;
 }
 

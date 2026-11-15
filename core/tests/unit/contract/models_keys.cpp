@@ -415,6 +415,9 @@ void checkVaultKeyModels(Checker& c) {
     vr::Status finished = running;
     finished.type = "s3";
     finished.remote = "attached";
+    finished.access = storage::remote_access::State{.vault_id = 4, .mode = storage::remote_access::Mode::Full,
+                                                    .reason = std::nullopt, .set_by = std::nullopt,
+                                                    .set_at = std::nullopt};
     finished.attach->state = ra::State::Done;
     finished.attach->verified_at = 1'762'000'900;
     finished.attach->cutover_at = 1'762'000'950;
@@ -458,9 +461,13 @@ void checkVaultKeyModels(Checker& c) {
                                       .passes = 1, .updated_at = 1'763'000'200};
     hydrating.detach_items = {.files_pending = 57, .files_verified = 60, .files_failed = 1, .files_fetched = 2,
                               .envelopes = 2, .envelopes_copied = 2};
+    hydrating.access = storage::remote_access::State{.vault_id = 4, .mode = storage::remote_access::Mode::ReadOnly,
+                                                     .reason = std::string("payment overdue"),
+                                                     .set_by = std::string("system:storage"), .set_at = 1'763'000'050};
     c.check(vr::toJson(hydrating), "VaultRemoteStatus", "vault.remote.status (detaching, an abort asked for)");
     vr::Status detached = hydrating;
     detached.type = "local";
+    detached.access.reset();
     detached.remote = "none";
     detached.attach.reset();
     detached.detach->state = rdt::State::Done;

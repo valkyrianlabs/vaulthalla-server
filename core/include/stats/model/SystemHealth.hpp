@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <ctime>
 #include <string>
 #include <vector>
 
@@ -143,6 +144,16 @@ struct RemoteAttachFailedHealth {
     std::string detail;   // the attach's last error
 };
 
+// An S3 vault whose remote access gate (storage/RemoteAccess.hpp) is not full: read_only (no writes reach its bucket;
+// local changes wait) or none (no request at all; remote-only files are unavailable). As the database records it.
+struct VaultRemoteAccessHealth {
+    unsigned int vaultId = 0;
+    std::string vaultName;
+    std::string reason;       // "" when none was given
+    std::string setBy;
+    std::time_t since = 0;
+};
+
 // Whether legacy-format content remains on this host (#373/#376): encrypting S3 vaults still on path_v0, cut-over
 // layout migrations whose path-named objects are not all gone yet, and legacy (gcm0) live files, recovery blobs and
 // unfinished resumable uploads. The gcm0 readers have no other callers once `remaining` is false; the next release's
@@ -184,6 +195,8 @@ struct SystemHealth {
     // as before; an operator resumes or aborts it (same shape as an attach's failure).
     std::vector<RemoteAttachFailedHealth> remoteDetachFailed;       // degraded
     std::vector<unsigned int> remoteDetachesUnfinished;             // informational: detaches still running
+    std::vector<VaultRemoteAccessHealth> vaultsRemoteRestricted;    // degraded: access read_only
+    std::vector<VaultRemoteAccessHealth> vaultsRemoteUnavailable;   // degraded: access none
     HealthSummary summary;
 
     [[nodiscard]] bool healthy() const noexcept;
@@ -207,6 +220,7 @@ void to_json(nlohmann::json& j, const VaultRecoveryMaterialHealth& health);
 void to_json(nlohmann::json& j, const VaultManifestUnpublishableHealth& health);
 void to_json(nlohmann::json& j, const LegacyContentHealth& health);
 void to_json(nlohmann::json& j, const RemoteAttachFailedHealth& health);
+void to_json(nlohmann::json& j, const VaultRemoteAccessHealth& health);
 void to_json(nlohmann::json& j, const SystemHealth& health);
 
 }

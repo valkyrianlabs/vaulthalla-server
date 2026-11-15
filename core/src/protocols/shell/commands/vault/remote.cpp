@@ -14,6 +14,7 @@
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <ctime>
 #include <string>
 
@@ -86,8 +87,26 @@ std::string detachText(const vrops::Status& s) {
     return out;
 }
 
+std::string accessText(const vrops::Status& s) {
+    if (!s.access) return {};
+    namespace rac = vh::storage::remote_access;
+    const auto& a = *s.access;
+    if (a.mode == rac::Mode::Full && !a.set_by) return {};
+    std::string out = fmt::format("  access:        {}", a.mode == rac::Mode::Full       ? "full"
+                                                         : a.mode == rac::Mode::ReadOnly ? "read-only (no uploads, "
+                                                                                           "deletes or manifest "
+                                                                                           "publish; local changes wait)"
+                                                                                         : "none (no request to the "
+                                                                                           "bucket; remote-only files "
+                                                                                           "are unavailable)");
+    if (a.reason) out += " — " + *a.reason;
+    if (a.set_by) out += fmt::format(" (set by {}{})", *a.set_by, a.set_at ? ", " + when(*a.set_at) : std::string{});
+    return out + "\n";
+}
+
 std::string statusText(const vrops::Status& s) {
-    std::string out = fmt::format("vault {} ({}): {} vault, remote {}\n", s.vault_id, s.vault_name, s.type, s.remote);
+    std::string out = fmt::format("vault {} ({}): {} vault, remote {}\n", s.vault_id, s.vault_name, s.type, s.remote) +
+                      accessText(s);
     // An unfinished detach is what matters now; a finished one is shown after the attach it undid.
     const bool detachFirst = s.detach && (rd::running(s.detach->state) || s.detach->state == rd::State::Failed);
     if (detachFirst) return out + detachText(s);
@@ -196,6 +215,30 @@ CommandResult detachCmd(const CommandCall& call) {
     }
 }
 
+CommandResult accessCmd(const CommandCall& call) {
+    constexpr const auto* ERR = "vault remote access";
+    const auto book = resolveUsage({"vault", "remote", "access"});
+    validatePositionals(call, book);
+    if (AgentCallScope::active())
+        return invalid(std::string(ERR) + ": setting a vault's remote access is not available to agents");
+    const bool json = hasFlag(call, book->resolveFlag("json_output")->aliases);
+    try {
+        const auto lookup = resolveVault(call, call.positionals[0], book, ERR);
+        if (!lookup || !lookup.ptr) return invalid(lookup.error);
+        auto text = optVal(call, "set");
+        if (!text) return invalid(std::string(ERR) + ": --set <full|read-only|none> is required");
+        std::ranges::replace(*text, '-', '_');
+        const auto mode = vh::storage::remote_access::modeFromString(*text);
+        if (!mode) return invalid(std::string(ERR) + ": --set takes full, read-only or none");
+        const auto status = vrops::setAccess(call.user, {.vault_id = lookup.ptr->id, .mode = *mode,
+                                                         .reason = optVal(call, "reason")});
+        if (json) return ok(vrops::toJson(status).dump(4));
+        return ok("Remote access set.\n" + statusText(status));
+    } catch (const vh::ops::Error& e) {
+        return invalid(std::string(ERR) + ": " + e.what());
+    }
+}
+
 CommandResult statusCmd(const CommandCall& call) {
     constexpr const auto* ERR = "vault remote status";
     const auto book = resolveUsage({"vault", "remote", "status"});
@@ -255,12 +298,14 @@ CommandResult handle_vault_remote(const CommandCall& call) {
     const auto [sub, subcall] = descend(call);
     const bool known = isCommandMatch({"vault", "remote", "attach"}, sub) ||
                        isCommandMatch({"vault", "remote", "detach"}, sub) ||
+                       isCommandMatch({"vault", "remote", "access"}, sub) ||
                        isCommandMatch({"vault", "remote", "status"}, sub) ||
                        isCommandMatch({"vault", "remote", "abort"}, sub);
     if (!known) return invalid(call.constructFullArgs(), "Unknown vault remote subcommand: '" + std::string(sub) + "'");
     if (subcall.positionals.empty()) return usage(subcall.constructFullArgs());
     if (isCommandMatch({"vault", "remote", "attach"}, sub)) return d::attachCmd(subcall);
     if (isCommandMatch({"vault", "remote", "detach"}, sub)) return d::detachCmd(subcall);
+    if (isCommandMatch({"vault", "remote", "access"}, sub)) return d::accessCmd(subcall);
     if (isCommandMatch({"vault", "remote", "status"}, sub)) return d::statusCmd(subcall);
     return d::abortCmd(subcall);
 }

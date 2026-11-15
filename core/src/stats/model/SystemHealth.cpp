@@ -14,6 +14,7 @@
 #include "db/query/vault/BucketCapability.hpp"
 #include "db/query/vault/LayoutMigration.hpp"
 #include "db/query/vault/RemoteAttach.hpp"
+#include "db/query/vault/RemoteAccess.hpp"
 #include "db/query/vault/RemoteDetach.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "log/Registry.hpp"
@@ -127,6 +128,8 @@ SystemHealthStatus computeOverallStatus(const SystemHealth& health) {
         && health.vaultsManifestUnpublishable.empty()
         && health.remoteAttachFailed.empty()
         && health.remoteDetachFailed.empty()
+        && health.vaultsRemoteRestricted.empty()
+        && health.vaultsRemoteUnavailable.empty()
         && health.deps.secretsWarning.empty()
         && health.database->brokenIdle == 0
         && protocolsHealthy(health.protocols, health.s3Gateway)
@@ -284,6 +287,18 @@ SystemHealth SystemHealth::snapshot() {
             out.remoteDetachesUnfinished.assign(detaches.unfinished.begin(), detaches.unfinished.end());
         } catch (const std::exception& e) {
             log::Registry::vaulthalla()->warn("[SystemHealth] remote detach check failed: {}", e.what());
+        }
+        try {
+            for (const auto& r : db::query::vault::RemoteAccess::restricted()) {
+                const VaultRemoteAccessHealth h{.vaultId = r.state.vault_id, .vaultName = r.vault_name,
+                                                .reason = r.state.reason.value_or(""),
+                                                .setBy = r.state.set_by.value_or(""),
+                                                .since = r.state.set_at.value_or(0)};
+                (r.state.mode == storage::remote_access::Mode::None ? out.vaultsRemoteUnavailable
+                                                                    : out.vaultsRemoteRestricted).push_back(h);
+            }
+        } catch (const std::exception& e) {
+            log::Registry::vaulthalla()->warn("[SystemHealth] remote access check failed: {}", e.what());
         }
     }
 
@@ -461,6 +476,16 @@ void to_json(nlohmann::json& j, const RemoteAttachFailedHealth& health) {
     };
 }
 
+void to_json(nlohmann::json& j, const VaultRemoteAccessHealth& health) {
+    j = nlohmann::json{
+        {"vault_id", health.vaultId},
+        {"vault_name", health.vaultName},
+        {"reason", health.reason},
+        {"set_by", health.setBy},
+        {"since", health.since},
+    };
+}
+
 void to_json(nlohmann::json& j, const LegacyContentHealth& health) {
     j = nlohmann::json{
         {"remaining", health.remaining},
@@ -489,6 +514,8 @@ void to_json(nlohmann::json& j, const SystemHealth& health) {
         {"remote_attaches_unfinished", health.remoteAttachesUnfinished},
         {"remote_detach_failed", health.remoteDetachFailed},
         {"remote_detaches_unfinished", health.remoteDetachesUnfinished},
+        {"vault_remote_restricted", health.vaultsRemoteRestricted},
+        {"vault_remote_unavailable", health.vaultsRemoteUnavailable},
         {"summary", health.summary},
     };
 }

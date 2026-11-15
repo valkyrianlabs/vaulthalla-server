@@ -2,6 +2,7 @@
 
 #include "ops/Actor.hpp"
 #include "vault/RemoteAttach.hpp"
+#include "storage/RemoteAccess.hpp"
 #include "vault/RemoteDetach.hpp"
 
 #include <cstdint>
@@ -49,6 +50,9 @@ struct Status {
     std::optional<vault::remote::Progress> progress;
     ItemCounts items;
     DetachCounts detach_items;
+    // An S3 vault's remote access gate (storage/RemoteAccess.hpp), as the daemon enforces it now; nullopt for a local
+    // vault.
+    std::optional<storage::remote_access::State> access;
 };
 
 // One vault, or with nullopt every live vault that has (or had) an attach and that the caller may view.
@@ -84,6 +88,17 @@ struct DetachRequest {
 // of: attach_running, layout_migration_running, key_rotation_running, key_salvage_running, legacy_content,
 // key_version_missing, event_sync_active, sync_conflicts_open. A failed detach started again resumes.
 [[nodiscard]] Status detach(const Actor& actor, const DetachRequest& request);
+
+struct AccessRequest {
+    unsigned int vault_id{};
+    storage::remote_access::Mode mode{storage::remote_access::Mode::Full};
+    std::optional<std::string> reason;
+};
+// Sets an S3 vault's remote access gate by hand (`vh vault remote access`): read_only stops every write to the bucket
+// (sync passes are skipped, local changes wait), none every request; full lifts it. The same permissions as detach,
+// no step-up (it adds no way to read anything). Refusals: Denied, NotFound, Invalid, Conflict (not an S3 vault).
+// The managed-storage service sets the same gate through storage::remote_access::set.
+[[nodiscard]] Status setAccess(const Actor& actor, const AccessRequest& request);
 
 struct AbortRequest {
     unsigned int vault_id{};

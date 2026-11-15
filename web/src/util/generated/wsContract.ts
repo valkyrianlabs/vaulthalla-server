@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '2f85411af0b59754b1b178cb00a056c5fd27fd2fe8ec2b51e2bbbefb35a6b03c'
+export const WS_CONTRACT_HASH = '5a8b7cf44c5c18fcf5db5d8ae379bf76b1c364ae28a5b994145eb93debf5c3e6'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '6c1142cc839247a91df9a91d0f0a93be7b5e4d6abd5852b098f1a28e95f7256d'
+export const WS_MODELS_HASH = '02a9f2f80337c8a691b347aac757d9cf9fc487b136e824107f767fe53dcd6732'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -2079,6 +2079,8 @@ export interface WsModels {
     remote_attaches_unfinished?: number[]
     remote_detach_failed?: { vault_id: number; vault_name: string; detail: string }[]
     remote_detaches_unfinished?: number[]
+    vault_remote_restricted?: { vault_id: number; vault_name: string; reason: string; set_by: string; since: number }[]
+    vault_remote_unavailable?: { vault_id: number; vault_name: string; reason: string; set_by: string; since: number }[]
     summary: {
       services_ready: number
       services_total: number
@@ -2961,6 +2963,10 @@ export interface WsModels {
     checked_at: number
   }
   /**
+   * An S3 vault's remote access gate (storage/RemoteAccess.hpp), as the daemon enforces it now.
+   */
+  'VaultRemoteAccess': { mode: 'full' | 'read_only' | 'none'; reason: string | null; set_by: string | null; set_at: number | null }
+  /**
    * A vault's remote attach (vault_remote_attach).
    */
   'VaultRemoteAttach': {
@@ -3070,13 +3076,14 @@ export interface WsModels {
     updated_at: number
   }
   /**
-   * ops::vault_remote::toJson(Status): a vault's remote storage, its attach and its detach.
+   * ops::vault_remote::toJson(Status): a vault's remote storage, its access, its attach and its detach.
    */
   'VaultRemoteStatus': {
     vault_id: number
     vault_name: string
     type: 'local' | 's3'
     remote: string
+    access: WsModels['VaultRemoteAccess'] | null
     attach: WsModels['VaultRemoteAttach'] | null
     detach: WsModels['VaultRemoteDetach'] | null
     progress: WsModels['VaultRemoteProgress'] | null
@@ -7000,6 +7007,7 @@ export interface WsContract {
       vault_name: string
       type: 'local' | 's3'
       remote: string
+      access: WsModels['VaultRemoteAccess'] | null
       attach: WsModels['VaultRemoteAttach'] | null
       detach: WsModels['VaultRemoteDetach'] | null
       progress: WsModels['VaultRemoteProgress'] | null
@@ -7037,6 +7045,7 @@ export interface WsContract {
       vault_name: string
       type: 'local' | 's3'
       remote: string
+      access: WsModels['VaultRemoteAccess'] | null
       attach: WsModels['VaultRemoteAttach'] | null
       detach: WsModels['VaultRemoteDetach'] | null
       progress: WsModels['VaultRemoteProgress'] | null
@@ -7069,6 +7078,7 @@ export interface WsContract {
       vault_name: string
       type: 'local' | 's3'
       remote: string
+      access: WsModels['VaultRemoteAccess'] | null
       attach: WsModels['VaultRemoteAttach'] | null
       detach: WsModels['VaultRemoteDetach'] | null
       progress: WsModels['VaultRemoteProgress'] | null

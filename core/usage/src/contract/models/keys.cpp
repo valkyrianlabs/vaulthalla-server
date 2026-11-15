@@ -268,10 +268,20 @@ std::vector<WsModel> vaultKeyModels() {
              .desc("What the detach verified locally."),
          str("last_error").nullable()}));
 
+    out.push_back(model("VaultRemoteAccess",
+        "An S3 vault's remote access gate (storage/RemoteAccess.hpp), as the daemon enforces it now.",
+        {str("mode").oneOf({"full", "read_only", "none"})
+             .desc("full: everything; read_only: reads and fetches work, no upload, delete or manifest publish (sync "
+                   "passes are skipped, local changes wait); none: no request to the bucket, files without a local "
+                   "copy are unavailable."),
+         str("reason").nullable(), str("set_by").nullable().desc("user:<name> or system:<service>; null: never set."),
+         vaultKeyTime("set_at").nullable()}));
+
     out.push_back(model("VaultRemoteStatus",
-        "ops::vault_remote::toJson(Status): a vault's remote storage, its attach and its detach.",
+        "ops::vault_remote::toJson(Status): a vault's remote storage, its access, its attach and its detach.",
         {vaultId(), str("vault_name"), str("type").oneOf({"local", "s3"}),
          str("remote").desc("none, attaching:<state>, attached or detaching:<state>."),
+         object("access", "VaultRemoteAccess").nullable().desc("null for a local vault."),
          object("attach", "VaultRemoteAttach").nullable().desc("null until an operator starts one."),
          object("detach", "VaultRemoteDetach").nullable().desc("null until an operator starts one."),
          object("progress", "VaultRemoteProgress").nullable(),

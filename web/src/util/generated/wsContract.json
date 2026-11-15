@@ -13440,6 +13440,106 @@
           ]
         },
         {
+          "description": "S3 vaults whose remote access is read_only: no upload, delete or manifest publish reaches the bucket and their sync passes are skipped; local changes wait. Any entry makes the node at least degraded.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "\"\" when none was given.",
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "user:<name> or system:<service>.",
+              "name": "set_by",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "since",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "vault_remote_restricted",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "S3 vaults whose remote access is none: no request reaches the bucket; files without a local copy are unavailable. Any entry makes the node at least degraded.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "\"\" when none was given.",
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "user:<name> or system:<service>.",
+              "name": "set_by",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "since",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "vault_remote_unavailable",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
           "fields": [
             {
               "minimum": 0,
@@ -19311,6 +19411,52 @@
       "name": "VaultRecoveryStats"
     },
     {
+      "description": "An S3 vault's remote access gate (storage/RemoteAccess.hpp), as the daemon enforces it now.",
+      "fields": [
+        {
+          "description": "full: everything; read_only: reads and fetches work, no upload, delete or manifest publish (sync passes are skipped, local changes wait); none: no request to the bucket, files without a local copy are unavailable.",
+          "enum": [
+            "full",
+            "read_only",
+            "none"
+          ],
+          "name": "mode",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "reason",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "user:<name> or system:<service>; null: never set.",
+          "name": "set_by",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "set_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "name": "VaultRemoteAccess"
+    },
+    {
       "description": "A vault's remote attach (vault_remote_attach).",
       "fields": [
         {
@@ -20112,7 +20258,7 @@
       "name": "VaultRemoteProgress"
     },
     {
-      "description": "ops::vault_remote::toJson(Status): a vault's remote storage, its attach and its detach.",
+      "description": "ops::vault_remote::toJson(Status): a vault's remote storage, its access, its attach and its detach.",
       "fields": [
         {
           "description": "Vault id.",
@@ -20155,6 +20301,16 @@
           "required": true,
           "types": [
             "string"
+          ]
+        },
+        {
+          "description": "null for a local vault.",
+          "model": "VaultRemoteAccess",
+          "name": "access",
+          "required": true,
+          "types": [
+            "object",
+            "null"
           ]
         },
         {
@@ -21784,7 +21940,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "6c1142cc839247a91df9a91d0f0a93be7b5e4d6abd5852b098f1a28e95f7256d",
+  "models_hash": "02a9f2f80337c8a691b347aac757d9cf9fc487b136e824107f767fe53dcd6732",
   "protocol": {
     "min": 1,
     "version": 1
@@ -50153,6 +50309,16 @@
           ]
         },
         {
+          "description": "null for a local vault.",
+          "model": "VaultRemoteAccess",
+          "name": "access",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
           "description": "null until an operator starts one.",
           "model": "VaultRemoteAttach",
           "name": "attach",
@@ -50401,6 +50567,16 @@
           ]
         },
         {
+          "description": "null for a local vault.",
+          "model": "VaultRemoteAccess",
+          "name": "access",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
           "description": "null until an operator starts one.",
           "model": "VaultRemoteAttach",
           "name": "attach",
@@ -50612,6 +50788,16 @@
           "required": true,
           "types": [
             "string"
+          ]
+        },
+        {
+          "description": "null for a local vault.",
+          "model": "VaultRemoteAccess",
+          "name": "access",
+          "required": true,
+          "types": [
+            "object",
+            "null"
           ]
         },
         {
@@ -50991,5 +51177,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "2f85411af0b59754b1b178cb00a056c5fd27fd2fe8ec2b51e2bbbefb35a6b03c"
+  "ws_hash": "5a8b7cf44c5c18fcf5db5d8ae379bf76b1c364ae28a5b994145eb93debf5c3e6"
 }
