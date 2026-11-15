@@ -344,12 +344,26 @@ each small to change:
 14. **The account policy in the root:** `recovery_policy.account_policy {policy, signature}` carries the pinned row's
     policy bytes for a vault with an active account-key grant; `vh vault recover` offers it to
     `ops::cloud_keys::offerPolicy`, which verifies it against this server's own pin and floor like the service's.
-15. **The cloud's announced contract changes** are one place each (`contract::` in `cloud/Storage.cpp`): the
-    offline-copy flag's rename, the ejection portal's address (stored in `ejection.portal_url`, opened by "Leave
-    managed storage"), base64url envelopes, and `moved_to` on a moved vault (state `moved` at once).
+15. **The cloud's contract changes** are one place each (`contract::` in `cloud/Storage.cpp`), as the cloud ships
+    them (2026-11-15), with no earlier names kept: `account_key_offline_copy_confirmed`, `ejection_portal_url` (https,
+    or http only to this host; stored in `ejection.portal_url`, opened by "Leave managed storage"), base64url envelopes
+    from `GET /v1/keys/vaults/{uid}/envelopes`, and `moved_to: {deployment_id, name}` on a vault moved off this
+    deployment (state `moved` at once, the reason naming the server).
 16. **The console** (item 8): `/managed-storage` (`features/managedStorage`, copy in `copy.ts`), a nav item under
     "Storage & cost" with `NavSignal` `cloudStorage` (the view permission and `available`; a server without the
     capability has no `cloud.storage.status`), and the new-vault switch (shown with the `meta.hello` capability;
     a choice that differs from the server's default is sent after the vault is created).
 17. **Not built:** the `403`-from-Backblaze wake, `pending_upload_bytes`/`pending_files` and throughput in
-    `CloudStorageVault`, rejoining a kept bucket in place, and the drill.
+    `CloudStorageVault`, rejoining a kept bucket in place. The drill is vaulthalla-cloud's `ci/milestone --only
+    managed` (its `tests/milestone/README.md`).
+18. **Restoring a managed vault** (the drill's finding, 2026-11-15): `vh vault recover --from-cloud --vault-uid U`
+    without `--api-key`. Once the restore is approved the cloud has moved the vault to this deployment, so after the
+    keys arrive the server asks for a bucket key of its own (`ops::cloud_storage::keyForRestore`: the sealed exchange,
+    stored as a cloud key owned by the restored vault's owner, probed, not acknowledged), restores with it, and only
+    then adopts the vault (`adoptRestored`: its row `active` on that key, the key acknowledged, the bucket bound, the
+    gate set). A restore that stops removes the key (`discardRestoreKey`); unacknowledged, the cloud revokes it.
+19. **Also from the drill (2026-11-15).** Access back after a suspension asks for a new bucket key (the cloud never
+    reinstates a revoked one; the service had waited for an active key that never came). A bucket the cloud reports
+    `emptying` or `deleted` while the plan isn't `ended` (paid again after the end began deleting it, or the account
+    holder deleted it in the portal) converts the vault in place as a confirmed end does; while the plan is `ended`,
+    item 13's confirmation still decides.
