@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'a43ab9d66b2ef337fb29c29963aa3c0b0a9e6b329f536e21699f73e01c1c57d2'
+export const WS_CONTRACT_HASH = 'f14dec94b0ad564ea133841b91b99eaf8b78e8f4dc6cb64f9157e73f6b0e67e3'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '549db1427b6daa3e18a250ed3436f7fe67528988fe0f30ced5972ac87e4232d5'
+export const WS_MODELS_HASH = 'b343025d5c4879445b3f08090da887eef7cd5e0c7a9defbad02f509e0ba81dcf'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -280,7 +280,7 @@ export interface WsModels {
     account_key?: { generation: number; fingerprint: string } | null
   }
   /**
-   * The Vaulthalla Cloud relay (design/cloud/relay.md): ops::cloud_relay::toJson(RelayStatus).
+   * The cloud relay (design/cloud/relay.md): ops::cloud_relay::toJson(RelayStatus).
    */
   'CloudRelayStatus': {
     state: 'off' | 'not_linked' | 'listener_off' | 'connecting' | 'connected' | 'backoff' | 'waiting' | 'stopped'
@@ -4211,9 +4211,9 @@ export interface WsContract {
     }
   }
   /**
-   * Switch the relay on for this linked server: browsers paired through Vaulthalla Cloud reach it (read
-   * only), and relayed pairing requests can arrive while a pairing window is open. The account holder's
-   * switch at the cloud must be on too. Super admins; conflict when not linked.
+   * Switch the relay on for this linked server: browsers paired through the cloud relay reach it (read only),
+   * and relayed pairing requests can arrive while a pairing window is open. The account holder's switch at
+   * the cloud must be on too. Super admins; conflict when not linked.
    */
   'cloud.relay.enable': {
     payload: null

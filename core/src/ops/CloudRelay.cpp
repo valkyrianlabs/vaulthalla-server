@@ -7,6 +7,7 @@
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "protocols/device/Service.hpp"
+#include "rbac/permission/admin/Cloud.hpp"
 
 #include <nlohmann/json.hpp>
 

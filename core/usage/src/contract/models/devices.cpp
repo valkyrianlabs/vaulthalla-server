@@ -37,11 +37,11 @@ std::vector<WsModel> deviceModels() {
          deviceTime("revoked_at").nullable(),
          boolean("revoked").desc("Revoked devices stay listed; their key never pairs again."),
          str("paired_via").oneOf({"listener", "relay"}).desc(
-             "listener: paired on the device listener (Desktop); relay: a web browser paired through Vaulthalla "
-             "Cloud, held to the read-only capability set (migration 144).")}));
+             "listener: paired on the device listener (Desktop); relay: a web browser paired through the cloud "
+             "relay, held to the read-only capability set (migration 144).")}));
 
     out.push_back(model("CloudRelayStatus",
-        "The Vaulthalla Cloud relay (design/cloud/relay.md): ops::cloud_relay::toJson(RelayStatus).",
+        "The cloud relay (design/cloud/relay.md): ops::cloud_relay::toJson(RelayStatus).",
         {str("state").oneOf({"off", "not_linked", "listener_off", "connecting", "connected", "backoff", "waiting",
                              "stopped"})
              .desc("off: the local switch; listener_off: device_server.enabled is false; backoff: retrying after a "

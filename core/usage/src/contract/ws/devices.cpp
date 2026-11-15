@@ -224,7 +224,7 @@ std::vector<WsCommandUsage> deviceCommands() {
                                   str("source_ip"), hex64("device_id"), strArray("code_choices"),
                                   boolean("approval_key_present"),
                                   str("via").oneOf({"listener", "relay"}).desc(
-                                      "relay: a web browser asking through Vaulthalla Cloud (from the connection, never "
+                                      "relay: a web browser asking through the cloud relay (from the connection, never "
                                       "the platform it names); it is paired read-only."),
                                   uinteger("created_at"), uinteger("expires_at")}),
                      uinteger("server_time").desc("The node's clock (Unix seconds), to count down by.")},
@@ -503,7 +503,7 @@ std::vector<WsCommandUsage> deviceCommands() {
     });
     out.push_back({
         .command = "cloud.relay.enable",
-        .description = "Switch the relay on for this linked server: browsers paired through Vaulthalla Cloud reach it "
+        .description = "Switch the relay on for this linked server: browsers paired through the cloud relay reach it "
                        "(read only), and relayed pairing requests can arrive while a pairing window is open. The account "
                        "holder's switch at the cloud must be on too. Super admins; conflict when not linked.",
         .input = "none",

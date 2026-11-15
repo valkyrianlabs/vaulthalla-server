@@ -11,6 +11,7 @@
 #include "log/Registry.hpp"
 #include "protocols/device/Service.hpp"
 #include "runtime/Manager.hpp"
+#include "storage/s3/curl/Http.hpp"
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/executor_work_guard.hpp>
@@ -25,6 +26,7 @@
 #include <boost/beast/websocket.hpp>
 #include <boost/beast/websocket/ssl.hpp>
 #include <nlohmann/json.hpp>
+#include <sodium.h>
 #include <vl/keykit/base64url.hpp>
 
 #include <fcntl.h>
@@ -39,13 +41,14 @@
 #include <deque>
 #include <map>
 #include <mutex>
-#include <random>
 #include <thread>
 #include <variant>
 
 namespace vh::cloud {
 
-namespace {
+// Named, not anonymous: RelayService::Impl derives from Engine (GCC -Wsubobject-linkage), and the unity build joins
+// this file with others of vh::cloud.
+namespace relay_detail {
 
 namespace asio = boost::asio;
 namespace beast = boost::beast;
@@ -784,20 +787,20 @@ std::variant<Admission, TicketFailure> fetchTicket(const storage::Linked& link, 
 }
 
 std::chrono::milliseconds jittered(const unsigned attempt) {
-    static thread_local std::mt19937_64 rng{std::random_device{}()};
+    // Full jitter between 1 s and the cap (1 s, 2 s, 4 s ... 5 min).
     const auto capSeconds = std::min<int64_t>(kBackoffCap.count() * 60, int64_t{1} << std::min(attempt, 16u));
-    std::uniform_int_distribution<int64_t> d(1000, std::max<int64_t>(1000, capSeconds * 1000));
-    return std::chrono::milliseconds(d(rng));
+    const auto spanMs = static_cast<uint32_t>(std::max<int64_t>(0, capSeconds * 1000 - 1000));
+    return std::chrono::milliseconds(1000 + (spanMs == 0 ? 0 : randombytes_uniform(spanMs + 1)));
 }
 
 std::mutex gLiveMutex;
 RelayService* gLive = nullptr;
 
-}
+
 
 // ---- the service ------------------------------------------------------------------------------------------------------
 
-struct RelayService::Impl {
+struct Engine {
     mutable std::mutex mutex;  // status_ and the decision state below
     RelayStatus status;
     std::atomic<bool> wake{true};
@@ -898,10 +901,12 @@ struct RelayService::Impl {
         status.enabled_at = desired.enabledAt;
     }
 
-    void tick(const std::function<bool()>& stopping);
+    void tick(const std::function<bool()>& stopping, const std::atomic<bool>* cancel);
 };
 
-void RelayService::Impl::tick(const std::function<bool()>& stopping) {
+void Engine::tick(const std::function<bool()>& stopping, const std::atomic<bool>* cancel) {
+    // A ticket request in flight ends within ~100 ms of a stop (the daemon's shutdown is bounded).
+    const ::vh::storage::s3::curl::http::ScopedCancellation cancellation(cancel);
     const auto now = Clock::now();
     if (reset.exchange(false)) {
         stoppedFor.reset();
@@ -1071,6 +1076,10 @@ void RelayService::Impl::tick(const std::function<bool()>& stopping) {
     asio::post(*ioc, [l = link] { l->start(); });
 }
 
+}
+
+struct RelayService::Impl : relay_detail::Engine {};
+
 RelayService::RelayService() : AsyncService("CloudRelayService"), impl_(std::make_shared<Impl>()) {
     impl_->acceptor = [](const int fd, protocols::device::RelayedOrigin origin) {
         const auto server = runtime::Manager::instance().getDeviceServer();
@@ -1080,14 +1089,14 @@ RelayService::RelayService() : AsyncService("CloudRelayService"), impl_(std::mak
         }
         return server->acceptRelayed(fd, std::move(origin));
     };
-    const std::scoped_lock lock(gLiveMutex);
-    gLive = this;
+    const std::scoped_lock lock(relay_detail::gLiveMutex);
+    relay_detail::gLive = this;
 }
 
 RelayService::~RelayService() {
     {
-        const std::scoped_lock lock(gLiveMutex);
-        if (gLive == this) gLive = nullptr;
+        const std::scoped_lock lock(relay_detail::gLiveMutex);
+        if (relay_detail::gLive == this) relay_detail::gLive = nullptr;
     }
     stop();
     impl_->stopIo();
@@ -1120,11 +1129,11 @@ void RelayService::setAcceptorForTesting(Acceptor acceptor) { impl_->acceptor = 
 void RelayService::runLoop() {
     while (!shouldStop()) {
         try {
-            impl_->tick([this] { return shouldStop(); });
+            impl_->tick([this] { return shouldStop(); }, &interruptFlag_);
         } catch (const std::exception& e) {
             log::Registry::cloud()->warn("[CloudRelay] Pass failed: {}", e.what());
         }
-        lazySleep(kLook);
+        lazySleep(relay_detail::kLook);
     }
     if (impl_->link) protocols::device::closeRelayedDeviceSessions();
     impl_->stopIo();
@@ -1136,14 +1145,14 @@ void RelayService::runLoop() {
 void RelayService::onStop() {}
 
 std::optional<RelayStatus> relaySnapshot() {
-    const std::scoped_lock lock(gLiveMutex);
-    if (!gLive) return std::nullopt;
-    return gLive->snapshot();
+    const std::scoped_lock lock(relay_detail::gLiveMutex);
+    if (!relay_detail::gLive) return std::nullopt;
+    return relay_detail::gLive->snapshot();
 }
 
 void wakeRelay(const bool reset) {
-    const std::scoped_lock lock(gLiveMutex);
-    if (gLive) gLive->wake(reset);
+    const std::scoped_lock lock(relay_detail::gLiveMutex);
+    if (relay_detail::gLive) relay_detail::gLive->wake(reset);
 }
 
 }

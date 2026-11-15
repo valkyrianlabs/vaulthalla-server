@@ -8,6 +8,7 @@
 #include "db/query/cloud/Link.hpp"
 #include "db/query/device/Device.hpp"
 #include "identities/User.hpp"
+#include "rbac/permission/admin/Cloud.hpp"
 #include "ops/CloudKeys.hpp"
 #include "log/Registry.hpp"
 #include "rbac/permission/admin/keys/Encryption.hpp"

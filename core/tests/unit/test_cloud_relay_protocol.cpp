@@ -275,8 +275,9 @@ TEST(CloudRelayReadOnly, EveryCommandOutsideTheReadOnlySetIsRefusedOnARelayedSes
         }
         EXPECT_EQ(protocols::ws::Router::classifyCommand(command, *relayPairedOnTheListener), decision)
             << command << ": a relay-paired device is held to the same set on any connection";
-        if (!reviewedReadOnly().contains(command))
+        if (!reviewedReadOnly().contains(command)) {
             EXPECT_EQ(protocols::ws::Router::isRelayedReadCommand(command), false) << command;
+        }
     }
     EXPECT_EQ(allowed, reviewedReadOnly().size()) << "every reviewed command is registered";
     // A paired Desktop is not narrowed.

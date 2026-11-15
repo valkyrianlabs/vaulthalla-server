@@ -11,7 +11,7 @@
       "since": "1.23.0"
     },
     {
-      "description": "A linked server can keep an outbound connection to the Vaulthalla Cloud relay, switched by a super admin (cloud.relay.status, .enable, .disable). Browsers reach it through relayed streams on the device listener, pair like a device (device.pairing.pending `via`, device.list `paired_via`) and are held to the read-only set (data.code relay_read_only).",
+      "description": "A linked server can keep an outbound connection to the cloud relay, switched by a super admin (cloud.relay.status, .enable, .disable). Browsers reach it through relayed streams on the device listener, pair like a device (device.pairing.pending `via`, device.list `paired_via`) and are held to the read-only set (data.code relay_read_only).",
       "name": "cloud.relay",
       "since": "1.23.0"
     },
@@ -116,7 +116,7 @@
       },
       {
         "code": "relay_read_only",
-        "description": "A device session through Vaulthalla Cloud (or a device paired that way) asked for a command outside the read-only set: browsing, metadata, downloads, the change feed, device.list and meta.*."
+        "description": "A device session through the cloud relay (or a device paired that way) asked for a command outside the read-only set: browsing, metadata, downloads, the change feed, device.list and meta.*."
       },
       {
         "code": "unknown_command",
@@ -1804,7 +1804,7 @@
       "name": "CloudLinkStatus"
     },
     {
-      "description": "The Vaulthalla Cloud relay (design/cloud/relay.md): ops::cloud_relay::toJson(RelayStatus).",
+      "description": "The cloud relay (design/cloud/relay.md): ops::cloud_relay::toJson(RelayStatus).",
       "fields": [
         {
           "description": "off: the local switch; listener_off: device_server.enabled is false; backoff: retrying after a failure; waiting: the cloud refused for a reason that may clear (off at the cloud, no plan, no relay), retried every 5 minutes; stopped: the cloud no longer knows this installation (toggle the switch to try again).",
@@ -3802,7 +3802,7 @@
           ]
         },
         {
-          "description": "listener: paired on the device listener (Desktop); relay: a web browser paired through Vaulthalla Cloud, held to the read-only capability set (migration 144).",
+          "description": "listener: paired on the device listener (Desktop); relay: a web browser paired through the cloud relay, held to the read-only capability set (migration 144).",
           "enum": [
             "listener",
             "relay"
@@ -23342,7 +23342,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "549db1427b6daa3e18a250ed3436f7fe67528988fe0f30ced5972ac87e4232d5",
+  "models_hash": "b343025d5c4879445b3f08090da887eef7cd5e0c7a9defbad02f509e0ba81dcf",
   "protocol": {
     "min": 1,
     "version": 1
@@ -28412,7 +28412,7 @@
       "client_timeout_ms": 15000,
       "command": "cloud.relay.enable",
       "confirmations": [],
-      "description": "Switch the relay on for this linked server: browsers paired through Vaulthalla Cloud reach it (read only), and relayed pairing requests can arrive while a pairing window is open. The account holder's switch at the cloud must be on too. Super admins; conflict when not linked.",
+      "description": "Switch the relay on for this linked server: browsers paired through the cloud relay reach it (read only), and relayed pairing requests can arrive while a pairing window is open. The account holder's switch at the cloud must be on too. Super admins; conflict when not linked.",
       "input": "none",
       "operation": null,
       "payload": [],
@@ -31978,7 +31978,7 @@
               ]
             },
             {
-              "description": "relay: a web browser asking through Vaulthalla Cloud (from the connection, never the platform it names); it is paired read-only.",
+              "description": "relay: a web browser asking through the cloud relay (from the connection, never the platform it names); it is paired read-only.",
               "enum": [
                 "listener",
                 "relay"
@@ -54962,5 +54962,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "a43ab9d66b2ef337fb29c29963aa3c0b0a9e6b329f536e21699f73e01c1c57d2"
+  "ws_hash": "f14dec94b0ad564ea133841b91b99eaf8b78e8f4dc6cb64f9157e73f6b0e67e3"
 }

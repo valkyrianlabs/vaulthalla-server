@@ -30,7 +30,7 @@ std::vector<Capability> capabilities() {
                         "(cloud.storage.status `available`)."},
         {.name = "cloud.relay",
          .since = "1.23.0",
-         .description = "A linked server can keep an outbound connection to the Vaulthalla Cloud relay, switched by a "
+         .description = "A linked server can keep an outbound connection to the cloud relay, switched by a "
                         "super admin (cloud.relay.status, .enable, .disable). Browsers reach it through relayed streams "
                         "on the device listener, pair like a device (device.pairing.pending `via`, device.list "
                         "`paired_via`) and are held to the read-only set (data.code relay_read_only)."},
