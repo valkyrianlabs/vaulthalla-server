@@ -871,13 +871,7 @@ protected:
     void enrolled(const Origin& o) {
         const auto ks = keys::status(superUser, o.id).front();
         records_ = {{"origin", {{"node_id", ks.node_id}, {"vault_id", o.id}}}};
-        json versions = json::array();
-        for (const auto& v : ks.needed_versions) {
-            json att = nullptr;
-            if (v.attestation) att = {{"key_id", v.attestation->key_id}, {"signature", v.attestation->signature}};
-            versions.push_back({{"version", v.version}, {"key_check", *v.key_check}, {"attestation", att}});
-        }
-        records_["key_versions"] = versions;
+        records_["key_versions"] = versionsOf(ks, o.id);
         json anchors = json::array();
         for (const auto& k : ks.attestation_public_keys) anchors.push_back({{"key_id", k.key_id}, {"public_key", k.public_key}});
         records_["attestation_public_keys"] = anchors;
@@ -896,6 +890,35 @@ protected:
             } catch (const vl::keykit::kev1::Error&) {}
         }
         vaultUid_ = vl::keykit::toBase32(o.uid);
+    }
+
+    // Each version as the cloud records it: its check and attestation under the origin they were made under (this
+    // node's id and vault id), the attestation with the public key of the key it names.
+    static json versionsOf(const keys::KeyStatus& ks, const uint32_t vaultId) {
+        json versions = json::array();
+        for (const auto& v : ks.needed_versions) {
+            json att = nullptr;
+            if (v.attestation) {
+                att = {{"key_id", v.attestation->key_id}, {"signature", v.attestation->signature}};
+                for (const auto& k : ks.attestation_public_keys)
+                    if (k.key_id == v.attestation->key_id) att["public_key"] = k.public_key;
+            }
+            versions.push_back({{"version", v.version}, {"key_check", *v.key_check}, {"attestation", att},
+                                {"origin", {{"node_id", ks.node_id}, {"vault_id", vaultId}}}});
+        }
+        return versions;
+    }
+    // The deliverer's keys, opened from the bucket's envelopes with the kit's recipient.
+    void openKeys(const Origin& o) {
+        const auto sk = vl::keykit::RecoverySeed::parse(o.seed).x25519SecretKey();
+        storage::s3::ManifestStore store(o.bucket);
+        for (const auto& obj : store.list(std::string(vl::keykit::kev1::kObjectPrefix))) {
+            const auto got = store.get(obj.key, std::nullopt);
+            try {
+                auto u = vl::keykit::kev1::unwrap(got->bytes, sk.bytes(), vl::keykit::kev1::Suite::X25519, o.uid);
+                keys_[u.key_version] = Bytes(u.key.bytes().begin(), u.key.bytes().end());
+            } catch (const vl::keykit::kev1::Error&) {}
+        }
     }
 
     storage::s3::curl::http::Response cloud(const storage::s3::curl::http::Request& r) {
@@ -989,6 +1012,76 @@ TEST_F(VaultRecoverFromCloud, RestoresTheVaultWithKeysADeviceRelayedThroughTheCl
     EXPECT_EQ(calls.back(), "POST /v1/recovery/restores/rst0123456789abcdefghjkmnp/complete");
     // The temporary key is gone once the restore completed.
     EXPECT_THROW((void)ops::cloud_restore::poll(superUser, "rst0123456789abcdefghjkmnp"), ops::Refused);
+}
+
+// A vault restored onto node B, rotated there and enrolled again: the cloud keeps A's records of the versions A made
+// and B's of the version B made, each under its own origin, and a restore onto a third node proves every version
+// under its own, with no salvage. A version whose origin is misstated proves nothing.
+TEST_F(VaultRecoverFromCloud, VersionsOfTwoNodesRestoreCanonicallyEachUnderItsOwnOrigin) {
+    auto o = populated();
+    enrolled(o);
+    becomeAnotherNode(o.id);
+    auto r = restoreFromCloud(o);
+    ASSERT_TRUE(r.written) << r.report.dump(2);
+    const auto engine = std::static_pointer_cast<storage::CloudEngine>(runtime::Deps::get().storageManager->getEngine(*r.vault_id));
+    engine->remote_policy()->strategy = sync::model::RemotePolicy::Strategy::Sync;
+    Origin b{.engine = engine, .bucket = o.bucket, .bucketName = o.bucketName, .id = *r.vault_id, .name = o.name,
+             .uid = o.uid, .seed = o.seed, .files = o.files};
+    rotate(b);
+    // B's enrollment, as the cloud records it: the versions A recorded stay A's; B's new version is B's.
+    const auto ksB = keys::status(superUser, b.id).front();
+    const auto bVersions = versionsOf(ksB, b.id);
+    auto aVersions = records_.at("key_versions");
+    const auto known = aVersions.size();
+    for (const auto& v : bVersions)
+        if (v.at("version").get<size_t>() > known) aVersions.push_back(v);
+    ASSERT_EQ(aVersions.size(), known + 1);
+    records_["key_versions"] = aVersions;
+    for (const auto& k : ksB.attestation_public_keys)
+        records_["attestation_public_keys"].push_back({{"key_id", k.key_id}, {"public_key", k.public_key}});
+    keys_.clear();
+    openKeys(b);
+    ASSERT_EQ(keys_.size(), known + 1);
+    const auto good = records_;
+
+    // Node C restores it: every version canonical, A's under A's origin and B's under B's.
+    becomeAnotherNode(b.id);
+    polls_ = 0;
+    auto c = restoreFromCloud(b);
+    ASSERT_TRUE(c.written) << c.report.dump(2);
+    EXPECT_EQ(c.mode, "canonical") << c.report.dump(2);
+    EXPECT_EQ(c.report.at("canonical_versions").size(), known + 1);
+    for (const auto& v : c.report.at("key_versions")) EXPECT_EQ(v.at("verdict"), "verified") << v.dump();
+    for (const auto& [path, content] : o.files)
+        EXPECT_EQ(readFile(runtime::Deps::get().storageManager->getEngine(*c.vault_id), path), content) << path;
+
+    // Misstated origins, each restored onto a fresh node: B's version claimed under A's origin, and that origin swapped
+    // with an A version's. B's version is then proven by nothing (its claim doesn't verify and its check doesn't
+    // match), so nothing is written.
+    const auto at = [](json& versions, const size_t version) -> json& {
+        for (auto& v : versions)
+            if (v.at("version").get<size_t>() == version) return v;
+        throw std::runtime_error("no version " + std::to_string(version));
+    };
+    const auto aOrigin = good.at("origin");
+    const auto bOrigin = json{{"node_id", ksB.node_id}, {"vault_id", b.id}};
+    for (const bool swapped : {false, true}) {
+        becomeAnotherNode(*c.vault_id);
+        records_ = good;
+        at(records_["key_versions"], known + 1)["origin"] = aOrigin;
+        if (swapped) at(records_["key_versions"], 1)["origin"] = bOrigin;
+        polls_ = 0;
+        std::string outcome;
+        try {
+            const auto bad = restoreFromCloud(b);
+            outcome = bad.written ? "written " + bad.mode : "not written";
+            if (bad.written) runtime::Deps::get().storageManager->removeVault(*bad.vault_id);
+        } catch (const ops::Refused& e) {
+            outcome = e.code;
+        }
+        EXPECT_NE(outcome.substr(0, 7), "written") << (swapped ? "swapped origins: " : "misstated origin: ") << outcome;
+        records_ = good;
+    }
 }
 
 TEST_F(VaultRecoverFromCloud, ARollbackIsRefusedAgainstTheCloudsCheckpointUnlessAccepted) {

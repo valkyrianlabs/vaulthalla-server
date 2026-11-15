@@ -111,12 +111,14 @@ Delivered exportOf(const nlohmann::json& status, const Pending& p) {
         for (const auto& v : records.at("key_versions"))
             if (v.is_object() && v.contains("version") && v.at("version").is_number_unsigned())
                 versionRecords[v.at("version").get<unsigned int>()] = v;
-    std::map<unsigned int, std::string> anchors;
+    // Key ids are each node's own: a vault restored onto another node has two keys 1. An attestation the cloud recorded
+    // without its public key takes the recorded key of its id only where that id is unique.
+    std::map<unsigned int, std::vector<std::string>> anchors;
     if (records.contains("attestation_public_keys") && records.at("attestation_public_keys").is_array())
         for (const auto& k : records.at("attestation_public_keys"))
             if (k.is_object() && k.contains("key_id") && k.at("key_id").is_number_unsigned() && k.contains("public_key") &&
                 k.at("public_key").is_string())
-                anchors[k.at("key_id").get<unsigned int>()] = k.at("public_key").get<std::string>();
+                anchors[k.at("key_id").get<unsigned int>()].push_back(k.at("public_key").get<std::string>());
 
     std::map<unsigned int, nlohmann::json> entries;  // by version, ascending
     for (const auto& b : status.at("bundle")) {
@@ -142,10 +144,14 @@ Delivered exportOf(const nlohmann::json& status, const Pending& p) {
             if (r->second.contains("attestation") && r->second.at("attestation").is_object()) {
                 auto att = r->second.at("attestation");
                 if (!att.contains("public_key") && att.contains("key_id") && att.at("key_id").is_number_unsigned())
-                    if (const auto a = anchors.find(att.at("key_id").get<unsigned int>()); a != anchors.end())
-                        att["public_key"] = a->second;
+                    if (const auto a = anchors.find(att.at("key_id").get<unsigned int>()); a != anchors.end() &&
+                        a->second.size() == 1)
+                        att["public_key"] = a->second.front();
                 entry["attestation"] = att;
             }
+            // The origin this version was recorded under (its check and attestation bind it): proven per version.
+            if (r->second.contains("origin") && r->second.at("origin").is_object() && !r->second.at("origin").empty())
+                entry["origin"] = r->second.at("origin");
         }
         entries[claimed] = std::move(entry);
     }
@@ -157,6 +163,7 @@ Delivered exportOf(const nlohmann::json& status, const Pending& p) {
                        {"key_info", {{"key_version", currentVersion}}}};
     if (current.contains("key_check")) doc["key_check"] = current.at("key_check");
     if (current.contains("attestation")) doc["attestation"] = current.at("attestation");
+    if (current.contains("origin")) doc["origin"] = current.at("origin");
     const auto& origin = records.contains("origin") ? records.at("origin") : nlohmann::json::object();
     if (origin.contains("node_id") && origin.at("node_id").is_string()) doc["node_id"] = origin.at("node_id");
     if (origin.contains("vault_id") && origin.at("vault_id").is_number_unsigned()) doc["vault_id"] = origin.at("vault_id");

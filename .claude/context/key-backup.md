@@ -327,5 +327,10 @@ proof, status reports it as `needed_versions[].origin`, and the manifest root as
 original kit still anchors those versions after later restores. Anything unproven stops the restore
 (`salvage_required`); `--salvage` mints a fresh key above every version the bucket names and runs the import's salvage
 pass; supplied keys are never stored. Same permission and channels as export (`recover_requires_device` for browser
-sessions), keys step-up on devices, excluded from MCP. Exports now carry `node_id` and `vault_uid`.
+sessions), keys step-up on devices, excluded from MCP. Exports now carry `node_id` and `vault_uid`. An export entry (or a
+historical key) may carry its own `origin {node_id, vault_id}` when it differs from the export's: a restore from the
+cloud of a vault that was restored onto another node and rotated there has versions of both nodes, each recorded by
+the cloud under its own origin (2026-11-15), and each is proven under that origin. The attestation signs the node id
+and vault id and the key check binds the vault id, so a misstated origin proves nothing. A cloud attestation without
+its public key takes the cloud's recorded key of that id only where the id is unique (ids are per node).
 

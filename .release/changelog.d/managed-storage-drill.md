@@ -6,3 +6,6 @@
   (`account_key_offline_copy_confirmed`, `ejection_portal_url`, base64url envelopes, `moved_to {deployment_id,
   name}`); an address the account service gives to open (billing, leaving managed storage) is https, or http only to
   this host.
+- `vh vault recover --from-cloud` proves each key version under the origin (node and vault id) the account service
+  recorded it under, so a vault restored onto another server, rotated there and enrolled again restores canonically
+  onto a third; an export entry or historical key may carry its own `origin`.
