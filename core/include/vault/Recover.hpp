@@ -3,9 +3,9 @@
 #include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include <vl/keykit/kit.hpp>
-#include "sync/manifest/Content.hpp"
-#include "sync/manifest/Reader.hpp"
-#include "sync/manifest/Store.hpp"
+#include <vl/vaultfmt/manifest/Content.hpp>
+#include <vl/vaultfmt/manifest/Reader.hpp>
+#include <vl/vaultfmt/manifest/Store.hpp>
 #include "vault/KeyAttestation.hpp"
 
 #include <nlohmann/json_fwd.hpp>
@@ -192,10 +192,10 @@ struct Plan {
     std::optional<std::string> root_version_id;   // version_log buckets: the canonical head's provider version
     std::optional<std::vector<std::string>> writers;  // the loaded root's writers (a join adds this node to them)
     std::optional<std::string> publish_mode;       // the loaded root's `publish` (absent: conditional)
-    sync::manifest::Freshness freshness{sync::manifest::Freshness::Unverified};
+    vl::vaultfmt::manifest::Freshness freshness{vl::vaultfmt::manifest::Freshness::Unverified};
     std::string freshness_report;
     std::vector<std::string> issues;               // manifest fallbacks (segments from versions, older roots, blind)
-    sync::manifest::Content content;               // what the restore writes (orphans placed under /Recovered)
+    vl::vaultfmt::manifest::Content content;               // what the restore writes (orphans placed under /Recovered)
     std::string root_uid;                          // the vault root directory's uid in content
     std::vector<VersionPlan> versions;             // ascending
     uint32_t current_version{};
@@ -207,7 +207,7 @@ struct Plan {
     EnvelopeStats envelopes;
     Downloads downloads;
     Pins pins;
-    std::optional<sync::manifest::RecoveryPolicy> recovery_policy;
+    std::optional<vl::vaultfmt::manifest::RecoveryPolicy> recovery_policy;
 
     [[nodiscard]] const VersionPlan* version(uint32_t v) const;
     // Versions whose key is held and proven (D1).
@@ -220,7 +220,7 @@ struct Plan {
 
 // Reads the bucket and the material and decides everything a restore needs. Throws Refusal (no key material, a kit for
 // another vault, a wrong seed, a rollback without accept_rollback, a fork), or the store's errors.
-[[nodiscard]] Plan plan(sync::manifest::ObjectStore& store, const Material& material, const Options& options);
+[[nodiscard]] Plan plan(vl::vaultfmt::manifest::ObjectStore& store, const Material& material, const Options& options);
 
 // The report a dry run returns (and a restore extends): never key material.
 [[nodiscard]] nlohmann::json toJson(const Plan& plan);
@@ -230,12 +230,12 @@ struct Plan {
 // ---- the store a restore reads through --------------------------------------------------------------------------------
 
 // Counts what is fetched, by key class (Downloads). Writes and deletes pass through.
-class MeteredStore final : public sync::manifest::ObjectStore {
+class MeteredStore final : public vl::vaultfmt::manifest::ObjectStore {
 public:
-    explicit MeteredStore(std::shared_ptr<sync::manifest::ObjectStore> inner) : inner_(std::move(inner)) {}
+    explicit MeteredStore(std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> inner) : inner_(std::move(inner)) {}
     [[nodiscard]] const Downloads& downloads() const { return downloads_; }
 
-    [[nodiscard]] std::optional<sync::manifest::StoredObject> get(const std::string& key,
+    [[nodiscard]] std::optional<vl::vaultfmt::manifest::StoredObject> get(const std::string& key,
                                                                  const std::optional<std::string>& versionId) override;
     [[nodiscard]] std::optional<std::vector<uint8_t>> getRange(const std::string& key, uint64_t offset,
                                                               uint64_t length) override;
@@ -246,24 +246,24 @@ public:
     std::string putIfMatch(const std::string& key, const std::vector<uint8_t>& bytes, const std::string& etag) override {
         return inner_->putIfMatch(key, bytes, etag);
     }
-    [[nodiscard]] std::vector<sync::manifest::ListedObject> list(const std::string& prefix) override;
-    [[nodiscard]] std::vector<sync::manifest::StoredVersion> versions(const std::string& key) override;
+    [[nodiscard]] std::vector<vl::vaultfmt::manifest::ListedObject> list(const std::string& prefix) override;
+    [[nodiscard]] std::vector<vl::vaultfmt::manifest::StoredVersion> versions(const std::string& key) override;
     void remove(const std::string& key) override { inner_->remove(key); }
-    sync::manifest::PutResult put(const std::string& key, const std::vector<uint8_t>& bytes) override {
+    vl::vaultfmt::manifest::PutResult put(const std::string& key, const std::vector<uint8_t>& bytes) override {
         return inner_->put(key, bytes);
     }
-    [[nodiscard]] std::vector<sync::manifest::StoredVersion> versionsUnder(const std::string& prefix) override {
+    [[nodiscard]] std::vector<vl::vaultfmt::manifest::StoredVersion> versionsUnder(const std::string& prefix) override {
         return inner_->versionsUnder(prefix);
     }
     void removeVersion(const std::string& key, const std::string& versionId) override {
         inner_->removeVersion(key, versionId);
     }
-    [[nodiscard]] sync::manifest::WriteCapability mode() const override { return inner_->mode(); }
+    [[nodiscard]] vl::vaultfmt::manifest::WriteCapability mode() const override { return inner_->mode(); }
 
 private:
     void count(const std::string& key, uint64_t bytes, bool ranged);
 
-    std::shared_ptr<sync::manifest::ObjectStore> inner_;
+    std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> inner_;
     Downloads downloads_;
 };
 

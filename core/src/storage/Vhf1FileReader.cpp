@@ -1,6 +1,6 @@
 #include "storage/Vhf1FileReader.hpp"
 
-#include "crypto/vhf1/Reader.hpp"
+#include <vl/vaultfmt/vhf1/Reader.hpp>
 #include "platform/FileTime.hpp"
 
 #include <sodium.h>
@@ -18,13 +18,13 @@ namespace vh::storage {
 
 struct Vhf1FileReader::Impl {
     int fd{-1};
-    std::optional<crypto::vhf1::RangeReader> range;
+    std::optional<vl::vaultfmt::vhf1::RangeReader> range;
     crypto::IntegrityKey integrityKey;
     std::optional<uint64_t> cachedIndex;
-    crypto::vhf1::SecureBytes cached;
+    vl::vaultfmt::vhf1::SecureBytes cached;
     std::vector<uint8_t> window;  // one sealed chunk (ciphertext)
     uint64_t contiguous{};         // chunks [0, contiguous) all authenticated by this reader
-    std::optional<crypto::vhf1::Error> failed;
+    std::optional<vl::vaultfmt::vhf1::Error> failed;
 
     ~Impl() {
         if (fd >= 0) ::close(fd);
@@ -74,7 +74,7 @@ Vhf1FileReader::Vhf1FileReader(Params params) : params_(std::move(params)), impl
         // The catalog's size is the authenticated object size: a different stored size is damage or a replacement.
         throw IntegrityError("Stored size of " + params_.path.filename().string() + " does not match its metadata");
 
-    std::array<uint8_t, crypto::vhf1::kHeaderSize> header{};
+    std::array<uint8_t, vl::vaultfmt::vhf1::kHeaderSize> header{};
     if (detail::preadFully(m.fd, header, 0, params_.path) != header.size())
         throw IntegrityError("Content is shorter than its header");
     try {
@@ -83,16 +83,16 @@ Vhf1FileReader::Vhf1FileReader(Params params) : params_(std::move(params)), impl
     } catch (const IntegrityError&) {
         crypto::IntegrityRegistry::instance().record(m.integrityKey, false);
         throw;
-    } catch (const crypto::vhf1::Error& e) {
+    } catch (const vl::vaultfmt::vhf1::Error& e) {
         crypto::IntegrityRegistry::instance().record(m.integrityKey, false);
         vh::vault::content::throwIntegrity(e, "Content");
     }
-    m.cached = crypto::vhf1::SecureBytes(static_cast<std::size_t>(m.range->header().chunkSize()));
+    m.cached = vl::vaultfmt::vhf1::SecureBytes(static_cast<std::size_t>(m.range->header().chunkSize()));
 }
 
 Vhf1FileReader::~Vhf1FileReader() = default;
 
-void Vhf1FileReader::fail(const crypto::vhf1::Error& error) {
+void Vhf1FileReader::fail(const vl::vaultfmt::vhf1::Error& error) {
     impl_->failed = error;
     impl_->cachedIndex.reset();
     impl_->cached.clear();
@@ -114,13 +114,13 @@ void Vhf1FileReader::loadChunk(const uint64_t index) {
     const auto plan = m.range->plan(start, end);
     m.window.resize(static_cast<std::size_t>(plan.objectRange->size()));
     if (detail::preadFully(m.fd, m.window, plan.objectRange->begin, params_.path) != m.window.size())
-        fail(crypto::vhf1::Error(crypto::vhf1::ErrorCode::SizeMismatch));
+        fail(vl::vaultfmt::vhf1::Error(vl::vaultfmt::vhf1::ErrorCode::SizeMismatch));
     m.cachedIndex.reset();
     m.cached.clear();
     try {
         auto plain = m.range->read(start, end, m.window);
         m.cached.append(plain.span());
-    } catch (const crypto::vhf1::Error& e) {
+    } catch (const vl::vaultfmt::vhf1::Error& e) {
         fail(e);
     }
     m.cachedIndex = index;

@@ -22,7 +22,7 @@ namespace vh::ops::vault_replicas {
 
 namespace vault_replicas_detail {
 
-namespace mf = sync::manifest;
+namespace mf = vl::vaultfmt::manifest;
 
 void requireAllowed(const Actor& actor, const Channel channel, const std::string_view what) {
     sync::replicas::requireExperimental(what);

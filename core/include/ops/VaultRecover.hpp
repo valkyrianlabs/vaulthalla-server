@@ -76,7 +76,7 @@ struct Result {
 // Test seams. The bucket a restore reads (default: a storage::s3::ManifestStore over the API key's controller,
 // opaque_v1 rules), and a hook called with the new vault's engine before anything is published or salvaged (tests
 // install a fake bucket).
-using StoreFactory = std::function<std::shared_ptr<sync::manifest::ObjectStore>(unsigned int apiKeyId,
+using StoreFactory = std::function<std::shared_ptr<vl::vaultfmt::manifest::ObjectStore>(unsigned int apiKeyId,
                                                                                const std::string& bucket)>;
 void setStoreFactoryForTesting(StoreFactory factory);
 using EngineHook = std::function<void(const std::shared_ptr<storage::Engine>& engine)>;

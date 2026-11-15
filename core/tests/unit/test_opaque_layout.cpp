@@ -16,7 +16,7 @@
 #include <vl/keykit/seed.hpp>
 #include "crypto/id/ObjectUid.hpp"
 #include "crypto/util/encrypt.hpp"
-#include "crypto/vhf1/Format.hpp"
+#include <vl/vaultfmt/vhf1/Format.hpp>
 #include "db/query/fs/File.hpp"
 #include "db/query/recovery/ObjectVersion.hpp"
 #include "db/query/recovery/Policy.hpp"
@@ -29,11 +29,11 @@
 #include "recovery/local/Backlog.hpp"
 #include "recovery/local/Versions.hpp"
 #include "recovery/provider/Restore.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/ManifestStore.hpp"
 #include "sync/Planner.hpp"
-#include "sync/manifest/Store.hpp"
+#include <vl/vaultfmt/manifest/Store.hpp>
 #include "sync/rotation/Runtime.hpp"
 #include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
@@ -44,7 +44,7 @@
 
 namespace vh::test_opaque_layout {
 
-namespace keys = storage::object_keys;
+namespace keys = vl::vaultfmt::keys;
 namespace content = vault::content;
 namespace sfs = std::filesystem;
 using test_support::versioned::VersionedBucket;
@@ -238,7 +238,7 @@ TEST(OpaqueMultipart, ASixtyGiBObjectUploadsInAtMost10000Parts) {
     f->object_uid = crypto::id::newObjectUid();
     f->backing_path = dir / "huge";
     const auto sealed = em->encrypt({}, f);   // the header of a generation of this file
-    spit(f->backing_path, Bytes(sealed.begin(), sealed.begin() + crypto::vhf1::kHeaderSize));
+    spit(f->backing_path, Bytes(sealed.begin(), sealed.begin() + vl::vaultfmt::vhf1::kHeaderSize));
     constexpr uint64_t kSize = 60 * kGiB;
     sfs::resize_file(f->backing_path, kSize);
     f->size_bytes = kSize;   // never read: the upload sends the sealed bytes as they are
@@ -384,12 +384,12 @@ protected:
     // Whether an object's header authenticates as the object of this file uid.
     static bool headerNames(const Vault& v, const Bytes& object, const crypto::id::ObjectUid& uid) {
         try {
-            (void)crypto::vhf1::openHeader(
-                object, {.kind = crypto::vhf1::Kind::FileContent, .vaultUid = v.engine->encryptionManager->vaultUid(),
+            (void)vl::vaultfmt::vhf1::openHeader(
+                object, {.kind = vl::vaultfmt::vhf1::Kind::FileContent, .vaultUid = v.engine->encryptionManager->vaultUid(),
                          .objectUid = uid, .generation = std::nullopt},
                 [&](const uint32_t version) { return v.engine->encryptionManager->historicalKeySnapshot(version); });
             return true;
-        } catch (const crypto::vhf1::Error&) {
+        } catch (const vl::vaultfmt::vhf1::Error&) {
             return false;
         }
     }
@@ -402,7 +402,7 @@ TEST_F(OpaqueLayoutTest, OpaqueRequestAudit) {
     const auto v = opaqueVault(/*localVersioning=*/true);
     // A recovery recipient (#370): its KEV1 envelopes go to the same bucket (.vaulthalla/key/<kid>), under the same
     // request rules, at enrollment and at every rotation.
-    vault::envelopes::setStoreFactoryForTesting([bucket = v.bucket](uint32_t) -> std::shared_ptr<sync::manifest::ObjectStore> {
+    vault::envelopes::setStoreFactoryForTesting([bucket = v.bucket](uint32_t) -> std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> {
         return std::make_shared<storage::s3::ManifestStore>(bucket);
     });
     struct ResetEnvelopeStore {

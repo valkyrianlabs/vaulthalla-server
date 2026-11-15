@@ -4,7 +4,7 @@
 #include "db/query/recovery/ObjectVersion.hpp"
 #include "db/query/sync/ObjectIdentity.hpp"
 #include "fs/model/File.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "log/Registry.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/PlaintextReader.hpp"
@@ -57,23 +57,23 @@ std::filesystem::path vaultPathOf(const std::string& objectKey) {
 std::string objectKeyOf(const storage::CloudEngine& engine, const std::filesystem::path& vaultPath) {
     if (!engine.opaqueLayout()) return objectKeyOf(vaultPath);
     const auto uid = db::query::sync::ObjectIdentity::uidAtPath(engine.vault->id, vaultPath.lexically_normal());
-    return uid ? storage::object_keys::contentKey(*uid) : std::string{};
+    return uid ? vl::vaultfmt::keys::contentKey(*uid) : std::string{};
 }
 
 std::string liveObjectKeyOf(const storage::CloudEngine& engine, const std::filesystem::path& vaultPath) {
     if (!engine.opaqueLayout()) return objectKeyOf(vaultPath);
     const auto file = db::query::fs::File::getFileByPath(engine.vault->id, vaultPath.lexically_normal());
-    return file && file->object_uid ? storage::object_keys::contentKey(*file->object_uid) : std::string{};
+    return file && file->object_uid ? vl::vaultfmt::keys::contentKey(*file->object_uid) : std::string{};
 }
 
 std::string directoryPrefixOf(const storage::CloudEngine& engine, const std::filesystem::path& vaultPath) {
     if (!engine.opaqueLayout()) return directoryPrefixOf(vaultPath);
-    return std::string(storage::object_keys::kContentPrefix);
+    return std::string(vl::vaultfmt::keys::kContentPrefix);
 }
 
 std::filesystem::path vaultPathOf(const storage::CloudEngine& engine, const std::string& objectKey) {
     if (!engine.opaqueLayout()) return vaultPathOf(objectKey);
-    const auto uid = storage::object_keys::uidOfContentKey(objectKey);
+    const auto uid = vl::vaultfmt::keys::uidOfContentKey(objectKey);
     if (!uid) return vaultPathOf(objectKey);
     if (auto path = db::query::sync::ObjectIdentity::pathOfUid(engine.vault->id, *uid)) return *path;
     return std::filesystem::path("/Recovered") / vl::keykit::toBase32(*uid);

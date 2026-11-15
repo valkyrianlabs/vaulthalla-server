@@ -26,11 +26,11 @@
 #include "stats/model/SystemHealth.hpp"
 #include "storage/BucketCapability.hpp"
 #include "storage/CloudEngine.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "storage/s3/Capability.hpp"
 #include "storage/s3/ManifestStore.hpp"
-#include "sync/manifest/Objects.hpp"
-#include "sync/manifest/Store.hpp"
+#include <vl/vaultfmt/manifest/Objects.hpp>
+#include <vl/vaultfmt/manifest/Store.hpp>
 #include "sync/model/Event.hpp"
 #include "sync/model/RemoteManifest.hpp"
 #include "sync/model/RemotePolicy.hpp"
@@ -48,7 +48,7 @@
 
 namespace vh::test_bucket_capability {
 
-using sync::manifest::WriteCapability;
+using vl::vaultfmt::manifest::WriteCapability;
 using test_support::versioned::Versioning;
 using test_support::versioned::VersionedBucket;
 using Puts = VersionedBucket::ConditionalPuts;
@@ -178,13 +178,13 @@ TEST(BucketProbe, TheStoredFormRoundTrips) {
     EXPECT_EQ(back.conditional_put, r.conditional_put);
     EXPECT_EQ(back.steps.size(), r.steps.size());
     EXPECT_EQ(back.probed_at, r.probed_at);
-    EXPECT_EQ(sync::manifest::publishModeFromString("version_log"), WriteCapability::VersionLog);
-    EXPECT_FALSE(sync::manifest::publishModeFromString("insufficient")) << "not a stored manifest_publish value";
-    EXPECT_TRUE(sync::manifest::sendsPreconditions(WriteCapability::Unknown)) << "never probed: no silent downgrade";
-    EXPECT_FALSE(sync::manifest::sendsPreconditions(WriteCapability::VersionLog));
-    EXPECT_EQ(storage::object_keys::classify(std::string(storage::s3::kProbePrefix) +
+    EXPECT_EQ(vl::vaultfmt::manifest::publishModeFromString("version_log"), WriteCapability::VersionLog);
+    EXPECT_FALSE(vl::vaultfmt::manifest::publishModeFromString("insufficient")) << "not a stored manifest_publish value";
+    EXPECT_TRUE(vl::vaultfmt::manifest::sendsPreconditions(WriteCapability::Unknown)) << "never probed: no silent downgrade";
+    EXPECT_FALSE(vl::vaultfmt::manifest::sendsPreconditions(WriteCapability::VersionLog));
+    EXPECT_EQ(vl::vaultfmt::keys::classify(std::string(storage::s3::kProbePrefix) +
                                              vl::keykit::toBase32(crypto::id::newObjectUid())),
-              storage::object_keys::KeyClass::Metadata);
+              vl::vaultfmt::keys::KeyClass::Metadata);
 }
 
 // ── BucketCapabilityDb (DB-backed) ───────────────────────────────────────────────────────────────────────────────────
@@ -282,7 +282,7 @@ TEST_F(BucketCapabilityDbTest, AnOpaqueVaultOnABackblazeLikeBucketPublishesAndAR
     const auto v = s3Vault(vault::model::StorageLayout::OpaqueV1);
     const auto bucket = bucket_capability_test::bucketWith(Versioning::Enabled, Puts::Reject501);
     record(v->id, *bucket);
-    const std::string rootKey(sync::manifest::kRootKey);
+    const std::string rootKey(vl::vaultfmt::manifest::kRootKey);
     {
         const auto cloud = std::make_shared<storage::CloudEngine>(v, bucket);
         cloud->encryptionManager->load_key();

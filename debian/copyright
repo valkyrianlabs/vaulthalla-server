@@ -52,6 +52,19 @@ Comment:
  relying-party verifier statically linked into vaulthalla-server, built from
  the release tarball pinned in subprojects/vl-webauthn.wrap.
 
+Files: subprojects/packagecache/vl-vaultfmt-*.tar.xz
+       subprojects/vl-vaultfmt-*/*
+Copyright:
+  2026 Valkyrian Labs LLC <cooper@valkyrianlabs.com>
+License: AGPL-3.0+
+Comment:
+ vl-vaultfmt (https://github.com/valkyrianlabs/vl-vaultfmt), the vault format
+ library (VHF1 files, object keys, the encrypted manifest) extracted from
+ vaulthalla-server and statically linked into it, built from the tarball
+ pinned in subprojects/vl-vaultfmt.wrap. The tarball carries vl-keykit's
+ release tarball for the library's standalone builds; this package builds
+ vl-keykit from subprojects/vl-keykit.wrap instead.
+
 Files: deploy/password-lists/common-passwords.txt
 Copyright:
   2018 Daniel Miessler

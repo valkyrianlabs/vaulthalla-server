@@ -15,7 +15,7 @@
 
 #include "crypto/id/ObjectUid.hpp"
 #include "crypto/util/encrypt.hpp"
-#include "crypto/vhf1/Format.hpp"
+#include <vl/vaultfmt/vhf1/Format.hpp>
 #include "db/query/fs/File.hpp"
 #include "db/query/recovery/Generation.hpp"
 #include "db/query/recovery/ObjectVersion.hpp"
@@ -33,14 +33,14 @@
 #include "protocols/shell/commands/vault.hpp"
 #include "recovery/local/Versions.hpp"
 #include "stats/model/SystemHealth.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/Capability.hpp"
 #include "storage/s3/provider/Registry.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "sync/Controller.hpp"
-#include "sync/manifest/Document.hpp"
-#include "sync/manifest/Objects.hpp"
+#include <vl/vaultfmt/manifest/Document.hpp>
+#include <vl/vaultfmt/manifest/Objects.hpp>
 #include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/LayoutMigration.hpp"
@@ -49,7 +49,7 @@
 
 namespace vh::test_layout_migration {
 
-namespace keys = storage::object_keys;
+namespace keys = vl::vaultfmt::keys;
 namespace content = vault::content;
 namespace lm = vault::layout;
 namespace sfs = std::filesystem;
@@ -189,8 +189,8 @@ protected:
     // Plaintext of one o/<uid> object version, opened as opaque_v1 reads it: bound to the vault and this uid.
     static std::string opaquePlain(const Vault& v, const crypto::id::ObjectUid& uid, const Bytes& sealed) {
         const auto em = v.engine->encryptionManager;
-        const auto opened = crypto::vhf1::openHeader(
-            sealed, {.kind = crypto::vhf1::Kind::FileContent, .vaultUid = em->vaultUid(), .objectUid = uid,
+        const auto opened = vl::vaultfmt::vhf1::openHeader(
+            sealed, {.kind = vl::vaultfmt::vhf1::Kind::FileContent, .vaultUid = em->vaultUid(), .objectUid = uid,
                      .generation = std::nullopt},
             [&](const uint32_t version) { return em->historicalKeySnapshot(version); });
         const content::Binding b{.vaultUid = em->vaultUid(),
@@ -627,16 +627,16 @@ TEST_F(LayoutMigrationTest, LayoutMigrationOntoABackblazeLikeBucketPublishesTheM
     write(v, "/a.txt", "a2");
     (void)pass(v);
     ASSERT_EQ(migrate(v).state, lm::State::CutOver) << rowOf(v).last_error.value_or("");
-    EXPECT_EQ(db::query::vault::BucketCapability::get(v.id()).capability, sync::manifest::WriteCapability::VersionLog);
+    EXPECT_EQ(db::query::vault::BucketCapability::get(v.id()).capability, vl::vaultfmt::manifest::WriteCapability::VersionLog);
     const auto state = db::query::sync::Manifest::state(v.id());
     ASSERT_TRUE(state.epoch);
     ASSERT_TRUE(state.root_version_id) << "settled on a version of the root";
-    const auto current = v.bucket->current(std::string(sync::manifest::kRootKey));
+    const auto current = v.bucket->current(std::string(vl::vaultfmt::manifest::kRootKey));
     ASSERT_TRUE(current);
     EXPECT_EQ(current->version_id, *state.root_version_id);
-    const auto root = sync::manifest::openRoot(current->body, v.engine->encryptionManager->vaultUid(),
+    const auto root = vl::vaultfmt::manifest::openRoot(current->body, v.engine->encryptionManager->vaultUid(),
                                                [&](const uint32_t k) { return v.engine->encryptionManager->historicalKeySnapshot(k); });
-    EXPECT_EQ(root.publish, std::string(sync::manifest::kPublishVersionLog));
+    EXPECT_EQ(root.publish, std::string(vl::vaultfmt::manifest::kPublishVersionLog));
     EXPECT_EQ(readLocal(v, "/a.txt"), "a2");
     EXPECT_EQ(readLocal(v, "/b.txt"), "b1");
     EXPECT_EQ(transfers(pass(v)), 0u);

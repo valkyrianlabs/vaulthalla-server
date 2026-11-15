@@ -333,7 +333,7 @@ unsigned copyEnvelopes(Ctx& ctx) {
         if (bytes.empty()) {
             ctx.checkpoint();
             if (!store) store.emplace(ctx.cloud->s3Controller());
-            std::optional<sync::manifest::StoredObject> object;
+            std::optional<vl::vaultfmt::manifest::StoredObject> object;
             try {
                 object = store->get(kev1::objectKey(e.kid), std::nullopt);
             } catch (const std::exception& ex) {

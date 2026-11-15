@@ -1,7 +1,7 @@
 #include "vault/PrefixSealer.hpp"
 
 #include "crypto/id/ObjectUid.hpp"
-#include "crypto/vhf1/Reader.hpp"
+#include <vl/vaultfmt/vhf1/Reader.hpp>
 #include "storage/PlaintextReader.hpp"
 
 #include <algorithm>
@@ -49,8 +49,8 @@ uint64_t fdSize(const int fd) {
     return static_cast<uint64_t>(st.st_size);
 }
 
-crypto::vhf1::OpenedHeader readHeader(const int fd, const Binding& binding, const crypto::SecretKeyPtr& key) {
-    std::array<uint8_t, crypto::vhf1::kHeaderSize> header{};
+vl::vaultfmt::vhf1::OpenedHeader readHeader(const int fd, const Binding& binding, const crypto::SecretKeyPtr& key) {
+    std::array<uint8_t, vl::vaultfmt::vhf1::kHeaderSize> header{};
     if (preadSome(fd, header, 0) != header.size()) throw storage::IntegrityError("The sealed prefix has no header");
     return openHeader(header, binding, key);
 }
@@ -61,9 +61,9 @@ crypto::vhf1::OpenedHeader readHeader(const int fd, const Binding& binding, cons
 
 struct PrefixReader::Impl {
     int fd{-1};
-    std::optional<crypto::vhf1::RangeReader> range;
+    std::optional<vl::vaultfmt::vhf1::RangeReader> range;
     std::optional<uint64_t> cachedIndex;
-    crypto::vhf1::SecureBytes cached;
+    vl::vaultfmt::vhf1::SecureBytes cached;
     std::vector<uint8_t> window;
     uint64_t size{};
 };
@@ -75,14 +75,14 @@ PrefixReader::PrefixReader(const int fd, const Binding& binding, const crypto::S
     impl_->size = plaintextSize;
     auto opened = prefix_detail::readHeader(fd, binding, key);
     // The layout of the whole object: chunk positions and final flags don't depend on how much is on disk yet.
-    const auto objectSize = crypto::vhf1::objectSizeFor(plaintextSize, opened.params().chunkLog2);
+    const auto objectSize = vl::vaultfmt::vhf1::objectSizeFor(plaintextSize, opened.params().chunkLog2);
     impl_->range.emplace(std::move(opened), objectSize, objectSize);
-    impl_->cached = crypto::vhf1::SecureBytes(static_cast<std::size_t>(impl_->range->header().chunkSize()));
+    impl_->cached = vl::vaultfmt::vhf1::SecureBytes(static_cast<std::size_t>(impl_->range->header().chunkSize()));
 }
 
 PrefixReader::~PrefixReader() = default;
 
-const crypto::vhf1::OpenedHeader& PrefixReader::header() const { return impl_->range->header(); }
+const vl::vaultfmt::vhf1::OpenedHeader& PrefixReader::header() const { return impl_->range->header(); }
 
 void PrefixReader::read(const uint64_t offset, std::span<uint8_t> out) {
     auto& m = *impl_;
@@ -104,7 +104,7 @@ void PrefixReader::read(const uint64_t offset, std::span<uint8_t> out) {
             try {
                 const auto plain = m.range->read(start, end, m.window);
                 m.cached.append(plain.span());
-            } catch (const crypto::vhf1::Error& e) {
+            } catch (const vl::vaultfmt::vhf1::Error& e) {
                 throwIntegrity(e, "The sealed prefix");
             }
             m.cachedIndex = index;
@@ -126,11 +126,11 @@ uint64_t PrefixSealer::chunkLength(const uint64_t index) const {
 }
 
 uint64_t PrefixSealer::chunkOffset(const uint64_t index) const {
-    return crypto::vhf1::kHeaderSize + index * (chunkSize_ + crypto::vhf1::kTagSize);
+    return vl::vaultfmt::vhf1::kHeaderSize + index * (chunkSize_ + vl::vaultfmt::vhf1::kTagSize);
 }
 
 uint64_t PrefixSealer::sealedObjectBytes() const {
-    if (complete()) return crypto::vhf1::objectSizeFor(size_, header_->params().chunkLog2);
+    if (complete()) return vl::vaultfmt::vhf1::objectSizeFor(size_, header_->params().chunkLog2);
     return chunkOffset(sealed_ / chunkSize_);
 }
 
@@ -161,26 +161,26 @@ std::unique_ptr<PrefixSealer> PrefixSealer::begin(const Params& params) {
     if (!params.key) throw std::invalid_argument("A sealing needs the vault key");
     const auto salt = [&] {
         const auto raw = crypto::util::b64_decode(params.binding.generation);
-        if (raw.size() != crypto::vhf1::kSaltSize) throw std::invalid_argument("The generation is not a VHF1 salt");
-        crypto::vhf1::Salt s{};
+        if (raw.size() != vl::vaultfmt::vhf1::kSaltSize) throw std::invalid_argument("The generation is not a VHF1 salt");
+        vl::vaultfmt::vhf1::Salt s{};
         std::ranges::copy(raw, s.begin());
         return s;
     }();
 
-    crypto::vhf1::HeaderParams hp;
-    hp.kind = crypto::vhf1::Kind::FileContent;
+    vl::vaultfmt::vhf1::HeaderParams hp;
+    hp.kind = vl::vaultfmt::vhf1::Kind::FileContent;
     hp.keyVersion = params.binding.keyVersion;
     hp.vaultUid = params.binding.vaultUid;
     hp.objectUid = *params.binding.objectUid;
     hp.salt = salt;
-    hp.chunkLog2 = crypto::vhf1::kWriterChunkLog2;
-    const auto body = crypto::vhf1::encodeHeaderBody(hp);
-    const auto hh = crypto::vhf1::headerHash(body);
-    const auto ks = crypto::vhf1::deriveKeys(*params.key, salt, hh);
-    const auto tag = crypto::vhf1::headerTag(*ks.headerKey, body);
-    std::array<uint8_t, crypto::vhf1::kHeaderSize> header{};
+    hp.chunkLog2 = vl::vaultfmt::vhf1::kWriterChunkLog2;
+    const auto body = vl::vaultfmt::vhf1::encodeHeaderBody(hp);
+    const auto hh = vl::vaultfmt::vhf1::headerHash(body);
+    const auto ks = vl::vaultfmt::vhf1::deriveKeys(*params.key, salt, hh);
+    const auto tag = vl::vaultfmt::vhf1::headerTag(*ks.headerKey, body);
+    std::array<uint8_t, vl::vaultfmt::vhf1::kHeaderSize> header{};
     std::ranges::copy(body, header.begin());
-    std::ranges::copy(tag, header.begin() + crypto::vhf1::kHeaderBodySize);
+    std::ranges::copy(tag, header.begin() + vl::vaultfmt::vhf1::kHeaderBodySize);
 
     if (::ftruncate(params.fd, 0) != 0)
         throw std::system_error(errno, std::generic_category(), "truncating a sealing");
@@ -193,8 +193,8 @@ std::unique_ptr<PrefixSealer> PrefixSealer::begin(const Params& params) {
     s->size_ = params.plaintextSize;
     s->header_ = openHeader(header, params.binding, params.key);
     s->chunkSize_ = s->header_->chunkSize();
-    s->pending_ = crypto::vhf1::SecureBytes(static_cast<std::size_t>(s->chunkSize_));
-    s->out_.resize(static_cast<std::size_t>(s->chunkSize_ + crypto::vhf1::kTagSize));
+    s->pending_ = vl::vaultfmt::vhf1::SecureBytes(static_cast<std::size_t>(s->chunkSize_));
+    s->out_.resize(static_cast<std::size_t>(s->chunkSize_ + vl::vaultfmt::vhf1::kTagSize));
     crypto_generichash_init(&s->hash_, nullptr, 0, crypto_generichash_BYTES);
     s->hashUpdate(header);
     return s;
@@ -226,8 +226,8 @@ std::unique_ptr<PrefixSealer> PrefixSealer::resume(const Params& params, const u
             return s;
         }
         s->chunkSize_ = s->header_->chunkSize();
-        s->pending_ = crypto::vhf1::SecureBytes(static_cast<std::size_t>(s->chunkSize_));
-        s->out_.resize(static_cast<std::size_t>(s->chunkSize_ + crypto::vhf1::kTagSize));
+        s->pending_ = vl::vaultfmt::vhf1::SecureBytes(static_cast<std::size_t>(s->chunkSize_));
+        s->out_.resize(static_cast<std::size_t>(s->chunkSize_ + vl::vaultfmt::vhf1::kTagSize));
         crypto_generichash_init(&s->hash_, nullptr, 0, crypto_generichash_BYTES);
         return s;
     }
@@ -243,25 +243,25 @@ std::unique_ptr<PrefixSealer> PrefixSealer::resume(const Params& params, const u
     s->chunkSize_ = s->header_->chunkSize();
     if (durable > s->size_ || (durable != s->size_ && durable % s->chunkSize_ != 0))
         throw storage::IntegrityError("The recorded sealed prefix is not a chunk boundary");
-    s->pending_ = crypto::vhf1::SecureBytes(static_cast<std::size_t>(s->chunkSize_));
-    s->out_.resize(static_cast<std::size_t>(s->chunkSize_ + crypto::vhf1::kTagSize));
+    s->pending_ = vl::vaultfmt::vhf1::SecureBytes(static_cast<std::size_t>(s->chunkSize_));
+    s->out_.resize(static_cast<std::size_t>(s->chunkSize_ + vl::vaultfmt::vhf1::kTagSize));
     crypto_generichash_init(&s->hash_, nullptr, 0, crypto_generichash_BYTES);
 
     // Rebuild by authentication: every durable chunk opens with its own index and final flag; the hash of the object
     // so far is recomputed from the bytes read.
-    std::array<uint8_t, crypto::vhf1::kHeaderSize> header{};
+    std::array<uint8_t, vl::vaultfmt::vhf1::kHeaderSize> header{};
     (void)prefix_detail::preadSome(params.fd, header, 0);
     s->hashUpdate(header);
     std::vector<uint8_t> sealedChunk;
-    crypto::vhf1::SecureBytes scratch(static_cast<std::size_t>(s->chunkSize_));
+    vl::vaultfmt::vhf1::SecureBytes scratch(static_cast<std::size_t>(s->chunkSize_));
     const auto chunks = durable == s->size_ ? (s->size_ + s->chunkSize_ - 1) / s->chunkSize_ : durable / s->chunkSize_;
     const auto lastIndex = (s->size_ + s->chunkSize_ - 1) / s->chunkSize_ - 1;
     for (uint64_t i = 0; i < chunks; ++i) {
-        sealedChunk.resize(static_cast<std::size_t>(s->chunkLength(i) + crypto::vhf1::kTagSize));
+        sealedChunk.resize(static_cast<std::size_t>(s->chunkLength(i) + vl::vaultfmt::vhf1::kTagSize));
         if (prefix_detail::preadSome(params.fd, sealedChunk, s->chunkOffset(i)) != sealedChunk.size())
             throw storage::IntegrityError("The sealed prefix ends before chunk " + std::to_string(i));
-        if (!crypto::vhf1::openChunk(*s->header_, i, i == lastIndex, sealedChunk,
-                                     scratch.storage().first(sealedChunk.size() - crypto::vhf1::kTagSize)))
+        if (!vl::vaultfmt::vhf1::openChunk(*s->header_, i, i == lastIndex, sealedChunk,
+                                     scratch.storage().first(sealedChunk.size() - vl::vaultfmt::vhf1::kTagSize)))
             throw storage::IntegrityError("Chunk " + std::to_string(i) + " of the sealed prefix failed authentication");
         s->hashUpdate(sealedChunk);
     }
@@ -273,8 +273,8 @@ std::unique_ptr<PrefixSealer> PrefixSealer::resume(const Params& params, const u
 void PrefixSealer::sealPending() {
     const auto index = sealed_ / chunkSize_;
     const auto lastIndex = (size_ + chunkSize_ - 1) / chunkSize_ - 1;
-    const auto out = std::span<uint8_t>(out_).first(pending_.size() + crypto::vhf1::kTagSize);
-    crypto::vhf1::sealChunk(header_->contentKey(), header_->hash(), index, index == lastIndex, pending_.span(), out);
+    const auto out = std::span<uint8_t>(out_).first(pending_.size() + vl::vaultfmt::vhf1::kTagSize);
+    vl::vaultfmt::vhf1::sealChunk(header_->contentKey(), header_->hash(), index, index == lastIndex, pending_.span(), out);
     prefix_detail::pwriteAll(fd_, out, chunkOffset(index));
     hashUpdate(out);
     sealed_ += pending_.size();
@@ -295,7 +295,7 @@ PrefixSealer::Fed PrefixSealer::feed(const uint64_t offset, std::span<const uint
         if (pos < sealed_) {
             if (!reader_) reader_ = std::make_unique<PrefixReader>(fd_, binding_, key_, size_);
             const auto n = static_cast<std::size_t>(std::min<uint64_t>(overlap, sealed_ - pos));
-            crypto::vhf1::SecureBytes was(n);
+            vl::vaultfmt::vhf1::SecureBytes was(n);
             was.resize(n);
             reader_->read(pos, was.span());
             if (sodium_memcmp(was.data(), decided.data(), n) != 0) return Fed::Diverged;
@@ -328,14 +328,14 @@ std::unique_ptr<PrefixSealer> PrefixSealer::resealed(const int newFd, const uint
     Params p;
     p.fd = newFd;
     p.binding = binding_;
-    p.binding.generation = generationOf(crypto::vhf1::freshSalt());
+    p.binding.generation = generationOf(vl::vaultfmt::vhf1::freshSalt());
     if (header_) p.binding.objectUid = header_->params().objectUid;
     if (!p.binding.objectUid) p.binding.objectUid = crypto::id::newObjectUid();
     p.key = key_;
     p.plaintextSize = size_;
     auto next = begin(p);
 
-    crypto::vhf1::SecureBytes buf(static_cast<std::size_t>(std::max<uint64_t>(chunkSize_, 1)));
+    vl::vaultfmt::vhf1::SecureBytes buf(static_cast<std::size_t>(std::max<uint64_t>(chunkSize_, 1)));
     for (uint64_t pos = 0; pos < keep;) {
         const auto n = static_cast<std::size_t>(std::min<uint64_t>(buf.capacity(), keep - pos));
         buf.resize(n);

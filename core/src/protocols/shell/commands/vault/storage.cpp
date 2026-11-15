@@ -33,9 +33,9 @@ std::string when(const std::time_t t) {
 std::string probeText(const vsops::ProbeAnswer& a) {
     const auto& p = a.probe;
     std::string out = fmt::format("vault {} ({}): layout {}\n", a.vault_id, a.vault_name, a.layout);
-    out += fmt::format("  capability:        {}{}\n", vh::sync::manifest::to_string(p.capability),
+    out += fmt::format("  capability:        {}{}\n", vl::vaultfmt::manifest::to_string(p.capability),
                        a.previous != p.capability || a.previously_changed
-                           ? fmt::format(" (was {}{})", vh::sync::manifest::to_string(a.previous),
+                           ? fmt::format(" (was {}{})", vl::vaultfmt::manifest::to_string(a.previous),
                                          a.previously_changed ? ", marked changed" : "")
                            : std::string{});
     out += fmt::format("  conditional PUT:   {}\n", p.conditional_put);
@@ -50,7 +50,7 @@ std::string probeText(const vsops::ProbeAnswer& a) {
     if (!a.manifest_publishable)
         out += "  the vault's encrypted manifest can't be published on this bucket (neither conditional writes nor "
                "object versions): its sync stalls (manifest_publish_unsupported)\n";
-    else if (p.capability == vh::sync::manifest::WriteCapability::VersionLog)
+    else if (p.capability == vl::vaultfmt::manifest::WriteCapability::VersionLog)
         out += "  the vault's manifest is published as versions of its root (one listing more per publish); keep "
                "every version under .vaulthalla/ (no lifecycle rule there)\n";
     else out += "  the vault's manifest can be published on this bucket\n";

@@ -1,8 +1,8 @@
 // The version_log publish protocol (design/encryption/06-publish-without-preconditions.md §5) under interleavings and
-// faults (§8.2), DB-free, on a bucket answering conditional PUTs as Backblaze B2 does (501). Every test runs twice
-// (its name ends in the bucket): on the versioned fake bucket behind the server's storage::s3::ManifestStore
-// (HttpFake: the controller's request path, XML listings and paging), and on the in-memory versioned ObjectStore
-// (Memory: helpers/memory_store.hpp, nothing of the server), which the shared format library's own tests will use.
+// faults (§8.2), DB-free, on the versioned fake bucket behind the server's vh::storage::s3::ManifestStore (the
+// controller's request path, XML listings and paging) answering conditional PUTs as Backblaze B2 does (501).
+// vl-vaultfmt runs the same suites on its in-memory ObjectStore (tests/test_manifest_interleavings.cpp there); a test's
+// name ends in its bucket (/HttpFake here).
 //
 // ManifestVersionLogInterleavings  every interleaving of two writers and a reader; every root-PUT-level interleaving
 //                                   of three writers; seeded random schedules of three writers and a reader.
@@ -33,19 +33,18 @@
 // nothing Vaulthalla deleted was ever canonical; I9 every root names version_log. At quiescence: one head, nothing
 // stray above it, every writer's changes in it.
 
-#include "../helpers/hooked_store.hpp"
-#include "../helpers/memory_store.hpp"
+#include <vl/vaultfmt/testing/hooked_store.hpp>
 #include "../helpers/versioned_bucket.hpp"
 #include "crypto/SecretKey.hpp"
 #include "storage/s3/ManifestStore.hpp"
-#include "sync/manifest/Chain.hpp"
-#include "sync/manifest/Content.hpp"
-#include "sync/manifest/Document.hpp"
-#include "sync/manifest/Objects.hpp"
-#include "sync/manifest/Publisher.hpp"
-#include "sync/manifest/Reader.hpp"
-#include "sync/manifest/Reconcile.hpp"
-#include "sync/manifest/Store.hpp"
+#include <vl/vaultfmt/manifest/Chain.hpp>
+#include <vl/vaultfmt/manifest/Content.hpp>
+#include <vl/vaultfmt/manifest/Document.hpp>
+#include <vl/vaultfmt/manifest/Objects.hpp>
+#include <vl/vaultfmt/manifest/Publisher.hpp>
+#include <vl/vaultfmt/manifest/Reader.hpp>
+#include <vl/vaultfmt/manifest/Reconcile.hpp>
+#include <vl/vaultfmt/manifest/Store.hpp>
 
 #include <gtest/gtest.h>
 
@@ -58,24 +57,22 @@
 #include <set>
 #include <thread>
 
-namespace vh::sync::manifest::test_manifest_interleavings {
+namespace vl::vaultfmt::manifest::test_manifest_interleavings {
 
 namespace interleaving_fixture {
 
 using Bytes = std::vector<uint8_t>;
-using test_support::manifest_store::HookedStore;
-using test_support::manifest_store::MemoryBucket;
-using test_support::manifest_store::MemoryStore;
-using test_support::manifest_store::StoreOp;
-using test_support::versioned::VersionedBucket;
-using test_support::versioned::Versioning;
+using vl::vaultfmt::test_support::HookedStore;
+using vl::vaultfmt::test_support::StoreOp;
+using vh::test_support::versioned::VersionedBucket;
+using vh::test_support::versioned::Versioning;
 
 constexpr std::time_t kStart = 1793880000;
 
-crypto::SecretKeyPtr keyOf(const uint8_t seed) {
+vh::crypto::SecretKeyPtr keyOf(const uint8_t seed) {
     Bytes k(32);
     for (std::size_t i = 0; i < k.size(); ++i) k[i] = static_cast<uint8_t>(seed + i);
-    return std::make_shared<const crypto::SecretKey>(k);
+    return std::make_shared<const vh::crypto::SecretKey>(k);
 }
 
 std::string uidT(const uint8_t first, const uint8_t fill) {
@@ -152,7 +149,7 @@ enum class Gating { RootOps, RootPutsOnly, FaultyActorFull };
 
 // The bucket a run happens on, as the scheduler and the invariants need it: both implementations keep versions, answer
 // a conditional PUT with "not implemented" and use MD5 ETags.
-enum class Backend { HttpFake, Memory };
+enum class Backend { HttpFake };
 
 class Bucket {
 public:
@@ -185,7 +182,7 @@ public:
         bucket_->md5Etags = true;
     }
     std::shared_ptr<ObjectStore> store() override {
-        return std::make_shared<storage::s3::ManifestStore>(bucket_, WriteCapability::VersionLog);
+        return std::make_shared<vh::storage::s3::ManifestStore>(bucket_, WriteCapability::VersionLog);
     }
     void setNow(const std::time_t now) override { bucket_->setNow(now); }
     void advance(const std::time_t seconds) override { bucket_->advance(seconds); }
@@ -204,31 +201,8 @@ private:
     std::shared_ptr<VersionedBucket> bucket_ = std::make_shared<VersionedBucket>(Versioning::Enabled);
 };
 
-class MemoryBackedBucket final : public Bucket {
-public:
-    MemoryBackedBucket() { bucket_->conditionalPuts(MemoryBucket::ConditionalPuts::Reject); }
-    std::shared_ptr<ObjectStore> store() override {
-        return std::make_shared<MemoryStore>(bucket_, WriteCapability::VersionLog);
-    }
-    void setNow(const std::time_t now) override { bucket_->setNow(now); }
-    void advance(const std::time_t seconds) override { bucket_->advance(seconds); }
-    void listingLag(const std::time_t seconds) override { bucket_->listingLag(seconds); }
-    void orderByStart() override { bucket_->orderBy(MemoryBucket::Order::Start); }
-    void holdPut(const std::string& key) override { bucket_->holdPut(key); }
-    std::string seed(const std::string& key, const Bytes& body) override { return bucket_->seed(key, body); }
-    std::vector<Version> history(const std::string& key) const override {
-        std::vector<Version> out;
-        for (auto& v : bucket_->history(key)) out.push_back({v.version_id, v.delete_marker, std::move(v.body)});
-        return out;
-    }
-    bool holds(const std::string& key) const override { return bucket_->current(key).has_value(); }
-
-private:
-    std::shared_ptr<MemoryBucket> bucket_ = std::make_shared<MemoryBucket>();
-};
-
 std::shared_ptr<Bucket> bucketOf(const Backend backend) {
-    if (backend == Backend::Memory) return std::make_shared<MemoryBackedBucket>();
+    (void)backend;
     return std::make_shared<HttpFakeBucket>();
 }
 
@@ -262,10 +236,10 @@ struct World {
         u[0] = 0x56;
         return u;
     }();
-    std::map<uint32_t, crypto::SecretKeyPtr> keys{{1, keyOf(7)}};
+    std::map<uint32_t, vh::crypto::SecretKeyPtr> keys{{1, keyOf(7)}};
 
-    [[nodiscard]] crypto::vhf1::KeyLookup lookup() const {
-        return [k = keys](const uint32_t v) -> crypto::SecretKeyPtr {
+    [[nodiscard]] vl::vaultfmt::vhf1::KeyLookup lookup() const {
+        return [k = keys](const uint32_t v) -> vh::crypto::SecretKeyPtr {
             const auto it = k.find(v);
             return it == k.end() ? nullptr : it->second;
         };
@@ -1026,20 +1000,22 @@ void expectClean(const Explored& e) {
 
 namespace f = interleaving_fixture;
 
-// Each suite on both buckets; a test is named <suite>.<test>/HttpFake or /Memory.
+// Each suite on the HTTP-level fake (vl-vaultfmt runs the same suites on its in-memory store); a test is named
+// <suite>.<test>/HttpFake.
 class ManifestVersionLogInterleavings : public ::testing::TestWithParam<f::Backend> {};
 class ManifestVersionLogFaults : public ::testing::TestWithParam<f::Backend> {};
 class ManifestVersionLogBrokenOrder : public ::testing::TestWithParam<f::Backend> {};
 
 std::string backendName(const ::testing::TestParamInfo<f::Backend>& info) {
-    return info.param == f::Backend::Memory ? "Memory" : "HttpFake";
+    (void)info;
+    return "HttpFake";
 }
 
-INSTANTIATE_TEST_SUITE_P(, ManifestVersionLogInterleavings, ::testing::Values(f::Backend::HttpFake, f::Backend::Memory),
+INSTANTIATE_TEST_SUITE_P(, ManifestVersionLogInterleavings, ::testing::Values(f::Backend::HttpFake),
                          backendName);
-INSTANTIATE_TEST_SUITE_P(, ManifestVersionLogFaults, ::testing::Values(f::Backend::HttpFake, f::Backend::Memory),
+INSTANTIATE_TEST_SUITE_P(, ManifestVersionLogFaults, ::testing::Values(f::Backend::HttpFake),
                          backendName);
-INSTANTIATE_TEST_SUITE_P(, ManifestVersionLogBrokenOrder, ::testing::Values(f::Backend::HttpFake, f::Backend::Memory),
+INSTANTIATE_TEST_SUITE_P(, ManifestVersionLogBrokenOrder, ::testing::Values(f::Backend::HttpFake),
                          backendName);
 
 TEST_P(ManifestVersionLogInterleavings, EveryInterleavingOfTwoWritersAndAReader) {

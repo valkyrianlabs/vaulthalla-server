@@ -939,7 +939,7 @@ void stepReplicas(const Ctx& ctx) {
             }
             if (*f.node_id == self || std::ranges::find(state.writers, *f.node_id) == state.writers.end()) continue;
             db::query::sync::Manifest::setWritersChange(
-                *found, sync::manifest::WritersChange{sync::manifest::WritersChange::Kind::Remove, *f.node_id});
+                *found, vl::vaultfmt::manifest::WritersChange{vl::vaultfmt::manifest::WritersChange::Kind::Remove, *f.node_id});
             audit("cloud.replica.drop", *found, {{"node", *f.node_id}, {"reason", f.reason.value_or("")}},
                   fmt::format("vault {}: {} is no longer a replica at Vaulthalla Cloud ({}); the next publish drops it "
                               "from the manifest's writers",

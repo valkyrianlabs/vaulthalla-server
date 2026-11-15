@@ -25,8 +25,8 @@
 #include "storage/BucketCapability.hpp"
 #include "storage/s3/Controller.hpp"
 #include "storage/s3/ManifestStore.hpp"
-#include "sync/manifest/Objects.hpp"
-#include "sync/manifest/Store.hpp"
+#include <vl/vaultfmt/manifest/Objects.hpp>
+#include <vl/vaultfmt/manifest/Store.hpp>
 #include "vault/APIKeyManager.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/KeyAttestation.hpp"
@@ -46,7 +46,7 @@ namespace vh::ops::vault_recover {
 
 namespace vault_recover_detail {
 
-namespace mf = sync::manifest;
+namespace mf = vl::vaultfmt::manifest;
 namespace rec = vault::recover;
 using vault_keys::Channel;
 
@@ -74,7 +74,7 @@ std::shared_ptr<mf::ObjectStore> storeFor(const unsigned int apiKeyId, const std
     // The opaque_v1 request rules (spec 01 §4.3): a restore names nothing but o/, .vaulthalla/ and no metadata.
     controller->setOpaqueLayout(true);
     // No probe here (a dry run writes nothing): a root published on a bucket without conditional writes says so
-    // (`publish: version_log`), and manifest::load then reads the canonical head by rule C1 (spec 06 §5.3).
+    // (`publish: version_log`), and vl::vaultfmt::manifest::load then reads the canonical head by rule C1 (spec 06 §5.3).
     return std::make_shared<storage::s3::ManifestStore>(std::move(controller));
 }
 
@@ -140,9 +140,9 @@ void requireJoinable(const rec::Plan& plan, const rec::Material& material, const
     const auto writers = plan.writers.value_or(std::vector<std::string>{});
     if (std::ranges::find(writers, self) != writers.end())
         throw Refused("join_already_writer", "this server is already one of the vault's writers");
-    if (writers.size() >= sync::manifest::kMaxWriters)
+    if (writers.size() >= vl::vaultfmt::manifest::kMaxWriters)
         throw Refused("replica_limit", fmt::format("the vault has {} writers already; a replicated vault has at most {}",
-                                                   writers.size(), sync::manifest::kMaxWriters));
+                                                   writers.size(), vl::vaultfmt::manifest::kMaxWriters));
     if (const auto blocking = plan.blocking(); !blocking.empty())
         throw Refused("join_key_unproven",
                       fmt::format("key version(s) {} are not proven by an attestation key your material pins; a join "
@@ -406,7 +406,7 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
         // The sids of the loaded root (garbage collection keeps them while it is one of the last three).
         if (const auto root = store->get(std::string(mf::kRootKey), plan.root_version_id); root && plan.root_sha256)
             if (mf::sha256Hex(root->bytes) == *plan.root_sha256) {
-                const crypto::vhf1::KeyLookup lookup = [&](const uint32_t v) -> crypto::SecretKeyPtr {
+                const vl::vaultfmt::vhf1::KeyLookup lookup = [&](const uint32_t v) -> crypto::SecretKeyPtr {
                     const auto* vp = plan.version(v);
                     return vp ? vp->key : nullptr;
                 };

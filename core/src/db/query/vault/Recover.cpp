@@ -7,7 +7,7 @@
 #include "db/query/fs/Directory.hpp"
 #include "db/query/fs/Entry.hpp"
 #include "fs/model/Entry.hpp"
-#include "sync/manifest/Objects.hpp"
+#include <vl/vaultfmt/manifest/Objects.hpp>
 #include "vault/Content.hpp"
 #include "vault/model/Vault.hpp"
 
@@ -24,12 +24,12 @@ namespace vh::db::query::vault {
 
 namespace recover_query_detail {
 
-namespace mf = vh::sync::manifest;
+namespace mf = vl::vaultfmt::manifest;
 using encoding::to_hex_bytea;
 
 std::optional<std::string> generationB64(const std::optional<std::string>& hex) {
-    if (!hex || hex->size() != 2 * vh::crypto::vhf1::kSaltSize) return std::nullopt;
-    std::vector<uint8_t> bytes(vh::crypto::vhf1::kSaltSize);
+    if (!hex || hex->size() != 2 * vl::vaultfmt::vhf1::kSaltSize) return std::nullopt;
+    std::vector<uint8_t> bytes(vl::vaultfmt::vhf1::kSaltSize);
     std::size_t len = 0;
     if (sodium_hex2bin(bytes.data(), bytes.size(), hex->data(), hex->size(), nullptr, &len, nullptr) != 0 ||
         len != bytes.size())

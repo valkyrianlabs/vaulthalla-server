@@ -37,7 +37,7 @@
 #include "crypto/id/Generator.hpp"
 #include "sync/Controller.hpp"
 #include "sync/events/Subscriptions.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "db/query/sync/ObjectIdentity.hpp"
 #include "db/encoding/u8.hpp"
 
@@ -438,11 +438,11 @@ void Cloud::initScopedBins() {
         std::vector<std::string> foreign;
         for (const auto& key : scope->keys) {
             const auto text = vh::db::encoding::to_utf8_string(key);
-            const auto uid = vh::storage::object_keys::uidOfContentKey(text);
+            const auto uid = vl::vaultfmt::keys::uidOfContentKey(text);
             if (!uid) {
                 auto bare = std::string_view(text);
                 while (bare.starts_with('/')) bare.remove_prefix(1);
-                if (vh::storage::object_keys::classify(bare) == vh::storage::object_keys::KeyClass::Foreign)
+                if (vl::vaultfmt::keys::classify(bare) == vl::vaultfmt::keys::KeyClass::Foreign)
                     foreign.emplace_back(bare);
                 continue;
             }
@@ -479,7 +479,7 @@ void Cloud::initScopedBins() {
 }
 
 void Cloud::keyByObjectUid() {
-    namespace keys = vh::storage::object_keys;
+    namespace keys = vl::vaultfmt::keys;
     std::unordered_map<std::u8string, std::shared_ptr<File>> locals;
     for (const auto& L : localFiles) {
         if (!L || !L->object_uid) {

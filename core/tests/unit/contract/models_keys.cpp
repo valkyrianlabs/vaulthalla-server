@@ -384,9 +384,9 @@ void checkVaultKeyModels(Checker& c) {
     // Spec 06 §7: the bucket capability probe.
     namespace vs = ops::vault_storage;
     vs::ProbeAnswer probed{.vault_id = 3, .vault_name = "archive", .layout = "opaque_v1",
-                           .previous = sync::manifest::WriteCapability::Unknown, .previously_changed = true, .probe = {},
+                           .previous = vl::vaultfmt::manifest::WriteCapability::Unknown, .previously_changed = true, .probe = {},
                            .manifest_publishable = false};
-    probed.probe.capability = sync::manifest::WriteCapability::VersionLog;
+    probed.probe.capability = vl::vaultfmt::manifest::WriteCapability::VersionLog;
     probed.probe.conditional_put = "rejected";
     probed.probe.versioning = true;
     probed.probe.get_if_match = true;

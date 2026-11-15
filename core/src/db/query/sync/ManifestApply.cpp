@@ -7,7 +7,7 @@
 #include "crypto/util/encrypt.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/Directory.hpp"
-#include "sync/manifest/Objects.hpp"
+#include <vl/vaultfmt/manifest/Objects.hpp>
 #include "vault/Content.hpp"
 
 #include <nlohmann/json.hpp>
@@ -23,7 +23,7 @@ namespace manifest_apply_detail {
 // The transaction writes fs_entry times itself (migration 149): the trigger keeps them, equal to the old one too.
 void keepMtimes(pqxx::work& txn) { txn.exec("SELECT set_config('vh.keep_mtime', 'on', true)"); }
 
-namespace mf = vh::sync::manifest;
+namespace mf = vl::vaultfmt::manifest;
 
 std::string uuidOf(const std::string& uid) { return vh::crypto::id::toUuid(mf::parseUid(uid, "bad_segment", "entry uid")); }
 
@@ -111,7 +111,7 @@ std::optional<ApplyRow> ManifestApply::row(pqxx::work& txn, const uint32_t vault
 }
 
 std::optional<unsigned int> ManifestApply::createEntry(pqxx::work& txn, const uint32_t vaultId, const unsigned int ownerId,
-                                                       const vh::sync::manifest::Entry& e, const unsigned int parentId,
+                                                       const vl::vaultfmt::manifest::Entry& e, const unsigned int parentId,
                                                        const std::string& path, const std::optional<uint64_t> inode) {
     using namespace manifest_apply_detail;
     if (const auto r = row(txn, vaultId, e.uid); r && !r->trashed) return std::nullopt;   // the uid is live already
@@ -155,7 +155,7 @@ std::optional<unsigned int> ManifestApply::createEntry(pqxx::work& txn, const ui
 }
 
 void ManifestApply::createTrashed(pqxx::work& txn, const uint32_t vaultId, const unsigned int ownerId,
-                                  const vh::sync::manifest::Entry& e, const std::string& path) {
+                                  const vl::vaultfmt::manifest::Entry& e, const std::string& path) {
     using namespace manifest_apply_detail;
     txn.exec("INSERT INTO files_trashed (vault_id, path, backing_path, base32_alias, size_bytes, trashed_at, trashed_by, "
              "  object_uid) VALUES ($1, $2, '', $3, $4, COALESCE(NULLIF($5, '')::timestamptz, NOW()), $6, $7)",
@@ -163,7 +163,7 @@ void ManifestApply::createTrashed(pqxx::work& txn, const uint32_t vaultId, const
                           e.trashed ? std::optional(e.trashed->at) : std::nullopt, ownerId, uuidOf(e.uid)});
 }
 
-void ManifestApply::upsertIndex(pqxx::work& txn, const uint32_t vaultId, const vh::sync::manifest::Entry& e) {
+void ManifestApply::upsertIndex(pqxx::work& txn, const uint32_t vaultId, const vl::vaultfmt::manifest::Entry& e) {
     using namespace manifest_apply_detail;
     if (!e.object) return;
     const auto gen = b64OfHex(e.generation);
@@ -186,7 +186,7 @@ void ManifestApply::deleteIndex(pqxx::work& txn, const uint32_t vaultId, const s
     txn.exec("DELETE FROM remote_object_index WHERE vault_id = $1 AND object_key = $2", pqxx::params{vaultId, objectKey(uid)});
 }
 
-bool ManifestApply::replaceContent(pqxx::work& txn, const unsigned int fileId, const vh::sync::manifest::Entry& e,
+bool ManifestApply::replaceContent(pqxx::work& txn, const unsigned int fileId, const vl::vaultfmt::manifest::Entry& e,
                                    const std::optional<std::string>& expectedHex) {
     const auto gen = b64OfHex(e.generation);
     const auto before = txn.exec("SELECT f.size_bytes, f.encryption_iv, e.parent_id FROM files f "
@@ -230,8 +230,8 @@ bool ManifestApply::moveRow(pqxx::work& txn, const unsigned int id, const unsign
     return true;
 }
 
-bool ManifestApply::setAttributes(pqxx::work& txn, const unsigned int entryId, const vh::sync::manifest::Entry& ours,
-                                  const vh::sync::manifest::Entry& target) {
+bool ManifestApply::setAttributes(pqxx::work& txn, const unsigned int entryId, const vl::vaultfmt::manifest::Entry& ours,
+                                  const vl::vaultfmt::manifest::Entry& target) {
     const auto opt = [](const auto& o) {
         return o ? std::optional<int64_t>(static_cast<int64_t>(*o)) : std::nullopt;
     };
@@ -248,13 +248,13 @@ bool ManifestApply::setAttributes(pqxx::work& txn, const unsigned int entryId, c
                      ours.owner ? std::optional(ours.owner->uid) : std::nullopt,
                      ours.owner ? std::optional(ours.owner->gid) : std::nullopt, target.mtime});
     if (updated.empty()) return false;
-    if (target.kind == vh::sync::manifest::EntryKind::Symlink && target.target != ours.target)
+    if (target.kind == vl::vaultfmt::manifest::EntryKind::Symlink && target.target != ours.target)
         txn.exec("UPDATE symlinks SET target = $2 WHERE fs_entry_id = $1 AND target IS NOT DISTINCT FROM $3",
                  pqxx::params{entryId, target.target.value_or(""), ours.target});
     return true;
 }
 
-void ManifestApply::addHistory(pqxx::work& txn, const uint32_t vaultId, const vh::sync::manifest::Entry& e) {
+void ManifestApply::addHistory(pqxx::work& txn, const uint32_t vaultId, const vl::vaultfmt::manifest::Entry& e) {
     using namespace manifest_apply_detail;
     for (std::size_t i = 0; i < e.versions.size(); ++i) {
         const auto& v = e.versions[i];
@@ -279,8 +279,8 @@ void ManifestApply::addHistory(pqxx::work& txn, const uint32_t vaultId, const vh
 }
 
 void ManifestApply::createSnapshot(pqxx::work& txn, const uint32_t vaultId, const unsigned int ownerId,
-                                   const vh::sync::manifest::SnapshotRecord& s,
-                                   const vh::sync::manifest::Content& result) {
+                                   const vl::vaultfmt::manifest::SnapshotRecord& s,
+                                   const vl::vaultfmt::manifest::Content& result) {
     using namespace manifest_apply_detail;
     (void)ownerId;
     const auto sid = txn.exec("INSERT INTO recovery_snapshot (vault_id, name, root_path, root_type, state, file_count, "
@@ -334,8 +334,8 @@ std::optional<int64_t> ManifestApply::snapshotId(const uint32_t vaultId, const s
 }
 
 std::vector<std::string> ManifestApply::setVault(pqxx::work& txn, const uint32_t vaultId,
-                                                 const vh::sync::manifest::VaultInfo& ours,
-                                                 const vh::sync::manifest::VaultInfo& target) {
+                                                 const vl::vaultfmt::manifest::VaultInfo& ours,
+                                                 const vl::vaultfmt::manifest::VaultInfo& target) {
     std::vector<std::string> notes;
     if (target.name != ours.name) {
         const auto taken = txn.exec("SELECT 1 FROM vault WHERE name = $1 AND id <> $2", pqxx::params{target.name, vaultId});

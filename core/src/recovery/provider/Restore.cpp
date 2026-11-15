@@ -25,8 +25,8 @@
 #include "recovery/provider/Versions.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
-#include "storage/ObjectKeys.hpp"
-#include "crypto/vhf1/Format.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
+#include <vl/vaultfmt/vhf1/Format.hpp>
 #include "storage/PlaintextReader.hpp"
 #include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "storage/s3/Controller.hpp"
@@ -885,7 +885,7 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
             auto gen = std::make_shared<fs::model::File>();
             gen->vault_id = vaultId;
             gen->path = destPath;
-            if (opaque) gen->object_uid = storage::object_keys::uidOfContentKey(destKey);   // the same file's object
+            if (opaque) gen->object_uid = vl::vaultfmt::keys::uidOfContentKey(destKey);   // the same file's object
             gen->name = destPath.filename().string();
             gen->size_bytes = meta.plaintext_size;
             gen->encryption_iv = meta.encrypted ? meta.iv : std::string{};
@@ -959,7 +959,7 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
             //     re-sealed under the current key into the destination's uid (another file, or the same one under a
             //     new key). The destination exists first, so its uid is known before anything is sealed for it.
             out.method = "provider_transfer";
-            const auto srcUid = storage::object_keys::uidOfContentKey(srcKey);
+            const auto srcUid = vl::vaultfmt::keys::uidOfContentKey(srcKey);
             if (!srcUid) return result("unavailable", "the version is no file's object");
             const bool creating = !dest;
             if (creating) d::ensureParentDirectories(engine, destPath, user);
@@ -986,12 +986,12 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
             vh::vault::content::Binding from{.vaultUid = engine->encryptionManager->vaultUid(), .generation = meta.iv,
                                              .keyVersion = meta.key_version, .objectUid = srcUid};
             if (from.generation.empty() || from.keyVersion == 0) {
-                std::vector<uint8_t> header(std::min<uint64_t>(meta.object_size, crypto::vhf1::kHeaderSize));
+                std::vector<uint8_t> header(std::min<uint64_t>(meta.object_size, vl::vaultfmt::vhf1::kHeaderSize));
                 std::ifstream in(fetched.path(), std::ios::binary);
                 in.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size()));
                 try {
-                    const auto opened = crypto::vhf1::openHeader(
-                        header, {.kind = crypto::vhf1::Kind::FileContent, .vaultUid = from.vaultUid,
+                    const auto opened = vl::vaultfmt::vhf1::openHeader(
+                        header, {.kind = vl::vaultfmt::vhf1::Kind::FileContent, .vaultUid = from.vaultUid,
                                  .objectUid = srcUid, .generation = std::nullopt},
                         [&](const uint32_t v) -> crypto::SecretKeyPtr {
                             try {
@@ -1002,7 +1002,7 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
                         });
                     from.generation = vh::vault::content::generationOf(opened.params().salt);
                     from.keyVersion = opened.params().keyVersion;
-                } catch (const crypto::vhf1::Error& e) {
+                } catch (const vl::vaultfmt::vhf1::Error& e) {
                     vh::vault::content::throwIntegrity(e, "the version's header");
                 }
             }

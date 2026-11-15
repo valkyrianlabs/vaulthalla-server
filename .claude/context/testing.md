@@ -215,8 +215,8 @@ Web: `web/tests/e2e/recovery.spec.ts` (scripted ws answers; see `web-client.md`)
 The verifier's suites (W3C L3 vectors, per-check negatives, strict parsers, recorded Chrome ceremonies, fuzz-corpus
 replay) and its libFuzzer targets moved with it to `valkyrianlabs/vl-webauthn`, whose CI runs them and fuzzes every
 change (decision D5). Here the daemon's passkey tests (sign-in, step-up, device approvals) sign with the test-only
-authenticator in `tests/unit/webauthn/Fixtures.hpp`. CI still builds the remaining libFuzzer target (`-Dfuzz=true`,
-VHF1) silently in the tooling job.
+authenticator in `tests/unit/webauthn/Fixtures.hpp`. The VHF1 libFuzzer target moved to vl-vaultfmt (#443), so the
+server builds none.
 
 ## Device approval suites (#361)
 
@@ -469,34 +469,30 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   `vh_live_bucket` refuses every name but the fixed ones. Real R2 dogfooding otherwise: only in a bucket you create
   and delete yourself.
 
-- VHF1 (#365): `Vhf1*` unit suites read `design/encryption/vectors/vectors.json` at test time (no DB, run in CI);
-  `tools/contracts/test_vhf1_vectors_contract.py` runs `vh_crypto_vectors.py --check` (needs python3-cryptography,
-  in the CI image) and fails when a VHF1 section or error code of the vectors isn't consumed by the C++ suite. The
-  libFuzzer target is dev-box only (clang 19 there; Apple clang has no libFuzzer):
-  `CC=clang-19 CXX=clang++-19 meson setup build-fuzz -Dfuzz=true -Dbuild_unit_tests=false -Dpreview_cad=disabled
-  -Dpreview_media=disabled -Dmanpage=false && meson compile -C build-fuzz -j 6 vh_fuzz_vhf1`, then
-  `build-fuzz/core/tests/fuzz/vh_fuzz_vhf1 -max_total_time=600 -max_len=16384 <corpus>` from a `mktemp -d` directory (seed it
-  with the vectors' objects, mode byte 0 first). Its iteration (`core/tests/fuzz/vhf1_fuzz_body.hpp`) also runs as
-  `Vhf1Fuzz` in the unit tests. Keep `build-fuzz` out of rsync `--delete` mirrors.
-- Manifest v2 (#368): `ManifestVectors`, `ManifestDocument`, `ManifestPartition`, `ManifestPublish*`, `ManifestChain*`,
-  `ManifestContent*`, `ManifestReplay*` (`test_manifest.cpp`, DB-free, CI) run the protocol on the versioned fake bucket
-  through the production `storage::s3::ManifestStore`; `ManifestVectors` reads every `manifest` vector (the contract above checks it, and
-  that every chain error/warning is one `sync::manifest` knows). `ManifestDbTest.*` (`test_manifest_db.cpp`,
+- VHF1 (#365) and the manifest's format suites live in vl-vaultfmt with the code (#443): its `Vhf1*`, `ManifestVectors`,
+  `ManifestDocument`, `ManifestPartition`, `ManifestReconcile*`, `ObjectKeys`, `VaultfmtCApi` suites and the
+  interleavings on its in-memory store (`<test>/Memory`) read its copy of the vectors; its `tests/vectors_contract.py`
+  holds them to every section and error code, and its CI builds and runs the `fuzz_vhf1` libFuzzer target. Here,
+  `tools/contracts/test_vhf1_vectors_contract.py` runs `vh_crypto_vectors.py --check` (needs python3-cryptography, in
+  the CI image) and `VaultfmtVectors` (`test_vaultfmt_vectors.cpp`) requires the library's copy identical to
+  `design/encryption/vectors/` and opens vectors through the linked library, as `KeykitVectors` does for vl-keykit.
+- Manifest v2 (#368): `ManifestPublish*`, `ManifestChain*`, `ManifestContent*`, `ManifestReplay*`, `ManifestStore*`,
+  `ManifestBaseCopy` (`test_manifest.cpp`, DB-free, CI) run the library's protocol on the versioned fake bucket
+  through the production `storage::s3::ManifestStore`. `ManifestDbTest.*` (`test_manifest_db.cpp`,
   db-only) compares DB → collect → publish → load → a scratch schema with an independent SQL projection of the live
   tables, and covers `remote_manifest_state`, the refused-root alert and the opaque_v1 `CloudEngine` path.
-- Format library candidates (#443): `tools/contracts/test_format_library_contract.py` (`verify.sh packaging`) fails
-  when `crypto/vhf1`, `sync/manifest`, `storage/ObjectKeys`, the fuzz target or the store test helpers include
-  anything but each other, vl-keykit, OpenSSL, nlohmann and the standard library. `tests/helpers/memory_store.hpp`
-  is an in-memory versioned bucket with the manifest `ObjectStore` over it (no HTTP, nothing of the server);
-  `ManifestVersionLogInterleavings`, `ManifestVersionLogFaults` and `ManifestVersionLogBrokenOrder`
-  (`test_manifest_interleavings.cpp`) are parameterised over the bucket and run each test as `<test>/HttpFake` (the
-  versioned fake behind `storage::s3::ManifestStore`) and `<test>/Memory`.
+- The format library (#443): `tools/contracts/test_format_library_contract.py` (`verify.sh packaging`) fails when the
+  wrap or its tarball drift, an in-tree copy of the moved code returns, or any server file uses an old include path or
+  namespace (`crypto/vhf1`, `sync/manifest`, `storage/ObjectKeys`, `object_keys::`). The store doubles are the
+  library's `<vl/vaultfmt/testing/{memory_store,hooked_store}.hpp>`; `ManifestVersionLogInterleavings`,
+  `ManifestVersionLogFaults` and `ManifestVersionLogBrokenOrder` (`test_manifest_interleavings.cpp`) run here as
+  `<test>/HttpFake` (the versioned fake behind `storage::s3::ManifestStore`) and in vl-vaultfmt as `<test>/Memory`.
 - version_log publish (spec 06 §5, §8.1-8.2): `ManifestPublishVersionLog*` / `ManifestChainVersionLog*`
   (`test_manifest.cpp`, DB-free) on a Reject501 fake (plain PUTs, one LIST more than conditional, loser deletes and
   merges, repair, GC of every version, janitor, lost reply, 5xx before commit, failed delete, writers and mode,
   listing lag, settle-window order violation, rollback/fork/gap, a lifecycle-expired head). The fake's knobs
   `listingLag(s)`, `orderBy(Start)` + `holdPut(key)` (per thread), `expireNoncurrent(prefix, days)` break A3, A4, A6.
-  `tests/helpers/hooked_store.hpp` (`HookedStore`) wraps any `ObjectStore` with before/after hooks: a version landed
+  `<vl/vaultfmt/testing/hooked_store.hpp>` (`HookedStore`) wraps any `ObjectStore` with before/after hooks: a version landed
   mid-publish, the scheduler's parking. `ManifestVersionLog*` (`test_manifest_interleavings.cpp`, DB-free, ~35 s):
   actors on threads parked at every root PUT, ListObjectVersions and DELETE (other requests ride in the slot; the
   file header argues why that bound is sound), exhaustive DFS for 2 writers + reader (800 runs) and root-PUT-level 3

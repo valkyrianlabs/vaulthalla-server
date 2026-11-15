@@ -4,7 +4,7 @@
 
 #include "audit/Trail.hpp"
 #include "crypto/SecretKey.hpp"
-#include "crypto/vhf1/Format.hpp"
+#include <vl/vaultfmt/vhf1/Format.hpp>
 #include "db/query/recovery/Generation.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "db/query/fs/File.hpp"
@@ -20,15 +20,15 @@
 #include "recovery/provider/Versions.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "storage/PlaintextReader.hpp"
 #include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "storage/s3/Controller.hpp"
 #include "storage/s3/pricing/PriceEstimate.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "sync/Controller.hpp"
-#include "sync/manifest/Content.hpp"
-#include "sync/manifest/Document.hpp"
+#include <vl/vaultfmt/manifest/Content.hpp>
+#include <vl/vaultfmt/manifest/Document.hpp>
 #include "sync/model/Action.hpp"
 #include "sync/model/Baseline.hpp"
 #include "vault/Content.hpp"
@@ -178,7 +178,7 @@ namespace layout_detail {
 
 using Q = db::query::vault::LayoutMigration;
 using FileSP = std::shared_ptr<fs::model::File>;
-namespace keys = storage::object_keys;
+namespace keys = vl::vaultfmt::keys;
 namespace content = vault::content;
 
 // A failure of the run that leaves the vault on path_v0 (the row goes to failed with this text).
@@ -1347,7 +1347,7 @@ void requirePreconditions(const storage::CloudEngine& engine) {
                                  "); add a recovery recipient or export the key first");
     // Spec 01 §6.1 step 5: the migration publishes the encrypted manifest, which needs conditional writes (spec 03
     // §3.4) or object versions (spec 06 §5) to arbitrate its root. A bucket never probed is probed here.
-    if (const auto capability = engine.writeCapability(); capability == sync::manifest::WriteCapability::Insufficient)
+    if (const auto capability = engine.writeCapability(); capability == vl::vaultfmt::manifest::WriteCapability::Insufficient)
         throw std::runtime_error("the bucket neither honours conditional writes nor keeps object versions (or not "
                                  "If-Match on GET): the opaque_v1 manifest can't be published on it");
 }
@@ -1546,7 +1546,7 @@ RunDeps runtimeRunDeps() {
 
 void verifyManifestAgainstDatabase(const storage::CloudEngine& engine) {
     const auto loaded = engine.loadManifestFromBucket();
-    std::map<std::string, const sync::manifest::Entry*> byUid;
+    std::map<std::string, const vl::vaultfmt::manifest::Entry*> byUid;
     for (const auto& e : loaded.entries) byUid[e.uid] = &e;
     for (const auto& f : layout_detail::Q::liveFiles(engine.vault->id)) {
         if (!f->object_uid) continue;
@@ -1555,7 +1555,7 @@ void verifyManifestAgainstDatabase(const storage::CloudEngine& engine) {
             throw std::runtime_error(fmt::format("the bucket's manifest does not name file {}", f->id));
         // The object the bucket holds for it (the remote index's row of o/<uid>, Vaulthalla's own upload).
         const auto indexed = db::query::sync::RemoteObjectIndex::getFile(engine.vault->id,
-                                                                         storage::object_keys::contentKey(*f->object_uid));
+                                                                         vl::vaultfmt::keys::contentKey(*f->object_uid));
         if (!indexed || indexed->encryption_iv.empty()) continue;
         const auto& entry = *it->second;
         std::string hex;

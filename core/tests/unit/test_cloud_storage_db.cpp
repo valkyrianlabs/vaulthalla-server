@@ -469,11 +469,11 @@ protected:
             return !probeFails_;
         });
         // A managed vault's envelopes go to its bucket (the fake), through the same ManifestStore as any S3 vault's.
-        vault::envelopes::setStoreFactoryForTesting([](const uint32_t vaultId) -> std::shared_ptr<sync::manifest::ObjectStore> {
+        vault::envelopes::setStoreFactoryForTesting([](const uint32_t vaultId) -> std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> {
             const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(db::query::vault::Vault::getVault(vaultId));
             if (!s3) throw std::runtime_error("not an S3 vault");
             return std::make_shared<storage::s3::ManifestStore>(buckets.at(s3->bucket),
-                                                                sync::manifest::WriteCapability::Conditional);
+                                                                vl::vaultfmt::manifest::WriteCapability::Conditional);
         });
         reset();
     }

@@ -7,7 +7,7 @@
 #include "crypto/id/ObjectUid.hpp"
 #include "storage/CloudEngine.hpp"
 
-#include "crypto/vhf1/Format.hpp"
+#include <vl/vaultfmt/vhf1/Format.hpp>
 #include "db/query/fs/File.hpp"
 #include "db/query/sync/ObjectIdentity.hpp"
 #include "fs/Filesystem.hpp"
@@ -18,7 +18,7 @@
 #include "identities/Manager.hpp"
 #include "log/Registry.hpp"
 #include "runtime/Deps.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/Controller.hpp"
 #include "vault/Content.hpp"
@@ -35,7 +35,7 @@ namespace vh::storage {
 
 namespace cloud_opaque_detail {
 
-crypto::vhf1::KeyLookup keyLookupOf(const std::shared_ptr<vault::EncryptionManager>& em) {
+vl::vaultfmt::vhf1::KeyLookup keyLookupOf(const std::shared_ptr<vault::EncryptionManager>& em) {
     return [em](const uint32_t version) -> crypto::SecretKeyPtr {
         try {
             return em->keySnapshot(version);
@@ -66,14 +66,14 @@ std::string CloudEngine::objectKeyOf(const vh::fs::model::File& f) const {
     if (!f.object_uid)
         throw std::runtime_error(fmt::format("[CloudStorageEngine] file {} has no object uid: it has no object in an "
                                              "opaque_v1 bucket", f.id));
-    return object_keys::contentKey(*f.object_uid);
+    return vl::vaultfmt::keys::contentKey(*f.object_uid);
 }
 
 std::string CloudEngine::objectKeyOf(const vh::fs::model::file::Trashed& f) const {
     if (!opaqueLayout()) return vh::fs::model::stripLeadingSlash(vh::fs::model::makeAbsolute(f.path)).string();
     if (!f.object_uid)
         throw std::runtime_error(fmt::format("[CloudStorageEngine] trashed file {} has no object uid", f.id));
-    return object_keys::contentKey(*f.object_uid);
+    return vl::vaultfmt::keys::contentKey(*f.object_uid);
 }
 
 std::string CloudEngine::objectKeyForPath(const std::filesystem::path& rel_path) const {
@@ -82,7 +82,7 @@ std::string CloudEngine::objectKeyForPath(const std::filesystem::path& rel_path)
     if (!uid)
         throw std::runtime_error(fmt::format("[CloudStorageEngine] vault {}: no file (entry) has an object at this path",
                                              vault->id));
-    return object_keys::contentKey(*uid);
+    return vl::vaultfmt::keys::contentKey(*uid);
 }
 
 CloudEngine::OpaqueListing CloudEngine::listOpaqueBucket() const {
@@ -92,15 +92,15 @@ CloudEngine::OpaqueListing CloudEngine::listOpaqueBucket() const {
     // foreign objects are told apart here. .vaulthalla/ objects are the manifest's (filesFromS3XML drops them).
     for (auto& f : vh::fs::model::filesFromS3XML(s3Provider_->listObjects({}))) {
         const auto key = vh::fs::model::stripLeadingSlash(f->path).string();
-        switch (object_keys::classify(key)) {
-        case object_keys::KeyClass::Content:
-            f->object_uid = object_keys::uidOfContentKey(key);
+        switch (vl::vaultfmt::keys::classify(key)) {
+        case vl::vaultfmt::keys::KeyClass::Content:
+            f->object_uid = vl::vaultfmt::keys::uidOfContentKey(key);
             f->remote_encrypted = true;
             out.objects.push_back(std::move(f));
             break;
-        case object_keys::KeyClass::Metadata:
+        case vl::vaultfmt::keys::KeyClass::Metadata:
             break;
-        case object_keys::KeyClass::Foreign:
+        case vl::vaultfmt::keys::KeyClass::Foreign:
             out.foreign.push_back(key);
             break;
         }
@@ -118,14 +118,14 @@ std::vector<uint8_t> CloudEngine::openOpaqueObject(const std::vector<uint8_t>& s
         if (binding.generation.empty() || binding.keyVersion == 0) {
             // No generation recorded for this object (a row indexed from a listing or an event): the header names it,
             // and must name this vault and this file to be read at all.
-            const auto opened = crypto::vhf1::openHeader(
-                sealed, {.kind = crypto::vhf1::Kind::FileContent, .vaultUid = binding.vaultUid,
+            const auto opened = vl::vaultfmt::vhf1::openHeader(
+                sealed, {.kind = vl::vaultfmt::vhf1::Kind::FileContent, .vaultUid = binding.vaultUid,
                          .objectUid = f->object_uid, .generation = std::nullopt},
                 cloud_opaque_detail::keyLookupOf(encryptionManager));
             binding.generation = vault::content::generationOf(opened.params().salt);
             binding.keyVersion = opened.params().keyVersion;
         }
-    } catch (const crypto::vhf1::Error& e) {
+    } catch (const vl::vaultfmt::vhf1::Error& e) {
         vault::content::throwIntegrity(e, "the object's header");
     }
     const auto key = encryptionManager->keySnapshot(binding.keyVersion);
@@ -137,18 +137,18 @@ std::pair<std::string, unsigned int> CloudEngine::opaqueObjectGeneration(const c
     if (!encryptionManager) throw std::runtime_error("Vault has no encryption key loaded");
     std::vector<uint8_t> header;
     s3::GetObjectOptions options;
-    options.range = std::make_pair(uint64_t{0}, uint64_t{crypto::vhf1::kHeaderSize - 1});
-    options.max_body_bytes = crypto::vhf1::kHeaderSize;
-    (void)s3Provider_->streamObject(object_keys::contentKey(uid), options, [&](const std::span<const uint8_t> bytes) {
+    options.range = std::make_pair(uint64_t{0}, uint64_t{vl::vaultfmt::vhf1::kHeaderSize - 1});
+    options.max_body_bytes = vl::vaultfmt::vhf1::kHeaderSize;
+    (void)s3Provider_->streamObject(vl::vaultfmt::keys::contentKey(uid), options, [&](const std::span<const uint8_t> bytes) {
         header.insert(header.end(), bytes.begin(), bytes.end());
     });
     try {
-        const auto opened = crypto::vhf1::openHeader(
-            header, {.kind = crypto::vhf1::Kind::FileContent, .vaultUid = encryptionManager->vaultUid(),
+        const auto opened = vl::vaultfmt::vhf1::openHeader(
+            header, {.kind = vl::vaultfmt::vhf1::Kind::FileContent, .vaultUid = encryptionManager->vaultUid(),
                      .objectUid = uid, .generation = std::nullopt},
             cloud_opaque_detail::keyLookupOf(encryptionManager));
         return {vault::content::generationOf(opened.params().salt), opened.params().keyVersion};
-    } catch (const crypto::vhf1::Error& e) {
+    } catch (const vl::vaultfmt::vhf1::Error& e) {
         vault::content::throwIntegrity(e, "the object's header");
     }
 }
@@ -156,9 +156,9 @@ std::pair<std::string, unsigned int> CloudEngine::opaqueObjectGeneration(const c
 void CloudEngine::requireOpaqueHeader(const std::span<const uint8_t> sealed, const vh::fs::model::File& f) const {
     if (!encryptionManager) throw std::runtime_error("Vault has no encryption key loaded");
     if (!f.object_uid) throw IntegrityError("an opaque_v1 object needs its file's uid");
-    if (sealed.size() < crypto::vhf1::kHeaderSize)
+    if (sealed.size() < vl::vaultfmt::vhf1::kHeaderSize)
         throw IntegrityError("the sealed content is shorter than a VHF1 header; it is not uploaded");
-    (void)vault::content::openHeader(sealed.first(crypto::vhf1::kHeaderSize),
+    (void)vault::content::openHeader(sealed.first(vl::vaultfmt::vhf1::kHeaderSize),
                                      {.vaultUid = encryptionManager->vaultUid(), .generation = f.encryption_iv,
                                       .keyVersion = f.encrypted_with_key_version, .objectUid = f.object_uid},
                                      encryptionManager->keySnapshot(f.encrypted_with_key_version));
@@ -166,9 +166,9 @@ void CloudEngine::requireOpaqueHeader(const std::span<const uint8_t> sealed, con
 
 std::shared_ptr<vh::fs::model::File> CloudEngine::importForeignObject(const std::string& key) {
     if (!opaqueLayout()) throw std::logic_error("importForeignObject is for opaque_v1 vaults");
-    if (object_keys::classify(key) != object_keys::KeyClass::Foreign)
+    if (vl::vaultfmt::keys::classify(key) != vl::vaultfmt::keys::KeyClass::Foreign)
         throw std::invalid_argument("only a foreign object is imported");
-    const auto path = std::filesystem::path(object_keys::importedPathOf(key)).lexically_normal();
+    const auto path = std::filesystem::path(vl::vaultfmt::keys::importedPathOf(key)).lexically_normal();
     if (db::query::sync::ObjectIdentity::uidAtPath(vault->id, path)) return nullptr;   // imported before
 
     const auto owner = identities::manager().user(vault->owner_id);

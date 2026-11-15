@@ -2,7 +2,7 @@
 
 #include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
-#include "crypto/vhf1/Format.hpp"
+#include <vl/vaultfmt/vhf1/Format.hpp>
 #include "vault/Content.hpp"
 
 #include <cstdint>
@@ -43,7 +43,7 @@ public:
     // Plaintext [offset, offset + out.size()); storage::IntegrityError when a chunk it needs is missing or fails.
     void read(uint64_t offset, std::span<uint8_t> out);
 
-    [[nodiscard]] const crypto::vhf1::OpenedHeader& header() const;
+    [[nodiscard]] const vl::vaultfmt::vhf1::OpenedHeader& header() const;
 
 private:
     struct Impl;
@@ -100,14 +100,14 @@ private:
     int fd_{-1};
     Binding binding_;
     crypto::SecretKeyPtr key_;
-    std::optional<crypto::vhf1::OpenedHeader> header_;
+    std::optional<vl::vaultfmt::vhf1::OpenedHeader> header_;
     std::unique_ptr<PrefixReader> reader_;    // authenticated reads of what is sealed (divergence checks, resealed())
     uint64_t size_{};
     uint64_t chunkSize_{};
     uint64_t fed_{};
     uint64_t sealed_{};
     bool tail_{false};
-    crypto::vhf1::SecureBytes pending_;       // plaintext of the chunk being filled
+    vl::vaultfmt::vhf1::SecureBytes pending_;       // plaintext of the chunk being filled
     std::vector<uint8_t> out_;                // one sealed chunk (ciphertext)
     crypto_generichash_state hash_{};
 };

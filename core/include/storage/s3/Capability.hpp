@@ -1,6 +1,6 @@
 #pragma once
 
-#include "sync/manifest/WriteCapability.hpp"
+#include <vl/vaultfmt/manifest/WriteCapability.hpp>
 
 #include <ctime>
 #include <optional>
@@ -12,7 +12,7 @@
 #include <nlohmann/json_fwd.hpp>
 
 // The bucket capability probe (design/encryption/06-publish-without-preconditions.md §7): one probe per bucket learns
-// its sync::manifest::WriteCapability (sync/manifest/WriteCapability.hpp: what each value means and what the manifest
+// its vl::vaultfmt::manifest::WriteCapability (sync/manifest/WriteCapability.hpp: what each value means and what the manifest
 // does with it), stored per vault (s3.manifest_publish, s3.bucket_probe; storage/BucketCapability.hpp).
 namespace vh::storage::s3 {
 
@@ -28,7 +28,7 @@ struct ProbeStep {
 };
 
 struct ProbeResult {
-    sync::manifest::WriteCapability capability{sync::manifest::WriteCapability::Unknown};
+    vl::vaultfmt::manifest::WriteCapability capability{vl::vaultfmt::manifest::WriteCapability::Unknown};
     std::string conditional_put;  // supported | rejected | ignored | inconsistent
     bool versioning{false};       // distinct version ids, listed newest first, each readable by id
     bool get_if_match{false};     // GET If-Match: 412 on a wrong ETag, 200 on the right one

@@ -13,7 +13,7 @@
 namespace vh::storage {
 
 // Positioned reader over one VHF1 generation stored in a local file (a vault backing file, a hydrated copy, a recovery
-// blob). Every read authenticates whole 64 KiB chunks (crypto::vhf1::RangeReader) before a byte of them is returned:
+// blob). Every read authenticates whole 64 KiB chunks (vl::vaultfmt::vhf1::RangeReader) before a byte of them is returned:
 // no plaintext is ever released unauthenticated, so there is no optimistic/strict distinction (spec 02 §3.7) and no
 // GCM CTR keystream (gcmCtrDecryptAt) anywhere on this path. The header must name the vault, the generation (salt) and
 // the key version the catalog recorded; the file's size must be the VHF1 size of the recorded plaintext size (the
@@ -47,7 +47,7 @@ public:
 
 private:
     struct Impl;
-    [[noreturn]] void fail(const crypto::vhf1::Error& error);
+    [[noreturn]] void fail(const vl::vaultfmt::vhf1::Error& error);
     void loadChunk(uint64_t index);
 
     Params params_;

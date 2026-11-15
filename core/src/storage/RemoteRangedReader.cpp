@@ -5,7 +5,7 @@
 #include "storage/CloudEngine.hpp"
 #include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "storage/s3/Controller.hpp"
-#include "crypto/vhf1/Reader.hpp"
+#include <vl/vaultfmt/vhf1/Reader.hpp>
 
 #include <sodium.h>
 
@@ -42,7 +42,7 @@ uint64_t RemoteRangedReader::defaultMaxDownloadedBytes(const uint64_t plaintextS
 }
 
 struct RemoteRangedReader::Vhf1State {
-    std::optional<crypto::vhf1::RangeReader> range;
+    std::optional<vl::vaultfmt::vhf1::RangeReader> range;
 };
 
 RemoteRangedReader::Window::~Window() {
@@ -75,7 +75,7 @@ RemoteRangedReader::RemoteRangedReader(Params params) : params_(std::move(params
         std::vector<uint8_t> header;
         {
             std::scoped_lock lock(mutex_);
-            fetchRange(0, crypto::vhf1::kHeaderSize - 1, header);
+            fetchRange(0, vl::vaultfmt::vhf1::kHeaderSize - 1, header);
         }
         auto opened = vh::vault::content::openHeader(header, params_.vhf1->binding, params_.key);
         vhf1_ = std::make_unique<Vhf1State>();
@@ -166,7 +166,7 @@ const RemoteRangedReader::Window& RemoteRangedReader::window(const uint64_t inde
         try {
             const auto plain = range.read(first, end, sealed);
             fresh.bytes.assign(plain.span().begin(), plain.span().end());
-        } catch (const crypto::vhf1::Error& e) {
+        } catch (const vl::vaultfmt::vhf1::Error& e) {
             vh::vault::content::throwIntegrity(e, "Remote object " + params_.objectKey.string());
         }
     } else {

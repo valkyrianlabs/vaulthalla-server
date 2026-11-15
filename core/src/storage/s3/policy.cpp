@@ -2,7 +2,7 @@
 // request a Controller sends while Controller::setOpaqueLayout(true): see Controller::enforceRequestPolicy.
 
 #include "storage/s3/Controller.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 
 #include <fmt/format.h>
 
@@ -68,7 +68,7 @@ bool ScopedLegacyLayoutCleanup::active() noexcept { return policy_detail::legacy
 void Controller::enforceRequestPolicy(const RequestOp op, std::string_view key, const RequestOptions* options,
                                       const std::string_view secondKey) const {
     if (!opaqueLayout()) return;
-    namespace keys = object_keys;
+    namespace keys = vl::vaultfmt::keys;
     while (key.starts_with('/')) key.remove_prefix(1);
 
     if (op == RequestOp::MetadataRewrite)

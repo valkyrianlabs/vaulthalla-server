@@ -14,7 +14,7 @@
 #include "identities/User.hpp"
 #include "ops/RecoveryRecipients.hpp"
 #include "rbac/permission/admin/keys/Encryption.hpp"
-#include "sync/manifest/Store.hpp"
+#include <vl/vaultfmt/manifest/Store.hpp>
 #include "vault/RecoveryEnvelopes.hpp"
 #include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"

@@ -16,7 +16,7 @@
 #include "recovery/provider/Versions.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/Controller.hpp"
 #include "sync/Controller.hpp"
@@ -78,7 +78,7 @@ std::vector<rq::GenerationRow> pendingUnderKey(const uint32_t vaultId, const std
                                                const std::string& key) {
     std::vector<rq::GenerationRow> out;
     // opaque_v1: the key is the file's uid, wherever the file was when each generation was retained.
-    if (storage::object_keys::uidOfContentKey(key)) {
+    if (vl::vaultfmt::keys::uidOfContentKey(key)) {
         for (auto& g : rq::Generation::listPending(vaultId, 10000))
             if (g.upstream_state == rq::UpstreamState::Pending && g.upstream_key == key) out.push_back(std::move(g));
         return out;
@@ -312,7 +312,7 @@ void addPlannedReplays(const uint32_t vaultId, const std::vector<sync::model::Ac
         const auto keyOf = [opaque](const fs::model::File& f) -> std::optional<std::string> {
             if (!opaque) return backlogKey(f.path);
             if (!f.object_uid) return std::nullopt;
-            return storage::object_keys::contentKey(*f.object_uid);
+            return vl::vaultfmt::keys::contentKey(*f.object_uid);
         };
         auto keys = nlohmann::json::array();
         for (const auto& a : plan) {
@@ -370,7 +370,7 @@ std::vector<std::string> orphanedKeys(const uint32_t vaultId, const std::size_t 
         for (const auto row : res) {
             auto key = row[0].as<std::string>();
             // An o/<uid> key (opaque_v1) belongs to whichever file has that uid, live or trashed, at any path.
-            if (const auto uid = storage::object_keys::uidOfContentKey(key);
+            if (const auto uid = vl::vaultfmt::keys::uidOfContentKey(key);
                 uid && db::query::sync::ObjectIdentity::known(vaultId, *uid))
                 continue;
             keys.push_back(std::move(key));

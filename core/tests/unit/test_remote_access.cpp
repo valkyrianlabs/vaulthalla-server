@@ -27,7 +27,7 @@
 #include "stats/model/SystemHealth.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/Manager.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "storage/PlaintextReader.hpp"
 #include "storage/RemoteAccess.hpp"
 #include "sync/Cloud.hpp"
@@ -114,7 +114,7 @@ protected:
     }
 
     static std::string contentKey(const CloudVault& v, const std::string& path) {
-        return storage::object_keys::contentKey(*row(v, path)->object_uid);
+        return vl::vaultfmt::keys::contentKey(*row(v, path)->object_uid);
     }
 
     static void dropLocalCopy(const CloudVault& v, const std::string& path) {

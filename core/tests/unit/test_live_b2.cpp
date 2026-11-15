@@ -9,19 +9,19 @@
 //
 // Run: (eval "$(grep -E '^export VH_B2_TEST_' <repo>/.bashrc)"; VH_LIVE_TESTS=1 build/core/vh_unit_tests --gtest_filter='LiveB2*')
 
-#include "../helpers/hooked_store.hpp"
+#include <vl/vaultfmt/testing/hooked_store.hpp>
 #include "../helpers/live_bucket.hpp"
 
 #include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "storage/s3/Capability.hpp"
 #include "storage/s3/ManifestStore.hpp"
-#include "sync/manifest/Content.hpp"
-#include "sync/manifest/Document.hpp"
-#include "sync/manifest/Objects.hpp"
-#include "sync/manifest/Publisher.hpp"
-#include "sync/manifest/Reader.hpp"
-#include "sync/manifest/Store.hpp"
+#include <vl/vaultfmt/manifest/Content.hpp>
+#include <vl/vaultfmt/manifest/Document.hpp>
+#include <vl/vaultfmt/manifest/Objects.hpp>
+#include <vl/vaultfmt/manifest/Publisher.hpp>
+#include <vl/vaultfmt/manifest/Reader.hpp>
+#include <vl/vaultfmt/manifest/Store.hpp>
 
 #include <sodium.h>
 
@@ -33,9 +33,9 @@
 namespace vh::test_live_b2 {
 
 namespace live = test_support::live;
-namespace mf = sync::manifest;
+namespace mf = vl::vaultfmt::manifest;
 namespace http = storage::s3::curl::http;
-using sync::manifest::WriteCapability;
+using vl::vaultfmt::manifest::WriteCapability;
 
 [[maybe_unused]] const auto* const kRunB2BucketEnvironment =
     ::testing::AddGlobalTestEnvironment(new live::RunB2BucketEnvironment);
@@ -135,12 +135,12 @@ TEST_F(LiveB2, TheManifestPublishesAsVersionsOfItsRoot) {
     EXPECT_TRUE(probe.versioning);
     EXPECT_TRUE(probe.get_if_match);
     EXPECT_EQ(probe.leftover_versions, 0u);
-    std::cout << "[live] probe: " << sync::manifest::to_string(probe.capability) << ", MD5 ETags " << probe.md5_etags
+    std::cout << "[live] probe: " << vl::vaultfmt::manifest::to_string(probe.capability) << ", MD5 ETags " << probe.md5_etags
               << std::endl;
 
     // (2) The manifest through the real storage::s3::ManifestStore.
     const auto s3 = std::make_shared<storage::s3::ManifestStore>(sharedController(), WriteCapability::VersionLog);
-    const auto store = std::make_shared<test_support::manifest_store::HookedStore>(s3);
+    const auto store = std::make_shared<vl::vaultfmt::test_support::HookedStore>(s3);
     std::vector<uint8_t> keyBytes(32);
     randombytes_buf(keyBytes.data(), keyBytes.size());
     const auto key = std::make_shared<const crypto::SecretKey>(keyBytes);
@@ -224,9 +224,9 @@ TEST_F(LiveB2, TheManifestPublishesAsVersionsOfItsRoot) {
         sibling.published_at = "2031-01-01T00:00:00Z";
         sibling.producer.node_id = "a-crashed-writer";
         const auto bytes = mf::sealRoot(sibling, vault, sealing);
-        store->after = [&](const test_support::manifest_store::StoreOp op, const std::string& k, const std::string&,
+        store->after = [&](const vl::vaultfmt::test_support::StoreOp op, const std::string& k, const std::string&,
                            const bool failed) {
-            if (op != test_support::manifest_store::StoreOp::Put || k != mf::kRootKey || failed || !siblingId.empty()) return;
+            if (op != vl::vaultfmt::test_support::StoreOp::Put || k != mf::kRootKey || failed || !siblingId.empty()) return;
             siblingId = s3->put(std::string(mf::kRootKey), bytes).version_id.value_or("");
         };
         content.entries.back().size = 2000;

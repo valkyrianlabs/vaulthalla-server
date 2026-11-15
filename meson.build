@@ -33,16 +33,6 @@ if meson.get_compiler('cpp').get_id() == 'gcc'
                           language: 'cpp')
 endif
 
-# -Dfuzz=true: a clang build of the libFuzzer targets only (the VHF1 codec's, core/tests/fuzz), which need none of the
-# daemon's other dependencies. The WebAuthn parsers are fuzzed in vl-webauthn's own CI.
-if get_option('fuzz')
-    if meson.get_compiler('cpp').get_id() != 'clang'
-        error('-Dfuzz=true needs clang with libFuzzer (e.g. CXX=clang++-18)')
-    endif
-    subdir('core/tests/fuzz')
-    subdir_done()
-endif
-
 subdir('core')
 
 if get_option('install_data')

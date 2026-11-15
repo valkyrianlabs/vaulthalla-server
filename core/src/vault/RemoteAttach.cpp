@@ -7,7 +7,7 @@
 #include "config/Registry.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "crypto/util/encrypt.hpp"
-#include "crypto/vhf1/Format.hpp"
+#include <vl/vaultfmt/vhf1/Format.hpp>
 #include "db/query/device/Device.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/sync/Event.hpp"
@@ -27,7 +27,7 @@
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/Controller.hpp"
 #include "storage/s3/ManifestStore.hpp"
@@ -35,11 +35,11 @@
 #include "storage/s3/provider/Registry.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "sync/Controller.hpp"
-#include "sync/manifest/Content.hpp"
-#include "sync/manifest/Document.hpp"
-#include "sync/manifest/Publisher.hpp"
-#include "sync/manifest/Reader.hpp"
-#include "sync/manifest/Store.hpp"
+#include <vl/vaultfmt/manifest/Content.hpp>
+#include <vl/vaultfmt/manifest/Document.hpp>
+#include <vl/vaultfmt/manifest/Publisher.hpp>
+#include <vl/vaultfmt/manifest/Reader.hpp>
+#include <vl/vaultfmt/manifest/Store.hpp>
 #include "sync/model/Action.hpp"
 #include "sync/model/Event.hpp"
 #include "sync/model/RemotePolicy.hpp"
@@ -192,9 +192,9 @@ nlohmann::json toJson(const Progress& p) {
 namespace remote_detail {
 
 using Q = db::query::vault::RemoteAttach;
-namespace keys = storage::object_keys;
+namespace keys = vl::vaultfmt::keys;
 namespace content = vault::content;
-namespace mf = sync::manifest;
+namespace mf = vl::vaultfmt::manifest;
 namespace kev1 = vl::keykit::kev1;
 
 // A failure of the run before the cutover: the row goes to failed with this text, the vault stays local.
@@ -319,7 +319,7 @@ void writeAll(const int fd, const std::span<const uint8_t> bytes) {
 std::vector<uint8_t> readHeader(const std::filesystem::path& path) {
     const FdGuard fd(::open(path.c_str(), O_RDONLY | O_CLOEXEC));
     if (fd.get() < 0) throw std::system_error(errno, std::generic_category(), "open " + path.string());
-    std::vector<uint8_t> out(crypto::vhf1::kHeaderSize);
+    std::vector<uint8_t> out(vl::vaultfmt::vhf1::kHeaderSize);
     std::size_t got = 0;
     while (got < out.size()) {
         const auto n = ::read(fd.get(), out.data() + got, out.size() - got);
@@ -385,7 +385,7 @@ struct Ctx {
         throw RunFailed(fmt::format("key version {} is not held", version));
     }
 
-    [[nodiscard]] crypto::vhf1::KeyLookup keyLookup() const {
+    [[nodiscard]] vl::vaultfmt::vhf1::KeyLookup keyLookup() const {
         return [em = em](const uint32_t version) -> crypto::SecretKeyPtr {
             try {
                 return em->historicalKeySnapshot(version);
@@ -859,13 +859,13 @@ void sendContent(Ctx& ctx, Item& it) {
     std::string generation;
     unsigned int keyVersion{};
     try {
-        const auto opened = crypto::vhf1::openHeader(
-            header, {.kind = crypto::vhf1::Kind::FileContent, .vaultUid = ctx.em->vaultUid(), .objectUid = *uid,
+        const auto opened = vl::vaultfmt::vhf1::openHeader(
+            header, {.kind = vl::vaultfmt::vhf1::Kind::FileContent, .vaultUid = ctx.em->vaultUid(), .objectUid = *uid,
                      .generation = std::nullopt},
             ctx.keyLookup());
         generation = content::generationOf(opened.params().salt);
         keyVersion = opened.params().keyVersion;
-    } catch (const crypto::vhf1::Error& e) {
+    } catch (const vl::vaultfmt::vhf1::Error& e) {
         throw storage::IntegrityError(fmt::format("file {}: its local copy is not this vault's sealed content ({})",
                                                   *it.file_id, e.what()));
     }
@@ -1512,7 +1512,7 @@ bool holdsThisVault(const uint32_t vaultId, const storage::s3::Controller& contr
     const auto engine = manager ? manager->getEngine(vaultId) : nullptr;
     if (!engine || !engine->vault || !engine->vault->uid || !engine->encryptionManager) return false;
     const auto em = engine->encryptionManager;
-    const crypto::vhf1::KeyLookup keys = [em](const uint32_t v) -> crypto::vhf1::KeyPtr {
+    const vl::vaultfmt::vhf1::KeyLookup keys = [em](const uint32_t v) -> vl::vaultfmt::vhf1::KeyPtr {
         try {
             return em->historicalKeySnapshot(v);
         } catch (const std::exception&) {
@@ -1522,10 +1522,10 @@ bool holdsThisVault(const uint32_t vaultId, const storage::s3::Controller& contr
     // Not owned: the store reads through the caller's controller for the length of this call.
     const std::shared_ptr<storage::s3::Controller> view(std::shared_ptr<void>{},
                                                         const_cast<storage::s3::Controller*>(&controller));
-    for (const auto mode : {sync::manifest::WriteCapability::Conditional, sync::manifest::WriteCapability::VersionLog}) {
+    for (const auto mode : {vl::vaultfmt::manifest::WriteCapability::Conditional, vl::vaultfmt::manifest::WriteCapability::VersionLog}) {
         try {
             storage::s3::ManifestStore store(view, mode);
-            (void)sync::manifest::load(store, *engine->vault->uid, keys);
+            (void)vl::vaultfmt::manifest::load(store, *engine->vault->uid, keys);
             return true;
         } catch (const std::exception&) {
         }
@@ -1569,7 +1569,7 @@ BucketCheck requireBucketUsable(const uint32_t vaultId, const uint32_t apiKeyId,
         throw;
     }
 
-    if (storedProbe && storedProbe->capability != sync::manifest::WriteCapability::Unknown) {
+    if (storedProbe && storedProbe->capability != vl::vaultfmt::manifest::WriteCapability::Unknown) {
         out.probe = *storedProbe;
     } else {
         try {
@@ -1578,8 +1578,8 @@ BucketCheck requireBucketUsable(const uint32_t vaultId, const uint32_t apiKeyId,
             throw Refusal("bucket_probe_failed", std::string("the bucket's write capability could not be probed: ") + e.what());
         }
     }
-    if (out.probe.capability != sync::manifest::WriteCapability::Conditional &&
-        out.probe.capability != sync::manifest::WriteCapability::VersionLog)
+    if (out.probe.capability != vl::vaultfmt::manifest::WriteCapability::Conditional &&
+        out.probe.capability != vl::vaultfmt::manifest::WriteCapability::VersionLog)
         throw Refusal("bucket_capability_insufficient",
                       "the bucket neither honours conditional writes nor keeps object versions (or not If-Match on "
                       "GET), so the vault's encrypted manifest can't be published on it: " + out.probe.reason);
@@ -1700,7 +1700,7 @@ RunResult run(const uint32_t vaultId, const RunDeps& deps) {
                            .details = {{"files", static_cast<int64_t>(outcome.indexed)},
                                        {"orphans", static_cast<int64_t>(outcome.orphans)},
                                        {"publish", ctx->row.manifest_publish.value_or(std::string(
-                                                       sync::manifest::to_string(ctx->mode)))},
+                                                       vl::vaultfmt::manifest::to_string(ctx->mode)))},
                                        {"gateway_remote_cache", outcome.gateway_flipped}}},
                           fmt::format("[RemoteAttach] Vault {} cut over to its bucket: {} file(s) indexed, {} orphan(s); "
                                       "the vault is an encrypted S3 vault from here on", vaultId, outcome.indexed,

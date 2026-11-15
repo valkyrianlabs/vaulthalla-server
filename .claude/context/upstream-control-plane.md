@@ -91,7 +91,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
 - **What:** `storage::s3::probeBucket` (`storage/s3/Capability.hpp`, `capability.cpp`) answers, on one key
   `.vaulthalla/probe/<uid>` (allowlisted under opaque_v1, `ObjectKeys`): PUT If-None-Match absent/present, If-Match
   wrong/right; versions newest first and readable by id; GET If-Match wrong/right; then deletes every version it wrote
-  by id (`leftover_versions` counts refusals). Verdict (`sync::manifest::WriteCapability`, `sync/manifest/WriteCapability.hpp`:
+  by id (`leftover_versions` counts refusals). Verdict (`vl::vaultfmt::manifest::WriteCapability`, `<vl/vaultfmt/manifest/WriteCapability.hpp>`:
   the enum, `to_string`, `publishModeFromString` and `sendsPreconditions` live with the manifest, which the probe includes): `Conditional` (conditions honoured; versions
   not needed: R2 has none), `VersionLog` (rejected with 501/400 NotImplemented, or silently ignored, and versions
   kept), `Insufficient` (neither, or GET If-Match not honoured), `Unknown` (never probed: behaves as Conditional).
@@ -109,7 +109,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
   the bucket), `vh vault storage probe`, and lazily on first use for rows from
   before 136 (`resolve`, at most one failed attempt per vault an hour). **Test mode never probes on its own**
   (`setLazyProbingForTesting`, `setControllerFactoryForTesting`): existing suites see Unknown and unchanged requests.
-- **What it changes:** `sync::manifest::ObjectStore::mode()` / `putOnce` (If-None-Match only where
+- **What it changes:** `vl::vaultfmt::manifest::ObjectStore::mode()` / `putOnce` (If-None-Match only where
   `sendsPreconditions`), `storage::s3::ManifestStore(controller, mode)`; segments, snapshots, the layout hint and KEV1 envelopes go through
   `putOnce`; the `path_v0` index-v1 is PUT plainly on a non-conditional bucket. On VersionLog the manifest root is
   published as provider versions (spec 06 §5; architecture.md "version_log publish"). `manifest::publish` throws

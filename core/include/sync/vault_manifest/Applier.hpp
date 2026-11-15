@@ -1,7 +1,7 @@
 #pragma once
 
-#include "sync/manifest/Reconcile.hpp"
-#include "sync/manifest/Reader.hpp"
+#include <vl/vaultfmt/manifest/Reconcile.hpp>
+#include <vl/vaultfmt/manifest/Reader.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -47,8 +47,8 @@ inline constexpr bool kCarriesForeignEnvelopes = true;
 
 struct ApplyOptions {
     std::function<bool(uint64_t inode)> isOpen{};                  // default: fuse::WorkingCopies
-    std::function<void(const manifest::Op& op)> beforeOp{};         // tests: a local write or a crash before an op
-    manifest::ObjectStore* store{};                                // the bucket (other writers' envelopes); the service's
+    std::function<void(const vl::vaultfmt::manifest::Op& op)> beforeOp{};         // tests: a local write or a crash before an op
+    vl::vaultfmt::manifest::ObjectStore* store{};                                // the bucket (other writers' envelopes); the service's
 };
 
 struct ApplyReport {
@@ -58,12 +58,12 @@ struct ApplyReport {
     bool recorded{false};                 // `known` is the head now
     bool union_base{false};               // no usable base copy: merged without one (nothing deleted)
     std::size_t applied{}, skipped{}, deferred{}, kept{};
-    std::vector<manifest::Conflict> conflicts;
+    std::vector<vl::vaultfmt::manifest::Conflict> conflicts;
     std::vector<std::string> notes;
 };
 
-[[nodiscard]] ApplyReport apply(uint32_t vaultId, const manifest::Uid& vaultUid, const crypto::vhf1::KeyLookup& keys,
-                                const manifest::Loaded& head, const std::string& selfNode,
+[[nodiscard]] ApplyReport apply(uint32_t vaultId, const vl::vaultfmt::manifest::Uid& vaultUid, const vl::vaultfmt::vhf1::KeyLookup& keys,
+                                const vl::vaultfmt::manifest::Loaded& head, const std::string& selfNode,
                                 const ApplyOptions& options = {});
 
 // Entries deferred while their file was open whose file is closed now: applied when the local copy is the one the
