@@ -557,6 +557,12 @@ class FakeS3:
         with self.store.lock:
             self.store.buckets[name] = Bucket(versioning=versioning)
 
+    def current(self, bucket: str, key: str) -> Version | None:
+        """The key's current version (None when absent or a delete marker)."""
+        with self.store.lock:
+            v = self.store.latest(self.store.buckets[bucket], key)
+            return None if v is None or v.delete_marker else v
+
     def requests(self) -> list[dict]:
         with self.store.lock:
             return list(self.store.log)

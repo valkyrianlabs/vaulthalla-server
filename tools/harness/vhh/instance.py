@@ -232,12 +232,14 @@ class Instance:
             **self.extra_env,
         }
         self._log = open(self.log_path, "ab", buffering=0)
+        self._ports = (ws_port, http_port)
         cmd = [str(self.server)]
         if self.extra_env.get("VHH_SETARCH") == "1":   # TSan on this kernel needs ASLR off
             cmd = ["setarch", "-R"] + cmd
         try:
             if self.own_tpm:
                 env["VH_TPM_TCTI"] = self._start_tpm()
+            self._env, self._cmd = env, cmd
             self.proc = subprocess.Popen(cmd, env=env, stdin=subprocess.DEVNULL, stdout=self._log,
                                          stderr=subprocess.STDOUT, start_new_session=True, cwd=str(self.run_dir))
             self._wait_ready(ws_port, http_port)
@@ -441,6 +443,24 @@ class Instance:
         return found
 
     # ------------------------------------------------------------------ shutdown
+    def restart(self, kill: bool = True, dead_timeout: float = 30) -> None:
+        """The daemon again on the same database, TPM, backing store and ports (a crash and a reboot when `kill`: the
+        process gets SIGKILL unless it is already gone). Waits until it serves again."""
+        if self.proc is not None and self.proc.poll() is None:
+            if kill:
+                self.proc.kill()
+            else:
+                self.proc.send_signal(signal.SIGTERM)
+            self.proc.wait(timeout=dead_timeout)
+        if mount_entry(self.mount):
+            self.abort_fuse()
+            run(["fusermount3", "-uz", str(self.mount)], timeout=10)
+        self.proc = subprocess.Popen(self._cmd, env=self._env, stdin=subprocess.DEVNULL, stdout=self._log,
+                                     stderr=subprocess.STDOUT, start_new_session=True, cwd=str(self.run_dir))
+        self._wait_ready(*self._ports)
+        if self.target is not None:
+            self.target.pid = self.proc.pid
+
     def stop(self, grace: float = 15) -> dict:
         """Stop the daemon (by its own pid), make sure the mount is gone, drop the run database. Idempotent."""
         report: dict = {"run_id": self.run_id}
