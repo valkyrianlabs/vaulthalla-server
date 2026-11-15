@@ -35,6 +35,8 @@ struct VaultKeys {
     // vault.remote.* (ops::vault_remote; design/storage/attach-remote.md): a local vault becomes an S3/R2 vault in
     // place. attach and abort with a keys step-up; status for whoever may view the vault.
     static json remoteAttach(const json& payload, const std::shared_ptr<Session>& session);
+    // vault.remote.detach: an S3 vault becomes a local vault in place (vault/RemoteDetach.hpp), with a keys step-up.
+    static json remoteDetach(const json& payload, const std::shared_ptr<Session>& session);
     static json remoteStatus(const json& payload, const std::shared_ptr<Session>& session);
     static json remoteAbort(const json& payload, const std::shared_ptr<Session>& session);
 };

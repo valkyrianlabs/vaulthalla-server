@@ -1,4 +1,5 @@
 #include "sync/Cloud.hpp"
+#include "storage/RemoteAccess.hpp"
 
 #include "storage/CloudEngine.hpp"
 #include "storage/ScopedS3RequestBudget.hpp"
@@ -142,6 +143,14 @@ void Cloud::operator()() {
     std::shared_ptr<CloudEngine> cloud;
     try {
         cloud = cloudEngine();
+        // The remote access gate (storage/RemoteAccess.hpp): a restricted vault's pass is skipped before any request,
+        // so it prevents failures instead of retrying them. Local writes and deletes stay pending and go up on the
+        // first pass after access is full again.
+        namespace rac = vh::storage::remote_access;
+        if (const auto access = rac::state(vaultId()); access.mode != rac::Mode::Full)
+            throw SyncStalled(fmt::format("skipped: remote {}{}",
+                                          access.mode == rac::Mode::ReadOnly ? "read-only" : "unavailable",
+                                          access.reason ? " (" + *access.reason + ")" : std::string{}));
         const ScopedS3RequestBudget s3Budget(cloud, cloud->remote_policy()->s3_request_budget);
 
         loadRemovedKeys();

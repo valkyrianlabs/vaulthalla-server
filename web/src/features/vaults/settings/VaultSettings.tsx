@@ -25,6 +25,7 @@ import { UPSTREAM_ENCRYPTION_OFF, UPSTREAM_ENCRYPTION_ON } from '@/features/vaul
 const DeleteVaultDialog = dynamic(() => import('@/features/vaults/DeleteVaultDialog'), { ssr: false })
 const EventSyncPanel = dynamic(() => import('@/features/vaults/settings/EventSyncPanel'), { ssr: false })
 const RecoveryPanel = dynamic(() => import('@/features/recovery/RecoveryPanel'), { ssr: false })
+const RemoteStoragePanel = dynamic(() => import('@/features/vaults/settings/RemoteStoragePanel'), { ssr: false })
 
 export const VaultSettings = () => {
   const vault = useCurrentVault()
@@ -32,6 +33,7 @@ export const VaultSettings = () => {
     <div className="max-w-3xl space-y-4">
       <GeneralForm vault={vault} />
       {vault.type === 's3' ? <BucketForm vault={vault} /> : null}
+      <RemoteStoragePanel vault={vault} />
       {vault.type === 's3' ? <EventSyncPanel vault={vault} /> : null}
       <RecoveryPanel vault={vault} />
       <DangerZone vault={vault} />
@@ -166,10 +168,7 @@ const GeneralForm = ({ vault }: { vault: VaultDetail }) => {
             </div>
             <div className="grid gap-1 text-xs text-fg-subtle sm:col-span-2">
               <span>
-                Storage type: <span className="text-fg-muted">{vaultTypeLabel(vault.type)}</span>
-                {vault.type === 'local'
-                  ? ' — a bucket can be attached from the command line (vh vault remote attach).'
-                  : ' — not changed here.'}
+                Storage type: <span className="text-fg-muted">{vaultTypeLabel(vault.type)}</span> — changed under Remote storage.
               </span>
             </div>
           </fieldset>

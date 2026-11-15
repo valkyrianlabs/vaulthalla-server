@@ -903,6 +903,60 @@ static std::shared_ptr<CommandUsage> remote_attach(const std::weak_ptr<CommandUs
     return cmd;
 }
 
+static std::shared_ptr<CommandUsage> remote_detach(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"detach"};
+    cmd->effect = CommandEffect::Destructive;
+    cmd->description =
+        "Turn an S3 or R2 vault into a local vault in place: the vault keeps its ID, keys, permissions, shares and "
+        "files, and from then on its content lives only on this host. Only an operator starts it. In the background, "
+        "every file without a local copy is fetched from the bucket (each fetch is checked against the price budget), "
+        "every local copy is authenticated against the generation the catalog records, and every recovery envelope is "
+        "copied from the bucket into the database, where a local vault keeps them. Files that change meanwhile are "
+        "checked again. Only then does the vault switch to local storage in one step; until then it stays an S3 vault "
+        "and syncs as before. The bucket and every object in it are left in place: nothing is deleted. Earlier "
+        "versions whose bodies only the bucket holds stay in the bucket's history (the status counts them). Refused "
+        "while an attach, a layout migration, a key rotation or a salvage runs, while legacy content remains, while "
+        "event-driven sync is on or while sync conflicts are open. If anything fails before the switch, run the "
+        "command again to resume, or abort it.";
+    cmd->positionals = {vaultPos};
+    cmd->required = {Option::Single("confirm", "The vault's name, confirming that it stops using its bucket",
+                                    "confirm", "name")
+                         .withGen("name", contract::gen::ref("vault", {"name"}))};
+    cmd->optional = {owner};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {
+        {"vh vault remote detach finance --confirm finance",
+         "Make vault 'finance' a local vault again, keeping a full local copy; its bucket is left as it is."}
+    };
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> remote_access(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"access"};
+    cmd->effect = CommandEffect::Write;
+    cmd->description =
+        "Set what an S3 or R2 vault may still do with its bucket. read-only: files are read and fetched as before, but "
+        "nothing is uploaded, deleted or published to the bucket; the vault's sync passes are skipped (recorded as "
+        "\"skipped: remote read-only\") and changes made here wait, to go up on the first pass once access is full "
+        "again; a key rotation waits too. none: no request goes to the bucket at all; files with a copy on this "
+        "server keep working, files without one fail as unavailable. full lifts either. vh vault remote status and "
+        "vh status show the vault's access and why.";
+    cmd->positionals = {vaultPos};
+    cmd->required = {Option::Single("access_mode", "full, read-only or none", "set", "mode")
+                         .withGen("mode", contract::gen::oneOf({"full", "read-only", "none"}))};
+    cmd->optional = {owner, Optional::Single("access_reason", "Why (shown in the status and the audit trail)", "reason",
+                                           "text")};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {
+        {"vh vault remote access finance --set read-only --reason \"provider maintenance\"",
+         "Stop every write to the bucket of vault 'finance' until access is set back to full."},
+        {"vh vault remote access finance --set full", "Lift the restriction; the next sync pass uploads what waited."}
+    };
+    return cmd;
+}
+
 static std::shared_ptr<CommandUsage> remote_status(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"status"};
@@ -912,7 +966,9 @@ static std::shared_ptr<CommandUsage> remote_status(const std::weak_ptr<CommandUs
         "cutover, done, failed or aborted), the bucket and how its manifest is published, the progress (files and "
         "bytes sent, the rate over the last minute and the time left when known), the cost estimate and what was "
         "actually sent, the last error, and after the switch the result of the vault's first sync pass. A failed "
-        "attach left the vault local and untouched.";
+        "attach left the vault local and untouched. For a detach: its state (preparing, hydrating, verifying, cutover, "
+        "done, failed or aborted), the files held and verified locally, those fetched from the bucket, the recovery "
+        "envelopes copied into the database, and what stays only in the bucket.";
     cmd->positionals = {vaultOrAll};
     cmd->optional = {owner};
     cmd->optional_flags = {jsonFlag};
@@ -928,14 +984,14 @@ static std::shared_ptr<CommandUsage> remote_abort(const std::weak_ptr<CommandUsa
     cmd->aliases = {"abort"};
     cmd->effect = CommandEffect::Destructive;
     cmd->description =
-        "Abort attaching a remote to a vault, before the vault has switched to its bucket. Everything the attach "
-        "uploaded (file objects, recovery envelopes, the manifest) is deleted from the bucket, each object by the "
-        "version the attach recorded, and the bucket is released for other use. Nothing the attach did not write is "
-        "deleted, and the vault itself was never changed. A delete the provider refuses is retried and stays listed "
-        "in the status until it succeeds. Not possible once the vault has switched over.";
+        "Abort attaching a remote to a vault, or detaching it, before the vault has switched. An attach's abort "
+        "deletes everything the attach uploaded (file objects, recovery envelopes, the manifest) from the bucket, each "
+        "object by the version the attach recorded, and releases the bucket for other use. Nothing the attach did not "
+        "write is deleted, and the vault itself was never changed. A delete the provider refuses is retried and stays "
+        "listed in the status until it succeeds. A detach's abort leaves the vault an S3 vault; the local copies it "
+        "fetched stay. Not possible once the vault has switched over.";
     cmd->positionals = {vaultPos};
-    cmd->required = {Option::Single("confirm", "The vault's name, confirming the deletion of what the attach uploaded",
-                                    "confirm", "name")
+    cmd->required = {Option::Single("confirm", "The vault's name, confirming the abort", "confirm", "name")
                          .withGen("name", contract::gen::ref("vault", {"name"}))};
     cmd->optional = {owner};
     cmd->optional_flags = {jsonFlag};
@@ -948,9 +1004,10 @@ static std::shared_ptr<CommandUsage> remote_abort(const std::weak_ptr<CommandUsa
 static std::shared_ptr<CommandUsage> vault_remote(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"remote"};
-    cmd->description = "Attach an S3 or R2 bucket to an existing local vault.";
-    cmd->examples = {{"vh vault remote status all", "Every vault with an attach."}};
-    cmd->subcommands = {remote_attach(cmd->weak_from_this()), remote_status(cmd->weak_from_this()),
+    cmd->description = "Attach an S3 or R2 bucket to an existing local vault, or detach it again.";
+    cmd->examples = {{"vh vault remote status all", "Every vault with an attach or detach."}};
+    cmd->subcommands = {remote_attach(cmd->weak_from_this()), remote_detach(cmd->weak_from_this()),
+                        remote_access(cmd->weak_from_this()), remote_status(cmd->weak_from_this()),
                         remote_abort(cmd->weak_from_this())};
     return cmd;
 }

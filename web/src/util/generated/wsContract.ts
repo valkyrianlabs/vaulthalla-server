@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '5f5a676024aff32a98e3035bfe595aa95b3f6337492a1a7527c9bc02b1f0f0a5'
+export const WS_CONTRACT_HASH = '5a8b7cf44c5c18fcf5db5d8ae379bf76b1c364ae28a5b994145eb93debf5c3e6'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'a7ae81b14e6ab5eb062e43098e0989c89862f0bc7c00f96b2299d3fafffe1169'
+export const WS_MODELS_HASH = '02a9f2f80337c8a691b347aac757d9cf9fc487b136e824107f767fe53dcd6732'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -2077,6 +2077,10 @@ export interface WsModels {
     } | null
     remote_attach_failed?: { vault_id: number; vault_name: string; detail: string }[]
     remote_attaches_unfinished?: number[]
+    remote_detach_failed?: { vault_id: number; vault_name: string; detail: string }[]
+    remote_detaches_unfinished?: number[]
+    vault_remote_restricted?: { vault_id: number; vault_name: string; reason: string; set_by: string; since: number }[]
+    vault_remote_unavailable?: { vault_id: number; vault_name: string; reason: string; set_by: string; since: number }[]
     summary: {
       services_ready: number
       services_total: number
@@ -2959,6 +2963,10 @@ export interface WsModels {
     checked_at: number
   }
   /**
+   * An S3 vault's remote access gate (storage/RemoteAccess.hpp), as the daemon enforces it now.
+   */
+  'VaultRemoteAccess': { mode: 'full' | 'read_only' | 'none'; reason: string | null; set_by: string | null; set_at: number | null }
+  /**
    * A vault's remote attach (vault_remote_attach).
    */
   'VaultRemoteAttach': {
@@ -2993,6 +3001,45 @@ export interface WsModels {
     last_error: string | null
   }
   /**
+   * A vault's remote detach (vault_remote_detach).
+   */
+  'VaultRemoteDetach': {
+    state: 'preparing' | 'hydrating' | 'verifying' | 'cutover' | 'done' | 'failed' | 'aborted'
+    api_key_id: number | null
+    bucket: string
+    started_at: number
+    started_by: number | null
+    attempts: number
+    verified_at: number | null
+    cutover_at: number | null
+    done_at: number | null
+    aborted_at: number | null
+    abort_requested_at: number | null
+    estimate: WsModels['VaultRemoteDetachEstimate'] | null
+    items: {
+      files_pending: number
+      files_verified: number
+      files_failed: number
+      files_fetched: number
+      envelopes: number
+      envelopes_copied: number
+    }
+    last_error: string | null
+  }
+  /**
+   * vault::remote::detach::toJson(Estimate): what the detach does, computed when it starts.
+   */
+  'VaultRemoteDetachEstimate': {
+    files: number
+    bytes: number
+    files_remote_only: number
+    bytes_remote_only: number
+    envelopes: number
+    envelopes_to_copy: number
+    history_in_bucket_only: number
+    trash_without_local_copy: number
+  }
+  /**
    * RemoteAttachCost: what the attach sends (vault::remote::toJson(Estimate)), computed before the first
    * content PUT.
    */
@@ -3014,10 +3061,11 @@ export interface WsModels {
     estimated_cost: string | null
   }
   /**
-   * vault::remote::toJson(Progress): rendered as is by clients.
+   * vault::remote::toJson(Progress): rendered as is by clients, for the attach or, while one is unfinished,
+   * the detach.
    */
   'VaultRemoteProgress': {
-    phase: 'preparing' | 'uploading' | 'catching_up' | 'verifying' | 'cutover' | 'done' | 'failed' | 'aborted'
+    phase: 'preparing' | 'uploading' | 'catching_up' | 'verifying' | 'cutover' | 'done' | 'failed' | 'aborted' | 'hydrating'
     files_total: number
     files_done: number
     bytes_total: number
@@ -3028,14 +3076,16 @@ export interface WsModels {
     updated_at: number
   }
   /**
-   * ops::vault_remote::toJson(Status): a vault's remote storage and its attach.
+   * ops::vault_remote::toJson(Status): a vault's remote storage, its access, its attach and its detach.
    */
   'VaultRemoteStatus': {
     vault_id: number
     vault_name: string
     type: 'local' | 's3'
     remote: string
+    access: WsModels['VaultRemoteAccess'] | null
     attach: WsModels['VaultRemoteAttach'] | null
+    detach: WsModels['VaultRemoteDetach'] | null
     progress: WsModels['VaultRemoteProgress'] | null
     items: {
       files_pending: number
@@ -6943,10 +6993,11 @@ export interface WsContract {
     response: { status: WsModels['RecoveryStatus'] }
   }
   /**
-   * Abort an attach before its cutover: everything it uploaded is deleted from the bucket, each object by the
-   * version the attach recorded, in the background, and the bucket is released (state aborted). Nothing the
-   * attach did not write is deleted; the vault itself was never changed. A delete the provider refuses is
-   * retried and stays listed. confirm must be the vault's name. With a keys step-up bound to the vault
+   * Abort an attach or a detach before its cutover. An attach's abort deletes everything it uploaded from the
+   * bucket, each object by the version the attach recorded, in the background, and releases the bucket (state
+   * aborted); nothing the attach did not write is deleted, the vault itself was never changed, and a delete
+   * the provider refuses is retried and stays listed. A detach's abort leaves the vault an S3 vault; the
+   * local copies it fetched stay. confirm must be the vault's name. With a keys step-up bound to the vault
    * (#359); the same permissions as vault.remote.attach, without the API key's.
    */
   'vault.remote.abort': {
@@ -6956,7 +7007,9 @@ export interface WsContract {
       vault_name: string
       type: 'local' | 's3'
       remote: string
+      access: WsModels['VaultRemoteAccess'] | null
       attach: WsModels['VaultRemoteAttach'] | null
+      detach: WsModels['VaultRemoteDetach'] | null
       progress: WsModels['VaultRemoteProgress'] | null
       items: {
         files_pending: number
@@ -6992,7 +7045,9 @@ export interface WsContract {
       vault_name: string
       type: 'local' | 's3'
       remote: string
+      access: WsModels['VaultRemoteAccess'] | null
       attach: WsModels['VaultRemoteAttach'] | null
+      detach: WsModels['VaultRemoteDetach'] | null
       progress: WsModels['VaultRemoteProgress'] | null
       items: {
         files_pending: number
@@ -7005,10 +7060,43 @@ export interface WsContract {
     }
   }
   /**
-   * Where attaching a remote stands for vault_id, or for every vault with an attach the caller may view:
-   * state, bucket, publish mode, progress (files and bytes, rate, time left), the estimate and usage, the
-   * last error, and after the cutover the first sync pass's result. The vault's admin View permission.
-   * Read-only; safe for any session.
+   * Detach the remote of an S3 vault (design/storage/attach-remote.md, "The reverse"): the vault keeps its
+   * id, keys, permissions, shares and files and becomes a local vault in place. Checks the preconditions now
+   * (an S3 vault with its keys loaded, no attach, layout migration, key rotation or salvage running, no
+   * content in a legacy format, every key version its files use held, no event-driven sync, no open sync
+   * conflict); then in the background every file without a local copy is fetched, every local copy is
+   * authenticated, and every recovery envelope is copied from the bucket into the database, before the vault
+   * switches in one transaction. The bucket and its objects are left in place. vault.remote.status follows
+   * it; a failed detach started again resumes. confirm must be the vault's name. With a keys step-up bound to
+   * the vault (#359); the vault's admin Edit and sync config Edit permissions and the encryption-key Rotate
+   * permission.
+   */
+  'vault.remote.detach': {
+    payload: { vault_id: number; confirm: string }
+    response: {
+      vault_id: number
+      vault_name: string
+      type: 'local' | 's3'
+      remote: string
+      access: WsModels['VaultRemoteAccess'] | null
+      attach: WsModels['VaultRemoteAttach'] | null
+      detach: WsModels['VaultRemoteDetach'] | null
+      progress: WsModels['VaultRemoteProgress'] | null
+      items: {
+        files_pending: number
+        files_sent: number
+        files_failed: number
+        envelopes: number
+        metadata_objects: number
+        orphans: number
+      }
+    }
+  }
+  /**
+   * Where attaching (or detaching) a remote stands for vault_id, or for every vault with an attach or detach
+   * the caller may view: state, bucket, publish mode, progress (files and bytes, rate, time left), the
+   * estimate and usage, the last error, and after an attach's cutover the first sync pass's result. The
+   * vault's admin View permission. Read-only; safe for any session.
    */
   'vault.remote.status': {
     payload: { vault_id?: number | null }
@@ -7323,6 +7411,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'vault.recovery.update',
   'vault.remote.abort',
   'vault.remote.attach',
+  'vault.remote.detach',
   'vault.remote.status',
   'vault.storage.probe',
 ]
@@ -7437,6 +7526,7 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'vault.recovery.suspend': 'data.destroy',
   'vault.remote.abort': 'keys',
   'vault.remote.attach': 'keys',
+  'vault.remote.detach': 'keys',
 }
 
 // Client timeouts the server declares per command (a timeout means "no answer yet", never "failed").
@@ -7715,6 +7805,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'vault.recovery.update': 180000,
   'vault.remote.abort': 60000,
   'vault.remote.attach': 120000,
+  'vault.remote.detach': 60000,
   'vault.remote.status': 15000,
   'vault.storage.probe': 60000,
 }

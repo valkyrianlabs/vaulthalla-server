@@ -4,6 +4,7 @@
 #include "auth/stepup/StepUp.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/vault/RemoteAttach.hpp"
+#include "db/query/vault/RemoteDetach.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
@@ -17,6 +18,7 @@
 #include "storage/s3/provider/Registry.hpp"
 #include "storage/upstream/Names.hpp"
 #include "vault/model/APIKey.hpp"
+#include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
 
 #include <fmt/format.h>
@@ -30,7 +32,9 @@ namespace vh::ops::vault_remote {
 namespace vault_remote_detail {
 
 using Q = db::query::vault::RemoteAttach;
+using DQ = db::query::vault::RemoteDetach;
 namespace ra = vault::remote;
+namespace rd = vault::remote::detach;
 using VaultPerm = rbac::permission::admin::VaultPermissions;
 using KeyPerm = rbac::permission::admin::keys::APIPermissions;
 using SyncConfigPerm = rbac::permission::vault::sync::SyncConfigPermissions;
@@ -64,7 +68,13 @@ void requireAttach(const Actor& actor, const std::shared_ptr<vault::model::Vault
         throw Denied("you do not have permission to use api-key " + std::to_string(*apiKeyId) + " for this vault");
 }
 
-std::string summaryOf(const bool s3Vault, const std::optional<ra::Row>& row) {
+// A detach (or attach) that ended (done or aborted) says nothing more than the vault's type does.
+bool unfinished(const std::optional<rd::Row>& row) {
+    return row && row->state != rd::State::Done && row->state != rd::State::Aborted;
+}
+
+std::string summaryOf(const bool s3Vault, const std::optional<ra::Row>& row, const std::optional<rd::Row>& detach) {
+    if (unfinished(detach)) return "detaching:" + std::string(rd::to_string(detach->state));
     if (row && row->state != ra::State::Done && row->state != ra::State::Aborted)
         return "attaching:" + std::string(ra::to_string(row->state));
     return s3Vault ? "attached" : "none";
@@ -73,11 +83,28 @@ std::string summaryOf(const bool s3Vault, const std::optional<ra::Row>& row) {
 Status statusOf(const vault::model::Vault& v) {
     const bool s3 = v.type == vault::model::VaultType::S3;
     Status s{.vault_id = v.id, .vault_name = v.name, .type = s3 ? "s3" : "local", .remote = {}, .attach = Q::get(v.id),
-             .progress = std::nullopt, .items = {}};
-    s.remote = summaryOf(s3, s.attach);
+             .detach = DQ::get(v.id), .progress = std::nullopt, .items = {}, .detach_items = {},
+             .access = std::nullopt};
+    s.remote = summaryOf(s3, s.attach, s.detach);
+    if (s3) s.access = storage::remote_access::state(v.id);
+    if (s.detach) {
+        const auto detachItems = DQ::items(v.id);
+        for (const auto& it : detachItems) {
+            if (it.kind == rd::ItemKind::Envelope) {
+                ++s.detach_items.envelopes;
+                if (it.hydrated) ++s.detach_items.envelopes_copied;
+                continue;
+            }
+            if (it.state == rd::ItemState::Pending) ++s.detach_items.files_pending;
+            else if (it.state == rd::ItemState::Failed) ++s.detach_items.files_failed;
+            else ++s.detach_items.files_verified;
+            if (it.hydrated) ++s.detach_items.files_fetched;
+        }
+        if (unfinished(s.detach) || !s.attach) s.progress = rd::progressOf(*s.detach, detachItems);
+    }
     if (!s.attach) return s;
     const auto items = Q::items(v.id);
-    s.progress = ra::progressOf(*s.attach, items);
+    if (!s.progress) s.progress = ra::progressOf(*s.attach, items);
     for (const auto& it : items) {
         if (it.state == ra::ItemState::Deleted || it.state == ra::ItemState::Stale) continue;
         switch (it.kind) {
@@ -114,7 +141,8 @@ nlohmann::json opt(const std::optional<T>& v) {
 }
 
 std::string remoteSummary(const unsigned int vaultId, const bool s3Vault) {
-    return vault_remote_detail::summaryOf(s3Vault, vault_remote_detail::Q::get(vaultId));
+    namespace d = vault_remote_detail;
+    return d::summaryOf(s3Vault, d::Q::get(vaultId), d::DQ::get(vaultId));
 }
 
 std::vector<Status> status(const Actor& actor, const std::optional<unsigned int> vaultId) {
@@ -129,6 +157,7 @@ std::vector<Status> status(const Actor& actor, const std::optional<unsigned int>
     }
     std::set<unsigned int> withRow;
     for (const auto& [id, state] : d::Q::states()) withRow.insert(id);
+    for (const auto& [id, state] : d::DQ::states()) withRow.insert(id);
     for (const auto& vault : db::query::vault::Vault::listLiveVaults())
         if (withRow.contains(vault->id) && d::canView(actor, vault)) out.push_back(d::statusOf(*vault));
     return out;
@@ -162,11 +191,43 @@ nlohmann::json toJson(const Status& s) {
                   {"first_pass", a.first_pass ? *a.first_pass : nlohmann::json(nullptr)},
                   {"last_error", d::opt(a.last_error)}};
     }
+    nlohmann::json detach = nullptr;
+    if (s.detach) {
+        const auto& r = *s.detach;
+        detach = {{"state", std::string(vault::remote::detach::to_string(r.state))},
+                  {"api_key_id", d::opt(r.api_key_id)},
+                  {"bucket", r.bucket},
+                  {"started_at", r.started_at},
+                  {"started_by", d::opt(r.started_by)},
+                  {"attempts", r.attempts},
+                  {"verified_at", d::optTime(r.verified_at)},
+                  {"cutover_at", d::optTime(r.cutover_at)},
+                  {"done_at", d::optTime(r.done_at)},
+                  {"aborted_at", d::optTime(r.aborted_at)},
+                  {"abort_requested_at", d::optTime(r.abort_requested_at)},
+                  {"estimate", r.estimate ? vault::remote::detach::toJson(vault::remote::detach::estimateFromJson(*r.estimate))
+                                          : nlohmann::json(nullptr)},
+                  {"items", {{"files_pending", s.detach_items.files_pending},
+                             {"files_verified", s.detach_items.files_verified},
+                             {"files_failed", s.detach_items.files_failed},
+                             {"files_fetched", s.detach_items.files_fetched},
+                             {"envelopes", s.detach_items.envelopes},
+                             {"envelopes_copied", s.detach_items.envelopes_copied}}},
+                  {"last_error", d::opt(r.last_error)}};
+    }
+    nlohmann::json access = nullptr;
+    if (s.access)
+        access = {{"mode", std::string(storage::remote_access::to_string(s.access->mode))},
+                  {"reason", d::opt(s.access->reason)},
+                  {"set_by", d::opt(s.access->set_by)},
+                  {"set_at", d::optTime(s.access->set_at)}};
     return {{"vault_id", s.vault_id},
             {"vault_name", s.vault_name},
             {"type", s.type},
             {"remote", s.remote},
+            {"access", access},
             {"attach", attach},
+            {"detach", detach},
             {"progress", s.progress ? vault::remote::toJson(*s.progress) : nlohmann::json(nullptr)},
             {"items", {{"files_pending", s.items.files_pending}, {"files_sent", s.items.files_sent},
                        {"files_failed", s.items.files_failed}, {"envelopes", s.items.envelopes},
@@ -191,6 +252,9 @@ Status attach(const Actor& actor, const AttachRequest& request) {
 
     if (vault->type != vault::model::VaultType::Local)
         throw Conflict("vault '" + vault->name + "' already has remote storage: only a local vault attaches a remote");
+    if (const auto detaching = d::DQ::get(vault->id); d::unfinished(detaching))
+        throw Conflict(fmt::format("vault '{}' has an unfinished remote detach ({}): abort or finish it first",
+                                   vault->name, d::rd::to_string(detaching->state)));
     if (const auto existing = d::Q::get(vault->id); existing && existing->state != ra::State::Failed &&
                                                     existing->state != ra::State::Aborted)
         throw Conflict(fmt::format("vault '{}' already has a remote attach ({})", vault->name,
@@ -252,14 +316,86 @@ Status attach(const Actor& actor, const AttachRequest& request) {
     return d::statusOf(*vault);
 }
 
+Status detach(const Actor& actor, const DetachRequest& request) {
+    namespace d = vault_remote_detail;
+    requireActor(actor);
+    const auto vault = d::liveVault(request.vault_id);
+    d::requireAttach(actor, vault, std::nullopt);
+    if (vault->type != vault::model::VaultType::S3)
+        throw Conflict("vault '" + vault->name + "' is a local vault: only an S3 vault detaches its remote");
+    if (const auto existing = d::DQ::get(vault->id); existing && d::rd::running(existing->state))
+        throw Conflict(fmt::format("vault '{}' already has a remote detach ({})", vault->name,
+                                   d::rd::to_string(existing->state)));
+    if (request.confirm != vault->name)
+        throw Invalid("the confirmation must be the vault's name exactly ('" + vault->name + "')");
+
+    const auto& manager = runtime::Deps::get().storageManager;
+    const auto engine = manager ? manager->getEngine(vault->id) : nullptr;
+    if (!engine) throw Conflict("vault '" + vault->name + "' is not loaded on this host");
+    try {
+        d::rd::requireVaultReady(*engine);
+    } catch (const vault::remote::Refusal& e) {
+        const auto text = fmt::format("vault '{}' can't detach its remote now: {}", vault->name, e.what());
+        if (e.code() == "not_s3" || e.code() == "vault_unavailable") throw Conflict(text);
+        throw Refused(e.code(), text);
+    }
+    auth::stepup::require(auth::stepup::Family::Keys, "vault.remote.detach:" + std::to_string(vault->id));
+
+    const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(vault);
+    const auto started = d::DQ::start({.vault_id = vault->id,
+                                       .api_key_id = s3 && s3->api_key_id ? std::make_optional(s3->api_key_id) : std::nullopt,
+                                       .bucket = s3 ? s3->bucket : std::string{}, .started_by = actor->id});
+    if (started.outcome == d::DQ::StartOutcome::Busy)
+        throw Conflict("vault '" + vault->name + "' already has a remote detach");
+    const bool resumed = started.outcome == d::DQ::StartOutcome::Resumed;
+    vh::audit::record({.action = "vault.remote.detach", .outcome = vh::audit::Outcome::Success, .actor_id = actor->id,
+                       .actor = actor->name(), .vault_id = vault->id,
+                       .details = {{"bucket", s3 ? s3->bucket : std::string{}}, {"resumed", resumed}}},
+                      fmt::format("[ops::vault_remote] {} {} detaching the remote of vault {}; the vault stays an S3 "
+                                  "vault until every file is held and verified locally, and its bucket is left in place",
+                                  actor->name(), resumed ? "resumed" : "started", vault->id));
+    return d::statusOf(*vault);
+}
+
+Status setAccess(const Actor& actor, const AccessRequest& request) {
+    namespace d = vault_remote_detail;
+    requireActor(actor);
+    const auto vault = d::liveVault(request.vault_id);
+    d::requireAttach(actor, vault, std::nullopt);
+    if (vault->type != vault::model::VaultType::S3)
+        throw Conflict("vault '" + vault->name + "' is a local vault: it has no remote storage whose access to set");
+    if (request.reason && request.reason->size() > 500) throw Invalid("the reason is longer than 500 characters");
+    (void)storage::remote_access::set(vault->id, request.mode, request.reason, "user:" + actor->name());
+    return d::statusOf(*vault);
+}
+
 Status abort(const Actor& actor, const AbortRequest& request) {
     namespace d = vault_remote_detail;
     namespace ra = vault::remote;
     requireActor(actor);
     const auto vault = d::liveVault(request.vault_id);
     d::requireAttach(actor, vault, std::nullopt);
+
+    // A detach before its cutover is what runs on an S3 vault; an attach before its cutover on a local one.
+    if (const auto detaching = d::DQ::get(vault->id); detaching && d::rd::beforeCutover(detaching->state)) {
+        if (request.confirm != vault->name)
+            throw Invalid("the confirmation must be the vault's name exactly ('" + vault->name + "')");
+        auth::stepup::require(auth::stepup::Family::Keys, "vault.remote.abort:" + std::to_string(vault->id));
+        if (!d::DQ::requestAbort(vault->id, actor->id))
+            throw Conflict("vault '" + vault->name + "' cut over meanwhile: nothing was aborted");
+        vh::audit::record({.action = "vault.remote.abort", .outcome = vh::audit::Outcome::Success, .actor_id = actor->id,
+                           .actor = actor->name(), .vault_id = vault->id,
+                           .details = {{"operation", "detach"},
+                                       {"state", std::string(d::rd::to_string(detaching->state))}}},
+                          fmt::format("[ops::vault_remote] {} asked to abort the remote detach of vault {} ({}); the "
+                                      "vault stays an S3 vault", actor->name(), vault->id,
+                                      d::rd::to_string(detaching->state)));
+        return d::statusOf(*vault);
+    }
+
     const auto row = d::Q::get(vault->id);
-    if (!row || row->state == ra::State::Aborted) throw Conflict("vault '" + vault->name + "' has no remote attach to abort");
+    if (!row || row->state == ra::State::Aborted)
+        throw Conflict("vault '" + vault->name + "' has no remote attach or detach to abort");
     if (!ra::beforeCutover(row->state))
         throw Conflict("vault '" + vault->name + "' has cut over to its bucket: an attach is aborted before the cutover "
                        "only");
@@ -270,7 +406,7 @@ Status abort(const Actor& actor, const AbortRequest& request) {
         throw Conflict("vault '" + vault->name + "' cut over meanwhile: nothing was aborted");
     vh::audit::record({.action = "vault.remote.abort", .outcome = vh::audit::Outcome::Success, .actor_id = actor->id,
                        .actor = actor->name(), .vault_id = vault->id,
-                       .details = {{"state", std::string(ra::to_string(row->state))}}},
+                       .details = {{"operation", "attach"}, {"state", std::string(ra::to_string(row->state))}}},
                       fmt::format("[ops::vault_remote] {} asked to abort the remote attach of vault {} ({}); the "
                                   "objects it recorded are deleted from the bucket, the vault was never changed",
                                   actor->name(), vault->id, ra::to_string(row->state)));

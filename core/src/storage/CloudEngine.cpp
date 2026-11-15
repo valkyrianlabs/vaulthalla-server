@@ -33,6 +33,7 @@
 #include "storage/s3/provider/Registry.hpp"
 #include "storage/ObjectKeys.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "storage/RemoteAccess.hpp"
 #include "db/query/sync/ObjectIdentity.hpp"
 #include "vault/Content.hpp"
 #include "crypto/vhf1/Format.hpp"
@@ -155,6 +156,7 @@ CloudEngine::CloudEngine(const std::shared_ptr<vh::vault::model::S3Vault>& vault
     resolveS3ProviderConfiguration();
     s3Provider_->setUsageVault(vault->id);   // feeds the vault's local usage ledger (recovery cost estimates)
     applyLayoutPolicy();
+    remote_access::refresh(vault->id);       // the access gate as the database says (storage/RemoteAccess.hpp)
 }
 
 CloudEngine::CloudEngine(const std::shared_ptr<vh::vault::model::S3Vault>& vault, std::shared_ptr<s3::Controller> s3Provider)
@@ -164,9 +166,11 @@ CloudEngine::CloudEngine(const std::shared_ptr<vh::vault::model::S3Vault>& vault
     resolveS3ProviderConfiguration();
     if (s3Provider_ && vault) s3Provider_->setUsageVault(vault->id);
     applyLayoutPolicy();
+    if (vault) remote_access::refresh(vault->id);
 }
 
 void CloudEngine::upload(const std::shared_ptr<File>& f) const {
+    remote_access::requireWrite(vault->id, "upload");
     const auto backingPath = resolvedBackingPath(*this, f);
     if (!fs::exists(backingPath) || !fs::is_regular_file(backingPath))
         throw std::runtime_error("[CloudStorageEngine] Invalid file: " + f->path.string());
@@ -209,6 +213,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f) const {
 }
 
 void CloudEngine::upload(const std::shared_ptr<File>& f, const std::vector<uint8_t>& buffer, const bool isCiphertext) const {
+    remote_access::requireWrite(vault->id, "upload");
     if (buffer.empty()) throw std::invalid_argument("[CloudStorageEngine] Buffer for upload cannot be empty");
     if (!f) throw std::invalid_argument("[CloudStorageEngine] Invalid file or buffer for upload");
 
@@ -571,6 +576,7 @@ bool CloudEngine::refreshRemoteIndexFromManifestIfChanged() const {
 }
 
 void CloudEngine::publishRemoteIndexManifest(const std::optional<std::string>& expectedETag) const {
+    remote_access::requireWrite(vault->id, "manifest publish");
     if (usesManifestV2()) {
         publishManifestV2();
         return;
@@ -662,6 +668,7 @@ void CloudEngine::requestManifestPublish() const {
 
 unsigned CloudEngine::ensureRecoveryEnvelopes() const {
     if (!vault || !encryptionManager) return 0;
+    remote_access::requireWrite(vault->id, "recovery envelope PUT");
     const auto& keys = *encryptionManager;
     std::vector<uint32_t> versions;
     for (const auto v : keys.retainedKeyVersions()) versions.push_back(v);
@@ -1112,12 +1119,15 @@ void CloudEngine::setRangedReadLimits(const RangedReadLimits& limits) { rangedLi
 void CloudEngine::setHydrateCatalogCommitForTesting(HydrateCatalogCommit commit) { catalogCommit_ = std::move(commit); }
 
 void CloudEngine::purge(const fs::path& rel_path) const {
+    // Before anything goes locally: a purge the bucket can't take leaves both copies as they are.
+    remote_access::requireWrite(vault->id, "delete");
     const auto key = objectKeyForPath(rel_path);   // before the row goes: opaque_v1 resolves the uid through it
     removeLocally(rel_path);
     removeRemoteKey(key, rel_path);
 }
 
 void CloudEngine::purge(const std::shared_ptr<file::Trashed>& f) const {
+    remote_access::requireWrite(vault->id, "delete");
     removeLocally(f);
     removeRemotely(f);
 }
@@ -1125,6 +1135,7 @@ void CloudEngine::purge(const std::shared_ptr<file::Trashed>& f) const {
 void CloudEngine::removeRemotely(const fs::path& rel_path) const { removeRemoteKey(objectKeyForPath(rel_path), rel_path); }
 
 void CloudEngine::removeRemoteKey(const std::string& key, const fs::path& rel_path) const {
+    remote_access::requireWrite(vault->id, "delete");
     auto own = noteOwnWrite(key, true, std::nullopt);
     s3Provider_->deleteObject(key);
     own.done();
@@ -1135,6 +1146,7 @@ void CloudEngine::removeRemoteKey(const std::string& key, const fs::path& rel_pa
 }
 
 void CloudEngine::removeRemotely(const std::shared_ptr<file::Trashed>& f) const {
+    remote_access::requireWrite(vault->id, "delete");
     // Trashing ended the file id and dropped its derived artifacts.
     const auto key = objectKeyOf(*f);
     auto own = noteOwnWrite(key, true, std::nullopt);

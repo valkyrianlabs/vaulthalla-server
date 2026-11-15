@@ -1052,6 +1052,8 @@ export interface WebSocketCommandMap {
   'vault.storage.probe': WsContract['vault.storage.probe']
   // A local vault becomes an S3/R2 vault in place (attach and abort ask a keys step-up); status follows the upload.
   'vault.remote.attach': WsContract['vault.remote.attach']
+  // An S3 vault becomes a local vault in place (a keys step-up); the bucket is left as it is.
+  'vault.remote.detach': WsContract['vault.remote.detach']
   'vault.remote.status': WsContract['vault.remote.status']
   'vault.remote.abort': WsContract['vault.remote.abort']
 }

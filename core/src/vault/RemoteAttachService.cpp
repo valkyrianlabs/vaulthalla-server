@@ -1,6 +1,7 @@
 #include "vault/RemoteAttachService.hpp"
 
 #include "db/query/vault/RemoteAttach.hpp"
+#include "db/query/vault/RemoteDetach.hpp"
 #include "log/Registry.hpp"
 #include "recovery/Store.hpp"
 #include "runtime/Deps.hpp"
@@ -8,6 +9,7 @@
 #include "storage/Manager.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/RemoteAttach.hpp"
+#include "vault/RemoteDetach.hpp"
 
 #include <filesystem>
 #include <system_error>
@@ -81,6 +83,35 @@ void RemoteAttachService::runOnce() {
             log::Registry::cloud()->warn("[RemoteAttach] Vault {}: {}", row.vault_id, e.what());
             try {
                 d::Q::setError(row.vault_id, e.what());
+            } catch (const std::exception&) {
+            }
+        }
+    }
+
+    // Detaches (vault/RemoteDetach.hpp): nothing in the bucket is written or deleted, so an abort needs no retry.
+    using DetachQ = db::query::vault::RemoteDetach;
+    namespace rd = remote::detach;
+    for (const auto& row : DetachQ::list()) {
+        if (stop()) return;
+        try {
+            if (row.abort_requested_at && rd::beforeCutover(row.state)) {
+                const auto result = rd::runAbort(row.vault_id);
+                log::Registry::cloud()->info("[RemoteDetach] Vault {}: aborted; the vault is still an S3 vault ({} "
+                                             "copied envelope(s) cleared, {} kept)", row.vault_id,
+                                             result.envelopes_cleared, result.envelopes_kept);
+                continue;
+            }
+            if (!rd::running(row.state)) continue;
+            auto deps = rd::runtimeRunDeps();
+            deps.stop = stop;
+            const auto result = rd::run(row.vault_id, deps);
+            if (result.state == rd::State::Failed)
+                log::Registry::cloud()->error("[RemoteDetach] Vault {}: detaching the remote failed; the vault is still "
+                                              "an S3 vault: {}", row.vault_id, result.error.value_or("?"));
+        } catch (const std::exception& e) {
+            log::Registry::cloud()->warn("[RemoteDetach] Vault {}: {}", row.vault_id, e.what());
+            try {
+                DetachQ::setError(row.vault_id, e.what());
             } catch (const std::exception&) {
             }
         }

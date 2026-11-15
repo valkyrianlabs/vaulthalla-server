@@ -4,6 +4,7 @@
 #include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "storage/CloudEngine.hpp"
+#include "storage/RemoteAccess.hpp"
 #include "sync/events/Subscriptions.hpp"
 #include "platform/Durable.hpp"
 #include "platform/StagedFile.hpp"
@@ -214,6 +215,14 @@ std::unique_ptr<RemoteFetchReservation> CloudEngine::reserveRemoteFetch(const Re
 std::shared_ptr<vh::fs::model::File> CloudEngine::hydrate(const std::shared_ptr<vh::fs::model::File>& f) const {
     if (!f) throw std::invalid_argument("Cannot hydrate a null file");
     if (f->backing_path.empty()) throw std::runtime_error("File has no backing path: " + f->path.string());
+    // The access gate (storage/RemoteAccess.hpp): a vault without remote access fetches nothing. A local copy still
+    // serves (hydrateNow returns it before any request); only a remote-only file fails, before any request is made.
+    if (vault && !remote_access::allowsReads(remote_access::mode(vault->id))) {
+        std::error_code present;
+        if (!std::filesystem::exists(f->backing_path, present))
+            throw ContentUnavailable("remote_unavailable: the vault's remote storage is unavailable, and this file has "
+                                     "no local copy: " + f->path.string());
+    }
 
     constexpr auto kHydrateFailureBackoff = std::chrono::minutes(2);
     const auto key = f->backing_path.lexically_normal().string();

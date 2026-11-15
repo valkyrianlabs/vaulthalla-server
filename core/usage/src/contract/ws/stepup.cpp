@@ -22,6 +22,7 @@ std::vector<WsStepUp> stepUpTable() {
         {"vault.recover", "keys", kTarget, "bound to the bucket (the console is refused recover_requires_device first)"},
         {"vault.layout.migrate", "keys", kTarget, ""},
         {"vault.remote.attach", "keys", kTarget, ""},
+        {"vault.remote.detach", "keys", kTarget, ""},
         {"vault.remote.abort", "keys", kTarget, ""},
         // device.trust: target-bound (request id + new key + chosen code), single use
         {"device.pairing.approve", "device.trust", kTarget, ""},

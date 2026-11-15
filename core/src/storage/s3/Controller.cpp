@@ -1,4 +1,5 @@
 #include "storage/s3/Controller.hpp"
+#include "storage/RemoteAccess.hpp"
 #include "recovery/usage/Ledger.hpp"
 #include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "vault/model/APIKey.hpp"
@@ -81,6 +82,15 @@ namespace vh::storage::s3 {
         // lock set while a sync pass, hydrate, purge or retry is in flight stops its next request. Bytes of a GET
         // already granted are not re-checked mid-stream.
         if (kind != RequestKind::DownloadBytes) upstream::guard::require(identity_);
+        // The vault's remote access gate (storage/RemoteAccess.hpp), the last line behind the sync pass, upload,
+        // delete, publish and hydrate checks: no write leaves a read-only vault, no request at all one without access.
+        if (const auto vaultId = usageVault(); vaultId != 0 && kind != RequestKind::DownloadBytes) {
+            if (kind == RequestKind::Put || kind == RequestKind::Copy || kind == RequestKind::Delete)
+                remote_access::requireWrite(vaultId, kind == RequestKind::Delete ? "DELETE"
+                                                     : kind == RequestKind::Copy ? "COPY" : "PUT");
+            else remote_access::requireRead(vaultId, kind == RequestKind::List ? "LIST"
+                                                     : kind == RequestKind::Head ? "HEAD" : "GET");
+        }
         // Every capture active on this thread sees the request: a nested capture (a preview hydrate's own cap
         // inside an S3 gateway request) must not hide it from the outer one. All captures and the engine-wide
         // budget are checked before anything is recorded.

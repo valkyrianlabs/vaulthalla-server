@@ -150,6 +150,18 @@
   to read capabilities, cached 10 min, from the lazy upload chunk (`features/files/upload/resumable.ts`). Share
   sessions may not say hello.
 
+## Remote storage (attach / detach)
+
+`features/vaults/settings/RemoteStoragePanel.tsx` (`next/dynamic` from `VaultSettings`, anchor `#remote-storage`):
+`vault.remote.status {vault_id}` polled every 3 s only while an operation runs (`models/vaultRemote.ts` `isRunning`;
+pure helpers unit-tested in `vaultRemote.test.ts`). A local vault without an operation shows the attach form
+(credential from `storage.apiKey.list`, bucket, storage tier, accept-unpriced, then `confirm()`); an S3 vault shows
+"Detach bucket…" (`confirm()` with the vault's name typed). While one runs: phase, `Meter` (null ratio while
+unknown), files/bytes/rate, last error, Abort (typed name) and, when failed, Resume (resends attach with the row's
+key and bucket, or detach). The keys step-up is the client's usual flow. When an operation ends the vault queries are
+invalidated (the type changed). A restricted vault (`access.mode` read_only/none) shows `accessNotice`. No copy
+mentions the managed service (claims lint).
+
 ## Sync conflicts (#187)
 
 `features/syncConflicts/*`, route `/sync-conflicts`. Open conflicts recorded under the remote `ask` policy, only in

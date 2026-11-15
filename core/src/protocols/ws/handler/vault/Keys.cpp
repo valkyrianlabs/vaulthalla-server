@@ -187,6 +187,14 @@ json VaultKeys::remoteAttach(const json& payload, const std::shared_ptr<Session>
                            .accept_unpriced = acceptUnpriced}));
 }
 
+json VaultKeys::remoteDetach(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto vaultId = requiredVaultId(payload);
+    if (!payload.contains("confirm") || !payload.at("confirm").is_string())
+        throw ops::Invalid("confirm must be the vault's name");
+    return ops::vault_remote::toJson(ops::vault_remote::detach(
+        actorOf(session), {.vault_id = vaultId, .confirm = payload.at("confirm").get<std::string>()}));
+}
+
 json VaultKeys::remoteStatus(const json& payload, const std::shared_ptr<Session>& session) {
     std::optional<unsigned int> vaultId;
     if (payload.is_object() && payload.contains("vault_id") && !payload.at("vault_id").is_null())

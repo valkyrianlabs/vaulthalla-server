@@ -247,11 +247,34 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
         });
 
         out.push_back({
+            .command = "vault.remote.detach",
+            .description = "Detach the remote of an S3 vault (design/storage/attach-remote.md, \"The reverse\"): the "
+                           "vault keeps its id, keys, permissions, shares and files and becomes a local vault in "
+                           "place. Checks the preconditions now (an S3 vault with its keys loaded, no attach, layout "
+                           "migration, key rotation or salvage running, no content in a legacy format, every key "
+                           "version its files use held, no event-driven sync, no open sync conflict); then in the "
+                           "background every file without a local copy is fetched, every local copy is authenticated, "
+                           "and every recovery envelope is copied from the bucket into the database, before the vault "
+                           "switches in one transaction. The bucket and its objects are left in place. "
+                           "vault.remote.status follows it; a failed detach started again resumes. confirm must be "
+                           "the vault's name. With a keys step-up bound to the vault (#359); the vault's admin Edit "
+                           "and sync config Edit permissions and the encryption-key Rotate permission.",
+            .payload = {vaultId(), str("confirm").gen(gen::ref("vault", {"name"})).desc("The vault's name.")},
+            .response = modelFields("VaultRemoteStatus"),
+            .refusal_codes = remoteRefusals({"attach_running", "layout_migration_running", "key_rotation_running",
+                                             "key_salvage_running", "legacy_content", "key_version_missing",
+                                             "event_sync_active", "sync_conflicts_open"}),
+            .response_model = "VaultRemoteStatus",
+            .client_timeout = std::chrono::milliseconds(60'000),
+        });
+
+        out.push_back({
             .command = "vault.remote.status",
-            .description = "Where attaching a remote stands for vault_id, or for every vault with an attach the caller "
-                           "may view: state, bucket, publish mode, progress (files and bytes, rate, time left), the "
-                           "estimate and usage, the last error, and after the cutover the first sync pass's result. "
-                           "The vault's admin View permission. Read-only; safe for any session.",
+            .description = "Where attaching (or detaching) a remote stands for vault_id, or for every vault with an "
+                           "attach or detach the caller may view: state, bucket, publish mode, progress (files and "
+                           "bytes, rate, time left), the estimate and usage, the last error, and after an attach's "
+                           "cutover the first sync pass's result. The vault's admin View permission. Read-only; safe "
+                           "for any session.",
             .payload = {vaultId().opt().nullable().desc("One vault; absent for all.")},
             .response = {objectArray("vaults", "VaultRemoteStatus")},
             .refusal_codes = {"denied", "invalid", "not_found", "unauthorized"},
@@ -260,12 +283,13 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
 
         out.push_back({
             .command = "vault.remote.abort",
-            .description = "Abort an attach before its cutover: everything it uploaded is deleted from the bucket, "
-                           "each object by the version the attach recorded, in the background, and the bucket is "
-                           "released (state aborted). Nothing the attach did not write is deleted; the vault itself "
-                           "was never changed. A delete the provider refuses is retried and stays listed. confirm "
-                           "must be the vault's name. With a keys step-up bound to the vault (#359); the same "
-                           "permissions as vault.remote.attach, without the API key's.",
+            .description = "Abort an attach or a detach before its cutover. An attach's abort deletes everything it "
+                           "uploaded from the bucket, each object by the version the attach recorded, in the "
+                           "background, and releases the bucket (state aborted); nothing the attach did not write is "
+                           "deleted, the vault itself was never changed, and a delete the provider refuses is retried "
+                           "and stays listed. A detach's abort leaves the vault an S3 vault; the local copies it "
+                           "fetched stay. confirm must be the vault's name. With a keys step-up bound to the vault "
+                           "(#359); the same permissions as vault.remote.attach, without the API key's.",
             .payload = {vaultId(), str("confirm").gen(gen::ref("vault", {"name"})).desc("The vault's name.")},
             .response = modelFields("VaultRemoteStatus"),
             .refusal_codes = opsRefusals(),

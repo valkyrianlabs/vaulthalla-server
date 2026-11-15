@@ -159,6 +159,73 @@ What to know:
 - A vault's recovery recipients carry over: their key envelopes are copied into the bucket before the switch.
 - An S3 gateway bucket bound to the vault keeps working and serves the vault as a cached remote from then on.
 - Attaching a bucket is decided by a person: it isn't available to agents.
+- The web console has the same flow under **Vault → Settings → Remote storage**: choose a credential and an empty
+  bucket, follow the progress, and abort or resume from there.
+
+## Detaching A Bucket From A Vault
+
+An S3/R2 vault can be made a local vault again, keeping a full copy on this server. It stays the same vault: its ID,
+keys, permissions, shares and files are kept.
+
+```bash
+vh vault remote detach finance --confirm finance
+vh vault remote status finance
+```
+
+The detach checks first and refuses otherwise, with the vault unchanged: no attach, bucket layout migration, key
+rotation or key salvage may be running, the vault holds no content in the legacy format, this server holds every key
+version its files use, event-driven sync is off, and no sync conflict is open (resolve them first, so no version in
+the bucket is left undecided).
+
+Then, in the background and while the vault stays an S3 vault that syncs as before:
+
+- every file without a copy on this server is fetched from the bucket (each fetch is checked against the
+  [price budget](/cost-control/price-budgets)),
+- every local copy is authenticated against the generation the catalog records, and
+- every recovery envelope of the vault's recovery recipients is copied from the bucket into the server's database,
+  where a local vault keeps them. A detach never leaves one behind: if an envelope can't be read from the bucket, the
+  detach stops and the vault stays an S3 vault.
+
+Files that change meanwhile are checked again. Only when everything is held and verified does the vault switch, in one
+step, to a local vault. **The bucket and every object in it are left as they are**: a detach never writes to or
+deletes from the bucket. Deleting the bucket, if you want to, is a separate step.
+
+If something fails before the switch, the vault is still an S3 vault. Run the same command again to resume, or abort
+it with `vh vault remote abort finance --confirm finance`; the files fetched so far stay on this server as cached
+copies.
+
+What to know:
+
+- Earlier versions whose contents only the bucket holds (released from this server once the provider kept them) stay
+  in the bucket's history and can't be restored from this server afterwards. Trashed files without a local copy stay
+  in the bucket too. `vh vault remote status` counts both before the switch.
+- Provider versioning as the vault's recovery mode becomes local snapshots; queued uploads of earlier versions are
+  dropped (the versions stay local recovery points).
+- An S3 gateway bucket bound to the vault serves it as a local bucket from then on.
+- Detaching is decided by a person: it isn't available to agents. The web console offers it under **Vault → Settings
+  → Remote storage**, with a step-up confirmation.
+
+## Remote Access
+
+An S3/R2 vault's access to its bucket can be limited, for example while the provider is in maintenance or while an
+account can't take new writes:
+
+```bash
+vh vault remote access finance --set read-only --reason "provider maintenance"
+vh vault remote access finance --set none
+vh vault remote access finance --set full
+```
+
+| Access | What the vault does |
+|---|---|
+| `full` | Everything, as usual. |
+| `read-only` | Files are read and fetched from the bucket as before, but nothing is uploaded, deleted or published there. The vault's sync passes are skipped (recorded as `skipped: remote read-only`); changes made on this server are kept and go up with the first pass once access is full again. A key rotation waits. |
+| `none` | No request goes to the bucket at all. Files with a copy on this server keep working; files without one can't be opened (`remote_unavailable`). |
+
+`vh vault remote status <vault>` shows the vault's access, why and who set it; `vh status` and the health page show
+a read-only or unavailable remote as degraded. Setting it needs the same permissions as attaching a bucket, and it
+isn't available to agents. A vault keeps its access across restarts. Detaching a read-only vault works (a detach only
+reads the bucket), and the setting goes with the vault's bucket.
 
 ## Upstream Encryption
 
