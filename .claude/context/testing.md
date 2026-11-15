@@ -345,6 +345,10 @@ bash tools/dev/verify.sh harness                                   # unit + self
   `detach::RunDeps` (the test's `sync::Controller` lease, `reloadEngine` as the swap); crash resume via `afterStep`
   (prepared, item:<id>, pass:<n>, hydrated, checked, cutover, swapped); the bucket's version snapshot must be
   unchanged. Not covered: Tier B (detach while FUSE writes), live buckets.
+- Remote access gate: DB-backed `RemoteAccess*` (`test_remote_access.cpp`): `makeCloudVault` vaults, the daemon's
+  own pass (`(*std::make_shared<sync::Cloud>(engine))()`) for the skip and the event, `runSyncPass` for the regular
+  passes, `VersionedBucket::counters()` to prove no request reached the bucket. The fake meters through
+  `Controller::recordRequest`, so the controller backstop is exercised too.
 - Lessons: the engine never touches the mount itself (a `Path.resolve()` blocked it in D state under a stopped
   daemon); `Instance.watchdog()` aborts the run's own FUSE connection past a hard deadline.
 - Never point mutating commands at vh-storage: targets are validated (a live `VH_TEST_MODE=1` daemon serving a

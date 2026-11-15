@@ -146,6 +146,10 @@ new managed vault is a configuration value (open question 11). Quota counts ever
 
 **New server work:** there is no read-only remote mode today. The gate is `vault_cloud_storage.access`, set by the
 service and read by the sync pass, the upload and delete paths, the manifest publisher and hydrate (work item 4).
+*Built (work item 4):* the gate lives in its own table `vault_remote_access` (migration 140), not in
+`vault_cloud_storage`, so BYOS vaults have it too and the cloud migration needn't own it; the service sets it with
+`storage::remote_access::set(vault, mode, cause, "system:cloud")` (`storage/RemoteAccess.hpp`); values `full`,
+`read_only`, `none`; operators also have `vh vault remote access`.
 
 | State (`billing.md`) | Key | Server does | Shows |
 |---|---|---|---|

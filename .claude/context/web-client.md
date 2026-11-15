@@ -159,7 +159,8 @@ pure helpers unit-tested in `vaultRemote.test.ts`). A local vault without an ope
 "Detach bucket…" (`confirm()` with the vault's name typed). While one runs: phase, `Meter` (null ratio while
 unknown), files/bytes/rate, last error, Abort (typed name) and, when failed, Resume (resends attach with the row's
 key and bucket, or detach). The keys step-up is the client's usual flow. When an operation ends the vault queries are
-invalidated (the type changed). No copy mentions the managed service (claims lint).
+invalidated (the type changed). A restricted vault (`access.mode` read_only/none) shows `accessNotice`. No copy
+mentions the managed service (claims lint).
 
 ## Sync conflicts (#187)
 

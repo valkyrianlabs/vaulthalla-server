@@ -205,6 +205,28 @@ What to know:
 - Detaching is decided by a person: it isn't available to agents. The web console offers it under **Vault → Settings
   → Remote storage**, with a step-up confirmation.
 
+## Remote Access
+
+An S3/R2 vault's access to its bucket can be limited, for example while the provider is in maintenance or while an
+account can't take new writes:
+
+```bash
+vh vault remote access finance --set read-only --reason "provider maintenance"
+vh vault remote access finance --set none
+vh vault remote access finance --set full
+```
+
+| Access | What the vault does |
+|---|---|
+| `full` | Everything, as usual. |
+| `read-only` | Files are read and fetched from the bucket as before, but nothing is uploaded, deleted or published there. The vault's sync passes are skipped (recorded as `skipped: remote read-only`); changes made on this server are kept and go up with the first pass once access is full again. A key rotation waits. |
+| `none` | No request goes to the bucket at all. Files with a copy on this server keep working; files without one can't be opened (`remote_unavailable`). |
+
+`vh vault remote status <vault>` shows the vault's access, why and who set it; `vh status` and the health page show
+a read-only or unavailable remote as degraded. Setting it needs the same permissions as attaching a bucket, and it
+isn't available to agents. A vault keeps its access across restarts. Detaching a read-only vault works (a detach only
+reads the bucket), and the setting goes with the vault's bucket.
+
 ## Upstream Encryption
 
 New S3/R2 vaults should normally use upstream encryption. With it enabled, a new vault uses **opaque storage** (`opaque_v1`): each file is one encrypted object named by a random id, with no metadata headers, and names, folders and history live in an encrypted manifest in the same bucket (`.vaulthalla/`). Your storage provider only ever sees encrypted, opaquely named objects. It can't see your file names, folders or contents. It can see how many objects you store, their sizes and when they change ([what remains visible](/vaults/encryption#what-opaque-storage-still-reveals)).

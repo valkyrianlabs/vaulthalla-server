@@ -338,6 +338,7 @@ provider changed, or when a vault reports `bucket_capability_changed`. See
 ```bash
 vh vault remote attach <vault> --api-key <key> --bucket <name> [--storage-tier <tier>] [--accept-unpriced] [--json]
 vh vault remote detach <vault> --confirm <vault name> [--json]
+vh vault remote access <vault> --set <full|read-only|none> [--reason <text>] [--json]
 vh vault remote status <vault-or-all> [--json]
 vh vault remote abort <vault> --confirm <vault name> [--json]
 ```
@@ -348,7 +349,9 @@ follows it; `abort` stops it before the switch and deletes what it uploaded. See
 [Attaching A Bucket To A Local Vault](/vaults/s3-r2-vaults#attaching-a-bucket-to-a-local-vault). `detach` does the
 reverse: it fetches and verifies every file on this server, copies the recovery envelopes into the database and then
 makes the vault local, leaving the bucket as it is; `abort` stops a detach before the switch too. See
-[Detaching A Bucket From A Vault](/vaults/s3-r2-vaults#detaching-a-bucket-from-a-vault).
+[Detaching A Bucket From A Vault](/vaults/s3-r2-vaults#detaching-a-bucket-from-a-vault). `access` limits what an
+S3/R2 vault may do with its bucket (read-only: no uploads, deletes or manifest publish; none: no request at all); see
+[Remote Access](/vaults/s3-r2-vaults#remote-access).
 
 ## File Recovery
 

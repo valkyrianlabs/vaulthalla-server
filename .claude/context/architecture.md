@@ -187,7 +187,7 @@ usage book and the operation catalog and no daemon types, so the client links it
   (`McpCatalog.RunLinesParseAsCheckedForEveryDocumentedExample`). Refused before running: unknown commands, groups,
   `--`, odd option spellings, confirmation flags in the command, and `mcp::exclusions()` (one list: `vault key export|import`,
   `secrets export|update`, `setup`, `teardown`, `fs get|put`, `mcp`, `skill`, `device pair|approve|deny`,
-  `device remote enable|disable`, `cloud link|unlink`, `cloud recovery enroll|unenroll`, `vault remote attach|detach`; also checked case-insensitively). Defense in depth for key material:
+  `device remote enable|disable`, `cloud link|unlink`, `cloud recovery enroll|unenroll`, `vault remote attach|detach|access`; also checked case-insensitively). Defense in depth for key material:
   `protocols::shell::AgentCallScope` marks a command run for an MCP client (`/mcp`'s executor; a `vh mcp` request
   carries `"agent": true`), and the vault key handlers refuse under it (`key-backup.md`).
 - Confirmations: a leaf's gates are its flags spelled `yes`/`accept-*`/`adopt-bucket` and the `confirm-token` option.
@@ -1060,6 +1060,23 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   key_version_missing, event_sync_active, sync_conflicts_open. Health `remote_detach_failed` (degraded),
   `remote_detaches_unfinished`. Tests `RemoteDetach*` (`test_remote_detach.cpp`), parity
   `VaultRemoteParityTest.DetachAndItsAbort*`. Console: `features/vaults/settings/RemoteStoragePanel.tsx` (lazy).
+- **Remote access gate** (managed-remotes.md "Entitlement states and the access gate", work item 4;
+  `storage/RemoteAccess.hpp`, migration 140 `vault_remote_access`, catalog `db::query::vault::RemoteAccess`).
+  `full | read_only | none` per S3 vault, no row = full. Held in memory (`remote_access::mode`, a shared-locked map,
+  never the database): `CloudEngine`'s constructors `refresh` it, `storage::Manager::initStorageEngines` `clear`s it
+  first, `remote_access::set(vaultId, mode, reason, setBy)` writes row + memory + audit `vault.remote.access` and, back
+  to full, `sync::Controller::runNow` (a skipped pass, like any stalled one, isn't rescheduled). Enforcement:
+  `sync::Cloud::operator()` throws `SyncStalled("skipped: remote read-only|unavailable (reason)")` right after
+  `startTask` (no request made); `CloudEngine::upload` (both), `purge` (both, before the local removal),
+  `removeRemoteKey`, `removeRemotely(Trashed)`, `publishRemoteIndexManifest`, `ensureRecoveryEnvelopes` call
+  `requireWrite`; `hydrate` refuses a remote-only file under none with `ContentUnavailable("remote_unavailable…")`;
+  last line `s3::Controller::recordRequest` (beside the protection guard) for any controller with `usageVault() != 0`:
+  PUT/COPY/DELETE need full, LIST/HEAD/GET not none (`remote_access::Restricted`, codes `remote_read_only`,
+  `remote_unavailable`). `vh vault keys rotate` answers "waits" while restricted. Operator setter `vh vault remote
+  access <vault> --set <mode> [--reason]` (`ops::vault_remote::setAccess`, set_by `user:<name>`; the managed-storage
+  service is to call `remote_access::set` with `system:<service>`). Status: `vault.remote.status` `access`; health
+  `vault_remote_restricted` / `vault_remote_unavailable` (degraded). A detach deletes the row (`forget`). Tests
+  `RemoteAccess*` (`test_remote_access.cpp`).
 - **Local-vault recovery envelopes** (attach-remote open question 2): `vault::envelopes::storeFor` returns a
   database-backed `ObjectStore` for a local vault (bytes in `vault_key_envelope.envelope`, written in the transaction
   that records the envelope; `KeyEnvelope::envelope`), so `ops::recovery_recipients::add`, rotation, salvage and

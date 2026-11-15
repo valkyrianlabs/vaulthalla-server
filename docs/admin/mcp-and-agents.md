@@ -39,8 +39,8 @@ inside the limits below. `vh skill install` sets an agent up in one step.
   `vh setup set-super-admin-password`), and `vh fs get` / `vh fs put`. Neither are pairing decisions
   (`vh device pair`, `approve`, `deny`), `vh device remote enable|disable` or `vh cloud link|unlink`, nor the master
   secret rotations (`vh secret master rotate|finalize|rollback`, `vh secret jwt rotate`,
-  `vh secret device-identity rotate`). Where a vault's data is stored is your decision too: `vh vault remote attach`
-  and `vh vault remote detach` are never available to agents (they can read `vh vault remote status`). To back up a vault key, run
+  `vh secret device-identity rotate`). Where a vault's data is stored is your decision too: `vh vault remote attach`,
+  `vh vault remote detach` and `vh vault remote access` are never available to agents (they can read `vh vault remote status`). To back up a vault key, run
   `vh vault keys export <vault>` yourself in a terminal.
 
 :::callout[Your account, your blast radius]{variant="warning"}
