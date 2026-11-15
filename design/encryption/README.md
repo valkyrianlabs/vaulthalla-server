@@ -13,6 +13,7 @@ encrypted bucket reconstructs files, names, versions and layout after the old se
 | [03 Metadata recovery](03-metadata-recovery.md) | 3 | encrypted copy-on-write manifest (root + segments) with epochs, KEV1 key envelopes to a customer recovery recipient, the recovery kit, `vh vault recover`, the catastrophic restore drill |
 | [04 Sealed vaults](04-sealed-vaults.md) | 4 | device-held keys, a signed membership chain, SAS-verified device approval, recovery seed; the server stores ciphertext, encrypted names and envelopes; blocked on #325 |
 | [05 Claims and custody](05-claims-and-custody.md) | 5 | provider-blind vs operator-blind vs device E2EE by deployment model, support-access rules, allowed wording |
+| [06 Publishing without conditional writes](06-publish-without-preconditions.md) | E (managed storage plan, 2026-11-12) | design for review, not implemented: a `version_log` publish path for versioned buckets that reject `If-Match` / `If-None-Match` (B2, confirmed live 2026-11-12), a per-bucket probe, and the root's `writers` |
 | [`vectors/`](vectors/) | 2, 3 | `vh_crypto_vectors.py` (reference implementation) and `vectors.json` (72 vectors: object ids, VHF1, range reads, negatives, KEV1, recovery seed, manifest objects and chain). `python3 vectors/vh_crypto_vectors.py --check` |
 
 ## Dependencies
@@ -75,7 +76,9 @@ flowchart TD
 9. **WS2-d**: retire the legacy format behind a version floor and local upgrade gates.
 10. **#325** (in parallel with 2-9), then **WS5-b** and **WS4** (sealed vaults) with the Desktop work.
 11. **Vaulthalla Cloud Recovery (Tiers B, C)**: a separate design workstream, not implemented, product-owner approval
-    required (05 §9).
+    required (05 §9). Amended 2026-11-12: Tier B's customer-key-controlled design was approved on 2026-11-10 and is
+    being built, not offered (05 §3.1, §3.2); managed vaults are enrolled in it automatically (product owner,
+    managed storage plan revision 4 §3.1 item 3). Tier C stays a separate workstream, not implemented.
 
 Each step is a separate PR with its own tests; none rotates an existing key. Steps 8 and 9 are the only ones that
 rewrite stored data, and both are verified before anything old is removed.
@@ -87,7 +90,7 @@ The four questions raised in review were decided on #344; the specs encode them.
 | | Decision | Where |
 |---|---|---|
 | **D1** | On a fresh node, a key version is canonical only when its original-node attestation verifies against the original public key pinned in customer-held recovery material (the kit, or an export that carries the public key). Otherwise explicit salvage and re-encryption. A fresh server's self-attestation never proves old provenance. Empty, missing and wrong anchors and an independent-host restore are tested. | 03 §5.4, §6.2, §7, §8 |
-| **D2** | Customer-held recovery recipients are mandatory for managed storage and sealed vaults before creation or writes. Self-hosted BYOS: prominently recommended, optional when an independently verified, current key export exists; otherwise `recovery_material_missing`. Read with the custody amendment below: no escrow of content-decryption material to Valkyrian Labs is the default for every vault. | 03 §5.5, 04 §6, 05 |
+| **D2** | Customer-held recovery recipients are mandatory for managed storage and sealed vaults before creation or writes. Self-hosted BYOS: prominently recommended, optional when an independently verified, current key export exists; otherwise `recovery_material_missing`. Read with the custody amendment below: no escrow of content-decryption material to Valkyrian Labs is the default for every vault. Amended 2026-11-12 (product owner, managed storage plan revision 4 §3.1 item 3): for managed storage the default recipient is the account recovery key the server pinned, added automatically, and the rule applies where a vault becomes managed: nothing but envelopes and the layout hint reaches a managed bucket, and no vault becomes managed, until a customer-class recipient covers every key version. | 03 §5.5, 04 §6, 05 |
 | **D3** | Every required retained upstream version and recovery generation is re-sealed into the opaque layout. Inventories and actual decryption are verified before anything path-keyed is deleted. Object Lock, provider retention, incomplete history and failed deletes are respected; the migration is never reported finished while names remain in provider history. Bounded verify/soak/rollback period; destructive-cleanup guardrails. | 01 §6 |
 | **D4** | Sealed vault v1: single owner, multiple owner-approved devices, macOS Desktop first; sharing and web access in phase 2. The server never receives plaintext, names or unwrapped content keys, and never enrolls an encryption-capable device on its own. | 04 |
 
@@ -103,11 +106,17 @@ The four questions raised in review were decided on #344; the specs encode them.
 - Three recovery tiers: **A Self-Managed** (these specs), **B Cloud Assisted** and **C Cloud Custodial**, both
   **planned, not implemented** (05 §3.1). Payment is never cryptographic consent; custody needs its own explicit
   authorization; no account, payment, managed-storage subscription or upgrade changes a vault's recovery properties.
+  Amended 2026-11-12 (product owner, managed storage plan revision 4 §3.1 item 3): Tier B was approved on 2026-11-10
+  and is being built, not offered; Tier C stays planned and not implemented. Managed storage includes Tier B for its
+  own vaults: a vault that becomes managed is enrolled automatically, only to the account key a person pinned on the
+  server, and the customer is told so (05 §3.1). No account, payment or upgrade, and no vault that isn't managed, changes that way.
 - No vault is called operator-blind while its recovery configuration gives Valkyrian Labs unilateral plaintext
   recovery. Noncustodial sealed vaults and fully self-managed deployments keep the stronger guarantee.
 - Formats are extensible without a redesign: KEV1's `recipient_class` and `purpose` registries and the root's
   versioned `recovery_policy` of independently revocable grants (03 §5.2, §5.7); existing envelopes are byte-identical
-  and the vectors include the reserved values. No code, APIs, tables or billing hooks for Tiers B and C.
+  and the vectors include the reserved values. No code, APIs, tables or billing hooks for Tiers B and C. Amended
+  2026-11-12: Tier B's server side exists since its approval (`ops::cloud_recovery`, migration 135); the sentence
+  holds for Tier C.
 - The future service is a separate workstream that needs product-owner approval (05 §9).
 
 Settled earlier on #329 and not reopened: opaque ids are intrinsic to `encrypt_upstream=true` (no second switch;
