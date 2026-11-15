@@ -19,13 +19,13 @@ struct Content {
     std::vector<KeyRecord> keys;                 // ascending by version
     std::optional<RecoveryPolicy> recovery_policy;
     std::vector<Entry> entries;                  // ascending by uid, unique
-    std::vector<SnapshotRecord> snapshots;       // ascending by id, unique
+    std::vector<SnapshotRecord> snapshots;       // ascending by snapshotKey (uid), unique
 
     [[nodiscard]] bool operator==(const Content&) const = default;
 };
 
-// Sorts entries (by uid), keys (by version) and snapshots (by id). Throws std::invalid_argument on a duplicate uid,
-// version or snapshot id.
+// Sorts entries (by uid), keys (by version) and snapshots (by snapshotKey: uid). Throws std::invalid_argument on a
+// duplicate uid, version or snapshot.
 void normalize(Content& content);
 
 // files = live (not trashed) files, dirs = directories (the vault root included), bytes = the live files' sizes.
@@ -33,9 +33,13 @@ void normalize(Content& content);
 
 // §3.4 step 3, "merge our pending changes on top": `ours` is what this writer produces now, `oursBefore` what it
 // produced for its previous publish (the base of its pending changes), `theirs` the newer root another writer
-// published. An entry (by uid), key version or snapshot that we changed since oursBefore takes our value; one we
-// deleted goes; everything else keeps theirs, including what they added. The producer, vault and recovery policy are
-// ours. With oursBefore == theirs (nobody else wrote) the result is `ours`.
+// published. An entry (by uid), key version or snapshot (by snapshotKey: its uid) that we changed since oursBefore
+// takes our value; one we deleted goes; everything else keeps theirs, including what they added. The producer, vault
+// and recovery policy are ours. With oursBefore == theirs (nobody else wrote) the result is `ours`.
+//
+// A root written before snapshot uids names its snapshots by id only ("id:<n>"); this server's collector names every
+// snapshot by uid, so on the first publish after the upgrade those records are "ours deleted" and ours (the same
+// snapshots, now with uids) replace them: no snapshot is lost (ManifestContent.APreUidRootsSnapshotsAreReplaced*).
 [[nodiscard]] Content mergePending(const Content& theirs, const Content& oursBefore, const Content& ours);
 
 // History the database doesn't hold, carried from the previous root into the next one (`now` is the publish time):

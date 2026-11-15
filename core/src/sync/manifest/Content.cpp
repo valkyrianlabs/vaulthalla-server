@@ -1,28 +1,31 @@
 #include "sync/manifest/Content.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <type_traits>
 
 namespace vh::sync::manifest {
 
 namespace content_detail {
 
-template <typename T, typename Key>
-std::map<Key, const T*> indexBy(const std::vector<T>& items, Key T::*member) {
-    std::map<Key, const T*> out;
-    for (const auto& item : items) out.emplace(item.*member, &item);
+template <typename T, typename KeyOf>
+auto indexBy(const std::vector<T>& items, KeyOf&& keyOf) {
+    std::map<std::decay_t<std::invoke_result_t<KeyOf&, const T&>>, const T*> out;
+    for (const auto& item : items) out.emplace(std::invoke(keyOf, item), &item);
     return out;
 }
 
 // One keyed collection merged by the mergePending rule.
-template <typename T, typename Key>
+template <typename T, typename KeyOf>
 std::vector<T> mergeKeyed(const std::vector<T>& theirs, const std::vector<T>& before, const std::vector<T>& ours,
-                          Key T::*member) {
-    const auto t = indexBy(theirs, member);
-    const auto b = indexBy(before, member);
-    const auto o = indexBy(ours, member);
+                          KeyOf keyOf) {
+    using Key = std::decay_t<std::invoke_result_t<KeyOf&, const T&>>;
+    const auto t = indexBy(theirs, keyOf);
+    const auto b = indexBy(before, keyOf);
+    const auto o = indexBy(ours, keyOf);
     std::set<Key> keys;
     for (const auto& [k, _] : t) keys.insert(k);
     for (const auto& [k, _] : o) keys.insert(k);
@@ -69,12 +72,12 @@ void pruneNames(Entry& e) {
 void normalize(Content& content) {
     std::ranges::sort(content.entries, {}, &Entry::uid);
     std::ranges::sort(content.keys, {}, &KeyRecord::version);
-    std::ranges::sort(content.snapshots, {}, &SnapshotRecord::id);
+    std::ranges::sort(content.snapshots, {}, snapshotKey);
     if (std::ranges::adjacent_find(content.entries, {}, &Entry::uid) != content.entries.end())
         throw std::invalid_argument("manifest content lists an entry uid twice");
     if (std::ranges::adjacent_find(content.keys, {}, &KeyRecord::version) != content.keys.end())
         throw std::invalid_argument("manifest content lists a key version twice");
-    if (std::ranges::adjacent_find(content.snapshots, {}, &SnapshotRecord::id) != content.snapshots.end())
+    if (std::ranges::adjacent_find(content.snapshots, {}, snapshotKey) != content.snapshots.end())
         throw std::invalid_argument("manifest content lists a snapshot twice");
 }
 
@@ -97,8 +100,7 @@ Content mergePending(const Content& theirs, const Content& oursBefore, const Con
     out.recovery_policy = ours.recovery_policy;
     out.entries = content_detail::mergeKeyed(theirs.entries, oursBefore.entries, ours.entries, &Entry::uid);
     out.keys = content_detail::mergeKeyed(theirs.keys, oursBefore.keys, ours.keys, &KeyRecord::version);
-    out.snapshots = content_detail::mergeKeyed(theirs.snapshots, oursBefore.snapshots, ours.snapshots,
-                                               &SnapshotRecord::id);
+    out.snapshots = content_detail::mergeKeyed(theirs.snapshots, oursBefore.snapshots, ours.snapshots, snapshotKey);
     normalize(out);
     return out;
 }

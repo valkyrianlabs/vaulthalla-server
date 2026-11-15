@@ -12,7 +12,7 @@ namespace version_log_detail {
 std::optional<OpenedRoot> openBytes(const std::vector<uint8_t>& bytes, const Uid& vaultUid,
                                     const crypto::vhf1::KeyLookup& keys) {
     try {
-        return OpenedRoot{openRoot(bytes, vaultUid, keys), sha256Hex(bytes)};
+        return OpenedRoot{openRoot(bytes, vaultUid, keys), sha256Hex(bytes), bytes};
     } catch (const crypto::vhf1::Error&) {
     } catch (const FormatError&) {
     }

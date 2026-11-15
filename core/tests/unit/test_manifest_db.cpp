@@ -68,8 +68,8 @@ void createScratch(pqxx::work& txn, const std::string& s) {
              "last_modified text, noncurrent_at text, delete_marker bool)");
     txn.exec("CREATE TABLE " + s + ".keys (version int, key_check text, attestation_key_id int, signature text, "
              "public_key text, created_at text, retired_at text)");
-    txn.exec("CREATE TABLE " + s + ".snapshots (id bigint, name text, created_at text, root_path text)");
-    txn.exec("CREATE TABLE " + s + ".members (snapshot_id bigint, uid text, path text, key_version int, "
+    txn.exec("CREATE TABLE " + s + ".snapshots (uid text, name text, created_at text, root_path text)");
+    txn.exec("CREATE TABLE " + s + ".members (snapshot_uid text, uid text, path text, key_version int, "
              "provider_version_id text, restorable bool)");
 }
 
@@ -109,11 +109,11 @@ void loadScratch(pqxx::work& txn, const std::string& s, const mf::Content& c) {
                               k.attestation ? std::optional(k.attestation->signature) : std::nullopt,
                               k.attestation ? k.attestation->public_key : std::nullopt, k.created_at, k.retired_at});
     for (const auto& snap : c.snapshots) {
-        txn.exec("INSERT INTO " + s + ".snapshots VALUES ($1::bigint,$2,$3,$4)",
-                 pqxx::params{static_cast<int64_t>(snap.id), snap.name, snap.created_at, snap.root_path});
+        txn.exec("INSERT INTO " + s + ".snapshots VALUES ($1,$2,$3,$4)",
+                 pqxx::params{uuidOf(snap.uid), snap.name, snap.created_at, snap.root_path});
         for (const auto& m : snap.members)
-            txn.exec("INSERT INTO " + s + ".members VALUES ($1::bigint,$2,$3,$4::int,$5,$6::bool)",
-                     pqxx::params{static_cast<int64_t>(snap.id), m.uid ? std::optional(uuidOf(*m.uid)) : std::nullopt,
+            txn.exec("INSERT INTO " + s + ".members VALUES ($1,$2,$3,$4::int,$5,$6::bool)",
+                     pqxx::params{uuidOf(snap.uid), m.uid ? std::optional(uuidOf(*m.uid)) : std::nullopt,
                                   m.path_at_capture,
                                   m.key_version ? std::optional<int64_t>(*m.key_version) : std::nullopt,
                                   m.provider_version_id, m.restorable_from_bucket});
@@ -182,10 +182,10 @@ void projectLive(pqxx::work& txn, const std::string& s, const uint32_t vaultId) 
                  " FROM vault_keys_trashed t LEFT JOIN key_attestation_keys a ON a.id = t.attestation_key_id "
              "WHERE t.vault_id = $1 AND t.version NOT IN (SELECT version FROM vault_keys WHERE vault_id = $1)",
              v);
-    txn.exec("INSERT INTO " + s + ".snapshots SELECT id, name, " + iso("created_at") +
+    txn.exec("INSERT INTO " + s + ".snapshots SELECT uid::text, name, " + iso("created_at") +
                  ", root_path FROM recovery_snapshot WHERE vault_id = $1 AND state = 'ready'",
              v);
-    txn.exec("INSERT INTO " + s + ".members SELECT fv.snapshot_id, f.object_uid::text, fv.path, NULLIF(b.key_version, 0), "
+    txn.exec("INSERT INTO " + s + ".members SELECT rs.uid::text, f.object_uid::text, fv.path, NULLIF(b.key_version, 0), "
              "  fv.upstream_version_id, fv.upstream_version_id IS NOT NULL "
              "FROM file_versions fv JOIN recovery_snapshot rs ON rs.id = fv.snapshot_id "
              "LEFT JOIN files f ON f.fs_entry_id = fv.file_id LEFT JOIN recovery_blob b ON b.id = fv.blob_id "
@@ -546,6 +546,170 @@ TEST_F(ManifestDbTest, OpaqueVaultsPublishManifestV2InsteadOfIndexV1) {
     EXPECT_EQ(after.root_sha256, epoch2.root_sha256);
     EXPECT_EQ(after.refused_reason, "rollback");
     EXPECT_EQ(drainManifestAlerts("manifest_rollback"), 1u);
+}
+
+
+// ── The local base copy, the applying marker, snapshot uids (design/sync/manifest-applier.md, items 1 and 3) ─────────
+
+namespace {
+
+std::set<std::string> baseSids(const uint32_t vaultId) {
+    return db::Transactions::exec("baseSids", [&](pqxx::work& txn) {
+        std::set<std::string> out;
+        for (const auto row : txn.exec("SELECT sid FROM remote_manifest_base WHERE vault_id = $1", pqxx::params{vaultId}))
+            out.insert(row[0].as<std::string>());
+        return out;
+    });
+}
+
+std::set<std::string> sidSet(const mf::PublishReport& r) {
+    const auto sids = r.published.sids();
+    return {sids.begin(), sids.end()};
+}
+
+}
+
+// Written in the transaction that records the root, by a publish and by a verified read of another writer's root;
+// a sid the root no longer names is dropped; it opens to exactly what the bucket holds at `known`.
+TEST_F(ManifestDbTest, TheBaseCopyFollowsEveryRecordedRootAndOpensToItsContent) {
+    seedRichVault();
+    auto bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
+    const auto store = std::make_shared<storage::s3::ManifestStore>(bucket);
+    const auto keys = testKeys();
+    sync::vault_manifest::Service service(vaultId, vaultUid, store, keys);
+    const auto first = service.publish();
+    EXPECT_EQ(baseSids(vaultId), sidSet(first));
+
+    const auto openStored = [&](const mf::Known& known) {
+        const auto copy = db::query::sync::Manifest::base(vaultId);
+        EXPECT_TRUE(copy);
+        std::string why;
+        auto content = copy ? mf::openBaseCopy(*copy, vaultUid, service.keyLookup(), known, &why) : std::nullopt;
+        EXPECT_TRUE(content) << why;
+        return content;
+    };
+    const auto opened = openStored(first.published.known);
+    ASSERT_TRUE(opened);
+    EXPECT_EQ(*opened, mf::load(*store, vaultUid, service.keyLookup()).content);
+
+    write("/top.txt", "changed");
+    const auto second = service.publish();
+    EXPECT_EQ(baseSids(vaultId), sidSet(second)) << "a sid no longer named is dropped";
+    EXPECT_NE(sidSet(first), sidSet(second));
+    ASSERT_TRUE(openStored(second.published.known));
+
+    // Another writer's root, read by verifyRemote: the copy follows `known`.
+    const auto k = keys->currentKey();
+    auto theirs = mf::load(*store, vaultUid, service.keyLookup()).content;
+    theirs.producer.node_id = "another-node";
+    mf::PublisherCache other;
+    mf::PublishOptions o;
+    o.now = mf::isoTime(std::time(nullptr));
+    const auto third = mf::publish(*store, vaultUid, service.keyLookup(), {k.version, k.key}, theirs,
+                                   second.published.known, other, o);
+    ASSERT_TRUE(service.verifyRemote());
+    EXPECT_EQ(db::query::sync::Manifest::state(vaultId).epoch, third.published.known.epoch);
+    EXPECT_EQ(baseSids(vaultId), sidSet(third));
+    ASSERT_TRUE(openStored(third.published.known));
+}
+
+// Spec 06 §5.5's gap, closed for the case the copy can close alone: a server restarted from its database while another
+// writer published on its known root keeps that writer's new entry (before: "deleted by us", reverted). Without a
+// copy (dropped here) the cold start merges on the head as before and drops it.
+TEST_F(ManifestDbTest, AColdStartPublishKeepsWhatAnotherWriterAddedSinceTheKnownRoot) {
+    for (const bool withCopy : {true, false}) {
+        SCOPED_TRACE(withCopy);
+        write("/a.txt", withCopy ? "with" : "without");
+        auto bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
+        const auto store = std::make_shared<storage::s3::ManifestStore>(bucket);
+        const auto keys = testKeys();
+        db::Transactions::exec("forget", [&](pqxx::work& txn) {
+            txn.exec("DELETE FROM remote_manifest_state WHERE vault_id = $1", pqxx::params{vaultId});
+            txn.exec("DELETE FROM remote_manifest_base WHERE vault_id = $1", pqxx::params{vaultId});
+        });
+        mf::PublishReport first;
+        {
+            sync::vault_manifest::Service service(vaultId, vaultUid, store, keys);
+            first = service.publish();
+        }
+        // Another writer, on that root, adds a file this database never saw.
+        const auto k = keys->currentKey();
+        const auto lookup = [key = k.key](uint32_t) { return key; };
+        auto theirs = mf::load(*store, vaultUid, lookup).content;
+        theirs.producer.node_id = "another-node";
+        mf::Entry added;
+        added.uid = mf::uidText(crypto::id::newObjectUid());
+        added.kind = mf::EntryKind::File;
+        added.parent = std::ranges::find_if(theirs.entries, [](const mf::Entry& e) { return !e.parent; })->uid;
+        added.name = "from-the-other-writer.txt";
+        added.size = 3;
+        theirs.entries.push_back(added);
+        mf::normalize(theirs);
+        mf::PublisherCache other;
+        mf::PublishOptions o;
+        o.now = mf::isoTime(std::time(nullptr));
+        (void)mf::publish(*store, vaultUid, lookup, {k.version, k.key}, theirs, first.published.known, other, o);
+
+        if (!withCopy)
+            db::Transactions::exec("drop copy", [&](pqxx::work& txn) {
+                txn.exec("UPDATE remote_manifest_state SET base_root = NULL WHERE vault_id = $1", pqxx::params{vaultId});
+            });
+        sync::vault_manifest::Service restarted(vaultId, vaultUid, store, keys);   // a cold cache
+        write("/a.txt", "a local change after the restart");
+        const auto r = restarted.publish();
+        EXPECT_TRUE(r.merged);
+        const bool kept = std::ranges::any_of(r.published.content.entries, [&](const mf::Entry& e) {
+            return e.uid == added.uid;
+        });
+        EXPECT_EQ(kept, withCopy);
+    }
+}
+
+TEST_F(ManifestDbTest, AnIncompleteApplyBlocksPublishingUntilThatRootIsRecorded) {
+    write("/a.txt", "a");
+    auto bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
+    sync::vault_manifest::Service service(vaultId, vaultUid, std::make_shared<storage::s3::ManifestStore>(bucket), testKeys());
+    const auto first = service.publish();
+    const auto known = first.published.known;
+    const std::string otherSha(64, 'c');
+    db::query::sync::Manifest::markApplying(vaultId, known.epoch + 1, otherSha);
+    auto state = db::query::sync::Manifest::state(vaultId);
+    EXPECT_EQ(state.applying_epoch, known.epoch + 1);
+    EXPECT_EQ(state.applying_root_sha256, otherSha);
+    write("/a.txt", "b");
+    EXPECT_THROW((void)service.publish(), mf::ApplyIncomplete) << "a partial state is never published";
+    EXPECT_EQ(bucket->history(std::string(mf::kRootKey)).size(), 1u) << "nothing was sent";
+
+    // Recording another root leaves the marker; recording the root being applied (its step 11) clears it.
+    const mf::RootRecord current{.epoch = known.epoch, .root_sha256 = known.root_sha256,
+                                 .etag = first.published.etag, .sids = first.published.sids(),
+                                 .version_id = std::nullopt, .base_version_id = std::nullopt, .settle_window = {},
+                                 .own = true, .base = std::nullopt};
+    db::query::sync::Manifest::recordRoot(vaultId, current);
+    EXPECT_TRUE(db::query::sync::Manifest::state(vaultId).applying_epoch);
+    db::query::sync::Manifest::markApplying(vaultId, known.epoch, known.root_sha256);
+    db::query::sync::Manifest::recordRoot(vaultId, current);
+    state = db::query::sync::Manifest::state(vaultId);
+    EXPECT_FALSE(state.applying_epoch);
+    EXPECT_FALSE(state.applying_root_sha256);
+    EXPECT_NO_THROW((void)service.publish());
+    EXPECT_THROW(db::Transactions::exec("half a marker", [&](pqxx::work& txn) {
+        txn.exec("UPDATE remote_manifest_state SET applying_epoch = 3 WHERE vault_id = $1", pqxx::params{vaultId});
+    }), pqxx::sql_error);
+}
+
+TEST_F(ManifestDbTest, SnapshotUidsAreAssignedOnceByTheCollectorAndNeverChange) {
+    seedRichVault();
+    const auto first = db::query::sync::Manifest::collect(vaultId);
+    const auto second = db::query::sync::Manifest::collect(vaultId);
+    ASSERT_EQ(first.snapshots.size(), 1u);
+    EXPECT_TRUE(vl::keykit::fromBase32(first.snapshots[0].uid));
+    EXPECT_FALSE(first.snapshots[0].id) << "the server's own id stays out of the manifest";
+    EXPECT_EQ(first.snapshots, second.snapshots);
+    EXPECT_ANY_THROW(db::Transactions::exec("rewrite snapshot uid", [&](pqxx::work& txn) {
+        txn.exec("UPDATE recovery_snapshot SET uid = $2::uuid WHERE vault_id = $1",
+                 pqxx::params{vaultId, crypto::id::toUuid(crypto::id::newObjectUid())});
+    }));
 }
 
 }

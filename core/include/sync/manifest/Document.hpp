@@ -176,14 +176,24 @@ struct SnapshotMember {
     [[nodiscard]] bool operator==(const SnapshotMember&) const = default;
 };
 
+// A snapshot's identity is its `uid` (16 random bytes, base32; recovery_snapshot.uid, migration 145), the same on every
+// server that holds the record (design/sync/manifest-applier.md, work item 1). `id` is the producing server's
+// recovery_snapshot.id, a per-server sequence: written only by servers from before the uid (and kept so such a record
+// re-encodes to its bytes), never by this one, and never an identity across servers. A record has a uid, an id or
+// both; snapshotKey() is what collections are keyed by.
 struct SnapshotRecord {
-    uint64_t id{};
+    std::string uid;                            // base32; empty only in a record from before uids
+    std::optional<uint64_t> id;                 // a pre-uid record's per-server id
     std::optional<std::string> name;
     std::string created_at;
     std::string root_path;
     std::vector<SnapshotMember> members;        // ascending by path_at_capture
     [[nodiscard]] bool operator==(const SnapshotRecord&) const = default;
 };
+
+// The key a snapshot record is merged, sorted and cached by: its uid, or "id:<n>" for a record from before uids (no
+// uid is ever that text: base32 has no ':').
+[[nodiscard]] std::string snapshotKey(const SnapshotRecord& record);
 
 struct SnapshotDocument {
     std::string vault_uid;

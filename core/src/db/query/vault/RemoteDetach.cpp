@@ -392,6 +392,7 @@ RemoteDetach::CutoverOutcome RemoteDetach::cutover(const uint32_t vaultId) {
         txn.exec("DELETE FROM remote_manifest_state WHERE vault_id = $1", pqxx::params{vaultId});
         txn.exec("DELETE FROM remote_manifest_root WHERE vault_id = $1", pqxx::params{vaultId});
         txn.exec("DELETE FROM remote_manifest_gc WHERE vault_id = $1", pqxx::params{vaultId});
+        txn.exec("DELETE FROM remote_manifest_base WHERE vault_id = $1", pqxx::params{vaultId});
         // A local vault has no remote access to gate (migration 140).
         txn.exec("DELETE FROM vault_remote_access WHERE vault_id = $1", pqxx::params{vaultId});
 

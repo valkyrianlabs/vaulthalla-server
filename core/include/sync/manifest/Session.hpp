@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,11 @@ struct ChainState {
     std::optional<std::string> base_version_id;
     std::vector<std::string> settle_window;
     std::optional<uint64_t> own_epoch;   // the last root this writer published itself
+    // design/sync/manifest-applier.md (migration 145): the root an apply is taking in, set before its first batch and
+    // cleared by the recordRoot of that root (its step 11). While set, the database is between two roots and nothing
+    // is published.
+    std::optional<uint64_t> applying_epoch;
+    std::optional<std::string> applying_root_sha256;
 };
 
 // One recorded root. version_id, base_version_id and the window on version_log buckets; own when this writer wrote it.
@@ -53,6 +59,16 @@ struct RootRecord {
     std::optional<std::string> base_version_id;
     std::vector<std::string> settle_window;
     bool own{false};
+    // The local base copy of this root (migration 145), written in the same transaction: the root's bytes and whichever
+    // named objects' bytes the writer has in hand (the store keeps the bytes of named sids it already holds and drops
+    // the rest). nullopt: no copy (the stored one is dropped; a cold start then merges as without one).
+    std::optional<BaseCopy> base{};
+};
+
+// Publishing is refused while an apply is incomplete (ChainState::applying_*): a partial state is never published.
+class ApplyIncomplete : public std::runtime_error {
+public:
+    explicit ApplyIncomplete(const std::string& message) : std::runtime_error(message) {}
 };
 
 // What one vault keeps between runs. Every call is for that vault; implementations are durable before they return
@@ -66,6 +82,10 @@ public:
     // sids in the root history, which keeps the newest roots' (retainedSids). Clears a recorded refusal (the chain
     // moved on).
     virtual void recordRoot(const RootRecord& record) = 0;
+    // The base copy recordRoot last stored, as stored (openBaseCopy checks it); nullopt when there is none.
+    [[nodiscard]] virtual std::optional<BaseCopy> base() = 0;
+    // An apply of this root begins (ChainState::applying_*); the recordRoot of the same root clears it.
+    virtual void markApplying(uint64_t epoch, const std::string& rootSha256) = 0;
     // A root the chain rules refused. True when it is not the root already recorded as refused: the session alerts
     // once per root, not once per pass.
     [[nodiscard]] virtual bool recordRefused(const std::string& reason, uint64_t epoch,
@@ -108,8 +128,10 @@ public:
     Session(const Uid& vaultUid, std::shared_ptr<ObjectStore> store, std::shared_ptr<StateStore> state,
             SessionHost host);
 
-    // Collects, publishes, records. Rethrows ChainRejected (after recording and alerting), PublishConflict and the
-    // store's errors.
+    // Collects, publishes, records (with the local base copy). Rethrows ChainRejected (after recording and alerting),
+    // PublishConflict and the store's errors; ApplyIncomplete, before any request, while an apply is incomplete. A cold
+    // session (no previous publish in memory) merges on the base copy of `known` when it opens, not on the bucket's
+    // head (design/sync/manifest-applier.md, "closing the §5.5 gap").
     PublishReport publish();
     // publish() unless the vault holds exactly what this session's last publish produced and the bucket's root is
     // still that publish (a sync pass that changed nothing writes nothing, spec 01 §5): nullopt then.

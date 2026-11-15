@@ -31,6 +31,7 @@ namespace vh::sync::manifest {
 struct OpenedRoot {
     RootDocument root;
     std::string sha256;
+    std::vector<uint8_t> bytes;   // the sealed object (the local base copy keeps it, migration 145)
 };
 
 class RootCache {
