@@ -7,6 +7,7 @@
 #include "cloud/Signing.hpp"
 #include "config/Registry.hpp"
 #include "db/query/cloud/Link.hpp"
+#include "db/query/device/Device.hpp"
 #include "ops/Cloud.hpp"
 #include "ops/Error.hpp"
 #include "storage/s3/curl/Http.hpp"
@@ -31,6 +32,9 @@ struct FakeCloud {
     std::string requestId = "0123456789abcdefghjkmnpqrs";
     std::string installation = "kceypk9vfn5tv6yx5c6qpfebdm";
     std::string claimAnswer = "pending";
+    std::string nodeId;  // from the link request
+    std::string deployment = "d3p1qymnt00000000000000000";
+    std::string accountPublicId = "5f0c3a3e-8d1b-4c2a-9e47-6b1d2f3a4c5e";
     bool reachable = true;
     bool revoked = false;
     std::vector<std::string> calls;  // "METHOD path"
@@ -90,9 +94,11 @@ struct FakeCloud {
         const auto body = r.body.empty() ? json() : json::parse(r.body);
         if (r.method == "POST" && path == "/v1/link-requests") {
             publicKey = body.at("public_key");
-            const std::string proof = "vhc-link-request-v1\n" + publicKey + "\n" + body.at("name").get<std::string>() +
-                                      "\n" + body.at("kind").get<std::string>();
-            if (body.at("kind") != "server" || !verifies(proof, body.at("proof")))
+            // Proof v2 (the cloud's installation-linking.md): a server's node id is 1 to 64 printable characters.
+            nodeId = body.value("node_id", "");
+            const std::string proof = "vhc-link-request-v2\n" + publicKey + "\n" + body.at("name").get<std::string>() +
+                                      "\n" + body.at("kind").get<std::string>() + "\n" + nodeId;
+            if (body.at("kind") != "server" || nodeId.empty() || nodeId.size() > 64 || !verifies(proof, body.at("proof")))
                 return reply(400, {{"error", {{"code", "invalid_argument"}, {"message", "bad proof"}}}});
             return reply(201, {{"request_id", requestId}, {"user_code", "WXYZ-1234"}, {"expires_at", 4102444800}});
         }
@@ -100,7 +106,9 @@ struct FakeCloud {
             const auto message = "vhc-link-claim-v1\n" + requestId + "\n" + std::to_string(body.at("timestamp").get<int64_t>());
             if (!verifies(message, body.at("signature")))
                 return reply(401, {{"error", {{"code", "unauthenticated"}, {"message", "bad claim"}}}});
-            if (claimAnswer == "linked") return reply(200, {{"status", "linked"}, {"installation_id", installation}, {"account_id", 7}});
+            if (claimAnswer == "linked")
+                return reply(200, {{"status", "linked"}, {"installation_id", installation}, {"account_id", 7},
+                                   {"deployment_id", deployment}, {"account_public_id", accountPublicId}});
             return reply(200, {{"status", claimAnswer}});
         }
         if (path == "/v1/installation" && (r.method == "GET" || r.method == "DELETE")) {
@@ -110,7 +118,13 @@ struct FakeCloud {
                 revoked = true;
                 return reply(204, nullptr);
             }
-            return reply(200, {{"id", installation}, {"account_id", 7}, {"kind", "server"}});
+            return reply(200, {{"id", installation}, {"account_id", 7}, {"kind", "server"},
+                               {"deployment_id", deployment}, {"account_public_id", accountPublicId}});
+        }
+        // The account has no recovery key yet (the cloud's key-manager.md: 404 before one exists).
+        if (r.method == "GET" && path == "/v1/keys/account") {
+            if (!signedByUs(r, path)) return reply(401, {{"error", {{"code", "unauthenticated"}, {"message", "no"}}}});
+            return reply(404, {{"error", {{"code", "not_found"}, {"message", "this account has no recovery key yet"}}}});
         }
         return reply(404, {{"error", {{"code", "not_found"}, {"message", "no route"}}}});
     }
@@ -163,12 +177,18 @@ TEST_F(CloudLinkDbTest, LinksAfterApprovalAndSignsEveryLaterRequest) {
     EXPECT_EQ(claimed.status, "linked");
     EXPECT_EQ(claimed.installation_id, cloud_.installation);
     EXPECT_EQ(claimed.account_id, 7);
+    EXPECT_EQ(claimed.deployment_id, cloud_.deployment);
+    EXPECT_EQ(claimed.account_public_id, cloud_.accountPublicId);
+    EXPECT_EQ(cloud_.nodeId, db::query::device::Devices::nodeId()) << "the proof covers this server's node id";
     EXPECT_THROW((void)oc::startLink(superUser, oc::Channel::Cli, std::nullopt), ops::Conflict) << "already linked";
 
     const auto s = oc::status(superUser);
     EXPECT_EQ(s.state, "linked");
     EXPECT_EQ(s.cloud, "ok") << s.cloud_detail.value_or("");  // a signed GET the fake verified
     EXPECT_EQ(s.fingerprint, started.fingerprint);
+    EXPECT_EQ(s.deployment_id, cloud_.deployment);
+    EXPECT_EQ(s.account_public_id, cloud_.accountPublicId);
+    EXPECT_EQ(db::query::cloud::Link::get()->key_check, "none") << "the key was checked right after the claim";
 
     const auto u = oc::unlink(superUser, oc::Channel::Cli, false);
     EXPECT_EQ(u.was, "linked");
@@ -179,7 +199,8 @@ TEST_F(CloudLinkDbTest, LinksAfterApprovalAndSignsEveryLaterRequest) {
     EXPECT_EQ(cloud_.calls, (std::vector<std::string>{"POST /v1/link-requests",
                                                       "POST /v1/link-requests/" + cloud_.requestId + "/claim",
                                                       "POST /v1/link-requests/" + cloud_.requestId + "/claim",
-                                                      "GET /v1/installation", "DELETE /v1/installation"}));
+                                                      "GET /v1/keys/account", "GET /v1/installation",
+                                                      "DELETE /v1/installation"}));
 }
 
 TEST_F(CloudLinkDbTest, DeniedAndExpiredRequestsLeaveNothingBehind) {
