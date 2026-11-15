@@ -159,6 +159,19 @@ void checkHeadForWriter(const RootDocument& head, const std::string& rootSha, co
                             head.epoch, rootSha);
 }
 
+HeadOrigin originOf(const RootDocument& head, const std::string& headSha256,
+                    const std::optional<std::string>& headBaseVersionId, const std::optional<Known>& known,
+                    const std::string& selfNode, const std::optional<uint64_t>& selfVaultId,
+                    const std::optional<std::string>& lastPut) {
+    if (selfNode.empty() || head.producer.node_id != selfNode) return HeadOrigin::Foreign;
+    if (selfVaultId && head.producer.vault_id && *head.producer.vault_id != *selfVaultId) return HeadOrigin::Foreign;
+    const bool direct = known ? head.epoch == known->epoch + 1 && head.prev == known->root_sha256 &&
+                                    (!known->version_id || !headBaseVersionId || *headBaseVersionId == *known->version_id)
+                              : head.epoch == 1 && !head.prev;
+    const bool lastOne = !lastPut || *lastPut == headSha256;
+    return direct && lastOne ? HeadOrigin::OwnPast : HeadOrigin::OwnUnexplained;
+}
+
 std::vector<std::string> Published::sids() const {
     std::vector<std::string> out;
     for (const auto& s : root.segments) out.push_back(s.sid);
@@ -305,6 +318,7 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
         }
 
         const auto rootBytes = sealRoot(root, vaultUid, sealing);
+        if (options.before_root_put) options.before_root_put(sha256Hex(rootBytes));
         if (versionLog) {
             const auto ourSha = sha256Hex(rootBytes);
             std::optional<std::string> ourId;

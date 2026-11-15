@@ -106,6 +106,7 @@ PublishReport Session::publishLocked(const Content& produced) {
     options.own_epoch = state.own_epoch;
     options.settled = d::settledOf(state);
     options.apply_on_lost = true;
+    options.before_root_put = [this](const std::string& sha) { state_->notePublishing(sha); };
     try {
         auto report = manifest::publish(*store_, vaultUid_, host_.keys, current, produced, knownState, cache_, options);
         state_->recordRoot({.epoch = report.published.known.epoch,
@@ -142,6 +143,37 @@ PublishReport Session::publishLocked(const Content& produced) {
         if (d::refusal(e.code())) refused(e, e.epoch(), e.rootSha256());
         cache_ = {};
         throw;
+    }
+}
+
+void Session::settleMoved(RemoteHead& out, Loaded&& loaded, const ChainState& state,
+                          const std::optional<Known>& knownState) {
+    switch (originOf(loaded.root, loaded.acceptance.root_sha256, loaded.base_version_id, knownState, host_.nodeId(),
+                     host_.vaultId, state.publishing_root_sha256)) {
+    case HeadOrigin::OwnPast:
+        // Our own root, PUT and not recorded: the database is at it or past it. Recorded, never reconciled.
+        state_->recordRoot({.epoch = loaded.acceptance.epoch,
+                            .root_sha256 = loaded.acceptance.root_sha256,
+                            .etag = loaded.etag,
+                            .sids = session_detail::sidsOf(loaded.root),
+                            .version_id = loaded.version_id,
+                            .base_version_id = loaded.base_version_id,
+                            .settle_window = loaded.settle_window,
+                            .own = true,
+                            .base = baseCopyOf(loaded.root, loaded.root_bytes, loaded.segments, loaded.snapshots)});
+        if (cache_.base && cache_.base->known != loaded.known()) cache_.base.reset();
+        out.adopted = true;
+        note(Notice::Info, std::format("recorded this server's own root of epoch {}, which was published but not "
+                                       "recorded",
+                                       loaded.acceptance.epoch));
+        return;
+    case HeadOrigin::OwnUnexplained:
+        out.own_unexplained = true;
+        out.head = std::move(loaded);
+        return;
+    case HeadOrigin::Foreign:
+        out.head = std::move(loaded);   // recorded by the apply, not here
+        return;
     }
 }
 
@@ -195,7 +227,7 @@ std::optional<RemoteHead> Session::verifyRemoteVersionLog() {
         }
         if (!loaded.strays.empty())
             note(Notice::Info, std::format("deleted {} stray root version(s) above the head", loaded.strays.size()));
-        if (moved) out.head = std::move(loaded);   // recorded by the apply, not here
+        if (moved) settleMoved(out, std::move(loaded), state, knownState);
         return out;
     } catch (const ChainRejected& e) {
         if (d::refusal(e.code())) refused(e, e.epoch(), e.rootSha256());
@@ -228,7 +260,7 @@ std::optional<RemoteHead> Session::verifyRemote() {
         if (!knownState || loaded.known() != *knownState) {
             // spec 06 §5.5, both modes: a head that excludes this writer after its last own root stops it here.
             checkHeadForWriter(loaded.root, loaded.acceptance.root_sha256, *store_, host_.nodeId(), state.own_epoch);
-            out.head = std::move(loaded);   // recorded by the apply, not here
+            settleMoved(out, std::move(loaded), state, knownState);
         }
         return out;
     } catch (const ChainRejected& e) {

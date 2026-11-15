@@ -370,6 +370,12 @@ ApplyReport apply(const uint32_t vaultId, const manifest::Uid& vaultUid, const c
                                        "would delete what it lost",
                                        head.acceptance.epoch, head.issues.size()));
 
+    if (!kCarriesForeignEnvelopes && head.root.writers && head.root.writers->size() > 1)
+        throw ApplyStopped(fmt::format(
+            "the root of epoch {} names {} writers: replicated vaults are not supported (among their prerequisites, "
+            "another writer's recovery envelope kids are not carried into this server's roots yet)",
+            head.acceptance.epoch, head.root.writers->size()));
+
     (void)finishDeferred(vaultId, options);
 
     // The base: the content of `known`, from the local copy; without a usable one, none (a union: nothing deleted).

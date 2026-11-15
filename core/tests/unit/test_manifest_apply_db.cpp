@@ -17,6 +17,7 @@
 #include "crypto/id/ObjectUid.hpp"
 #include "db/query/fs/File.hpp"
 #include "fs/model/File.hpp"
+#include "db/query/device/Device.hpp"
 #include "db/query/sync/Manifest.hpp"
 #include "db/query/sync/ManifestApply.hpp"
 #include "fs/Filesystem.hpp"
@@ -29,7 +30,10 @@
 #include "sync/vault_manifest/Service.hpp"
 #include "vault/EncryptionManager.hpp"
 
+#include <atomic>
+#include <chrono>
 #include <set>
+#include <thread>
 
 namespace vh::test_manifest_apply_db {
 
@@ -110,9 +114,18 @@ protected:
     void SetUp() override {
         Suite::SetUp();
         if (IsSkipped()) return;
+        fresh();
+    }
+
+    // A new vault (and bucket) for this test, or for the next case of it.
+    void fresh() {
         v = test_support::versioned::makeCloudVault(superUser, "ma", Versioning::Enabled, true,
                                                     sync::model::RemotePolicy::Strategy::Cache);
         store = std::make_shared<storage::s3::ManifestStore>(v.bucket);
+        restart();
+    }
+    // A daemon restart: the manifest service's memory (its publisher cache) is gone, the database stays.
+    void restart() {
         service = std::make_unique<sync::vault_manifest::Service>(v.id(), *v.engine->vault->uid, store,
                                                                    v.engine->encryptionManager);
     }
@@ -537,6 +550,171 @@ TEST_F(ManifestApplyDb, ShareLinksFollowAMovedFolderAndGoWithADeletedOne) {
         << "the moved folder keeps its id and its link";
     EXPECT_EQ(count("SELECT count(*) FROM share_link WHERE vault_id = $1 AND root_entry_id = " + std::to_string(old), id()), 0);
     EXPECT_TRUE(db::query::fs::File::getFileByPath(id(), "/Photos/Docs/report.pdf"));
+}
+
+
+// ── This server's own roots (review of items 4-5) ──────────────────────────────────────────────────────────────────
+
+namespace {
+
+// recordRoot fails for this vault (a transient database failure after the PUT): any update that moves the root.
+void failRecords(const uint32_t vaultId, const bool on) {
+    db::Transactions::exec("failRecords", [&](pqxx::work& txn) {
+        txn.exec("CREATE OR REPLACE FUNCTION vh_test_fail_record() RETURNS trigger AS $$ BEGIN "
+                 "RAISE EXCEPTION 'recordRoot fails (test)'; END $$ LANGUAGE plpgsql");
+        txn.exec("DROP TRIGGER IF EXISTS vh_test_fail_record ON remote_manifest_state");
+        if (on)
+            txn.exec("CREATE TRIGGER vh_test_fail_record BEFORE UPDATE ON remote_manifest_state FOR EACH ROW WHEN "
+                     "(NEW.root_sha256 IS DISTINCT FROM OLD.root_sha256 AND NEW.vault_id = " + std::to_string(vaultId) +
+                     ") EXECUTE FUNCTION vh_test_fail_record()");
+    });
+}
+
+}
+
+// A root this server PUT and never recorded (recordRoot failed, or the daemon crashed between the two) is its own past
+// state: the database is at it or past it. It is adopted (recorded as own, with its base copy) and nothing is
+// reconciled: local changes made since (a rename, an edit, a delete, a create) are neither reverted, re-created nor
+// reported as conflicts, and the next publish carries them. The same with no base copy.
+TEST_F(ManifestApplyDb, AnOwnRootLeftUnrecordedIsAdoptedNotApplied) {
+    for (const auto* variant : {"record failed", "crash", "crash, no base copy"}) {
+        SCOPED_TRACE(variant);
+        fresh();
+        seed();
+        write("/doomed.txt", "created before the unrecorded publish");
+        const auto known = *db::query::sync::Manifest::state(id()).epoch;
+        failRecords(id(), true);
+        EXPECT_ANY_THROW((void)service->publish());
+        failRecords(id(), false);
+        const auto unrecorded = head();
+        ASSERT_EQ(unrecorded.acceptance.epoch, known + 1) << "the root was PUT";
+        ASSERT_EQ(db::query::sync::Manifest::state(id()).epoch, known) << "and not recorded";
+        if (std::string(variant) != "record failed") restart();
+        if (std::string(variant).ends_with("no base copy"))
+            db::Transactions::exec("pre-145", [&](pqxx::work& txn) {
+                txn.exec("UPDATE remote_manifest_state SET base_root = NULL WHERE vault_id = $1", pqxx::params{id()});
+            });
+
+        // Local changes since that publish.
+        ASSERT_EQ(fs::Filesystem::rename(v.engine->vaultPathToFusePath("/top.txt"),
+                                         v.engine->vaultPathToFusePath("/moved.txt"), superUser), 0);
+        const auto beforeEdit = db::query::fs::File::getFileByPath(id(), "/Docs/report.pdf")->encryption_iv;
+        write("/Docs/report.pdf", "edited since");
+        const auto edited = db::query::fs::File::getFileByPath(id(), "/Docs/report.pdf")->encryption_iv;
+        ASSERT_NE(edited, beforeEdit);
+        fs::Filesystem::remove(v.engine->vaultPathToFusePath("/doomed.txt"), superUser->id);
+        write("/created.txt", "new");
+
+        const auto since = journal();
+        v.bucket->resetCounters();
+        EXPECT_FALSE(service->applyRemote()) << "adopted: nothing to apply";
+        const auto c = v.bucket->counters();
+        EXPECT_EQ(c.put + c.del + c.copy, 0u) << "the verify and the record only";
+        EXPECT_EQ(journal(), since) << "no entry was written";
+        const auto state = db::query::sync::Manifest::state(id());
+        EXPECT_EQ(state.epoch, unrecorded.acceptance.epoch);
+        EXPECT_EQ(state.own_epoch, unrecorded.acceptance.epoch) << "recorded as this server's own";
+        EXPECT_FALSE(state.applying_epoch);
+        EXPECT_TRUE(db::query::sync::Manifest::base(id())) << "with its base copy";
+
+        EXPECT_TRUE(db::query::fs::File::getFileByPath(id(), "/moved.txt"));
+        EXPECT_FALSE(db::query::fs::File::getFileByPath(id(), "/top.txt"));
+        EXPECT_EQ(db::query::fs::File::getFileByPath(id(), "/Docs/report.pdf")->encryption_iv, edited);
+        EXPECT_FALSE(db::query::fs::File::getFileByPath(id(), "/doomed.txt")) << "not re-created";
+        EXPECT_EQ(count("SELECT count(*) FROM sync_conflicts WHERE vault_id = $1", id()), 0);
+
+        const auto next = service->publish();
+        EXPECT_EQ(next.published.known.epoch, unrecorded.acceptance.epoch + 1);
+        const auto h = head().content;
+        EXPECT_TRUE(byName(h, "moved.txt"));
+        EXPECT_FALSE(byName(h, "top.txt"));
+        EXPECT_TRUE(byName(h, "created.txt"));
+        ASSERT_TRUE(byName(h, "doomed.txt"));
+        EXPECT_TRUE(byName(h, "doomed.txt")->trashed) << "the delete is carried (to the trash)";
+    }
+}
+
+// Only the root this server last PUT is its own: one that merely names this node and vault as its producer (a
+// cloned database publishing under this identity) is refused, and one from this node for another vault id (a restore
+// beside the original on one server) is another writer's and is applied.
+TEST_F(ManifestApplyDb, ARootThatOnlyNamesThisNodeIsNotTakenForItsOwn) {
+    seed();
+    auto clone = head().content;
+    at(clone, "top.txt").name = "clone.txt";
+    (void)publishAs(clone, db::query::device::Devices::nodeId());
+    EXPECT_THROW((void)service->applyRemote(), sync::vault_manifest::ApplyStopped);
+    EXPECT_TRUE(db::query::fs::File::getFileByPath(id(), "/top.txt")) << "nothing applied";
+
+    fresh();
+    seed();
+    auto beside = head().content;
+    at(beside, "top.txt").name = "beside.txt";
+    beside.producer.vault_id = id() + 100000;
+    (void)publishAs(beside, db::query::device::Devices::nodeId());
+    const auto r = service->applyRemote();
+    ASSERT_TRUE(r);
+    EXPECT_TRUE(r->recorded);
+    EXPECT_TRUE(db::query::fs::File::getFileByPath(id(), "/beside.txt"));
+}
+
+// Two applies of one vault never overlap: a publish that met HeadMoved on another thread waits for the pass's apply,
+// then finds the head recorded and applies nothing. Without the service's apply mutex the second apply runs its own
+// operations while the first is between two of them.
+TEST_F(ManifestApplyDb, TwoAppliesOfOneVaultRunOneAfterTheOther) {
+    seed();
+    auto theirs = head().content;
+    at(theirs, "top.txt").name = "renamed.txt";
+    at(theirs, "a.jpg").mode = 0600;
+    (void)publishAs(theirs);
+    std::atomic<int> inside{0}, most{0};
+    std::atomic<bool> secondStarted{false};
+    sync::vault_manifest::ApplyOptions o;
+    o.beforeOp = [&](const mf::Op&) {
+        const int now = ++inside;
+        most = std::max(most.load(), now);
+        if (!secondStarted) {
+            for (int i = 0; i < 50 && !secondStarted; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));   // room for the second apply to start
+        }
+        --inside;
+    };
+    std::optional<sync::vault_manifest::ApplyReport> first, second;
+    std::thread a([&] { first = service->applyRemote(o); });
+    std::thread b([&] {
+        for (int i = 0; i < 100 && inside == 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        secondStarted = true;
+        second = service->applyRemote(o);
+    });
+    a.join();
+    b.join();
+    EXPECT_EQ(most.load(), 1) << "the applies overlapped";
+    ASSERT_TRUE(first);
+    EXPECT_TRUE(first->recorded);
+    EXPECT_FALSE(second) << "the second found the head recorded";
+}
+
+// Replicated vaults stay refused while another writer's recovery envelope kids are dropped from this server's roots
+// (design item 6 prerequisite; Applier.hpp kCarriesForeignEnvelopes): a head naming several writers is not applied.
+// Removing the refusal without the carry-forward fails here.
+TEST_F(ManifestApplyDb, AReplicatedHeadIsRefusedWhileForeignEnvelopesAreNotCarried) {
+    static_assert(!sync::vault_manifest::kCarriesForeignEnvelopes,
+                  "with the carry-forward built, replace this test by one of the carry-forward");
+    seed();
+    const auto h = head();
+    auto named = h.root;
+    named.epoch = h.acceptance.epoch + 1;
+    named.prev = h.acceptance.root_sha256;
+    named.producer.node_id = "another-node";
+    named.writers = std::vector<std::string>{db::query::device::Devices::nodeId(), "another-node"};
+    const auto k = v.engine->encryptionManager->currentKey();
+    (void)v.bucket->seed(std::string(mf::kRootKey), mf::sealRoot(named, uid(), {k.version, k.key}));
+    try {
+        (void)service->applyRemote();
+        ADD_FAILURE() << "a replicated head was applied";
+    } catch (const sync::vault_manifest::ApplyStopped& e) {
+        EXPECT_NE(std::string(e.what()).find("envelope"), std::string::npos) << e.what();
+    }
+    EXPECT_EQ(db::query::sync::Manifest::state(id()).epoch, h.acceptance.epoch);
 }
 
 }

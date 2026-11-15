@@ -47,6 +47,8 @@ struct ChainState {
     // is published.
     std::optional<uint64_t> applying_epoch;
     std::optional<std::string> applying_root_sha256;
+    // The last root this writer PUT for the vault (migration 146), written before the PUT (originOf).
+    std::optional<std::string> publishing_root_sha256;
 };
 
 // One recorded root. version_id, base_version_id and the window on version_log buckets; own when this writer wrote it.
@@ -70,6 +72,12 @@ struct RootRecord {
 // advances only by an apply, which records it, or by this writer's own publish.
 struct RemoteHead : Acceptance {
     std::optional<Loaded> head;
+    // The head was this writer's own past root, built directly on the recorded one (originOf OwnPast): recorded now,
+    // nothing to apply.
+    bool adopted{false};
+    // The head names this writer as its producer but is not its own past root (originOf OwnUnexplained): `head` is set
+    // and must not be applied (the server stalls: another installation may publish under this identity).
+    bool own_unexplained{false};
 };
 
 // Publishing is refused while an apply is incomplete (ChainState::applying_*): a partial state is never published.
@@ -93,6 +101,9 @@ public:
     [[nodiscard]] virtual std::optional<BaseCopy> base() = 0;
     // An apply of this root begins (ChainState::applying_*); the recordRoot of the same root clears it.
     virtual void markApplying(uint64_t epoch, const std::string& rootSha256) = 0;
+    // This writer is about to PUT the root of this hash (ChainState::publishing_root_sha256). Durable before it
+    // returns; a throw stops the publish before the PUT.
+    virtual void notePublishing(const std::string& rootSha256) = 0;
     // A root the chain rules refused. True when it is not the root already recorded as refused: the session alerts
     // once per root, not once per pass.
     [[nodiscard]] virtual bool recordRefused(const std::string& reason, uint64_t epoch,
@@ -124,6 +135,7 @@ struct SessionHost {
     std::function<SealingKey()> currentKey;           // the key new documents are sealed under, with its version
     crypto::vhf1::KeyLookup keys;                     // every key version this writer holds
     std::function<std::string()> nodeId;              // this writer's name in a root's `writers`
+    std::optional<uint64_t> vaultId{};                // this writer's id of the vault (a root's producer.vault_id)
     std::function<std::time_t()> now;                 // the clock a publish stamps its root with
     std::function<void(const Refusal&)> alert;        // a root was refused: called once per refused root
     std::function<void(Notice, const std::string&)> note;   // what happened, for a log (one sentence, no prefix)
@@ -165,6 +177,8 @@ private:
     // verifyRemote on a version_log bucket (spec 06 §5.3, §5.4): rule C1 from the settled root, the settle window,
     // the writers and mode checks, and repair of stray versions above the head.
     std::optional<RemoteHead> verifyRemoteVersionLog();
+    // A loaded head that is not the recorded root: adopted when it is this writer's own past root, else returned.
+    void settleMoved(RemoteHead& out, Loaded&& loaded, const ChainState& state, const std::optional<Known>& knownState);
     PublishReport publishLocked(const Content& produced);
     [[nodiscard]] std::optional<Known> known() const;
     void note(Notice level, const std::string& message) const;

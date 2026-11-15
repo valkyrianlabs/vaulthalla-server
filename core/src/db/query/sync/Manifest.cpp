@@ -100,7 +100,7 @@ vh::sync::manifest::ChainState Manifest::state(const uint32_t vaultId) {
             "SELECT epoch, root_sha256, etag, refused_reason, refused_epoch, refused_root_sha256, "
             "       EXTRACT(EPOCH FROM refused_at)::bigint AS refused_at, EXTRACT(EPOCH FROM gc_at)::bigint AS gc_at, "
             "       root_version_id, base_version_id, array_to_json(settle_window)::text AS settle_window, own_epoch, "
-            "       applying_epoch, applying_root_sha256 "
+            "       applying_epoch, applying_root_sha256, publishing_root_sha256 "
             "FROM remote_manifest_state WHERE vault_id = $1 AND manifest_key = $2",
             pqxx::params{vaultId, kRootStateKey});
         if (res.empty()) return s;
@@ -120,6 +120,7 @@ vh::sync::manifest::ChainState Manifest::state(const uint32_t vaultId) {
         s.own_epoch = optNum<uint64_t>(row["own_epoch"]);
         s.applying_epoch = optNum<uint64_t>(row["applying_epoch"]);
         s.applying_root_sha256 = optText(row["applying_root_sha256"]);
+        s.publishing_root_sha256 = optText(row["publishing_root_sha256"]);
         return s;
     });
 }
@@ -200,6 +201,16 @@ std::optional<vh::sync::manifest::BaseCopy> Manifest::base(const uint32_t vaultI
                                        pqxx::params{vaultId}))
             copy.objects[row[0].as<std::string>()] = encoding::from_hex_bytea(row[1].as<std::string>());
         return copy;
+    });
+}
+
+void Manifest::notePublishing(const uint32_t vaultId, const std::string& rootSha256) {
+    using namespace manifest_query_detail;
+    Transactions::exec("Manifest::notePublishing", [&](pqxx::work& txn) {
+        txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, publishing_root_sha256, updated_at) "
+                 "VALUES ($1, $2, $3, CURRENT_TIMESTAMP) ON CONFLICT (vault_id, manifest_key) DO UPDATE SET "
+                 "  publishing_root_sha256 = EXCLUDED.publishing_root_sha256, updated_at = CURRENT_TIMESTAMP",
+                 pqxx::params{vaultId, kRootStateKey, rootSha256});
     });
 }
 

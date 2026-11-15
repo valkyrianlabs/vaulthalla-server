@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <ctime>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -59,6 +60,10 @@ private:
     template <typename F>
     auto publishRounds(F&& once) -> decltype(once());
 
+    // Serializes applyRemote (a pass, and a publish on another thread that met HeadMoved). Taken before the
+    // session's mutex, never while it is held (the session releases it before HeadMoved reaches publishRounds); held
+    // only on sync and publish paths, never in a FUSE callback or ws handler.
+    std::mutex applyMutex_;
     uint32_t vaultId_;
     manifest::Uid vaultUid_;
     std::shared_ptr<vault::EncryptionManager> keys_;

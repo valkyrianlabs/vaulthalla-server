@@ -437,6 +437,47 @@ republishing; no base copy as a union; share links following a moved folder and 
 `reverted_by_restart` zero and every model equal to the head at quiescence; the original crash test keeps the
 in-memory merge and its `> 0`, as the record of what the applier fixed.
 
+**Own roots (review of items 4-5).** A solo vault meets a head that is not `known` whenever its own root was PUT and
+not recorded (a crash between the PUT and `recordRoot`, or a failed `recordRoot`). Its database is at or past that
+root, so reconciling it as another writer's would misread every change made since (a rename undone by "the head
+wins", an edit against itself, an entry deleted since re-created). `originOf` (Publisher.hpp) classifies a moved head
+before anything is applied:
+
+- *OwnPast*: producer node id = this node **and** producer vault id = this vault, built directly on `known` (epoch + 1,
+  `prev` = known's hash, and on version_log the version below it = known's version id when recorded; epoch 1 with no
+  `prev` when nothing is known), and its hash is the last root this server PUT (`remote_manifest_state.
+  publishing_root_sha256`, migration 146, written before every root PUT through `PublishOptions::before_root_put`).
+  `Session::verifyRemote` records it as own with its base copy and nothing is reconciled.
+- *OwnUnexplained*: names this node and vault but fails the rest. No publish of this server leaves one (every publish
+  builds on `known`, and a moved head is applied or adopted before the next), so another installation is publishing
+  under this identity: `ApplyStopped`, never guessed.
+- *Foreign*: anything else, including this node's root for another vault id (a restore beside the original on one
+  server).
+
+How the identity behaves: the node id is `device_node.node_id`, one per installation's database. `vh vault recover`
+on another server publishes under that server's node id; on the same server it restores into a new vault id
+(`Recover::reserveVaultId`, a sequence that never reuses an id), so neither looks own. A database restored from a backup
+onto a second machine while the first still runs is the one way two installations share a node id and vault id; the
+last-PUT hash then tells them apart (each server's own PUTs only). The hash is absent only in a state that has not
+published since migration 146; there the producer and the direct-on-known check decide, which a clone could pass (an
+accepted gap of that one-time window). Undo: drop the hash check in `originOf` (the producer rule alone).
+
+**One apply at a time.** `Service::applyRemote` holds `applyMutex_` for the whole remote step (deferred entries, verify,
+apply, `applied`). Lock order is apply mutex, then the session's: the session releases its mutex before `HeadMoved`
+reaches `publishRounds`, and nothing takes the apply mutex while holding the session's or `Filesystem`'s. The pass
+lease is never waited on under it, and no FUSE callback or ws handler takes it (only the sync pass and the publish
+paths call `applyRemote`). `ManifestApplyDb.TwoAppliesOfOneVaultRunOneAfterTheOther` overlaps two applies without it.
+
+**Item 6 prerequisites, named where replicated vaults are refused** (`Applier.hpp`, `kCarriesForeignEnvelopes`; the
+applier refuses a head naming more than one writer, `ManifestApplyDb.AReplicatedHeadIsRefusedWhileForeignEnvelopes*`):
+
+1. Another writer's recovery envelope kids are dropped from this server's roots (decision 7 of items 4-5): carry them
+   forward (or have each replica's envelopes for the account grants named) before replicas run.
+2. When another writer built on this server's own unrecorded root before this server adopted it, the apply's base is
+   `known`, not that root, so local changes made since can lose to it (the interleaving suite measures it:
+   `own_root_built_on`, 24 of 646 crash runs, 2026-11-15). Store the pending root's base copy before its PUT (its root
+   and new segments' bytes, by sid) and use it as the base when the head's chain contains it.
+
 **What items 6 and 7 need:** item 6 (the two-daemon drill, `vhh drill mirror`, then Backblaze) can drive two vaults
 with one uid on one bucket now; it needs the join (writers naming both nodes, `mirrors.md`) or a test-only writers
 seed, and it should assert the journal and FUSE views on both. Item 7 (status) has `ApplyReport` (epoch, producer,

@@ -1018,6 +1018,10 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   the index row; open files are deferred (`manifest_apply_deferred`, overridden in `Manifest::collect`); no usable
   base copy merges as a union. Tests: DB `ManifestApplyDb*` (test_manifest_apply_db.cpp),
   `VaultRecoverDb.ARestoreKeepsEachSnapshotsUid`, `ManifestVersionLogFaults.WithTheApplier*` (`Scenario::model_db`).
+  A moved head is classified first (`originOf`): this server's own unrecorded root (producer node and vault id, built
+  directly on `known`, hash = `publishing_root_sha256`, written before every root PUT) is adopted by `verifyRemote`;
+  one only naming this identity is `ApplyStopped`. `Service::applyRemote` is serialized per vault (`applyMutex_`). A
+  head naming several writers is refused (`kCarriesForeignEnvelopes` false: replicated vaults' prerequisites).
 - **`vh vault recover`** (#371, spec 03 §6.4): `vault::recover` (plan: envelopes, export, `loadForRestore` with the
   kit's checkpoint or blind, D1 `prove` against the customer's pinned attestation keys, reconciliation, `MeteredStore`
   download budget), `db::query::vault::Recover` (one transaction: vault, tree with inodes, trash, index, provider
