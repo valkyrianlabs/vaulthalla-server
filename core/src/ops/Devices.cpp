@@ -175,7 +175,8 @@ Device approve(const Actor& actor, const std::string& requestId, const std::stri
     try {
         db::query::device::NewDevice row{.user_id = claim.owner_id, .approved_by = actor->id, .name = claim.name,
                                          .platform = claim.platform, .app_version = claim.app_version,
-                                         .spki_sha256 = claim.device_id, .last_ip = claim.source_ip};
+                                         .spki_sha256 = claim.device_id, .last_ip = claim.source_ip,
+                                         .relayed = claim.relayed};
         if (claim.approval_key) {
             row.approval_key_spki = claim.approval_key->spkiDer;
             row.approval_key_sha256 = vh::device::crypto::toHex(claim.approval_key->spkiSha256);
@@ -186,8 +187,12 @@ Device approve(const Actor& actor, const std::string& requestId, const std::stri
         throw;
     }
     pairing().finishApproval(requestId, device.id, PairingClock::now());
-    log::Registry::audit()->info("[ops::devices] {} approved device {} ('{}', {}) from {}", actor->name(),
-                                 shortId(device.spki_sha256), device.name, device.platform, claim.source_ip);
+    vh::audit::record({.action = "device.pairing.approve", .actor_id = actor->id, .actor = actor->name(),
+                       .details = {{"device", device.id}, {"via", device.paired_via},
+                                   {"key", shortId(device.spki_sha256)}, {"source_ip", claim.source_ip}}},
+                      "[ops::devices] " + actor->name() + " approved device " + shortId(device.spki_sha256) + " ('" +
+                          device.name + "', " + device.platform + ") from " + claim.source_ip +
+                          (claim.relayed ? " via Vaulthalla Cloud" : ""));
     if (claim.approval_key)
         vh::audit::record({.action = "device.approval.key.register", .actor_id = actor->id, .actor = actor->name(),
                        .details = {{"device", device.id}, {"via", "pairing"},
@@ -210,6 +215,8 @@ vh::device::PairRequestReceipt pairRequest(const vh::device::Peer& peer, const P
     if (!commitment) throw Invalid("commitment must be 64 hex digits");
     vh::device::PairRequestInput input{.name = validName(req.name), .platform = validPlatform(req.platform),
                                        .app_version = validAppVersion(req.app_version), .commitment = *commitment};
+    // design/cloud/relay.md: a browser holds no approval key (#361): approvals reach a person in the web console.
+    if (req.approval_key && peer.relayed) throw Invalid("a device paired through Vaulthalla Cloud registers no approval key");
     if (req.approval_key) {
         const auto der = vh::device::crypto::fromBase64(*req.approval_key);
         if (!der || der->empty()) throw Invalid("approval_key must be standard base64 (with padding)");

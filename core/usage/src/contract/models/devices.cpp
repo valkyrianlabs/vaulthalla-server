@@ -35,7 +35,28 @@ std::vector<WsModel> deviceModels() {
          deviceTime("last_seen_at").nullable(),
          str("last_ip").nullable().desc("The address of the device's last connection."),
          deviceTime("revoked_at").nullable(),
-         boolean("revoked").desc("Revoked devices stay listed; their key never pairs again.")}));
+         boolean("revoked").desc("Revoked devices stay listed; their key never pairs again."),
+         str("paired_via").oneOf({"listener", "relay"}).desc(
+             "listener: paired on the device listener (Desktop); relay: a web browser paired through the cloud "
+             "relay, held to the read-only capability set (migration 144).")}));
+
+    out.push_back(model("CloudRelayStatus",
+        "The cloud relay (design/cloud/relay.md): ops::cloud_relay::toJson(RelayStatus).",
+        {str("state").oneOf({"off", "not_linked", "listener_off", "connecting", "connected", "backoff", "waiting",
+                             "stopped"})
+             .desc("off: the local switch; listener_off: device_server.enabled is false; backoff: retrying after a "
+                   "failure; waiting: the cloud refused for a reason that may clear (off at the cloud, no plan, no "
+                   "relay), retried every 5 minutes; stopped: the cloud no longer knows this installation (toggle the "
+                   "switch to try again)."),
+         boolean("enabled").desc("The local switch, for this linked installation."),
+         str("enabled_by").nullable(), deviceTime("enabled_at").nullable(),
+         str("relay_url").nullable().desc("From the latest ticket."),
+         deviceTime("connected_since").nullable().desc("Since the relay admitted this server (WELCOME)."),
+         deviceTime("renew_by").nullable(), deviceTime("last_ticket_at").nullable(),
+         deviceTime("next_attempt_at").nullable(), str("last_error").nullable(),
+         uinteger("streams").desc("Relayed streams open now."),
+         uinteger("streams_accepted").desc("Since the daemon started."),
+         uinteger("streams_refused").desc("Since the daemon started: bad tickets, failed key proofs, limits.")}));
 
     out.push_back(model("KeyBackupGrant",
         "A paired device's key-backup grant (#362, migration 130; MFA design note section 6.4): "

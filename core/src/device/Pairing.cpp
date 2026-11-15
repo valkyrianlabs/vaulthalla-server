@@ -113,7 +113,8 @@ std::vector<PendingRequest> Pairing::pending(const uint32_t ownerId, const time_
         if (r.owner_id != ownerId || r.state != RequestState::Pending) continue;
         out.push_back(PendingRequest{.request_id = id, .name = r.name, .platform = r.platform,
                                      .app_version = r.app_version, .source_ip = r.source_ip,
-                                     .device_id = crypto::toHex(r.device_spki), .code_choices = r.choices,
+                                     .device_id = crypto::toHex(r.device_spki), .relayed = r.relayed,
+                                     .code_choices = r.choices,
                                      .created_at = toTime(r.created_at), .expires_at = toTime(r.expires_at),
                                      .approval_key_present = r.approval_key.has_value()});
     }
@@ -145,7 +146,7 @@ ApprovalClaim Pairing::beginApproval(const uint32_t ownerId, const std::string& 
     r.state = RequestState::Approving;
     return ApprovalClaim{.request_id = requestId, .owner_id = r.owner_id, .device_id = crypto::toHex(r.device_spki),
                          .name = r.name, .platform = r.platform, .app_version = r.app_version,
-                         .source_ip = r.source_ip, .approval_key = r.approval_key};
+                         .source_ip = r.source_ip, .approval_key = r.approval_key, .relayed = r.relayed};
 }
 
 std::string Pairing::checkApproval(const uint32_t ownerId, const std::string& requestId, const std::string& code,
@@ -212,6 +213,7 @@ PairRequestReceipt Pairing::request(const Peer& peer, const PairRequestInput& in
     r.platform = input.platform;
     r.app_version = input.app_version;
     r.source_ip = peer.address;
+    r.relayed = peer.relayed;
     r.commitment = input.commitment;
     r.approval_key = input.approval_key;
     r.nonce_server = crypto::randomNonce();

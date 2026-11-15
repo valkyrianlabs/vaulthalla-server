@@ -4,6 +4,7 @@
 #include "ops/Cloud.hpp"
 #include "ops/CloudKeys.hpp"
 #include "ops/CloudRecovery.hpp"
+#include "ops/CloudRelay.hpp"
 #include "ops/CloudStorage.hpp"
 #include "protocols/shell/commands/vault.hpp"
 #include "vault/model/Vault.hpp"
@@ -524,6 +525,45 @@ CommandResult handleStorage(const CommandCall& call) {
     return invalid(call.constructFullArgs(), "Unknown cloud storage subcommand: '" + std::string(sub) + "'");
 }
 
+namespace relay = ::vh::ops::cloud_relay;
+
+relay::Channel relayChannel() { return AgentCallScope::active() ? relay::Channel::Agent : relay::Channel::Cli; }
+
+std::string relayStatusText(const ::vh::cloud::RelayStatus& s) {
+    std::string out = "Relay         " + s.state + (s.enabled ? " (switched on" + (s.enabled_by ? " by " + *s.enabled_by : std::string()) + ")" : "") + "\n";
+    if (s.relay_url) out += "Relay URL     " + *s.relay_url + "\n";
+    if (s.connected_since) out += "Connected     since " + utc(*s.connected_since) + "\n";
+    if (s.renew_by) out += "Renew by      " + utc(*s.renew_by) + "\n";
+    if (s.next_attempt_at) out += "Next attempt  " + utc(*s.next_attempt_at) + "\n";
+    if (s.last_error) out += "Last error    " + *s.last_error + "\n";
+    out += fmt::format("Streams       {} open, {} accepted, {} refused since the daemon started\n", s.streams,
+                       s.streams_accepted, s.streams_refused);
+    if (s.state == "not_linked") out += "This server isn't linked to an account (`vh cloud link`).\n";
+    else if (s.state == "off") out += "Off: browsers can't reach this server through Vaulthalla Cloud (`vh cloud relay enable`).\n";
+    return out;
+}
+
+CommandResult handleRelay(const CommandCall& call) {
+    if (call.positionals.empty()) return usage(call.constructFullArgs());
+    const auto [sub, subcall] = descend(call);
+    const auto is = [&](const char* name) { return isCommandMatch({"cloud", "relay", name}, sub); };
+    const bool json = hasFlag(subcall, "json");
+    const auto render = [json](const ::vh::cloud::RelayStatus& s) { return json ? jsonText(relay::toJson(s)) : relayStatusText(s); };
+    if (is("status")) {
+        validatePositionals(subcall, resolveUsage({"cloud", "relay", "status"}));
+        return runOp("cloud relay status", [&] { return relay::status(subcall.user); }, render);
+    }
+    if (is("enable")) {
+        validatePositionals(subcall, resolveUsage({"cloud", "relay", "enable"}));
+        return runOp("cloud relay enable", [&] { return relay::enable(subcall.user, relayChannel()); }, render);
+    }
+    if (is("disable")) {
+        validatePositionals(subcall, resolveUsage({"cloud", "relay", "disable"}));
+        return runOp("cloud relay disable", [&] { return relay::disable(subcall.user, relayChannel()); }, render);
+    }
+    return invalid(call.constructFullArgs(), "Unknown cloud relay subcommand: '" + std::string(sub) + "'");
+}
+
 CommandResult handleCloud(const CommandCall& call) {
     if (call.positionals.empty()) return usage(call.constructFullArgs());
     const auto [sub, subcall] = descend(call);
@@ -534,6 +574,7 @@ CommandResult handleCloud(const CommandCall& call) {
     if (is("recovery")) return handleRecovery(subcall);
     if (is("key")) return handleKey(subcall);
     if (is("storage")) return handleStorage(subcall);
+    if (is("relay")) return handleRelay(subcall);
     return invalid(call.constructFullArgs(), "Unknown cloud subcommand: '" + std::string(sub) + "'");
 }
 

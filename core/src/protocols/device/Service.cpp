@@ -19,6 +19,9 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/address.hpp>
 #include <boost/asio/ssl/context.hpp>
+#include <boost/asio/strand.hpp>
+
+#include <unistd.h>
 
 #include <chrono>
 #include <functional>
@@ -68,7 +71,13 @@ std::size_t closeDeviceSessions(const uint32_t deviceRowId, const vh::device::Pe
 }
 
 std::size_t closeRemoteDeviceSessions() {
-    return closeIf([](const ws::Session& s) { return !s.devicePeer() || !isLoopback(s.devicePeer()->address); });
+    return closeIf([](const ws::Session& s) {
+        return !s.devicePeer() || (!s.devicePeer()->relayed && !isLoopback(s.devicePeer()->address));
+    });
+}
+
+std::size_t closeRelayedDeviceSessions() {
+    return closeIf([](const ws::Session& s) { return s.devicePeer() && s.devicePeer()->relayed; });
 }
 
 std::size_t closeAllDeviceListenerSessions() {
@@ -102,6 +111,7 @@ void Service::replaceIdentity(std::shared_ptr<const vh::device::ServerIdentity> 
     auto tls = makeServerContext(*identity);
     if (listener_) listener_->setTls(tls);
     tls_ = std::move(tls);
+    relayedTls_ = makeRelayedServerContext(*identity);
     identity_ = std::move(identity);
     vh::device::setCurrentServerIdentity(identity_);
     log::Registry::runtime()->info("[DeviceServer] Now presenting the rotated server identity (SPKI sha256 {})",
@@ -113,6 +123,35 @@ void Service::setIdentityForTesting(std::shared_ptr<const vh::device::ServerIden
     identity_ = std::move(identity);
     vh::device::setCurrentServerIdentity(identity_);
     tls_.reset();
+    relayedTls_.reset();
+}
+
+bool Service::acceptRelayed(const int fd, RelayedOrigin origin) {
+    std::scoped_lock lock(mutex_);
+    const auto cfg = config::Registry::get().device_server;
+    if (!isRunning() || !cfg.enabled || !ioc_) {
+        ::close(fd);
+        return false;
+    }
+    bool owned = false;  // once the socket holds fd, it closes it
+    try {
+        ensureIdentityLocked();
+        tcp::socket socket(asio::make_strand(*ioc_));
+        boost::system::error_code ec;
+        // A local socketpair end: TCP's protocol object only types the socket; nothing asks for a TCP endpoint.
+        socket.assign(tcp::v4(), fd, ec);
+        if (ec) {
+            ::close(fd);
+            return false;
+        }
+        owned = true;
+        startRelayedConnection(std::move(socket), relayedTls_, router_, cfg.max_connections, std::move(origin));
+        return true;
+    } catch (const std::exception& e) {
+        if (!owned) ::close(fd);
+        log::Registry::runtime()->error("[DeviceServer] Cannot take a relayed stream: {}", e.what());
+        return false;
+    }
 }
 
 void Service::ensureIdentityLocked() {
@@ -122,6 +161,7 @@ void Service::ensureIdentityLocked() {
         log::Registry::runtime()->info("[DeviceServer] Server identity loaded (SPKI sha256 {})", identity_->spkiHex());
     }
     if (!tls_) tls_ = makeServerContext(*identity_);
+    if (!relayedTls_) relayedTls_ = makeRelayedServerContext(*identity_);
     if (!router_) {
         router_ = std::make_shared<ws::Router>();
         ws::Handler::registerAllHandlers(router_);

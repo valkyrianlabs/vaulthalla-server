@@ -69,6 +69,7 @@ struct PendingRequest {
     std::string app_version{};
     std::string source_ip{};
     std::string device_id{};  // the device key's SPKI hash (hex)
+    bool relayed{false};      // asked through the Vaulthalla Cloud relay (a web browser), from the connection
     std::array<std::string, 3> code_choices{};
     std::time_t created_at{};
     std::time_t expires_at{};
@@ -85,6 +86,7 @@ struct ApprovalClaim {
     std::string app_version{};
     std::string source_ip{};
     std::optional<crypto::PublicKey> approval_key{};
+    bool relayed{false};
 };
 
 struct RequestStatus {
@@ -148,6 +150,7 @@ private:
         std::string name{}, platform{}, app_version{}, source_ip{};
         crypto::Hash commitment{}, nonce_server{};
         std::optional<crypto::PublicKey> approval_key{};
+        bool relayed{false};
         std::string code{};  // the SAS, once confirmed
         std::array<std::string, 3> choices{};
         RequestState state{RequestState::AwaitingConfirm};

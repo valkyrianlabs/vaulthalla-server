@@ -26,6 +26,8 @@ struct NewDevice {
     // the same transaction (device_approval_keys, registered_via 'pairing').
     std::optional<std::vector<uint8_t>> approval_key_spki{};
     std::string approval_key_sha256{};
+    // Paired through the Vaulthalla Cloud relay (devices.paired_via = 'relay', migration 144).
+    bool relayed = false;
 };
 
 class Devices {

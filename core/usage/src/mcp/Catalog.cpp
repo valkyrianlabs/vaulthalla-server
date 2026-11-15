@@ -97,6 +97,8 @@ const std::vector<Exclusion>& exclusions() {
         {{"cloud", "storage", "rotate"}, "a vault's bucket key is replaced by a human's decision"},
         {{"cloud", "storage", "new-vaults"}, "where new vaults are stored is decided by a human"},
         {{"cloud", "storage", "billing"}, "billing opens in a browser, for the account holder"},
+        {{"cloud", "relay", "enable"}, "whether browsers may reach this server through Vaulthalla Cloud is decided by a human"},
+        {{"cloud", "relay", "disable"}, "whether browsers may reach this server through Vaulthalla Cloud is decided by a human"},
     };
     return list;
 }

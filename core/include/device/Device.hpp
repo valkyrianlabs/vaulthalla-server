@@ -26,12 +26,15 @@ struct Device {
     std::optional<std::time_t> last_seen_at;
     std::optional<std::string> last_ip;
     std::optional<std::time_t> revoked_at;
+    // How it was paired: "listener" (the device listener: Desktop) or "relay" (a web browser through Vaulthalla
+    // Cloud, migration 144; held to the read-only capability set).
+    std::string paired_via{"listener"};
 
     [[nodiscard]] bool revoked() const noexcept { return revoked_at.has_value(); }
 };
 
 // {id, device_id, user_id, user_name, name, platform, app_version, previous_device_id, approved_by, created_at,
-//  last_seen_at, last_ip, revoked_at, revoked}: times are Unix seconds or null.
+//  last_seen_at, last_ip, revoked_at, revoked, paired_via}: times are Unix seconds or null.
 void to_json(nlohmann::json& j, const Device& d);
 
 // Device names (pairing requests, renames): 1-64 characters (UTF-8 code points), no control characters, trimmed.

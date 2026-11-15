@@ -17,12 +17,13 @@ int64_t steadySeconds() {
 constexpr int64_t kTouchEverySeconds = 300;
 }
 
-Authorization authorize(const crypto::PublicKey& key, const std::string& address) {
+Authorization authorize(const crypto::PublicKey& key, const std::string& address, const bool relayed) {
     auto peer = std::make_shared<Peer>();
     peer->spki = key.spkiSha256;
     peer->spkiHex = crypto::toHex(key.spkiSha256);
     peer->spkiDer = key.spkiDer;
     peer->address = address;
+    peer->relayed = relayed;
 
     Authorization out{.peer = peer, .user = nullptr};
     const auto row = db::query::device::Devices::byAnySpki(peer->spkiHex);
@@ -32,6 +33,7 @@ Authorization authorize(const crypto::PublicKey& key, const std::string& address
     if (!user || user->systemOnly()) return out;
 
     peer->deviceRowId = row->id;
+    peer->pairedViaRelay = row->paired_via == "relay";
     // #362: a device that hasn't connected for 90 days loses its key-backup grant before this connection counts.
     try {
         (void)ops::backup_grants::revokeIfIdle(*row);

@@ -4,6 +4,7 @@
 
 #include "device/Device.hpp"
 #include "ops/BackupGrants.hpp"
+#include "ops/CloudRelay.hpp"
 
 #include <string>
 
@@ -25,6 +26,7 @@ device::Device rotatedRevokedDevice() {
     d.last_seen_at = 1760000600;
     d.last_ip = "10.0.0.42";
     d.revoked_at = 1760001200;
+    d.paired_via = "relay";
     return d;
 }
 
@@ -82,6 +84,23 @@ void checkDeviceModels(Checker& c) {
             "KeyBackupGrant", "device.backup.grant.list grants[] (revoked)");
     c.check(ops::backup_grants::toJson(test_contract_models_devices::migratedGrant(), std::nullopt), "KeyBackupGrant",
             "device.backup.grant.create grant (migrated, device gone)");
+
+    ::vh::cloud::RelayStatus connected;
+    connected.state = "connected";
+    connected.enabled = true;
+    connected.enabled_by = "admin";
+    connected.enabled_at = 1760000000;
+    connected.relay_url = "wss://relay.vaulthalla.test";
+    connected.connected_since = 1760000100;
+    connected.renew_by = 1760000700;
+    connected.last_ticket_at = 1760000100;
+    connected.next_attempt_at = 1760000101;
+    connected.last_error = "the relay closed the connection (4003 renew)";
+    connected.streams = 2;
+    connected.streams_accepted = 9;
+    connected.streams_refused = 1;
+    c.check(ops::cloud_relay::toJson(connected), "CloudRelayStatus", "cloud.relay.status (connected)");
+    c.check(ops::cloud_relay::toJson(::vh::cloud::RelayStatus{}), "CloudRelayStatus", "cloud.relay.status (off)");
 }
 
 }

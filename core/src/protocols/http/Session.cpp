@@ -69,6 +69,16 @@ std::atomic<int64_t> writeTimeoutMs{60'000};
 }
 
 // The device listener's routes over HTTP: the human lanes nginx forwards on the web side, and /mcp.
+// design/cloud/relay.md, wave 2: what a relayed (or relay-paired) device may ask on these lanes: reading only.
+[[nodiscard]] bool isReadOnlyDeviceRequest(const boost::beast::http::verb method, const std::string_view target) {
+    if (method != boost::beast::http::verb::get && method != boost::beast::http::verb::head) return false;
+    for (const std::string_view prefix : {"/preview", "/download"})
+        if (target.starts_with(prefix) && (target.size() == prefix.size() || target[prefix.size()] == '/' ||
+                                           target[prefix.size()] == '?'))
+            return true;
+    return false;
+}
+
 [[nodiscard]] bool isDeviceLaneTarget(const std::string_view target) {
     for (const std::string_view prefix : {"/preview", "/download", "/upload"})
         if (target.starts_with(prefix) && (target.size() == prefix.size() || target[prefix.size()] == '/' ||
@@ -416,6 +426,10 @@ bool Session::serve(HeaderParser& parser) {
         if (!device_->principal) return refuse("device_unknown: this device is not paired with this node", status::forbidden);
         if (stopping()) return false;
         const auto& peer = *device_->connection.peer;
+        // Per request: a keep-alive connection's later requests are held to the same rule as its first.
+        if (peer.readOnly() && !isReadOnlyDeviceRequest(parser.get().method(), target))
+            return refuse("relay_read_only: a session through Vaulthalla Cloud can only preview and download",
+                          status::forbidden);
         ::vh::device::touch(peer);
         principalScope.emplace(device_->principal);
         origin.emplace("device " + peer.shortId());

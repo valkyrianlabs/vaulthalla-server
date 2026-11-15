@@ -20,7 +20,9 @@ class Router {
   public:
     // DenyDeviceUnknown: a pairing-only connection on the device listener asked for anything but pairing; it is
     // answered ERROR with data.code "device_unknown" (the same for unknown and revoked keys: no oracle).
-    enum class CommandAuthDecision { Allow, RequireHumanAuth, Deny, DenyDeviceUnknown };
+    // DenyReadOnly: a relayed (Vaulthalla Cloud) device session asked for a command outside the read-only set; it is
+    // answered ERROR with data.code "relay_read_only".
+    enum class CommandAuthDecision { Allow, RequireHumanAuth, Deny, DenyDeviceUnknown, DenyReadOnly };
 
     using SessionPtr = std::shared_ptr<Session>;
     using Handler = std::function<void(json&&, const SessionPtr&)>;
@@ -60,6 +62,10 @@ class Router {
     [[nodiscard]] static bool isDevicePairCommand(std::string_view command);
     // Commands only a paired device's own session may run (device.identity.rotate, device.server.identity).
     [[nodiscard]] static bool isDeviceOnlyCommand(std::string_view command);
+    // design/cloud/relay.md, wave 2: everything a device session that came through the relay, or a device paired
+    // through it, may run: browsing, metadata, downloads and the change feed. An allowlist: a command added later is
+    // refused there until it is added here on purpose (UsageContract walks every registered command).
+    [[nodiscard]] static bool isRelayedReadCommand(std::string_view command);
     [[nodiscard]] static CommandAuthDecision classifyCommand(std::string_view command, const Session& session);
     // The answer to a command no handler is registered for, once the session may run it (web and device sessions;
     // pairing-only ones get device_unknown first): ERROR "Unknown command" with data.code "unknown_command".

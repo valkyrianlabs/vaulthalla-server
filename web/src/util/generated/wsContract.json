@@ -11,6 +11,11 @@
       "since": "1.23.0"
     },
     {
+      "description": "A linked server can keep an outbound connection to the cloud relay, switched by a super admin (cloud.relay.status, .enable, .disable). Browsers reach it through relayed streams on the device listener, pair like a device (device.pairing.pending `via`, device.list `paired_via`) and are held to the read-only set (data.code relay_read_only).",
+      "name": "cloud.relay",
+      "since": "1.23.0"
+    },
+    {
       "description": "A linked server keeps vaults in managed storage: new vaults may be attached to it automatically (cloud.storage.status, .switch, .offer.accept, .offer.decline, .rotate, .new_vaults, .billing.handoff). Whether it is available is runtime state (cloud.storage.status `available`).",
       "name": "cloud.storage.managed_remotes",
       "since": "1.23.0"
@@ -108,6 +113,10 @@
       {
         "code": "not_found",
         "description": "What the request names doesn't exist (or isn't visible to the actor)."
+      },
+      {
+        "code": "relay_read_only",
+        "description": "A device session through the cloud relay (or a device paired that way) asked for a command outside the read-only set: browsing, metadata, downloads, the change feed, device.list and meta.*."
       },
       {
         "code": "unknown_command",
@@ -1793,6 +1802,135 @@
         }
       ],
       "name": "CloudLinkStatus"
+    },
+    {
+      "description": "The cloud relay (design/cloud/relay.md): ops::cloud_relay::toJson(RelayStatus).",
+      "fields": [
+        {
+          "description": "off: the local switch; listener_off: device_server.enabled is false; backoff: retrying after a failure; waiting: the cloud refused for a reason that may clear (off at the cloud, no plan, no relay), retried every 5 minutes; stopped: the cloud no longer knows this installation (toggle the switch to try again).",
+          "enum": [
+            "off",
+            "not_linked",
+            "listener_off",
+            "connecting",
+            "connected",
+            "backoff",
+            "waiting",
+            "stopped"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The local switch, for this linked installation.",
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "enabled_by",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "enabled_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "From the latest ticket.",
+          "name": "relay_url",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Since the relay admitted this server (WELCOME).",
+          "name": "connected_since",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "renew_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "last_ticket_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "next_attempt_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "last_error",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Relayed streams open now.",
+          "minimum": 0,
+          "name": "streams",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Since the daemon started.",
+          "minimum": 0,
+          "name": "streams_accepted",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Since the daemon started: bad tickets, failed key proofs, limits.",
+          "minimum": 0,
+          "name": "streams_refused",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "name": "CloudRelayStatus"
     },
     {
       "description": "ops::cloud_storage::toJson(EndedConfirmation).",
@@ -3661,6 +3799,18 @@
           "required": true,
           "types": [
             "boolean"
+          ]
+        },
+        {
+          "description": "listener: paired on the device listener (Desktop); relay: a web browser paired through the cloud relay, held to the read-only capability set (migration 144).",
+          "enum": [
+            "listener",
+            "relay"
+          ],
+          "name": "paired_via",
+          "required": true,
+          "types": [
+            "string"
           ]
         }
       ],
@@ -23192,7 +23342,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "2a7b8cbc9ae3209c308ea6fdd3dd8016c3c43fadbae82b5b6b3e6beac858a696",
+  "models_hash": "b343025d5c4879445b3f08090da887eef7cd5e0c7a9defbad02f509e0ba81dcf",
   "protocol": {
     "min": 1,
     "version": 1
@@ -28114,6 +28264,451 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
+      "command": "cloud.relay.disable",
+      "confirmations": [],
+      "description": "Switch the relay off: the connection and every relayed session close at once; paired browsers stay paired (device.revoke unpairs one). Super admins.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "off: the local switch; listener_off: device_server.enabled is false; backoff: retrying after a failure; waiting: the cloud refused for a reason that may clear (off at the cloud, no plan, no relay), retried every 5 minutes; stopped: the cloud no longer knows this installation (toggle the switch to try again).",
+          "enum": [
+            "off",
+            "not_linked",
+            "listener_off",
+            "connecting",
+            "connected",
+            "backoff",
+            "waiting",
+            "stopped"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The local switch, for this linked installation.",
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "enabled_by",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "enabled_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "From the latest ticket.",
+          "name": "relay_url",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Since the relay admitted this server (WELCOME).",
+          "name": "connected_since",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "renew_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "last_ticket_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "next_attempt_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "last_error",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Relayed streams open now.",
+          "minimum": 0,
+          "name": "streams",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Since the daemon started.",
+          "minimum": 0,
+          "name": "streams_accepted",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Since the daemon started: bad tickets, failed key proofs, limits.",
+          "minimum": 0,
+          "name": "streams_refused",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": "CloudRelayStatus",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "cloud.relay.enable",
+      "confirmations": [],
+      "description": "Switch the relay on for this linked server: browsers paired through the cloud relay reach it (read only), and relayed pairing requests can arrive while a pairing window is open. The account holder's switch at the cloud must be on too. Super admins; conflict when not linked.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "description": "off: the local switch; listener_off: device_server.enabled is false; backoff: retrying after a failure; waiting: the cloud refused for a reason that may clear (off at the cloud, no plan, no relay), retried every 5 minutes; stopped: the cloud no longer knows this installation (toggle the switch to try again).",
+          "enum": [
+            "off",
+            "not_linked",
+            "listener_off",
+            "connecting",
+            "connected",
+            "backoff",
+            "waiting",
+            "stopped"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The local switch, for this linked installation.",
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "enabled_by",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "enabled_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "From the latest ticket.",
+          "name": "relay_url",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Since the relay admitted this server (WELCOME).",
+          "name": "connected_since",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "renew_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "last_ticket_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "next_attempt_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "last_error",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Relayed streams open now.",
+          "minimum": 0,
+          "name": "streams",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Since the daemon started.",
+          "minimum": 0,
+          "name": "streams_accepted",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Since the daemon started: bad tickets, failed key proofs, limits.",
+          "minimum": 0,
+          "name": "streams_refused",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": "CloudRelayStatus",
+      "step_up": "device.trust",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "cloud.relay.status",
+      "confirmations": [],
+      "description": "The relay's local switch and the outbound connection as the service last saw it (connected only after the relay admitted it), when it must renew, the last error and the relayed streams. Reads the database and the service's memory, no cloud call. Super admins or the admin cloud View permission.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "off: the local switch; listener_off: device_server.enabled is false; backoff: retrying after a failure; waiting: the cloud refused for a reason that may clear (off at the cloud, no plan, no relay), retried every 5 minutes; stopped: the cloud no longer knows this installation (toggle the switch to try again).",
+          "enum": [
+            "off",
+            "not_linked",
+            "listener_off",
+            "connecting",
+            "connected",
+            "backoff",
+            "waiting",
+            "stopped"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The local switch, for this linked installation.",
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "enabled_by",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "enabled_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "From the latest ticket.",
+          "name": "relay_url",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Since the relay admitted this server (WELCOME).",
+          "name": "connected_since",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "renew_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "last_ticket_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "name": "next_attempt_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "last_error",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Relayed streams open now.",
+          "minimum": 0,
+          "name": "streams",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Since the daemon started.",
+          "minimum": 0,
+          "name": "streams_accepted",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Since the daemon started: bad tickets, failed key proofs, limits.",
+          "minimum": 0,
+          "name": "streams_refused",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": "CloudRelayStatus",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
       "command": "cloud.storage.billing.handoff",
       "confirmations": [],
       "description": "The address of the account's billing page (checkout: choose a plan; portal: manage it), to open in a browser; short-lived and never stored. The service polls the account's state fast for a few minutes afterwards. The admin cloud Billing permission.",
@@ -31380,6 +31975,18 @@
               "required": true,
               "types": [
                 "boolean"
+              ]
+            },
+            {
+              "description": "relay: a web browser asking through the cloud relay (from the connection, never the platform it names); it is paired read-only.",
+              "enum": [
+                "listener",
+                "relay"
+              ],
+              "name": "via",
+              "required": true,
+              "types": [
+                "string"
               ]
             },
             {
@@ -54355,5 +54962,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "64a009cd00663c9efb771f113e6b6598bfa6e51facac18f1a9e49df1d7221032"
+  "ws_hash": "f14dec94b0ad564ea133841b91b99eaf8b78e8f4dc6cb64f9157e73f6b0e67e3"
 }

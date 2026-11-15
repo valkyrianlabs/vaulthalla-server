@@ -160,6 +160,7 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
         {"cloud.key.confirm", "console: cloud_key_requires_device first; needs a linked server with a waiting key "
                               "(AccountKeyPin.ConfirmIsForSuperAdminsOnTheCliOrAPairedDevice)"},
         {"device.remote.enable", "writes the daemon's config file: refusal in AStolenBrowserSessionCantApprove..."},
+        {"cloud.relay.enable", "needs a linked server: CloudRelayServiceTest.SwitchingItOnFromTheConsoleIsAStepUp"},
         {"device.approval.key.register", "a paired device's own session: test_device_approvals_db.cpp"},
         {"device.backup.grant.create", "needs a paired device and an exportable vault: test_key_backup_grants_db.cpp"},
         {"device.backup.grant.extend", "needs a live grant: test_key_backup_grants_db.cpp"},
