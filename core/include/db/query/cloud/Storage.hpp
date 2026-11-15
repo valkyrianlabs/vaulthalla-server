@@ -56,6 +56,8 @@ struct StorageAccountRow {
     std::optional<std::time_t> enabled_at{};
     bool offer_open{false};
     std::optional<std::time_t> fast_until{};
+    std::optional<std::time_t> ended_seen_at{}, ended_confirmed_at{};   // migration 143
+    std::optional<std::string> ended_confirmed_by{};
 };
 
 // What a successful fetch writes (the settings stay as they are).
@@ -83,6 +85,8 @@ struct CloudStorage {
     static bool markEnabled();
     static void setOfferOpen(bool open);
     static void setFastUntil(std::time_t until);
+    // An admin confirmed the current run of `ended` answers (false: the service isn't reporting `ended`).
+    static bool confirmEnded(const std::string& by);
     // The link is gone: the cached entitlement and the settings go with it.
     static void clearAccount();
 

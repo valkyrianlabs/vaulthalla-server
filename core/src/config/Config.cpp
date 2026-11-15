@@ -192,6 +192,10 @@ Config& Config::operator=(Config&&) noexcept = default;
                 if (storage["poll_minutes"]) cfg.cloud.storage_poll_minutes = storage["poll_minutes"].as<unsigned int>();
                 if (storage["default_retention_days"])
                     cfg.cloud.storage_default_retention_days = storage["default_retention_days"].as<unsigned int>();
+                if (storage["ended_grace_hours"])
+                    cfg.cloud.storage_ended_grace_hours = storage["ended_grace_hours"].as<unsigned int>();
+                if (cfg.cloud.storage_ended_grace_hours < 1 || cfg.cloud.storage_ended_grace_hours > 8760)
+                    throw std::invalid_argument("config.yaml: cloud.storage.ended_grace_hours is 1 to 8760");
                 if (cfg.cloud.storage_poll_minutes < 1 || cfg.cloud.storage_poll_minutes > 1440)
                     throw std::invalid_argument("config.yaml: cloud.storage.poll_minutes is 1 to 1440");
                 if (cfg.cloud.storage_default_retention_days < 1 || cfg.cloud.storage_default_retention_days > 36500)

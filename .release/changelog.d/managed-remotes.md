@@ -14,3 +14,12 @@
   are in managed storage unless `--force` (`managed_vaults`). `vh cloud recovery status --verify` compares the
   cloud's account-key envelopes with this server's records. New health entries under `cloud_storage`.
 - `cloud.storage.poll_minutes` and `cloud.storage.default_retention_days` in config.yaml (defaults 15 and 30).
+- Managed storage follow-ups (migration 143 adds `cloud_storage_account.ended_seen_at`, `.ended_confirmed_at`,
+  `.ended_confirmed_by`): an ended plan converts vaults only after `vh cloud storage confirm-ended` (ws
+  `cloud.storage.ended.confirm`) or `cloud.storage.ended_grace_hours` (default 24) of continuous `ended`; an attach
+  to a bucket that holds the vault's own earlier copy is refused `bucket_holds_this_vault` instead of
+  `bucket_not_empty`; manifest roots carry the account's signed recovery policy (`recovery_policy.account_policy`),
+  which a restore verifies and accepts when newer; root grants carry `account_key_generation`.
+- Console: a managed storage page and a new-vault switch, both hidden unless the server reports the capability and
+  storage is available. Route budgets for `/account`, `/users/[name]` (242 KB) and `/files` (232 KB) were raised: the
+  generated ws contract the client ships grew with the managed-storage commands.

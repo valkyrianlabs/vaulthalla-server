@@ -331,6 +331,25 @@ each small to change:
     and reports `/ejected`; the engine and credentials stay.
 11. **Unlink** refuses `managed_vaults` while any row is between `registered` and `detaching`; `--force` closes their
     gates (state `moved`, reason `unlinked`) and forgets the cached account state.
-12. **Not built:** the `403`-from-Backblaze wake, re-attaching a vault's own earlier bucket (attach-remote question 6:
-    a kept bucket refuses `bucket_not_empty`), `pending_upload_bytes`/`pending_files` and throughput in
-    `CloudStorageVault`, the console page, the Desktop contract bump beyond the regenerated ws contract, the drill.
+12. **The vault's own earlier bucket** (switched off, then on again; an `ended` the cloud reverses): an attach whose
+    bucket isn't empty loads the bucket's manifest root with the vault's uid and its own keys; if it authenticates, the
+    attach refuses `bucket_holds_this_vault` (the operator restores with `vh vault recover`, or the account holder
+    deletes the bucket in the portal) instead of `bucket_not_empty`. Nothing in the bucket is deleted. Rejoining it in
+    place (attach-remote question 6, with files only the bucket holds coming back as remote-only entries) is not built.
+13. **An ended plan waits** (migration 143): the vault stays attached with access `none` (reason
+    `ended_pending_confirmation`, health `cloud_storage_ended_pending`, status `ended {since, converts_at,
+    confirmed_by}`) until an admin confirms (`vh cloud storage confirm-ended`, ws `cloud.storage.ended.confirm`) or
+    the service has answered `ended` without interruption for `cloud.storage.ended_grace_hours` (24). Any other
+    answer clears the run.
+14. **The account policy in the root:** `recovery_policy.account_policy {policy, signature}` carries the pinned row's
+    policy bytes for a vault with an active account-key grant; `vh vault recover` offers it to
+    `ops::cloud_keys::offerPolicy`, which verifies it against this server's own pin and floor like the service's.
+15. **The cloud's announced contract changes** are one place each (`contract::` in `cloud/Storage.cpp`): the
+    offline-copy flag's rename, the ejection portal's address (stored in `ejection.portal_url`, opened by "Leave
+    managed storage"), base64url envelopes, and `moved_to` on a moved vault (state `moved` at once).
+16. **The console** (item 8): `/managed-storage` (`features/managedStorage`, copy in `copy.ts`), a nav item under
+    "Storage & cost" with `NavSignal` `cloudStorage` (the view permission and `available`; a server without the
+    capability has no `cloud.storage.status`), and the new-vault switch (shown with the `meta.hello` capability;
+    a choice that differs from the server's default is sent after the vault is created).
+17. **Not built:** the `403`-from-Backblaze wake, `pending_upload_bytes`/`pending_files` and throughput in
+    `CloudStorageVault`, rejoining a kept bucket in place, and the drill.

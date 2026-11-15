@@ -54,6 +54,7 @@ struct VaultKeys {
     static json cloudStorageSwitch(const json& payload, const std::shared_ptr<Session>& session);
     static json cloudStorageOfferAccept(const json& payload, const std::shared_ptr<Session>& session);
     static json cloudStorageOfferDecline(const json& payload, const std::shared_ptr<Session>& session);
+    static json cloudStorageEndedConfirm(const json& payload, const std::shared_ptr<Session>& session);
     static json cloudStorageRotate(const json& payload, const std::shared_ptr<Session>& session);
     static json cloudStorageNewVaults(const json& payload, const std::shared_ptr<Session>& session);
     static json cloudStorageBillingHandoff(const json& payload, const std::shared_ptr<Session>& session);

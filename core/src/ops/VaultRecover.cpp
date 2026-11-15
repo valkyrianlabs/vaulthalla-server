@@ -1,6 +1,7 @@
 #include "ops/VaultRecover.hpp"
 
 #include "cloud/AccountPin.hpp"
+#include "ops/CloudKeys.hpp"
 
 #include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
@@ -390,6 +391,12 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
         log::Registry::cloud()->warn("[ops::vault_recover] vault {}: the bucket could not be probed ({}); the first "
                                      "sync pass probes it", vaultId, e.what());
     }
+
+    // The account's signed recovery policy the root carried (key-manager.md, "Where it travels"): verified against this
+    // server's own pin and floor, and accepted only if newer than what the service served.
+    if (plan.recovery_policy && plan.recovery_policy->account_policy)
+        (void)ops::cloud_keys::offerPolicy(plan.recovery_policy->account_policy->policy,
+                                           plan.recovery_policy->account_policy->signature, "the restored manifest root");
 
     // Start the vault (cache strategy) and publish its first root on top of the loaded one.
     std::shared_ptr<storage::Engine> engine;

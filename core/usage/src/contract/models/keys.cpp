@@ -200,7 +200,16 @@ std::vector<WsModel> vaultKeyModels() {
          object("billing").nullable().desc("The account's billing summary as last fetched."),
          object("ejection").nullable().desc("An ejection's progress, as the service reports it."),
          vaultKeyTime("fetched_at").nullable().desc("When the account's state was last confirmed."),
-         str("fetch_error").nullable(), str("next_step").nullable()}));
+         str("fetch_error").nullable(),
+         object("ended", "", {vaultKeyTime("since"), vaultKeyTime("converts_at").desc("Without a confirmation."),
+                              str("confirmed_by").nullable()})
+             .nullable()
+             .desc("The plan ended and the conversion to local waits: an admin's confirmation, or the grace period."),
+         str("next_step").nullable()}));
+
+    out.push_back(model("CloudStorageEndedConfirmation", "ops::cloud_storage::toJson(EndedConfirmation).",
+        {boolean("confirmed"), vaultKeyTime("since").nullable(),
+         uinteger("vaults").desc("The managed vaults it converts.")}));
 
     out.push_back(model("CloudStorageOffer", "An answer to the offer: ops::cloud_storage::toJson(OfferResult).",
         {intArray("vaults").desc("The vaults the answer changed."), boolean("offer_open")}));

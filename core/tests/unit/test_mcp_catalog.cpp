@@ -160,7 +160,8 @@ TEST(McpCatalog, ExclusionListIsExactlyTheAgreedOne) {
                                             "cloud unlink", "cloud recovery enroll", "cloud recovery unenroll",
                                             "cloud key confirm", "cloud key forget", "cloud storage enable",
                                             "cloud storage disable", "cloud storage accept", "cloud storage decline",
-                                            "cloud storage rotate", "cloud storage new-vaults", "cloud storage billing"};
+                                            "cloud storage confirm-ended", "cloud storage rotate", "cloud storage new-vaults",
+                                            "cloud storage billing"};
     EXPECT_EQ(paths, expected);
 }
 
@@ -178,7 +179,7 @@ TEST(McpCatalog, ExcludedCommandsAreNeitherListedNorRunnable) {
                           "device remote disable", "cloud link", "cloud unlink", "cloud recovery enroll",
                           "cloud recovery unenroll", "cloud key confirm", "cloud key forget", "cloud storage enable",
                           "cloud storage disable", "cloud storage accept", "cloud storage decline", "cloud storage rotate",
-                          "cloud storage new-vaults", "cloud storage billing"})
+                          "cloud storage new-vaults", "cloud storage billing", "cloud storage confirm-ended"})
         EXPECT_TRUE(excluded.contains(c)) << c;
 
     // No typed tool binds one, and nothing in a tool definition offers it.

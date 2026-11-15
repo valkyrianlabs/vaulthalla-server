@@ -178,6 +178,7 @@ void Handler::registerVaultKeyHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("cloud.storage.offer.accept", &handler::VaultKeys::cloudStorageOfferAccept);
     r->registerPayload("cloud.storage.offer.decline", &handler::VaultKeys::cloudStorageOfferDecline);
     r->registerPayload("cloud.storage.rotate", &handler::VaultKeys::cloudStorageRotate);
+    r->registerPayload("cloud.storage.ended.confirm", &handler::VaultKeys::cloudStorageEndedConfirm);
     r->registerPayload("cloud.storage.new_vaults", &handler::VaultKeys::cloudStorageNewVaults);
     r->registerPayload("cloud.storage.billing.handoff", &handler::VaultKeys::cloudStorageBillingHandoff);
 }

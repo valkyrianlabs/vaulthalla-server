@@ -277,10 +277,20 @@ struct Grant {
     [[nodiscard]] bool usableForDecryption() const;
 };
 
+// The linked account's signed recovery policy (design/cloud/key-manager.md, "Where it travels"): its exact bytes and the
+// base64url of its Ed25519 signature, carried so a replica or a restore gets it from the bucket with the service out of
+// reach. Untrusted here: a reader verifies it against its own pin and its own sequence floor before using it.
+struct AccountPolicyBytes {
+    std::string policy;
+    std::string signature;
+    [[nodiscard]] bool operator==(const AccountPolicyBytes&) const = default;
+};
+
 struct RecoveryPolicy {
     uint32_t v{kRecoveryPolicyVersion};
     bool understood{true};                      // false: a version this reader doesn't know (grants left empty)
     std::vector<Grant> grants;
+    std::optional<AccountPolicyBytes> account_policy{};
     [[nodiscard]] bool operator==(const RecoveryPolicy&) const = default;
 };
 

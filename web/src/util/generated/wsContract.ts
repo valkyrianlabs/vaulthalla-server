@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '15c44f8d16e7bfc7c9ad2321c8e18c3dc2bd6983b831f9765962779c6a1826f8'
+export const WS_CONTRACT_HASH = '64a009cd00663c9efb771f113e6b6598bfa6e51facac18f1a9e49df1d7221032'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '43502e71a1a5a0620d5533435f95c1417a562d0a2dff615910f0eede1abb4f23'
+export const WS_MODELS_HASH = '2a7b8cbc9ae3209c308ea6fdd3dd8016c3c43fadbae82b5b6b3e6beac858a696'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -279,6 +279,10 @@ export interface WsModels {
     account_key?: { generation: number; fingerprint: string } | null
   }
   /**
+   * ops::cloud_storage::toJson(EndedConfirmation).
+   */
+  'CloudStorageEndedConfirmation': { confirmed: boolean; since: number | null; vaults: number }
+  /**
    * A billing page address: ops::cloud_storage::toJson(Handoff).
    */
   'CloudStorageHandoff': { kind: 'checkout' | 'portal'; url: string; expires_at: number | null }
@@ -309,6 +313,7 @@ export interface WsModels {
     ejection: object | null
     fetched_at: number | null
     fetch_error: string | null
+    ended: { since: number; converts_at: number; confirmed_by: string | null } | null
     next_step: string | null
   }
   /**
@@ -2211,7 +2216,7 @@ export interface WsModels {
     vault_remote_unavailable?: { vault_id: number; vault_name: string; reason: string; set_by: string; since: number }[]
     cloud_account_key?: { issue: 'cloud_account_key_tampered' | 'cloud_account_key_change_pending'; detail: string } | null
     cloud_storage?: {
-      code: 'cloud_account_key_unconfirmed' | 'cloud_recovery_behind' | 'vault_cloud_moved' | 'vault_cloud_failed' | 'cloud_account_key_no_offline_copy'
+      code: 'cloud_account_key_unconfirmed' | 'cloud_recovery_behind' | 'vault_cloud_moved' | 'vault_cloud_failed' | 'cloud_account_key_no_offline_copy' | 'cloud_storage_ended_pending'
       severity: 'degraded' | 'info'
       vault_id: number | null
       detail: string
@@ -4173,6 +4178,16 @@ export interface WsContract {
     response: { kind: 'checkout' | 'portal'; url: string; expires_at: number | null }
   }
   /**
+   * Confirm that the account's plan ended: managed vaults become local in place now (files held only in their
+   * buckets are listed as lost; nothing local is deleted) instead of after cloud.storage.ended_grace_hours of
+   * continuous `ended` reports. Conflict unless the service reports `ended`. The admin cloud Storage
+   * permission.
+   */
+  'cloud.storage.ended.confirm': {
+    payload: null
+    response: { confirmed: boolean; since: number | null; vaults: number }
+  }
+  /**
    * Whether vaults created from now on use managed storage by default (on unless turned off). The admin cloud
    * Storage permission.
    */
@@ -4237,7 +4252,7 @@ export interface WsContract {
    * and state in words. Reads the database only. Super admins or the admin cloud View permission.
    */
   'cloud.storage.status': {
-    payload: Record<string, never>
+    payload: null
     response: {
       linked: boolean
       account_key: 'unlinked' | 'unconfirmed' | 'pinned' | 'tampered'
@@ -4258,6 +4273,7 @@ export interface WsContract {
       ejection: object | null
       fetched_at: number | null
       fetch_error: string | null
+      ended: { since: number; converts_at: number; confirmed_by: string | null } | null
       next_step: string | null
     }
   }
@@ -7554,6 +7570,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'cloud.key.status',
   'cloud.link.status',
   'cloud.storage.billing.handoff',
+  'cloud.storage.ended.confirm',
   'cloud.storage.new_vaults',
   'cloud.storage.offer.accept',
   'cloud.storage.offer.decline',
@@ -7960,6 +7977,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'cloud.key.status': 15000,
   'cloud.link.status': 15000,
   'cloud.storage.billing.handoff': 15000,
+  'cloud.storage.ended.confirm': 15000,
   'cloud.storage.new_vaults': 15000,
   'cloud.storage.offer.accept': 15000,
   'cloud.storage.offer.decline': 15000,

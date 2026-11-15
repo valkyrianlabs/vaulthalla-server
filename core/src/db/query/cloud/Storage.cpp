@@ -87,7 +87,8 @@ std::optional<StorageAccountRow> CloudStorage::account() {
         const auto res = txn.exec("SELECT state, plan, quota_bytes, storage_access, cause, used_bytes, usage_day, "
                                   "account_key_confirmed, provider, ejection::text, billing::text, " + d::epoch("fetched_at") +
                                   ", fetch_error, new_vaults, " + d::epoch("enabled_at") + ", offer_open, " +
-                                  d::epoch("fast_until") + " FROM cloud_storage_account");
+                                  d::epoch("fast_until") + ", " + d::epoch("ended_seen_at") + ", " +
+                                  d::epoch("ended_confirmed_at") + ", ended_confirmed_by FROM cloud_storage_account");
         if (res.empty()) return std::nullopt;
         const auto& r = res[0];
         StorageAccountRow row;
@@ -108,6 +109,9 @@ std::optional<StorageAccountRow> CloudStorage::account() {
         row.enabled_at = d::optTime(r[14]);
         row.offer_open = r[15].as<bool>();
         row.fast_until = d::optTime(r[16]);
+        row.ended_seen_at = d::optTime(r[17]);
+        row.ended_confirmed_at = d::optTime(r[18]);
+        row.ended_confirmed_by = d::opt<std::string>(r[19]);
         return row;
     });
 }
@@ -117,13 +121,18 @@ void CloudStorage::saveFetched(const FetchedAccount& f) {
         const auto ejection = f.ejection.is_null() ? std::optional<std::string>() : std::optional(f.ejection.dump());
         const auto billing = f.billing.is_null() ? std::optional<std::string>() : std::optional(f.billing.dump());
         txn.exec("INSERT INTO cloud_storage_account (singleton, state, plan, quota_bytes, storage_access, cause, used_bytes, "
-                 "usage_day, account_key_confirmed, provider, ejection, billing, fetched_at, fetch_error, updated_at) "
-                 "VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, now(), NULL, now()) "
+                 "usage_day, account_key_confirmed, provider, ejection, billing, fetched_at, fetch_error, updated_at, ended_seen_at) "
+                 "VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, now(), NULL, now(), "
+                 "CASE WHEN $1 = 'ended' THEN now() END) "
                  "ON CONFLICT (singleton) DO UPDATE SET state = EXCLUDED.state, plan = EXCLUDED.plan, quota_bytes = "
                  "EXCLUDED.quota_bytes, storage_access = EXCLUDED.storage_access, cause = EXCLUDED.cause, used_bytes = "
                  "EXCLUDED.used_bytes, usage_day = EXCLUDED.usage_day, account_key_confirmed = "
                  "EXCLUDED.account_key_confirmed, provider = EXCLUDED.provider, ejection = EXCLUDED.ejection, billing = "
-                 "EXCLUDED.billing, fetched_at = now(), fetch_error = NULL, updated_at = now()",
+                 "EXCLUDED.billing, fetched_at = now(), fetch_error = NULL, updated_at = now(), "
+                 "ended_seen_at = CASE WHEN EXCLUDED.state = 'ended' THEN COALESCE(cloud_storage_account.ended_seen_at, "
+                 "now()) END, ended_confirmed_at = CASE WHEN EXCLUDED.state = 'ended' THEN "
+                 "cloud_storage_account.ended_confirmed_at END, ended_confirmed_by = CASE WHEN EXCLUDED.state = 'ended' "
+                 "THEN cloud_storage_account.ended_confirmed_by END",
                  pqxx::params{f.state, f.plan, static_cast<int64_t>(f.quota_bytes), f.storage_access, f.cause,
                               f.used_bytes ? std::optional<int64_t>(static_cast<int64_t>(*f.used_bytes)) : std::nullopt,
                               f.usage_day, f.account_key_confirmed, f.provider, ejection, billing});
@@ -163,6 +172,15 @@ void CloudStorage::setFastUntil(const std::time_t until) {
     Transactions::exec("cloud::CloudStorage::setFastUntil", [&](pqxx::work& txn) {
         txn.exec("UPDATE cloud_storage_account SET fast_until = to_timestamp($1), updated_at = now()",
                  pqxx::params{static_cast<int64_t>(until)});
+    });
+}
+
+bool CloudStorage::confirmEnded(const std::string& by) {
+    return Transactions::exec("cloud::CloudStorage::confirmEnded", [&](pqxx::work& txn) {
+        return txn.exec("UPDATE cloud_storage_account SET ended_confirmed_at = now(), ended_confirmed_by = $1, updated_at = "
+                        "now() WHERE state = 'ended' AND ended_seen_at IS NOT NULL",
+                        pqxx::params{by})
+                   .affected_rows() > 0;
     });
 }
 

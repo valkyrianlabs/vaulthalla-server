@@ -374,7 +374,9 @@ TEST(ManifestDocument, RichRootSegmentAndSnapshotRoundTrip) {
     root.keys = content.keys;
     root.keys[1].envelopes = std::vector<std::string>{"abcdefghjkmnpqrstvwxyz0123"};
     root.recovery_policy = RecoveryPolicy{1, true, {Grant{"g1", std::string(64, 'b'), "customer", 1, "Recovery kit",
-                                                           "2026-11-01T00:00:00Z", "device-3", std::nullopt, std::nullopt}}};
+                                                           "2026-11-01T00:00:00Z", "device-3", std::nullopt, std::nullopt, 1u}}};
+    // The account's signed recovery policy travels in the root, byte for byte (design/cloud/key-manager.md).
+    root.recovery_policy->account_policy = AccountPolicyBytes{.policy = "vhc-recovery-policy-v1\n…", .signature = "c2ln"};
     root.segments = {SegmentRef{uidT(0x10, 0x01), {0x00, 0x7f}, 3, std::string(64, 'c'), 900},
                      SegmentRef{uidT(0x10, 0x02), {0x80, 0xff}, 4, std::string(64, 'd'), 1200}};
     root.snapshots = {SnapshotRef{uidT(0x10, 0x03), std::string(64, 'e'), 400}};

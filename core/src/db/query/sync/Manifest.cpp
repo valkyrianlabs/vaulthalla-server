@@ -262,6 +262,21 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId, const Coll
                 g.account_key_generation = row["account_key_generation"].as<uint32_t>();
             policy.grants.push_back(std::move(g));
         }
+        // The account's signed recovery policy (key-manager.md): carried for a vault the account key covers, as the
+        // pinned row holds it. A reader verifies it against its own pin; nothing here vouches for it.
+        if (!txn.exec("SELECT 1 FROM vault_recovery_grant WHERE vault_id = $1 AND account_key_generation IS NOT NULL AND "
+                      "revoked_at IS NULL LIMIT 1", pqxx::params{vaultId}).empty()) {
+            const auto ap = txn.exec("SELECT policy, encode(policy_signature, 'base64') FROM cloud_account_key WHERE state = "
+                                     "'pinned' AND policy IS NOT NULL ORDER BY generation DESC LIMIT 1");
+            if (!ap.empty()) {
+                // base64url without padding, as the service serves it.
+                auto sig = ap[0][1].as<std::string>();
+                std::erase(sig, '\n');
+                std::erase(sig, '=');
+                for (auto& ch : sig) ch = ch == '+' ? '-' : ch == '/' ? '_' : ch;
+                policy.account_policy = mf::AccountPolicyBytes{.policy = ap[0][0].as<std::string>(), .signature = sig};
+            }
+        }
         c.recovery_policy = std::move(policy);
         // KEV1 envelopes by key version (keys[].envelopes): every kid written, a revoked grant's too.
         std::map<uint32_t, std::vector<std::string>> envelopesByVersion;

@@ -67,6 +67,49 @@ Reply call(const Linked& link, const std::string& method, const std::string& pat
     return r;
 }
 
+// ---- the contract's announced changes, one place each ----------------------------------------------------------------
+namespace contract {
+
+// Renamed to say it is the offline copy's confirmation: the old name until the cloud ships the new one.
+bool offlineCopyConfirmedOf(const json& body) {
+    for (const auto* name : {"offline_copy_confirmed", "account_key_offline_copy_confirmed", "account_key_confirmed"})
+        if (body.is_object() && body.contains(name) && body[name].is_boolean()) return body[name].get<bool>();
+    return false;
+}
+
+// The ejection portal's address: absent until the cloud returns it.
+std::optional<std::string> ejectionPortalOf(const json& body) {
+    for (const auto* name : {"ejection_portal_url", "eject_url"})
+        if (body.is_object() && body.contains(name) && body[name].is_string()) {
+            const auto url = body[name].get<std::string>();
+            if (url.starts_with("https://")) return url;
+        }
+    if (body.is_object() && body.contains("ejection") && body["ejection"].is_object() &&
+        body["ejection"].contains("portal_url") && body["ejection"]["portal_url"].is_string())
+        return body["ejection"]["portal_url"].get<std::string>();
+    return std::nullopt;
+}
+
+// Envelopes are base64 today and base64url once the cloud switches: either decodes.
+std::optional<std::vector<uint8_t>> decodeEnvelope(const std::string& text) {
+    if (auto url = vl::keykit::base64UrlDecode(text)) return url;
+    return vl::keykit::base64Decode(text);
+}
+
+// Where a moved vault went: absent until the cloud lists it.
+std::optional<std::string> movedToOf(const json& v) {
+    if (!v.is_object() || !v.contains("moved_to") || v["moved_to"].is_null()) return std::nullopt;
+    if (v["moved_to"].is_string()) return v["moved_to"].get<std::string>();
+    if (v["moved_to"].is_object()) {
+        const auto& m = v["moved_to"];
+        if (m.contains("name") && m["name"].is_string()) return m["name"].get<std::string>();
+        if (m.contains("deployment_id") && m["deployment_id"].is_string()) return m["deployment_id"].get<std::string>();
+    }
+    return std::string("another server");
+}
+
+}
+
 VaultStorage parseVault(const json& v) {
     if (!v.is_object()) throw std::runtime_error("a vault entry isn't an object");
     VaultStorage out;
@@ -82,6 +125,7 @@ VaultStorage parseVault(const json& v) {
         out.content_retention_days = static_cast<uint32_t>(*d);
     if (const auto t = optInt(v, "detached_at")) out.detached_at = static_cast<std::time_t>(*t);
     if (const auto t = optInt(v, "converted_at")) out.converted_at = static_cast<std::time_t>(*t);
+    out.moved_to = contract::movedToOf(v);
     if (v.contains("credential") && v["credential"].is_object()) {
         const auto& k = v["credential"];
         out.key_state = optString(k, "state").value_or("none");
@@ -123,7 +167,8 @@ Overview parseOverview(const nlohmann::json& body) {
         if (const auto b = d::optInt(body["usage"], "stored_bytes"); b && *b >= 0) out.stored_bytes = static_cast<uint64_t>(*b);
         out.usage_date = d::optString(body["usage"], "date");
     }
-    out.account_key_confirmed = d::optBool(body, "account_key_confirmed");
+    out.offline_copy_confirmed = d::contract::offlineCopyConfirmedOf(body);
+    out.ejection_portal = d::contract::ejectionPortalOf(body);
     out.ejection = body.contains("ejection") ? body["ejection"] : nlohmann::json(nullptr);
     out.provider = d::optString(body, "provider").value_or("");
     if (body.contains("vaults") && body["vaults"].is_array())
@@ -260,7 +305,7 @@ std::vector<CloudEnvelope> vaultEnvelopes(const Linked& link, const std::string&
         CloudEnvelope c;
         const auto version = d::optInt(e, "key_version");
         const auto generation = d::optInt(e, "generation");
-        const auto bytes = vl::keykit::base64Decode(d::optString(e, "envelope").value_or(""));
+        const auto bytes = d::contract::decodeEnvelope(d::optString(e, "envelope").value_or(""));
         if (!version || *version < 1 || !bytes) throw CallError(r.status, "malformed", "", "an envelope entry is malformed");
         c.key_version = static_cast<uint32_t>(*version);
         c.generation = static_cast<uint32_t>(generation.value_or(0));

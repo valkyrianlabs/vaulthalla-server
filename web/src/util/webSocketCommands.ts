@@ -1071,6 +1071,7 @@ export interface WebSocketCommandMap {
   'cloud.storage.offer.accept': WsContract['cloud.storage.offer.accept']
   'cloud.storage.offer.decline': WsContract['cloud.storage.offer.decline']
   'cloud.storage.rotate': WsContract['cloud.storage.rotate']
+  'cloud.storage.ended.confirm': WsContract['cloud.storage.ended.confirm']
   'cloud.storage.new_vaults': WsContract['cloud.storage.new_vaults']
   'cloud.storage.billing.handoff': WsContract['cloud.storage.billing.handoff']
 }

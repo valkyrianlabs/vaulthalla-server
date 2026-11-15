@@ -25,6 +25,7 @@
 #include "db/query/cloud/RecoveryVault.hpp"
 #include "db/query/cloud/Storage.hpp"
 #include "db/query/fs/File.hpp"
+#include "db/query/sync/Manifest.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/vault/RecoveryGrants.hpp"
 #include "db/query/vault/RemoteAttach.hpp"
@@ -58,6 +59,7 @@
 #include <vl/keykit/base64url.hpp>
 #include <vl/keykit/kev1.hpp>
 #include <vl/keykit/kit.hpp>
+#include <vl/keykit/recovery_policy.hpp>
 #include <vl/keykit/seed.hpp>
 #include <vl/keykit/storage_credential.hpp>
 #include <vl/keykit/uid.hpp>
@@ -97,6 +99,20 @@ struct KeyHistory {
         auto st = account::statementFor(seeds.back(), publicId, 1, std::nullopt, account::Reason::Initial);
         chain.push_back(account::sign(st, seeds.back(), nullptr));
         statements.push_back(std::move(st));
+    }
+    // A recovery policy listing one recipient, signed by the account key (as Desktop or the portal does).
+    [[nodiscard]] json policy(const uint32_t sequence) const {
+        account::RecoveryPolicy p{.public_id = publicId, .sequence = sequence, .generation = 1,
+                                  .issued_at = "2026-11-15T00:00:00Z", .recipients = {}};
+        account::PolicyRecipient r{.x25519_public = {}, .label = "Kit " + std::to_string(sequence)};
+        const auto seed = vl::keykit::RecoverySeed::generate();
+        const auto pk = seed.x25519PublicKey();
+        std::ranges::copy(pk, r.x25519_public.begin());
+        p.recipients.push_back(r);
+        const auto s = account::signPolicy(p, seeds.at(0), statements.at(0));
+        return {{"sequence", sequence}, {"generation", 1}, {"policy", s.policy},
+                {"signature", vl::keykit::base64UrlEncode(s.signature)}, {"created_by", "installation:test"},
+                {"created_at", 1770000000}};
     }
     [[nodiscard]] std::string fingerprint() const {
         return account::fingerprintText(account::fingerprint(statements.at(0)));
@@ -876,6 +892,9 @@ TEST_F(CloudStorageTest, TheEndOfThePlanConvertsToLocalInPlaceAndListsWhatWasLos
     cloud_.cause = "ended";
     cloud_.enforce();
     (void)tick();
+    EXPECT_EQ(state(id), "active") << "one report converts nothing";
+    (void)cs::confirmEnded(superUser, cs::Channel::Cli);
+    (void)tick();
     EXPECT_EQ(state(id), "detaching");
     bucket->clearRequests();
     const auto detached = runDetach(id);
@@ -910,6 +929,110 @@ TEST_F(CloudStorageTest, SurfacesAuthorizeAndAgentsOnlyRead) {
     const auto j = cs::toJson(cs::status(superUser));
     EXPECT_TRUE(j.at("available").get<bool>());
     EXPECT_FALSE(j.at("new_vaults").get<bool>());
+}
+
+TEST_F(CloudStorageTest, AnEndedPlanWaitsForAConfirmationOrTheGracePeriodAndASingleReportChangesNothing) {
+    linkAndPin();
+    const auto id = activeVault();
+    EXPECT_EQ(code([&] { return cs::confirmEnded(superUser, cs::Channel::Cli); }), "conflict") << "nothing to confirm";
+    cloud_.state = "ended";
+    cloud_.access = "none";
+    cloud_.cause = "ended";
+    cloud_.enforce();
+    (void)tick();
+    EXPECT_EQ(state(id), "active");
+    EXPECT_EQ(DB::get(id)->reason, std::optional<std::string>("ended_pending_confirmation"));
+    EXPECT_EQ(storage::remote_access::mode(id), storage::remote_access::Mode::None) << "attached, without access";
+    EXPECT_FALSE(db::query::vault::RemoteDetach::get(id));
+    EXPECT_TRUE(cs::status(superUser).ended.has_value());
+    EXPECT_TRUE(std::ranges::any_of(cs::health(), [](const cs::HealthIssue& h) { return h.code == "cloud_storage_ended_pending"; }));
+    // A wrong report: the next answer is active again, and the run of `ended` starts over.
+    cloud_.state = "active";
+    cloud_.access = "full";
+    cloud_.cause = "active";
+    for (auto& [kid, k] : cloud_.keys) k.state = "revoked";
+    cloud_.keys["Kback000000"] = {.uid = uidOf(id), .state = "active", .access = "full", .secret = "s"};
+    (void)tick();
+    EXPECT_FALSE(DB::account()->ended_seen_at);
+    EXPECT_FALSE(cs::status(superUser).ended.has_value());
+    cloud_.state = "ended";
+    cloud_.access = "none";
+    cloud_.enforce();
+    (void)tick();
+    EXPECT_EQ(state(id), "active");
+    // The grace period passes without interruption: the conversion starts without a person.
+    db::Transactions::exec("t", [&](pqxx::work& txn) {
+        txn.exec("UPDATE cloud_storage_account SET ended_seen_at = now() - interval '25 hours'");
+    });
+    (void)tick();
+    EXPECT_EQ(state(id), "detaching");
+    EXPECT_EQ(db::query::vault::RemoteDetach::get(id)->mode, rd::Mode::InPlace);
+}
+
+TEST_F(CloudStorageTest, SwitchingOnAgainRecognisesTheVaultsOwnBucketAndRefusesWithoutDeletingAnything) {
+    linkAndPin();
+    const auto id = activeVault();
+    const auto bucket = bucketOf(id);
+    const auto bucketName = *DB::get(id)->bucket;
+    (void)cs::setSwitch(superUser, id, false, db::query::vault::Vault::getVault(id)->name, cs::Channel::Cli);
+    (void)tick();
+    ASSERT_EQ(state(id), "detaching");
+    ASSERT_EQ(runDetach(id).state, rd::State::Done);
+    (void)tick();
+    ASSERT_EQ(state(id), "off");
+    EXPECT_TRUE(cloud_.vaults[uidOf(id)].detachedAt) << "reported /detached";
+    const auto objects = bucket->keys();
+    ASSERT_FALSE(objects.empty());
+
+    (void)cs::setSwitch(superUser, id, true, std::nullopt, cs::Channel::Cli);
+    for (int i = 0; i < 6; ++i) (void)tick();
+    EXPECT_EQ(state(id), "keyed");
+    EXPECT_EQ(DB::get(id)->reason, std::optional<std::string>("bucket_holds_this_vault"));
+    EXPECT_FALSE(db::query::vault::RemoteAttach::get(id)) << "no attach over its earlier copy";
+    EXPECT_EQ(bucket->keys(), objects) << "nothing in the bucket was deleted";
+    EXPECT_EQ(readLocal(id, "/a.txt"), "alpha");
+
+    // Another vault offered the same bucket isn't told it is its own: an ordinary non-empty bucket.
+    const auto other = newVault("other");
+    write(other->vault->id, "/x.txt", "x");
+    auto key = std::make_shared<vault::model::APIKey>(superUser->id, "cs_other_" + vh::test::uniqueTag('k'),
+                                                      vault::model::S3Provider::Other, "AKIATESTACCESSKEY000",
+                                                      "secret-value-0000000000000000000000000", "auto",
+                                                      "https://s3.fake.test");
+    const auto keyId = runtime::Deps::get().apiKeyManager->addAPIKey(key);
+    try {
+        (void)ra::requireBucketUsable(other->vault->id, keyId, bucketName, *bucket, std::nullopt);
+        ADD_FAILURE() << "a non-empty bucket was accepted";
+    } catch (const ra::Refusal& e) {
+        EXPECT_EQ(e.code(), "bucket_not_empty");
+    }
+    EXPECT_EQ(bucket->keys(), objects);
+}
+
+TEST_F(CloudStorageTest, TheRootCarriesTheAccountPolicyAndARestoreOffersIt) {
+    linkAndPin();
+    const auto id = activeVault();
+    auto answer = history_.answer();
+    answer["policy"] = history_.policy(1);
+    cloud_.keyAnswer = answer;
+    ASSERT_EQ(ops::cloud_keys::check("test").state, "pinned");
+    // The manifest root names the policy's exact bytes for a vault the account key covers.
+    const auto content = db::query::sync::Manifest::collect(id);
+    ASSERT_TRUE(content.recovery_policy);
+    ASSERT_TRUE(content.recovery_policy->account_policy);
+    EXPECT_EQ(content.recovery_policy->account_policy->policy, answer["policy"]["policy"].get<std::string>());
+    EXPECT_EQ(content.recovery_policy->account_policy->signature, answer["policy"]["signature"].get<std::string>());
+    // A newer policy from a root is verified against this server's pin and accepted; the same or an older one isn't.
+    const auto newer = history_.policy(2);
+    EXPECT_TRUE(ops::cloud_keys::offerPolicy(newer["policy"], newer["signature"], "test root"));
+    EXPECT_EQ(ops::cloud_keys::status(superUser).policy->sequence, 2u);
+    EXPECT_FALSE(ops::cloud_keys::offerPolicy(newer["policy"], newer["signature"], "test root"));
+    EXPECT_FALSE(ops::cloud_keys::offerPolicy(answer["policy"]["policy"], answer["policy"]["signature"], "test root"))
+        << "a rollback is refused";
+    // A forgery (another key's signature) is refused.
+    const auto forged = vl::keykit::base64UrlEncode(std::vector<uint8_t>(64, 7));
+    EXPECT_FALSE(ops::cloud_keys::offerPolicy(history_.policy(3)["policy"], forged, "test root"));
+    EXPECT_EQ(ops::cloud_keys::status(superUser).policy->sequence, 2u);
 }
 
 }

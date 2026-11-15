@@ -48,6 +48,12 @@ private:
     std::string reason_;
 };
 
+// The cloud's contract names that are announced to change, each in one place (contract:: in Storage.cpp):
+//   - `account_key_confirmed` (the offline copy's confirmation) is renamed: offlineCopyConfirmedOf reads either name;
+//   - GET /v1/storage gains the ejection portal's address: ejectionPortalOf;
+//   - the envelopes route answers base64url instead of base64: decodeEnvelope takes either;
+//   - a moved vault is listed with where it went: movedToOf.
+
 // GET /v1/storage: the account's entitlement and this deployment's vaults.
 struct Entitlement {
     std::optional<std::string> state;     // active | past_due | restricted | suspended | ended | null (no plan)
@@ -70,13 +76,16 @@ struct VaultStorage {
     std::string key_state{"none"};
     std::optional<std::string> key_id;
     std::optional<std::string> key_access;   // full | read_delete
+    // A vault the account moved to another deployment (a restore elsewhere): where it went, when the cloud says so.
+    std::optional<std::string> moved_to;
 };
 
 struct Overview {
     Entitlement entitlement;
     std::optional<uint64_t> stored_bytes;
     std::optional<std::string> usage_date;   // YYYY-MM-DD
-    bool account_key_confirmed{false};       // the cloud's word: the account key's offline copy is confirmed
+    bool offline_copy_confirmed{false};      // the cloud's word: the account key's offline copy is confirmed
+    std::optional<std::string> ejection_portal;   // where the account holder leaves managed storage, when given
     nlohmann::json ejection;                 // null, or the ejection's progress
     std::string provider;
     std::vector<VaultStorage> vaults;

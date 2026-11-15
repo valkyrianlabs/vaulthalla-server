@@ -488,6 +488,9 @@ struct CloudConfig {
     // (days, 1-36500; shown when storage is switched on and changed through the vault's recovery policy).
     unsigned int storage_poll_minutes = 15;
     unsigned int storage_default_retention_days = 30;
+    // How long the service must report the plan `ended` without interruption before managed vaults are converted to
+    // local without an admin's confirmation (hours, 1-8760).
+    unsigned int storage_ended_grace_hours = 24;
 };
 
 struct SecretsConfig {

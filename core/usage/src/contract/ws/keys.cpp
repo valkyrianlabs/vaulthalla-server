@@ -241,7 +241,8 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
             .refusal_codes = remoteRefusals({"key_rotation_running", "key_salvage_running", "legacy_content",
                                              "key_version_missing", "key_version_unattested",
                                              "recovery_material_missing", "bucket_listing_failed", "bucket_not_empty",
-                                             "bucket_probe_failed", "bucket_capability_insufficient"}),
+                                             "bucket_probe_failed", "bucket_capability_insufficient",
+                                             "bucket_holds_this_vault"}),
             .response_model = "VaultRemoteStatus",
             .client_timeout = std::chrono::milliseconds(120'000),
         });
@@ -411,6 +412,7 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
                        "with its date) beside this server's own, the offer for vaults that existed before it was "
                        "available, and every vault's switch and state in words. Reads the database only. Super admins "
                        "or the admin cloud View permission.",
+        .input = "none",
         .response = modelFields("CloudStorageStatus"),
         .refusal_codes = {"denied", "unauthorized"},
         .response_model = "CloudStorageStatus",
@@ -450,6 +452,18 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
         .response = modelFields("CloudStorageOffer"),
         .refusal_codes = storageRefusals,
         .response_model = "CloudStorageOffer",
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "cloud.storage.ended.confirm",
+        .description = "Confirm that the account's plan ended: managed vaults become local in place now (files held only "
+                       "in their buckets are listed as lost; nothing local is deleted) instead of after "
+                       "cloud.storage.ended_grace_hours of continuous `ended` reports. Conflict unless the service "
+                       "reports `ended`. The admin cloud Storage permission.",
+        .input = "none",
+        .response = modelFields("CloudStorageEndedConfirmation"),
+        .refusal_codes = {"denied", "conflict", "unauthorized"},
+        .response_model = "CloudStorageEndedConfirmation",
         .client_timeout = kDefaultTimeout,
     });
     out.push_back({

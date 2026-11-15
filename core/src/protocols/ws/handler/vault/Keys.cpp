@@ -322,6 +322,10 @@ json VaultKeys::cloudStorageOfferDecline(const json& payload, const std::shared_
     return ::vh::ops::cloud_storage::toJson(::vh::ops::cloud_storage::declineOffer(actorOf(session), cloud_storage_ws::vaultList(payload), channelOf(session)));
 }
 
+json VaultKeys::cloudStorageEndedConfirm(const json&, const std::shared_ptr<Session>& session) {
+    return ::vh::ops::cloud_storage::toJson(::vh::ops::cloud_storage::confirmEnded(actorOf(session), channelOf(session)));
+}
+
 json VaultKeys::cloudStorageRotate(const json& payload, const std::shared_ptr<Session>& session) {
     return ::vh::ops::cloud_storage::toJson(::vh::ops::cloud_storage::rotate(actorOf(session), requiredVaultId(payload), channelOf(session)));
 }

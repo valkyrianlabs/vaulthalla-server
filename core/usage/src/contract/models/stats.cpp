@@ -464,7 +464,8 @@ std::vector<WsModel> statsSystemModels() {
                    "fingerprint confirmation. null otherwise. Either one makes the node at least degraded."),
          objectArray("cloud_storage", "",
                      {str("code").oneOf({"cloud_account_key_unconfirmed", "cloud_recovery_behind", "vault_cloud_moved",
-                                         "vault_cloud_failed", "cloud_account_key_no_offline_copy"}),
+                                         "vault_cloud_failed", "cloud_account_key_no_offline_copy",
+                                         "cloud_storage_ended_pending"}),
                       str("severity").oneOf({"degraded", "info"}), uinteger("vault_id").nullable(), str("detail")})
              .opt()
              .desc("Managed storage: a degraded entry makes the node at least degraded; info entries don't."),

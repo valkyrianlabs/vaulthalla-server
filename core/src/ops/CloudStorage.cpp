@@ -152,9 +152,16 @@ std::string summaryOf(const Row& r) {
                                       : "local";
     if (r.state == "registered") return "registered";
     if (r.state == "waiting") return "waiting for its bucket" + why;
-    if (r.state == "keyed") return "bucket ready, starting the upload";
+    if (r.state == "keyed")
+        return r.reason == std::optional<std::string>("bucket_holds_this_vault")
+                   ? "its bucket still holds this vault's earlier copy: restore it (`vh vault recover`) or have the "
+                     "account holder delete the bucket"
+                   : "bucket ready, starting the upload";
     if (r.state == "attaching") return "uploading";
     if (r.state == "active") {
+        if (r.reason == std::optional<std::string>("ended_pending_confirmation"))
+            return "the plan ended: waiting for an admin's confirmation (`vh cloud storage confirm-ended`) before it "
+                   "becomes local; local copies only meanwhile";
         const auto mode = storage::remote_access::mode(r.vault_id);
         if (mode == storage::remote_access::Mode::ReadOnly) return "read-only: local changes kept" + why;
         if (mode == storage::remote_access::Mode::None) return "unavailable: local copies only" + why;
@@ -681,14 +688,24 @@ void enroll(Row& r, const vault::model::Vault& vault) {
     }
 }
 
+std::time_t endedGrace() {
+    return static_cast<std::time_t>(config::Registry::get().cloud.storage_ended_grace_hours) * 3600;
+}
+
+bool endedConfirmed(const db::query::cloud::StorageAccountRow& a) {
+    if (a.state != std::optional<std::string>("ended")) return false;
+    if (a.ended_confirmed_at) return true;
+    return a.ended_seen_at && now() - *a.ended_seen_at >= endedGrace();
+}
+
 void stepActive(Row& r, const Ctx& ctx, const vault::model::Vault& vault) {
     const auto* v = cloudVault(ctx, r.vault_uid);
     // Gone from this deployment's view after it became active: another server restored it (the cloud moved the
     // replica). Only a fetch newer than the activation says so.
-    if (!v && r.active_at && ctx.fetchedAt > *r.active_at) {
+    if ((!v && r.active_at && ctx.fetchedAt > *r.active_at) || (v && v->moved_to)) {
         r.state = "moved";
         r.moved_at = now();
-        r.reason = "restored on another server";
+        r.reason = v && v->moved_to ? "restored on " + *v->moved_to : "restored on another server";
         save(r);
         applyGate(r, ctx.account);
         audit("cloud.storage.moved", r.vault_id, nlohmann::json::object(),
@@ -701,7 +718,17 @@ void stepActive(Row& r, const Ctx& ctx, const vault::model::Vault& vault) {
         return;
     }
     if (ctx.account.state == std::optional<std::string>("ended")) {
-        startDetach(r, true, "ended");
+        // One report must not convert every vault: an admin confirms it, or the service keeps saying so for
+        // cloud.storage.ended_grace_hours. Until then the vault stays attached with access none.
+        if (endedConfirmed(ctx.account)) {
+            startDetach(r, true, "ended");
+        } else {
+            applyGate(r, ctx.account);
+            if (r.reason != std::optional<std::string>("ended_pending_confirmation")) {
+                r.reason = "ended_pending_confirmation";
+                save(r);
+            }
+        }
         return;
     }
     if (r.switch_state != "on") {
@@ -905,6 +932,10 @@ Status status(const Actor& actor) {
         s.ejection = account->ejection;
         s.fetched_at = account->fetched_at;
         s.fetch_error = account->fetch_error;
+        if (account->state == std::optional<std::string>("ended") && account->ended_seen_at)
+            s.ended = EndedPending{.since = *account->ended_seen_at,
+                                   .converts_at = *account->ended_seen_at + d::endedGrace(),
+                                   .confirmed_by = account->ended_confirmed_by};
     }
     s.available = s.linked && s.account_key == "pinned" && d::storageAvailable(account);
     std::map<unsigned int, d::Row> rows;
@@ -922,6 +953,9 @@ Status status(const Actor& actor) {
     else if (s.account_key == "unconfirmed")
         s.next_step = "confirm the account recovery key's fingerprint (`vh cloud key confirm`): managed storage waits for it";
     else if (s.account_key == "tampered") s.next_step = "the pinned account key fails its check (`vh cloud key status`)";
+    else if (s.ended && !s.ended->confirmed_by)
+        s.next_step = "the plan ended: managed vaults become local in place when an admin confirms it (`vh cloud storage "
+                      "confirm-ended`) or after the grace period";
     else if (!s.available) s.next_step = "the account has no storage plan (`vh cloud storage billing checkout`)";
     else if (!s.offered.empty())
         s.next_step = std::to_string(s.offered.size()) + " vault(s) wait for a decision (`vh cloud storage accept` or "
@@ -1031,6 +1065,21 @@ VaultEntry rotate(const Actor& actor, const unsigned int vaultId, const Channel 
     return d::entryOf(*vault, *r);
 }
 
+EndedConfirmation confirmEnded(const Actor& actor, const Channel channel) {
+    namespace d = cloud_storage_ops_detail;
+    d::requireStorage(actor, channel);
+    if (!d::DB::confirmEnded("user:" + actor->name()))
+        throw Conflict("the account's service isn't reporting the plan ended; nothing to confirm");
+    d::auditActor(actor, "cloud.storage.ended.confirm", std::nullopt, nlohmann::json::object(),
+                  "confirmed that the plan ended: managed vaults become local in place");
+    wake();
+    const auto a = d::DB::account();
+    return {.confirmed = true, .since = a ? a->ended_seen_at : std::nullopt,
+            .vaults = static_cast<unsigned int>(std::ranges::count_if(d::DB::list(), [](const d::Row& r) {
+                return r.state == "active";
+            }))};
+}
+
 bool setNewVaultsDefault(const Actor& actor, const bool on, const Channel channel) {
     namespace d = cloud_storage_ops_detail;
     d::requireStorage(actor, channel);
@@ -1106,11 +1155,15 @@ TickResult tick(const bool force) {
                     billing = d::cs::billing(*link);
                 } catch (const d::cs::CallError&) {
                 }
+                if (ov.ejection_portal) {
+                    if (!ov.ejection.is_object()) ov.ejection = nlohmann::json::object();
+                    ov.ejection["portal_url"] = *ov.ejection_portal;
+                }
                 d::DB::saveFetched({.state = ov.entitlement.state, .plan = ov.entitlement.plan,
                                     .quota_bytes = ov.entitlement.storage_quota_bytes,
                                     .storage_access = ov.entitlement.storage_access, .cause = ov.entitlement.cause,
                                     .used_bytes = ov.stored_bytes, .usage_day = ov.usage_date,
-                                    .account_key_confirmed = ov.account_key_confirmed, .provider = ov.provider,
+                                    .account_key_confirmed = ov.offline_copy_confirmed, .provider = ov.provider,
                                     .ejection = ov.ejection, .billing = billing});
                 std::scoped_lock cache(d::cacheMutex);
                 d::cachedOverview = ov;
@@ -1240,6 +1293,12 @@ std::vector<HealthIssue> health() {
         out.push_back({.code = "cloud_account_key_unconfirmed", .severity = "degraded", .vault_id = std::nullopt,
                        .detail = "managed storage waits until a super admin confirms the account recovery key "
                                  "(`vh cloud key confirm`)"});
+    if (account && account->state == std::optional<std::string>("ended") && !d::endedConfirmed(*account) &&
+        std::ranges::any_of(rows, [](const d::Row& r) { return r.state == "active"; }))
+        out.push_back({.code = "cloud_storage_ended_pending", .severity = "degraded", .vault_id = std::nullopt,
+                       .detail = "the account's service reports the plan ended: managed vaults stay attached without "
+                                 "access until an admin confirms it (`vh cloud storage confirm-ended`) or "
+                                 "cloud.storage.ended_grace_hours pass"});
     for (const auto& r : rows) {
         if (r.state == "active" && r.enroll_behind_since && d::now() - *r.enroll_behind_since >= d::kEnrollBehindHealth)
             out.push_back({.code = "cloud_recovery_behind", .severity = "degraded", .vault_id = r.vault_id,
@@ -1323,7 +1382,15 @@ nlohmann::json toJson(const Status& s) {
             {"ejection", s.ejection},
             {"fetched_at", opt(s.fetched_at)},
             {"fetch_error", opt(s.fetch_error)},
+            {"ended", s.ended ? nlohmann::json{{"since", s.ended->since}, {"converts_at", s.ended->converts_at},
+                                               {"confirmed_by", opt(s.ended->confirmed_by)}}
+                              : nlohmann::json(nullptr)},
             {"next_step", opt(s.next_step)}};
+}
+
+nlohmann::json toJson(const EndedConfirmation& e) {
+    return {{"confirmed", e.confirmed}, {"since", e.since ? nlohmann::json(*e.since) : nlohmann::json(nullptr)},
+            {"vaults", e.vaults}};
 }
 
 nlohmann::json toJson(const OfferResult& r) { return {{"vaults", r.vaults}, {"offer_open", r.offer_open}}; }

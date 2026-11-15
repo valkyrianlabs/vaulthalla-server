@@ -93,6 +93,7 @@ const std::vector<Exclusion>& exclusions() {
         {{"cloud", "storage", "disable"}, "where a vault is stored is decided by a human"},
         {{"cloud", "storage", "accept"}, "where a vault is stored is decided by a human"},
         {{"cloud", "storage", "decline"}, "where a vault is stored is decided by a human"},
+        {{"cloud", "storage", "confirm-ended"}, "converting managed vaults to local is decided by a human"},
         {{"cloud", "storage", "rotate"}, "a vault's bucket key is replaced by a human's decision"},
         {{"cloud", "storage", "new-vaults"}, "where new vaults are stored is decided by a human"},
         {{"cloud", "storage", "billing"}, "billing opens in a browser, for the account holder"},

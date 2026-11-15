@@ -121,6 +121,11 @@ struct PinnedKey {
 // Best effort: what can't be wrapped yet is written by the next check or sync pass. Never throws.
 void applyPolicy(unsigned int vaultId) noexcept;
 
+// A recovery policy from another transport (the manifest root a restore or a replica read): verified exactly as the
+// one the service serves (the pinned key's signature, this link's account, a sequence above the floor) and accepted
+// only if newer. Returns whether it was accepted. Never throws; refusals are audited cloud.policy.refused.
+bool offerPolicy(const std::string& policy, const std::string& signature, const std::string& source) noexcept;
+
 // What health reports (only once a row exists): cloud_account_key_tampered or cloud_account_key_change_pending.
 struct HealthIssue {
     std::string code;

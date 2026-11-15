@@ -236,7 +236,16 @@ std::shared_ptr<CommandUsage> storage(const std::weak_ptr<CommandUsage>& parent)
     billing->examples = {{"vh cloud storage billing", "The billing portal's address."},
                          {"vh cloud storage billing --kind checkout --plan storage-1tb", "Choose a plan."}};
 
-    cmd->subcommands = {status, enable, disable, accept, decline, rotate, newVaults, billing};
+    auto confirmEnded = build(self);
+    confirmEnded->effect = CommandEffect::Destructive;
+    confirmEnded->aliases = {"confirm-ended"};
+    confirmEnded->description = "Confirm that the account's plan ended, so managed vaults become local in place now "
+                                "(files held only in their buckets are listed as lost; nothing local is deleted) "
+                                "instead of after cloud.storage.ended_grace_hours. Until then they stay attached "
+                                "without access.";
+    confirmEnded->examples = {{"vh cloud storage confirm-ended", "Make the managed vaults local now."}};
+
+    cmd->subcommands = {status, enable, disable, accept, decline, rotate, newVaults, billing, confirmEnded};
     cmd->examples = {{"vh cloud storage status", "Show managed storage."}};
     return cmd;
 }

@@ -382,6 +382,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         {"event_sync_active", {"vault.remote.detach"}}, {"sync_conflicts_open", {"vault.remote.detach"}},
         {"key_version_unattested", {"vault.remote.attach"}}, {"recovery_material_missing", {"vault.remote.attach"}},
         {"bucket_listing_failed", {"vault.remote.attach"}}, {"bucket_not_empty", {"vault.remote.attach"}},
+        {"bucket_holds_this_vault", {"vault.remote.attach"}},
         {"already_signed_in", {"auth.login", "auth.passkey.options", "auth.passkey.login"}},
         // #357: the pending-MFA sign-in and the enrollment commands.
         {"mfa_required", {"auth.login", "auth.mfa.verify"}},

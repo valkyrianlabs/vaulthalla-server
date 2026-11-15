@@ -367,10 +367,15 @@ void checkVaultKeyModels(Checker& c) {
                        .storage_access = "full", .cause = "active", .managed_local_bytes = 1024, .new_vaults = true,
                        .offer_open = true, .offered = {managed}, .vaults = {managed, own},
                        .billing = {{"state", "active"}}, .ejection = {{"state", "requested"}}, .fetched_at = 1'763'000'000,
-                       .fetch_error = "unreachable", .next_step = "accept the offer"};
+                       .fetch_error = "unreachable",
+                       .ended = cst::EndedPending{.since = 1'763'000'000, .converts_at = 1'763'086'400,
+                                                  .confirmed_by = "user:admin"},
+                       .next_step = "accept the offer"};
     c.check(cst::toJson(status), "CloudStorageStatus", "cloud.storage.status");
     c.check(cst::toJson(cst::Status{.billing = nullptr, .ejection = nullptr}), "CloudStorageStatus",
             "cloud.storage.status (unlinked)");
+    c.check(cst::toJson(cst::EndedConfirmation{.confirmed = true, .since = 1'763'000'000, .vaults = 2}),
+            "CloudStorageEndedConfirmation", "cloud.storage.ended.confirm");
     c.check(cst::toJson(cst::OfferResult{.vaults = {3}, .offer_open = false}), "CloudStorageOffer",
             "cloud.storage.offer.accept");
     c.check(cst::toJson(cst::Handoff{.kind = "portal", .url = "https://vaulthalla.test/handoff#h1", .expires_at = 1'763'000'600}),

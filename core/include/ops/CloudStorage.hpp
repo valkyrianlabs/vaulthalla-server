@@ -67,6 +67,13 @@ struct VaultEntry {
     std::optional<std::time_t> active_at{}, moved_at{}, ejected_at{}, ended_at{};
 };
 
+// The plan ended and the conversion waits (an admin's confirmation, or ended_grace_hours of continuous `ended`).
+struct EndedPending {
+    std::time_t since{};
+    std::time_t converts_at{};
+    std::optional<std::string> confirmed_by{};
+};
+
 struct Status {
     bool linked{false};
     std::string account_key{"unlinked"};       // unlinked | unconfirmed | pinned | tampered
@@ -86,6 +93,7 @@ struct Status {
     nlohmann::json ejection{};
     std::optional<std::time_t> fetched_at{};
     std::optional<std::string> fetch_error{};
+    std::optional<EndedPending> ended{};
     std::optional<std::string> next_step{};
 };
 [[nodiscard]] Status status(const Actor& actor);
@@ -110,6 +118,16 @@ OfferResult declineOffer(const Actor& actor, const std::optional<std::vector<uns
 
 // Asks for a new bucket key for an active vault (the service exchanges, probes, swaps and acknowledges it).
 VaultEntry rotate(const Actor& actor, unsigned int vaultId, Channel channel);
+
+// An admin's confirmation that the plan ended (`vh cloud storage confirm-ended`): managed vaults then become local in
+// place without waiting for cloud.storage.ended_grace_hours. Conflict unless the service reports `ended` now. The cloud
+// Storage permission; never an agent.
+struct EndedConfirmation {
+    bool confirmed{false};
+    std::optional<std::time_t> since{};
+    unsigned int vaults{};   // the managed vaults it converts
+};
+EndedConfirmation confirmEnded(const Actor& actor, Channel channel);
 
 // Whether vaults created from now on are switched on by default (open question 10: an admin setting, on by default).
 bool setNewVaultsDefault(const Actor& actor, bool on, Channel channel);
@@ -176,6 +194,7 @@ void setKeyProbeForTesting(std::optional<KeyProbe> probe);
 [[nodiscard]] nlohmann::json toJson(const VaultEntry& v);
 [[nodiscard]] nlohmann::json toJson(const Status& s);
 [[nodiscard]] nlohmann::json toJson(const OfferResult& r);
+[[nodiscard]] nlohmann::json toJson(const EndedConfirmation& e);
 [[nodiscard]] nlohmann::json toJson(const Handoff& h);
 
 }

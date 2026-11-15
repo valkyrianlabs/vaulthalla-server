@@ -411,6 +411,11 @@ std::string storageStatusText(const storage::Status& s) {
                            s.used_bytes ? bytesText(*s.used_bytes) : "?", bytesText(*s.quota_bytes),
                            s.usage_day ? " as of " + *s.usage_day : "", bytesText(s.managed_local_bytes));
     out += std::string("New vaults    ") + (s.new_vaults ? "managed by default" : "local by default") + "\n";
+    if (s.ended)
+        out += fmt::format("Plan ended    since {}; {}\n", utc(s.ended->since),
+                           s.ended->confirmed_by ? "confirmed by " + *s.ended->confirmed_by
+                                                 : "vaults become local at " + utc(s.ended->converts_at) +
+                                                       " unless confirmed sooner (`vh cloud storage confirm-ended`)");
     if (s.fetched_at) out += "Last checked  " + utc(*s.fetched_at) + (s.fetch_error ? " (" + *s.fetch_error + ")" : "") + "\n";
     if (!s.offered.empty()) {
         out += fmt::format("\n{} vault(s) existed before managed storage was available and wait for a decision (`vh cloud "
@@ -498,6 +503,14 @@ CommandResult handleStorage(const CommandCall& call) {
                      [](const bool on) {
                          return std::string(on ? "New vaults use managed storage by default.\n"
                                                : "New vaults stay local unless switched on.\n");
+                     });
+    }
+    if (is("confirm-ended")) {
+        validatePositionals(subcall, resolveUsage({"cloud", "storage", "confirm-ended"}));
+        return runOp("cloud storage confirm-ended", [&] { return storage::confirmEnded(subcall.user, storageChannel()); },
+                     [](const storage::EndedConfirmation& e) {
+                         return fmt::format("Confirmed: {} managed vault(s) become local in place on the next pass.\n",
+                                            e.vaults);
                      });
     }
     if (is("billing")) {

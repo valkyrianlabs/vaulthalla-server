@@ -1795,6 +1795,38 @@
       "name": "CloudLinkStatus"
     },
     {
+      "description": "ops::cloud_storage::toJson(EndedConfirmation).",
+      "fields": [
+        {
+          "name": "confirmed",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "since",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The managed vaults it converts.",
+          "minimum": 0,
+          "name": "vaults",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "name": "CloudStorageEndedConfirmation"
+    },
+    {
       "description": "A billing page address: ops::cloud_storage::toJson(Handoff).",
       "fields": [
         {
@@ -2022,6 +2054,43 @@
           "required": true,
           "types": [
             "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The plan ended and the conversion to local waits: an admin's confirmation, or the grace period.",
+          "fields": [
+            {
+              "description": "Unix seconds.",
+              "minimum": 0,
+              "name": "since",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Without a confirmation.",
+              "minimum": 0,
+              "name": "converts_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "confirmed_by",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            }
+          ],
+          "name": "ended",
+          "required": true,
+          "types": [
+            "object",
             "null"
           ]
         },
@@ -14585,7 +14654,8 @@
                 "cloud_recovery_behind",
                 "vault_cloud_moved",
                 "vault_cloud_failed",
-                "cloud_account_key_no_offline_copy"
+                "cloud_account_key_no_offline_copy",
+                "cloud_storage_ended_pending"
               ],
               "name": "code",
               "required": true,
@@ -23122,7 +23192,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "43502e71a1a5a0620d5533435f95c1417a562d0a2dff615910f0eede1abb4f23",
+  "models_hash": "2a7b8cbc9ae3209c308ea6fdd3dd8016c3c43fadbae82b5b6b3e6beac858a696",
   "protocol": {
     "min": 1,
     "version": 1
@@ -28128,6 +28198,57 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
+      "command": "cloud.storage.ended.confirm",
+      "confirmations": [],
+      "description": "Confirm that the account's plan ended: managed vaults become local in place now (files held only in their buckets are listed as lost; nothing local is deleted) instead of after cloud.storage.ended_grace_hours of continuous `ended` reports. Conflict unless the service reports `ended`. The admin cloud Storage permission.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "name": "confirmed",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "since",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The managed vaults it converts.",
+          "minimum": 0,
+          "name": "vaults",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": "CloudStorageEndedConfirmation",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
       "command": "cloud.storage.new_vaults",
       "confirmations": [],
       "description": "Whether vaults created from now on use managed storage by default (on unless turned off). The admin cloud Storage permission.",
@@ -28617,7 +28738,7 @@
       "command": "cloud.storage.status",
       "confirmations": [],
       "description": "Managed storage on this server: whether it is available (linked, the account recovery key confirmed, the account entitled), the plan state, usage against the quota (the account's figure, with its date) beside this server's own, the offer for vaults that existed before it was available, and every vault's switch and state in words. Reads the database only. Super admins or the admin cloud View permission.",
-      "input": "payload",
+      "input": "none",
       "operation": null,
       "payload": [],
       "refusal_codes": [
@@ -28797,6 +28918,43 @@
           "required": true,
           "types": [
             "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The plan ended and the conversion to local waits: an admin's confirmation, or the grace period.",
+          "fields": [
+            {
+              "description": "Unix seconds.",
+              "minimum": 0,
+              "name": "since",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Without a confirmation.",
+              "minimum": 0,
+              "name": "converts_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "confirmed_by",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            }
+          ],
+          "name": "ended",
+          "required": true,
+          "types": [
+            "object",
             "null"
           ]
         },
@@ -53518,6 +53676,7 @@
         "bucket_not_empty",
         "bucket_probe_failed",
         "bucket_capability_insufficient",
+        "bucket_holds_this_vault",
         "step_up_required",
         "recovery_cooldown"
       ],
@@ -53537,6 +53696,7 @@
         "bucket_not_empty",
         "bucket_probe_failed",
         "bucket_capability_insufficient",
+        "bucket_holds_this_vault",
         "step_up_required",
         "recovery_cooldown"
       ],
@@ -54195,5 +54355,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "15c44f8d16e7bfc7c9ad2321c8e18c3dc2bd6983b831f9765962779c6a1826f8"
+  "ws_hash": "64a009cd00663c9efb771f113e6b6598bfa6e51facac18f1a9e49df1d7221032"
 }

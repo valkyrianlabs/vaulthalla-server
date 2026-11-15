@@ -1504,6 +1504,35 @@ void requireVaultReady(const storage::Engine& engine) {
                                : std::string{}));
 }
 
+// Whether the bucket holds this vault's own earlier copy (attach-remote question 6): its manifest root loads and
+// authenticates with this vault's uid and its own keys. Read-only. Anything else (no root, another vault's, a root
+// that doesn't open) is false.
+bool holdsThisVault(const uint32_t vaultId, const storage::s3::Controller& controller) {
+    const auto& manager = runtime::Deps::get().storageManager;
+    const auto engine = manager ? manager->getEngine(vaultId) : nullptr;
+    if (!engine || !engine->vault || !engine->vault->uid || !engine->encryptionManager) return false;
+    const auto em = engine->encryptionManager;
+    const crypto::vhf1::KeyLookup keys = [em](const uint32_t v) -> crypto::vhf1::KeyPtr {
+        try {
+            return em->historicalKeySnapshot(v);
+        } catch (const std::exception&) {
+            return nullptr;
+        }
+    };
+    // Not owned: the store reads through the caller's controller for the length of this call.
+    const std::shared_ptr<storage::s3::Controller> view(std::shared_ptr<void>{},
+                                                        const_cast<storage::s3::Controller*>(&controller));
+    for (const auto mode : {sync::manifest::WriteCapability::Conditional, sync::manifest::WriteCapability::VersionLog}) {
+        try {
+            storage::s3::ManifestStore store(view, mode);
+            (void)sync::manifest::load(store, *engine->vault->uid, keys);
+            return true;
+        } catch (const std::exception&) {
+        }
+    }
+    return false;
+}
+
 BucketCheck requireBucketUsable(const uint32_t vaultId, const uint32_t apiKeyId, const std::string& bucket,
                                 const storage::s3::Controller& controller,
                                 const std::optional<storage::s3::ProbeResult>& storedProbe) {
@@ -1526,7 +1555,19 @@ BucketCheck requireBucketUsable(const uint32_t vaultId, const uint32_t apiKeyId,
         throw Refusal("bucket_listing_failed",
                       std::string("the bucket could not be listed completely, so it can't be shown to be empty: ") + e.what());
     }
-    (void)d::reconcile(vaultId, listed, out.versioned);
+    try {
+        (void)d::reconcile(vaultId, listed, out.versioned);
+    } catch (const Refusal& e) {
+        // The vault's own earlier bucket (switched off, then on again): recognised, never attached over. Rejoining it
+        // means reconciling what only the bucket holds, which is a restore; nothing in it is deleted to make room.
+        if (e.code() == "bucket_not_empty" && holdsThisVault(vaultId, controller))
+            throw Refusal("bucket_holds_this_vault",
+                          "the bucket holds this vault's own earlier copy (its manifest opens with this vault's keys), "
+                          "which an attach never writes over: restore the vault from it (`vh vault recover`), or empty "
+                          "the bucket first (for managed storage: the account holder deletes it in the portal, and the "
+                          "next switch on gets a new one)");
+        throw;
+    }
 
     if (storedProbe && storedProbe->capability != sync::manifest::WriteCapability::Unknown) {
         out.probe = *storedProbe;
