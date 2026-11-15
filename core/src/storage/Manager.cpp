@@ -1,6 +1,7 @@
 #include "storage/Manager.hpp"
 #include "storage/Engine.hpp"
 #include "storage/CloudEngine.hpp"
+#include "storage/RemoteAccess.hpp"
 #include "sync/events/Subscriptions.hpp"
 #include "config/Registry.hpp"
 #include "vault/model/Vault.hpp"
@@ -94,6 +95,8 @@ void Manager::initStorageEngines() {
     engines_.clear();
     vaultToEngine_.clear();
     unavailable_.clear();
+    // The remote access gate is read again by every CloudEngine built below (storage/RemoteAccess.hpp).
+    remote_access::clear();
 
     try {
         for (auto& vault : db::query::vault::Vault::listLiveVaults()) {

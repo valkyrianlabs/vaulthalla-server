@@ -91,3 +91,4 @@ current    2780d19a36e105cbc0dbd56c28d7065249089ef73bc7b109ca890655a6bfc00a  136
 current    a1c7b1665fe4254bf88c881966f05b755d3ad37f0ffe34e37e1aa89b5eae28ea  137_manifest_version_log.sql  unreleased
 current    e78b86f4d54276cc70a61dcd1352c4b03a7547c62d9d9a086008c1d2e53e2d25  138_remote_attach.sql  unreleased
 current    bebbe4522322056ebb8376a9f2a27976b58f059e5dc5cfd41c4a5a2124871890  139_remote_detach.sql  unreleased
+current    b58920aadcc8c9af29f9de698b3c92cecb90bc2d1a26b8b8688186c33eb230d3  140_remote_access.sql  unreleased

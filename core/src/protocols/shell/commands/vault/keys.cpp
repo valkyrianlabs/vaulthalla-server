@@ -11,6 +11,7 @@
 #include "ops/VaultKeys.hpp"
 #include "vault/RecoveryEnvelopes.hpp"
 #include "vault/RemoteAttach.hpp"
+#include "storage/RemoteAccess.hpp"
 #include "vault/Retention.hpp"
 #include "vault/model/Deletion.hpp"
 #include "vault/model/Key.hpp"
@@ -358,6 +359,13 @@ static CommandResult handle_rotate_vault_keys(const CommandCall& call) {
         const bool alreadyPending = db::query::vault::Key::keyRotationInProgress(engine->vault->id);
         // A new key version must not seal content before its recovery envelopes reach the bucket a remote attach is
         // filling: the rotation waits for the attach (vault/RemoteAttach.hpp) and starts when it ends.
+        // A vault whose remote is read-only or unavailable can't put the new version's envelopes or re-sealed objects
+        // in its bucket (storage/RemoteAccess.hpp): the rotation waits until access is full again.
+        if (const auto access = ::vh::storage::remote_access::mode(engine->vault->id);
+            !alreadyPending && access != ::vh::storage::remote_access::Mode::Full)
+            return "Key rotation for " + label + " waits: the vault's remote storage is " +
+                   std::string(access == ::vh::storage::remote_access::Mode::ReadOnly ? "read-only" : "unavailable") +
+                   " (vh vault remote status " + std::to_string(engine->vault->id) + "); rotate once it is full again.\n";
         if (!alreadyPending && ::vh::vault::remote::queueRotation(engine->vault->id))
             return "Key rotation for " + label + " is queued: a remote is being attached to this vault, and the "
                    "rotation starts once the attach has finished (vh vault remote status " +

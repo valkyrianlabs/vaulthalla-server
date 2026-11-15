@@ -84,8 +84,8 @@ public:
     // One transaction, the vault's row locked: still a live S3 vault whose detach is verifying and verified with no
     // abort asked; every live file with content has a verified content item at its current generation; every
     // vault_key_envelope row of the vault holds its bytes. Then vault.type = 'local', the s3 row deleted, rsync ->
-    // fsync (sync row kept: interval and enabled), the remote index, sync baselines and manifest rows of the vault
-    // deleted, a gateway binding remote_cache/remote_proxy -> local, the bucket row unbound (ownership kept), pending
+    // fsync (sync row kept: interval and enabled), the remote index, sync baselines, manifest rows and remote access row of
+    // the vault deleted, a gateway binding remote_cache/remote_proxy -> local, the bucket row unbound (ownership kept), pending
     // upstream backlog -> skipped ('detached'), recovery mode provider_versioning -> local_snapshots, the attach row and
     // its items deleted, and the detach row cutover.
     [[nodiscard]] static CutoverOutcome cutover(uint32_t vaultId);

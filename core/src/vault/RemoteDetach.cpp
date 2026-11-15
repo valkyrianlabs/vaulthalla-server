@@ -18,6 +18,7 @@
 #include "storage/CloudEngine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "storage/RemoteAccess.hpp"
 #include "storage/s3/ManifestStore.hpp"
 #include "sync/Controller.hpp"
 #include "vault/Content.hpp"
@@ -460,6 +461,7 @@ void finishCutover(const uint32_t vaultId, const RunDeps& deps, RunResult& resul
             result.busy = true;
             return;
         }
+        storage::remote_access::forget(vaultId);
         if (deps.swapEngine) deps.swapEngine(vaultId);
         if (deps.afterStep) deps.afterStep("swapped");
         Q::markDone(vaultId);
@@ -632,6 +634,7 @@ RunResult run(const uint32_t vaultId, const RunDeps& deps) {
                                            {"backlog_skipped", static_cast<int64_t>(outcome.backlog_skipped)}}},
                               fmt::format("[RemoteDetach] Vault {} cut over to local storage: every file is held here; "
                                           "bucket '{}' was left in place", vaultId, ctx->row.bucket));
+            storage::remote_access::forget(vaultId);   // its row went with the S3 binding
             ctx->step("cutover");
             result.state = State::Cutover;
             try {

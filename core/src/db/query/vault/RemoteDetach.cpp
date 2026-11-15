@@ -360,6 +360,8 @@ RemoteDetach::CutoverOutcome RemoteDetach::cutover(const uint32_t vaultId) {
         txn.exec("DELETE FROM remote_manifest_state WHERE vault_id = $1", pqxx::params{vaultId});
         txn.exec("DELETE FROM remote_manifest_root WHERE vault_id = $1", pqxx::params{vaultId});
         txn.exec("DELETE FROM remote_manifest_gc WHERE vault_id = $1", pqxx::params{vaultId});
+        // A local vault has no remote access to gate (migration 140).
+        txn.exec("DELETE FROM vault_remote_access WHERE vault_id = $1", pqxx::params{vaultId});
 
         // A gateway bucket on a local vault is a local bucket (ops::s3_gateway).
         out.gateway_flipped = txn.exec("UPDATE s3_gateway_bucket SET mode = 'local' WHERE vault_id = $1 "
