@@ -1004,8 +1004,20 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   by `StateStore::base()` and checked by `openBaseCopy`; a cold `Session` publishes with the copy's content as
   `PublishOptions::pending_base` (the mergePending base) instead of the head. `applying_epoch` /
   `applying_root_sha256` (`Manifest::markApplying`, cleared by recording that root) make `publish` throw
-  `ApplyIncomplete`. Nothing sets the marker or applies a head yet (items 4-5). Tests `ManifestReconcile*`,
-  `ManifestReconcileProperty*` (test_manifest_reconcile.cpp), `ManifestBaseCopy.*`, DB `ManifestDbTest.*`.
+  `ApplyIncomplete`. Tests `ManifestReconcile*`, `ManifestReconcileProperty*` (test_manifest_reconcile.cpp),
+  `ManifestBaseCopy.*`, DB `ManifestDbTest.*`.
+- **Manifest applier, items 4-5** (design "As built: items 4 and 5"; migration 146): `verifyRemote` returns a
+  `RemoteHead` and never records another writer's root; `known` advances only by an apply or an own publish. The
+  server's session publishes with `apply_on_lost` (a moved head throws `HeadMoved`); `vault_manifest::Service`
+  applies and republishes (`kPublishRounds` 4). `Service::applyRemote` (finish deferred entries, verify, apply) is the
+  pass's remote step (`CloudEngine::refreshRemoteIndexFromManifestIfChanged`, before planning). The executor is
+  `sync::vault_manifest::Applier` over `db::query::sync::ManifestApply`: per-op transaction, compare-and-set on
+  `op.ours`, `markApplying` first, record with the base copy last (only when nothing was skipped), audit
+  `manifest.applied`; moves/trash/deletes through `Filesystem::rename`/`remove` and `Engine::removeLocally` (a
+  remote-only file moves in the rows), creates/content/attributes in rows; a local copy not yet uploaded writes only
+  the index row; open files are deferred (`manifest_apply_deferred`, overridden in `Manifest::collect`); no usable
+  base copy merges as a union. Tests: DB `ManifestApplyDb*` (test_manifest_apply_db.cpp),
+  `VaultRecoverDb.ARestoreKeepsEachSnapshotsUid`, `ManifestVersionLogFaults.WithTheApplier*` (`Scenario::model_db`).
 - **`vh vault recover`** (#371, spec 03 §6.4): `vault::recover` (plan: envelopes, export, `loadForRestore` with the
   kit's checkpoint or blind, D1 `prove` against the customer's pinned attestation keys, reconciliation, `MeteredStore`
   download budget), `db::query::vault::Recover` (one transaction: vault, tree with inodes, trash, index, provider

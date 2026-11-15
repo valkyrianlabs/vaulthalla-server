@@ -1,8 +1,8 @@
 # Applying another writer's manifest to the local database
 
 Status: design for review (managed storage plan of 2026-11-12, workstream I, "a manifest applier that merges another
-server's changes into the local database"); work items 1 to 3 are built (see "As built: items 1 to 3"), items 4 to 7
-are not. It covers how a running server takes a
+server's changes into the local database"); work items 1 to 5 are built (see "As built: items 1 to 3" and "As built:
+items 4 and 5"), items 6 (in part) and 7 are not. Replicated vaults stay refused (the join is `mirrors.md`). It covers how a running server takes a
 canonical `opaque_v1` root that another writer published into its database, FUSE view, cache and change journal, and
 how that closes the restart gap of [spec 06](../encryption/06-publish-without-preconditions.md) §5.5. It does not cover
 the publish protocol (spec 03 §3.4, spec 06 §5), joining a node to `writers`, key hand-over or rotation between
@@ -369,4 +369,76 @@ in order with `ours` as the compare-and-set; for each open `ContentEditEdit` wri
 `remote_object_index` row and leave the files row; hand `incoming_account_policy` to the cloud service; finish with
 `recordRoot` of the head with `.base = baseCopyOf(loaded...)` in the last transaction. Deferral of open files needs
 its own table (`manifest_apply_deferred`, the next migration).
+
+## As built: items 4 and 5 (branch `feat/manifest-applier-apply`)
+
+**Item 5, wiring.** `Session::verifyRemote` returns a `RemoteHead` (the `Acceptance` plus, when the head is not the
+recorded root, the loaded head with its sealed bytes) and no longer records another writer's root: `known` advances
+only by an apply or by this server's own publish (closes decision 5 of items 1-3). The server's session publishes with
+`PublishOptions::apply_on_lost`: a head other than `known`, at the start or after a lost round (412, or C1 naming
+another successor), throws `HeadMoved` instead of merging in memory. `vault_manifest::Service::publish` /
+`publishIfChanged` catch it, apply (`applyRemote`) and publish again, at most `kPublishRounds` = 4 times, then
+`PublishConflict`. A pass applies before planning: `CloudEngine::refreshRemoteIndexFromManifestIfChanged` calls
+`applyRemote` (deferred entries first, then the verify: one HEAD while nothing moved). `ApplyStopped` and
+`ApplyIncomplete` stall the pass (`SyncStalled`). The tests' and the interleaving suite's own writers keep the
+in-memory merge (`apply_on_lost` false) unless they model a database.
+
+**Item 4, the executor.** `db::query::sync::ManifestApply` (rows, by uid) and `sync::vault_manifest::Applier`
+(`apply`, `finishDeferred`). Per operation, a compare-and-set on `op.ours` (row found by uid; parent uid and name for
+placement, the index row's generation for content, mode and owner for attributes), one short transaction, then the
+cache work. Choices, each the simplest that loses nothing:
+
+1. *No usable base copy* (a state from before migration 145, one an attach-remote cutover or a restore recorded, a
+   copy of another root): the merge runs with an empty base, a union. Nothing is deleted on either side; additions
+   and the head's placement and attributes apply. Undo: stall instead (`apply` throws `ApplyStopped` when
+   `union_base` would be set).
+2. *A skipped operation* (a local write since collect, a name taken, a parent gone) leaves the head unrecorded and
+   `applying_*` set: nothing is published from the partial state and the next pass applies the head again from a
+   fresh collect. A skip that would otherwise be recorded could let the next publish drop the other writer's entry.
+   Livelock is possible only under constant local writes to the same entries. Undo: record anyway after skips (change
+   the `report.skipped` branch).
+3. *One transaction per operation*, not batches of 500: each is short, and the moves, trash and deletes go through
+   `Filesystem::rename` / `remove` and `Engine::removeLocally` (their own transactions, cache and backing-file work,
+   local versioning). Creates, content and attributes are rows in `ManifestApply` (the shapes of `Recover::apply`).
+   Undo: batch the row-only operations in `Applier.cpp`. A file with no local bytes (remote-only under `cache`)
+   moves in the rows (`ManifestApply::moveRow`): `Filesystem::rename` refuses a source without backing bytes; a folder
+   created by an apply or a restore gets its backing directory before a move.
+4. *A local copy whose generation isn't the index's* (a change waiting for its upload): a content replacement writes
+   only the index row (the planner's two-sided path decides it, under the vault's policy), a delete or trash is not
+   applied (edit beats delete; the next publish carries the entry). Counted as `kept`, not skipped.
+5. *Open working copies* (`fuse::WorkingCopies::isOpen`): a content replacement, delete or trash is deferred
+   (`manifest_apply_deferred`, migration 146) and the collector reports the deferred target for the uid, so the head
+   is recorded and no publish reverts it. `finishDeferred`, at the start of every `applyRemote`, finishes each once
+   closed: unchanged → applied; sealed new bytes → the incoming object into the index (two-sided change) for a
+   replacement, kept for a delete or trash.
+6. *Restore from our trash* (theirs edited what ours trashed): a live entry is created, our trash row ends
+   (`deleted_at`) and its local bytes go as a purge would remove them: left in the trash, the next pass's purge would
+   delete the object the live file now names.
+7. *Not executed:* envelope kids (`AddEnvelopes`: envelope rows belong to this server's grants, which come only from
+   the account's policy), the file-recovery policy (set per server through `vh vault recovery`), a `mirror` sync
+   strategy (refused for replicas), a vault name another vault here holds. Each is a note in the report.
+8. *A head that didn't load completely* (a segment from an older root, a blind range) is not applied (`ApplyStopped`):
+   reconcile would read what it lost as deleted.
+9. *reconcile, refined on real data:* provider versions compare as a set (the database lists them in its own
+   order), and an entry no operation touches stays exactly as ours holds it (prior names and a tombstone's last place
+   are not the database's; the publisher carries them from the root it builds on). Before, both made an
+   `AddHistory` the database could never satisfy, so a re-apply never converged.
+10. *Audit:* `manifest.applied` (epoch, producing node, counts, union base), after the record. The undone placements and
+   the decided conflicts are in `ApplyReport::conflicts`; their status output is item 7.
+
+**Tests.** DB-backed `ManifestApplyDb.*` (test_manifest_apply_db.cpp, a real opaque_v1 cloud vault on the versioned
+fake bucket, the other writer a publish under another node id): every kind of change with rows, index, journal kinds
+and cache; the same head twice and a solo pass costing one HEAD; a local write skipping the record then converging; a
+crash before every operation then re-apply; open files deferred then applied or kept; real collector output with the
+real trash form (an edit beating our trash) and reconcile on the result planning nothing; a lost round applying and
+republishing; no base copy as a union; share links following a moved folder and going with a deleted one.
+`VaultRecoverDb.ARestoreKeepsEachSnapshotsUid`. The interleaving suite's writers optionally keep a model database
+(`Scenario::model_db`): `ManifestVersionLogFaults.WithTheApplierACrashAtEveryStepRevertsNothing` asserts
+`reverted_by_restart` zero and every model equal to the head at quiescence; the original crash test keeps the
+in-memory merge and its `> 0`, as the record of what the applier fixed.
+
+**What items 6 and 7 need:** item 6 (the two-daemon drill, `vhh drill mirror`, then Backblaze) can drive two vaults
+with one uid on one bucket now; it needs the join (writers naming both nodes, `mirrors.md`) or a test-only writers
+seed, and it should assert the journal and FUSE views on both. Item 7 (status) has `ApplyReport` (epoch, producer,
+counts, conflicts, union base, notes) and `manifest_apply_deferred` to show; nothing persists the last report yet.
 

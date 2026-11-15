@@ -127,7 +127,10 @@ DB-free: `ManifestReconcile*:ManifestReconcileProperty*` (test_manifest_reconcil
 seeds each, ~5 s at -O0, print the failing seed, and `VH_RECONCILE_SEED=<n>` reruns one), `ManifestBaseCopy*`,
 `ManifestDocument.*Snapshot*`, `ManifestContent.*Snapshot*`, `ManifestPublish.AColdStart*`. DB-backed:
 `ManifestDbTest*` (base copy, cold start, applying marker, snapshot uids), `SqlDeployerHistoryDb.ManifestApplier*`
-(migration 145).
+(migration 145), `ManifestApplyDb*` (the applier on a real opaque_v1 cloud vault: every step, idempotence and the solo
+pass's one HEAD, compare-and-set skips, crashes between operations, deferral of open files, the real trash form, lost
+rounds, union without a base copy, share links), `VaultRecoverDb.ARestoreKeepsEachSnapshotsUid`. The interleaving
+suite's `ManifestVersionLogFaults.WithTheApplier*` runs writers with model databases (`Scenario::model_db`).
 
 ## Cloud relay suites
 

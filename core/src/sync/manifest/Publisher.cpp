@@ -198,6 +198,12 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
             report.root_rebuilt = report.root_rebuilt || base.rebuilt;
             cache.base = std::move(base.published);
             if (!cache.base) pendingBase = Content{};
+            if (options.apply_on_lost && known && cache.base && !base.rebuilt && cache.base->known != *known) {
+                const auto epoch = cache.base->known.epoch;
+                cache.base.reset();
+                throw HeadMoved(std::format("the bucket's head is epoch {}, not the recorded epoch {}: apply it first",
+                                            epoch, known->epoch));
+            }
         }
         const std::optional<Published>& base = cache.base;
         if (base && !base->root.vault_uid.empty()) checkHead(base->root, base->known.root_sha256, store, options);

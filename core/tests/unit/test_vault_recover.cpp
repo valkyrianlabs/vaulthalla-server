@@ -566,6 +566,43 @@ TEST_F(VaultRecoverDb, RestoresTheVaultOnANodeThatNeverHeldItFromTheKit) {
     EXPECT_EQ(again.report.at("salvageable_versions"), json({4})) << "node B's version needs node B's key pinned";
 }
 
+// A snapshot record keeps its uid through a restore (migration 145): the restored recovery_snapshot row carries the
+// manifest's uid, so the restored vault's next publish names the same snapshot and a replica merges it by uid.
+TEST_F(VaultRecoverDb, ARestoreKeepsEachSnapshotsUid) {
+    auto o = origin();
+    write(o, "/kept.txt", bytes("in a snapshot"));
+    pass(o.engine);
+    enroll(o);
+    db::Transactions::exec("snapshot", [&](pqxx::work& txn) {
+        const auto fileId = txn.exec("SELECT id FROM fs_entry WHERE vault_id = $1 AND path = '/kept.txt'",
+                                     pqxx::params{o.id}).one_field_ref().as<int64_t>();
+        const auto snap = txn.exec("INSERT INTO recovery_snapshot (vault_id, name, root_path, root_type, state) "
+                                   "VALUES ($1, 'before restore', '/', 'directory', 'ready') RETURNING id",
+                                   pqxx::params{o.id}).one_field_ref().as<int64_t>();
+        auto storage = crypto::id::toUuid(crypto::id::newObjectUid());
+        std::erase(storage, '-');
+        const auto blob = txn.exec("INSERT INTO recovery_blob (vault_id, storage_name, key_version, cipher_bytes, "
+                                   "  plaintext_bytes) VALUES ($1, $2, 1, 30, 10) RETURNING id",
+                                   pqxx::params{o.id, storage}).one_field_ref().as<int64_t>();
+        txn.exec("INSERT INTO file_versions (vault_id, file_id, snapshot_id, blob_id, version_number, size_bytes, path, "
+                 "  rel_path) VALUES ($1, $2, $3, $4, 1, 10, '/kept.txt', 'kept.txt')",
+                 pqxx::params{o.id, fileId, snap, blob});
+    });
+    o.engine->publishRemoteIndexManifest();
+    const auto before = db::query::sync::Manifest::collect(o.id);
+    ASSERT_EQ(before.snapshots.size(), 1u);
+    const auto snapshotUid = before.snapshots[0].uid;
+    ASSERT_FALSE(snapshotUid.empty());
+    const auto kit = kitOf(o);
+    becomeAnotherNode(o.id);
+    const auto r = recover(o, &kit, nullptr);
+    ASSERT_TRUE(r.written) << r.report.dump(2);
+    const auto restored = db::query::sync::Manifest::collect(*r.vault_id);
+    ASSERT_EQ(restored.snapshots.size(), 1u);
+    EXPECT_EQ(restored.snapshots[0].uid, snapshotUid);
+    EXPECT_EQ(restored.snapshots[0].name, "before restore");
+}
+
 TEST_F(VaultRecoverDb, OnABackblazeLikeBucketTheRestoreTakesTheCanonicalHeadAndPublishesOnIt) {
     // Spec 06 §5: an opaque_v1 vault on a bucket without conditional writes publishes its root as versions; a restore
     // reads the canonical head by rule C1 although a losing sibling and a delete marker sit above it, and its first

@@ -550,6 +550,15 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId, const Coll
             c.entries.push_back(std::move(e));
         }
 
+        // ---- entries an apply deferred while their file was open (migration 146): the root's value until the apply
+        // finishes them, so a publish never reverts what another writer did
+        for (const auto row : txn.exec("SELECT uid::text, target::text FROM manifest_apply_deferred WHERE vault_id = $1",
+                                       pqxx::params{vaultId})) {
+            const auto uid = mf::uidText(crypto::id::fromUuid(row[0].as<std::string>()));
+            std::erase_if(c.entries, [&](const mf::Entry& e) { return e.uid == uid; });
+            if (!row[1].is_null()) c.entries.push_back(mf::entryFromJson(nlohmann::json::parse(row[1].as<std::string>())));
+        }
+
         // ---- snapshots, by uid (migration 145): one is given here the first time it is listed (libsodium), like
         // directories; recovery_snapshot.id is this server's and stays out of the manifest.
         {

@@ -99,6 +99,18 @@ void unionHistory(Entry& r, const Entry* t, const Entry* o) {
     r.names = std::move(names);
 }
 
+// The history a database holds: provider versions, as a set (it lists them in its own order). Prior names and a
+// tombstone's last place are not the database's: the publisher carries them from the previous root (carryHistory), so
+// they never make an operation.
+bool sameHistory(const Entry& a, const Entry& b) {
+    const auto ids = [](const Entry& e) {
+        std::set<std::string> out;
+        for (const auto& v : e.versions) out.insert(v.version_id);
+        return out;
+    };
+    return ids(a) == ids(b);
+}
+
 struct Decided {
     std::optional<Entry> entry;
     bool placementFromTheirs{false};   // the result's placement is the head's and not ours (the cycle rule may undo it)
@@ -606,12 +618,22 @@ Reconciliation reconcile(const Content& base, const Content& theirs, const Conte
         }
         // 9. History: only ever added.
         if (re) {
-            const bool historyMoved = oe ? oe->versions != re->versions || oe->names != re->names
-                                         : !re->versions.empty() || !re->names.empty();
-            if (historyMoved || (re->kind == EntryKind::Tombstone && (!oe || *oe != *re))) add(OpKind::AddHistory);
+            const bool historyMoved = oe ? !sameHistory(*oe, *re) : !re->versions.empty();
+            const bool tombstoneMoved = re->kind == EntryKind::Tombstone && (!oe || oe->kind != EntryKind::Tombstone);
+            if (historyMoved || tombstoneMoved) add(OpKind::AddHistory);
         }
     }
     plan.insert(plan.end(), snapshotOps.begin(), snapshotOps.end());
+
+    // An entry no operation touches stays as ours holds it: what differs is history the database doesn't hold (prior
+    // names, a tombstone's last place), which the publisher carries from the root it builds on.
+    {
+        std::set<std::string> touched;
+        for (const auto& op : plan) touched.insert(op.uid);
+        for (auto& e : out.result.entries)
+            if (!touched.contains(e.uid))
+                if (const Entry* oe = at(oursMap, e.uid)) e = *oe;
+    }
 
     // Order: by step; directories created parents first, moves directories first, deletes children first.
     const auto dirFirst = [&](const Op& op) { return op.target && op.target->kind == EntryKind::Dir ? 0 : 1; };

@@ -97,3 +97,4 @@ current    8498749fb2864c977bd31810c49200be930a3f9242339ea6b0445d6dcd9ffddf  142
 current    083163f14a7b582369b95c47d8d75f588583ded3bec6db8e21b04c3ff2b13e86  143_managed_storage_ended.sql  unreleased
 current    ee96bd44fba372f9dc4a659761ed272324272ca086d83ba5b881cb66000e3363  144_cloud_relay.sql  unreleased
 current    905e4f555d42315379fde637d0d2fdd2525b21745a5bea640aa038dc002f069a  145_manifest_applier_base.sql  unreleased
+current    db6befc1e05e44e3c4a85c4fb0d15131da05411c247f1e94e33672cd1bc93e44  146_manifest_apply_deferred.sql  unreleased

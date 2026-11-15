@@ -65,6 +65,13 @@ struct RootRecord {
     std::optional<BaseCopy> base{};
 };
 
+// What verifyRemote found: the bucket's head as accepted, and, when it is not the recorded root, the loaded head itself
+// (root, segments and their sealed bytes) for the caller to apply (design/sync/manifest-applier.md, item 5): `known`
+// advances only by an apply, which records it, or by this writer's own publish.
+struct RemoteHead : Acceptance {
+    std::optional<Loaded> head;
+};
+
 // Publishing is refused while an apply is incomplete (ChainState::applying_*): a partial state is never published.
 class ApplyIncomplete : public std::runtime_error {
 public:
@@ -129,7 +136,9 @@ public:
             SessionHost host);
 
     // Collects, publishes, records (with the local base copy). Rethrows ChainRejected (after recording and alerting),
-    // PublishConflict and the store's errors; ApplyIncomplete, before any request, while an apply is incomplete. A cold
+    // PublishConflict and the store's errors; ApplyIncomplete, before any request, while an apply is incomplete;
+    // HeadMoved when the bucket's head is not the recorded root (another writer published, or won a round): the
+    // caller applies it (verifyRemote, then the applier) and publishes again. A cold
     // session (no previous publish in memory) merges on the base copy of `known` when it opens, not on the bucket's
     // head (design/sync/manifest-applier.md, "closing the §5.5 gap").
     PublishReport publish();
@@ -137,11 +146,16 @@ public:
     // still that publish (a sync pass that changed nothing writes nothing, spec 01 §5): nullopt then.
     std::optional<PublishReport> publishIfChanged();
 
-    // Checks the bucket's current root against the recorded state without loading segments: one GET of the root
-    // when its ETag moved. An accepted newer root (another writer) becomes the known state; nullopt when there is no
-    // root or it doesn't authenticate (the next publish rebuilds it). Rethrows ChainRejected after recording and
-    // alerting.
-    std::optional<Acceptance> verifyRemote();
+    // Checks the bucket's current root against the recorded state: one HEAD while its ETag is the recorded one.
+    // Otherwise the head is loaded with its segments and checked (chain rules, writers, mode); a head that is not the
+    // recorded root is returned in RemoteHead::head and is not recorded: the caller applies it and the apply records
+    // it. nullopt when there is no root or it doesn't authenticate (the next publish rebuilds it). Rethrows
+    // ChainRejected after recording and alerting.
+    std::optional<RemoteHead> verifyRemote();
+
+    // An apply recorded the head this session returned: the next publish builds on the recorded root (and the base
+    // of its pending changes is the base copy, which now is that root).
+    void applied();
 
     // GC when the last one was more than a day before `now` (ChainState::gc_at); nullopt when not due.
     std::optional<GcReport> collectGarbageIfDue(std::time_t now);
@@ -150,7 +164,7 @@ private:
     void refused(const ChainRejected& e, uint64_t epoch, const std::string& rootSha256);
     // verifyRemote on a version_log bucket (spec 06 §5.3, §5.4): rule C1 from the settled root, the settle window,
     // the writers and mode checks, and repair of stray versions above the head.
-    std::optional<Acceptance> verifyRemoteVersionLog();
+    std::optional<RemoteHead> verifyRemoteVersionLog();
     PublishReport publishLocked(const Content& produced);
     [[nodiscard]] std::optional<Known> known() const;
     void note(Notice level, const std::string& message) const;

@@ -107,6 +107,10 @@ struct PublishOptions {
     // when the cache holds no last_produced (a cold start). Without either, the base is the bucket's head, which drops
     // every entry another writer added that this writer's database lacks (spec 06 §5.5).
     std::optional<Content> pending_base{};
+    // The database is always at a root (design/sync/manifest-applier.md): with `known` set, a head other than it is
+    // never merged in memory; publish throws HeadMoved instead (after deleting a losing version_log root, as usual).
+    // False: the in-memory merge of spec 03 §3.4 step 3 (the tests' writers without a database).
+    bool apply_on_lost{false};
 };
 
 struct PublishReport {
@@ -131,6 +135,14 @@ struct PublishReport {
 // than this server's last own root (ownEpoch) and its writers don't name selfNode. No check without a selfNode.
 void checkHeadForWriter(const RootDocument& head, const std::string& rootSha256, const ObjectStore& store,
                         const std::string& selfNode, const std::optional<uint64_t>& ownEpoch);
+
+// The bucket's head is not the root this writer knows (another writer published before this publish, or won one of
+// its rounds), and PublishOptions::apply_on_lost asks for the head to be applied instead of merged in memory: nothing
+// is recorded; the caller applies the head and publishes again (design/sync/manifest-applier.md, item 5).
+class HeadMoved : public std::runtime_error {
+public:
+    explicit HeadMoved(const std::string& message) : std::runtime_error(message) {}
+};
 
 // version_log: our root's version isn't listed yet after every retry (the listing lags behind the PUT). Nothing is
 // recorded; the changes stay pending and the next publish settles or supersedes it.
