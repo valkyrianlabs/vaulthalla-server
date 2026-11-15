@@ -6,3 +6,8 @@
   show each writer's standing at the cloud (`manifest.replicas[].cloud`) and the servers the cloud lists that aren't
   writers (`manifest.cloud_only`). Former replicas are matched to the manifest's writers by the node id the cloud now
   sends.
+- A server the account holder removed from a replicated vault leaves it locally (`vh vault leave` no longer tries to
+  publish with its revoked key), and joining it again isn't undone by the managed-storage pass's overview from before
+  the join.
+- A join never places objects the vault's manifest doesn't name under `/Recovered` (they are the other writers'); a
+  restore still recovers them.
