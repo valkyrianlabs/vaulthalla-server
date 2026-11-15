@@ -1,4 +1,5 @@
 #include "ops/Vaults.hpp"
+#include "ops/CloudStorage.hpp"
 #include "sync/vault_manifest/Replicas.hpp"
 #include "db/query/sync/ManifestApply.hpp"
 #include "ops/VaultRemote.hpp"
@@ -697,7 +698,9 @@ Details get(const Actor& actor, const unsigned int vaultId) {
     out.remote = vault_remote::remoteSummary(vaultId, out.vault->type == VaultType::S3);
     if (const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(out.vault);
         s3 && s3->storage_layout == vault::model::StorageLayout::OpaqueV1)
-        out.manifest = db::query::sync::ManifestApply::status(vaultId);
+        out.manifest = out.vault->uid ? cloud_storage::describeReplicas(vl::keykit::toBase32(*out.vault->uid),
+                                                                        db::query::sync::ManifestApply::status(vaultId))
+                                      : db::query::sync::ManifestApply::status(vaultId);
     if (const auto owner = vh::identities::manager().user(out.vault->owner_id)) out.owner_name = owner->name();
     return out;
 }

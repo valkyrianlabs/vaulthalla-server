@@ -1161,6 +1161,24 @@ TEST_F(VaultRecoverFromCloud, AJoinAsksForIntentJoinAndKeepsTheOtherWriter) {
     config::Registry::set(cfg);
 }
 
+// `vh vault join --from-cloud` checks these before its restore request (the drill found the request, the approval and a
+// bucket key all happening before the flag's refusal): nothing reaches the cloud for a join this server refuses.
+TEST_F(VaultRecoverFromCloud, AJoinIsRefusedBeforeAnythingIsAskedWithTheFlagOffOrForAnAgent) {
+    auto cfg = config::Registry::get();
+    cfg.sync.replicas.experimental = false;
+    config::Registry::set(cfg);
+    const auto before = calls.size();
+    EXPECT_EQ(code([&] { ops::vault_replicas::requireJoinAllowed(superUser, keys::Channel::Cli); return 0; }),
+              "replicas_experimental");
+    cfg.sync.replicas.experimental = true;
+    config::Registry::set(cfg);
+    EXPECT_EQ(code([&] { ops::vault_replicas::requireJoinAllowed(superUser, keys::Channel::Agent); return 0; }), "denied");
+    EXPECT_EQ(code([&] { ops::vault_replicas::requireJoinAllowed(superUser, keys::Channel::Cli); return 0; }), "ok");
+    EXPECT_EQ(calls.size(), before) << "no call to the cloud";
+    cfg.sync.replicas.experimental = false;
+    config::Registry::set(cfg);
+}
+
 TEST_F(VaultRecoverFromCloud, ARollbackIsRefusedAgainstTheCloudsCheckpointUnlessAccepted) {
     auto o = populated();
     o.engine->publishRemoteIndexManifest();

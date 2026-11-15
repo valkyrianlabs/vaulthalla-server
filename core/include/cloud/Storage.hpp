@@ -86,6 +86,8 @@ struct VaultStorage {
         std::string name;
         std::optional<std::string> node_id;
         std::optional<std::string> reason;   // former: server | owner | moved | deployment_removed
+        // Active: a server reported that its manifest no longer names this node (contract 10), by that server's name.
+        std::optional<std::string> unlisted_by;
     };
     std::vector<Replica> replicas, former_replicas;
     // The account holder removed the vault from this server (`removed: {reason: "owner"}`): stop syncing it.
@@ -137,6 +139,10 @@ void acknowledge(const Linked& link, const std::string& keyId);
 // DELETE /v1/vaults/{uid}/replica (204): this server stops holding a replicated vault (vh vault leave). False when the
 // cloud says it doesn't hold it (404 no_such_vault); throws CallError otherwise.
 bool leaveReplica(const Linked& link, const std::string& vaultUid);
+// POST /v1/vaults/{uid}/replicas/unlisted {node_id} (204): a root this server published no longer names that node (vh
+// vault replica remove; contract 10). False when no replica of the vault at the cloud has that node id (404
+// not_held); throws CallError otherwise. The cloud records it and removes nobody: the account holder does.
+bool reportUnlisted(const Linked& link, const std::string& vaultUid, const std::string& nodeId);
 
 // POST /v1/storage/vaults/{uid}/detached and /ejected (204).
 void reportDetached(const Linked& link, const std::string& vaultUid);

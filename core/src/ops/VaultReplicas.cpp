@@ -68,6 +68,10 @@ uint64_t publishChange(const std::shared_ptr<storage::CloudEngine>& engine, cons
 
 }  // namespace vault_replicas_detail
 
+void requireJoinAllowed(const Actor& actor, const Channel channel) {
+    vault_replicas_detail::requireAllowed(actor, channel, "vault join");
+}
+
 vault_recover::Result join(const Actor& actor, vault_recover::Request request, const Channel channel) {
     vault_replicas_detail::requireAllowed(actor, channel, "vault join");
     request.join = true;
@@ -137,6 +141,8 @@ RemoveResult removeReplica(const Actor& actor, const unsigned int vaultId, const
     r.node = node;
     r.published_epoch = publishChange(engine, vaultId, {mf::WritersChange::Kind::Remove, node}, what);
     r.solo = !sync::replicas::replicated(vaultId);
+    if (engine->vault && engine->vault->uid)
+        r.cloud = cloud_storage::reportWriterRemoved(vl::keykit::toBase32(*engine->vault->uid), node);
     audit::record({.action = "vault.replica.remove", .outcome = audit::Outcome::Success, .actor_id = actor->id,
                    .actor = actor->name(), .vault_id = vaultId,
                    .details = {{"node", node}, {"published_epoch", r.published_epoch}, {"solo", r.solo}}},
@@ -153,7 +159,8 @@ nlohmann::json toJson(const LeaveResult& r) {
 }
 
 nlohmann::json toJson(const RemoveResult& r) {
-    return {{"vault_id", r.vault_id}, {"node", r.node}, {"published_epoch", r.published_epoch}, {"solo", r.solo}};
+    return {{"vault_id", r.vault_id}, {"node", r.node}, {"published_epoch", r.published_epoch}, {"solo", r.solo},
+            {"cloud", r.cloud.empty() ? nlohmann::json(nullptr) : nlohmann::json(r.cloud)}};
 }
 
 }

@@ -205,6 +205,18 @@ static CommandResult recoverOrJoin(const CommandCall& call, const bool join) {
     }
     const bool json = hasFlag(call, usage->resolveFlag("json_output")->aliases);
     const auto channel = AgentCallScope::active() ? keys_ops::Channel::Agent : keys_ops::Channel::Cli;
+    // A join is refused here, before a restore request reaches the cloud (whose approval would add the replica) or a
+    // bucket key is made: the flag off, an agent, a browser session, not a super admin.
+    if (join) {
+        try {
+            vh::ops::vault_replicas::requireJoinAllowed(call.user, channel);
+        } catch (const ops::Refused& e) {
+            if (json) return invalid(nlohmann::json{{"error", e.code}, {"message", e.what()}}.dump(4));
+            return invalid(std::string(ERR) + ": " + e.what() + " [" + e.code + "]");
+        } catch (const ops::Error& e) {
+            return invalid(std::string(ERR) + ": " + e.what());
+        }
+    }
 
     // --from-cloud: the keys come from the linked account through a device; the restore completes only once they
     // were imported (or a dry run reported), and is cancelled on every other way out.

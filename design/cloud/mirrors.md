@@ -108,7 +108,11 @@ no local file names are counted as orphans, "left alone, never downloaded" (`Clo
   `DELETE /v1/vaults/{uid}/replica`, and keeps or deletes B's local copy as the operator chooses. The last replica
   can't leave; it deletes or detaches the vault as a solo vault does.
 - **The owner removes B** in the portal: the cloud revokes B's managed key (`onReplicaRemoved`). The next remaining
-  replica's background cloud service drops B from `writers`.
+  replica's background cloud service drops B from `writers` (matched by the `node_id` the cloud lists).
+- **A dead B removed by a server** (`vh vault replica remove` on A): only the manifest changes. The cloud's replica set
+  stays the account holder's (one server never evicts another there): A reports it (`POST /v1/vaults/{uid}/replicas/
+  unlisted`), the portal shows B as `unlisted`, and B's key works until the owner removes B. `vh vault sync info`
+  shows each writer's standing at the cloud and the servers the cloud lists that aren't writers.
 - **A compromised replica** still holds the keys. Removal therefore offers a rotation that excludes it (below), and
   revokes B's credential.
 

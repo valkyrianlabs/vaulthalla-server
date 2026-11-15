@@ -20,6 +20,9 @@ using Channel = vault_keys::Channel;
 // `vh vault join`: vault_recover in join mode (Request::join, set here): the same proofs, the database built from the
 // manifest with nothing downloaded, and a first publish that adds this node to the root's writers and keeps the others.
 [[nodiscard]] vault_recover::Result join(const Actor& actor, vault_recover::Request request, Channel channel);
+// The flag, the channel and the caller, before a join asks anyone for anything (a join --from-cloud checks them before
+// its restore request, so the cloud never adds a replica this server would then refuse). Throws as join does.
+void requireJoinAllowed(const Actor& actor, Channel channel);
 
 struct LeaveResult {
     unsigned int vault_id{};
@@ -37,6 +40,7 @@ struct RemoveResult {
     std::string node{};
     uint64_t published_epoch{};
     bool solo{false};   // this server is the vault's only writer now (it may rotate again)
+    std::string cloud{};   // linked: what Vaulthalla Cloud's replica set says of that server (it stays the owner's)
 };
 // `vh vault replica remove`: a remaining writer drops another (a dead replica) from the root's writers. If that
 // server is still running, its next publish is refused as superseded and it stops.

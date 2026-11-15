@@ -69,7 +69,14 @@ std::vector<WsModel> vaultModels() {
              "A join, leave or replica removal this server's publishes carry until a recorded root shows it."),
          boolean("behind").desc("This server has not taken in everything the bucket's head says: an apply in "
                                 "progress, skipped or stopped, entries waiting for an open file, or a writers change "
-                                "not published yet.")}));
+                                "not published yet."),
+         objectArray("cloud_only", "ManifestCloudOnly").desc(
+             "Servers Vaulthalla Cloud lists as holding the vault that the recorded root doesn't name (joining, or "
+             "removed here and not yet by the account holder); empty when unlinked.")}));
+
+    out.push_back(model("ManifestCloudOnly", "A server of the vault at Vaulthalla Cloud that isn't one of its writers.",
+        {str("deployment_id"), str("name"), str("node_id"),
+         str("unlisted_by").nullable().desc("The server that reported removing it from the manifest; null: none did.")}));
 
     out.push_back(model("ManifestReplica", "One writer of a vault's manifest (manifest_writer_root, migration 150).",
         {str("node_id"),
@@ -77,7 +84,11 @@ std::vector<WsModel> vaultModels() {
          uinteger("last_epoch").nullable().desc("Its last root this server recorded; null: none since this server "
                                                 "held the vault."),
          str("last_root_sha256").nullable(),
-         str("last_published_at").nullable().desc("ISO-8601 UTC, as the root says.")}));
+         str("last_published_at").nullable().desc("ISO-8601 UTC, as the root says."),
+         str("cloud").nullable().oneOf({"listed", "unlisted", "former", "not_listed"}).desc(
+             "Vaulthalla Cloud's replica set at the last poll: listed, listed but reported removed from the manifest "
+             "(unlisted), removed there (former: the next publish drops it), or not listed; null: not linked or not "
+             "polled yet.")}));
 
     out.push_back(model("ManifestWritersChange", "remote_manifest_state.writers_change (migration 150).",
         {str("kind").oneOf({"add", "remove"}), str("node")}));

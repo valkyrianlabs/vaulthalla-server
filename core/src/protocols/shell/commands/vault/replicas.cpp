@@ -74,9 +74,10 @@ CommandResult handle_vault_replica(const CommandCall& call) {
         if (!lookup || !lookup.ptr) return invalid(lookup.error);
         const auto r = rops::removeReplica(subcall.user, lookup.ptr->id, subcall.positionals[1], channel());
         if (json) return ok(rops::toJson(r).dump(4));
-        return ok(fmt::format("Vault {}: {} is no longer a writer (manifest epoch {}).{}\n", r.vault_id, r.node,
+        return ok(fmt::format("Vault {}: {} is no longer a writer (manifest epoch {}).{}\n{}", r.vault_id, r.node,
                               r.published_epoch,
-                              r.solo ? " This server is the only writer now: the vault is solo again." : ""));
+                              r.solo ? " This server is the only writer now: the vault is solo again." : "",
+                              r.cloud.empty() ? "" : "  " + r.cloud + ".\n"));
     } catch (const vh::ops::Error& e) {
         return refusal(ERR, e, json);
     }

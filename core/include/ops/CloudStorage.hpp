@@ -170,6 +170,14 @@ void adoptJoinedVault(unsigned int vaultId, const std::string& vaultUid, const J
 // `vh vault leave`: DELETE /v1/vaults/{uid}/replica when this server is linked (6). True: the cloud was told (or this
 // server isn't linked, or the cloud didn't hold it); false with `error` when the call failed.
 [[nodiscard]] bool reportLeft(const std::string& vaultUid, std::string& error);
+// `vh vault replica remove`, when linked: the cloud's replica set is the account holder's (contract 10), so this only
+// reports that the manifest dropped `node` (POST /v1/vaults/{uid}/replicas/unlisted) and returns what to tell the
+// operator (empty when this server isn't linked).
+[[nodiscard]] std::string reportWriterRemoved(const std::string& vaultUid, const std::string& node);
+// The manifest status (db::query::sync::ManifestApply::status) with the cloud's view from the last poll: each writer's
+// `cloud` (listed | unlisted | former | not_listed, or null when unknown) and `cloud_only`, the servers the cloud lists
+// that the manifest doesn't name. The two sides never disagree silently.
+[[nodiscard]] nlohmann::json describeReplicas(const std::string& vaultUid, const nlohmann::json& manifest);
 
 // Asks the service for a pass now (non-blocking: a vault was created or restored, a switch flipped, a refresh asked).
 void wake();

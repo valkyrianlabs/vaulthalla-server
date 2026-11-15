@@ -5360,6 +5360,42 @@
       "name": "ManifestApplyReport"
     },
     {
+      "description": "A server of the vault at Vaulthalla Cloud that isn't one of its writers.",
+      "fields": [
+        {
+          "name": "deployment_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "node_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The server that reported removing it from the manifest; null: none did.",
+          "name": "unlisted_by",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "name": "ManifestCloudOnly"
+    },
+    {
       "description": "One writer of a vault's manifest (manifest_writer_root, migration 150).",
       "fields": [
         {
@@ -5398,6 +5434,21 @@
         {
           "description": "ISO-8601 UTC, as the root says.",
           "name": "last_published_at",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Vaulthalla Cloud's replica set at the last poll: listed, listed but reported removed from the manifest (unlisted), removed there (former: the next publish drops it), or not listed; null: not linked or not polled yet.",
+          "enum": [
+            "listed",
+            "unlisted",
+            "former",
+            "not_listed"
+          ],
+          "name": "cloud",
           "required": true,
           "types": [
             "string",
@@ -19833,6 +19884,16 @@
           "types": [
             "boolean"
           ]
+        },
+        {
+          "description": "Servers Vaulthalla Cloud lists as holding the vault that the recorded root doesn't name (joining, or removed here and not yet by the account holder); empty when unlinked.",
+          "items": "object",
+          "model": "ManifestCloudOnly",
+          "name": "cloud_only",
+          "required": true,
+          "types": [
+            "array"
+          ]
         }
       ],
       "name": "VaultManifestStatus"
@@ -23650,7 +23711,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "b8a6130418ea365bea5ca0e8aa1a182b3a72f3af58afe85e12c94ed70bf70a03",
+  "models_hash": "e77334ae7a52b498d9c759e8b454eaf9b18c46bfda692cba4fdd8afd9986ef43",
   "protocol": {
     "min": 1,
     "version": 1

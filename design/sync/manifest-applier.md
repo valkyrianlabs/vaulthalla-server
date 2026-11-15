@@ -724,10 +724,32 @@ writer the recorded root names, `self`, its last root this server recorded: `man
   `former_replicas` entry still among the manifest's writers is dropped by this server's next publish (one change at a
   time).
 
-**Contract gap (reported, not worked around):** the cloud's `replicas` and `former_replicas` entries carry
-`deployment_id` and `name`, never the deployment's `node_id`, and the manifest's writers are node ids. The cloud has
-the node id (`deployment.node_id`, sent at link). The server reads an optional `node_id` in those entries and, without
-it, logs that the former replica can't be matched and changes nothing. Needed: `node_id` in both lists.
+**Contract gaps, closed (2026-11-15, vaulthalla-cloud `managed-storage.md` "As built" 29 and contract 7, 10):**
+- The cloud's `replicas` and `former_replicas` carry each deployment's `node_id` (only to servers that hold or held the
+  vault); the server matches former replicas to the manifest's writers by it. Null only for a deployment linked before
+  link requests carried a node id: logged, nothing changes.
+- *A dead replica stays the account holder's to remove at the cloud* (decided with the cloud: one server never evicts
+  another there, since the cloud's replica set decides who gets a bucket key). `vh vault replica remove`, when linked,
+  publishes the root without the node and then reports it (`POST /v1/vaults/{uid}/replicas/unlisted {node_id}`), and
+  says what the cloud says: "Vaulthalla Cloud still lists '<name>' ... until the account holder removes it from the
+  vault in the portal", or that it no longer lists it (`RemoveResult.cloud`, `cloud` in `--json`). The cloud shows the
+  report beside that replica (`unlisted`). Undo: drop `reportWriterRemoved`.
+- *The two sides never disagree silently:* `vh vault sync info` and `storage.vault.get` (`manifest`) annotate each
+  writer with `cloud` (`listed`, `unlisted`, `former`: the next publish drops it, `not_listed`; null when unlinked or
+  before the first poll) and add `cloud_only` (servers the cloud lists that the root doesn't name: joining, or removed
+  here and not yet by the owner), from the managed-storage pass's last overview (`ops::cloud_storage::
+  describeReplicas`; no HEAD, no extra call). The ws contract changed (models `ManifestReplica.cloud`,
+  `VaultManifestStatus.cloud_only`, `ManifestCloudOnly`). Undo: drop the two calls of `describeReplicas`.
+- Refusals are matched on the envelope's `reason` (the contract now says so; `code` is only the class).
+
+**What the cloud drill found (vaulthalla-cloud `tests/milestone/managed.py` steps 17 and 18: real servers through the
+real cloud, moto checking every key), each fixed here with a test beside it:**
+
+1. *The flag was checked after the cloud acted.* `vh vault join --from-cloud` with `sync.replicas.experimental` off made
+   the restore request, waited for the approval (which adds the replica at the cloud) and the delivery, exchanged a
+   bucket key, and only then refused `replicas_experimental` (cleaning up with a cancel and a leave). The flag, the
+   channel and the caller are now checked before anything is asked (`vault_replicas::requireJoinAllowed`;
+   `VaultRecoverFromCloud.AJoinIsRefusedBeforeAnythingIsAskedWithTheFlagOffOrForAnAgent`).
 
 **Not built here:** rotation across replicas (replica keys, pending versions), the cloud-side removal of a dead
 replica by the owner (`DELETE /v1/vaults/{uid}/replicas/{deployment_id}`; the server drops it through

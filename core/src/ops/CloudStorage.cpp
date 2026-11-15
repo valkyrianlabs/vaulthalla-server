@@ -1345,6 +1345,82 @@ bool reportLeft(const std::string& vaultUid, std::string& error) {
     }
 }
 
+std::string reportWriterRemoved(const std::string& vaultUid, const std::string& node) {
+    namespace d = cloud_storage_ops_detail;
+    const auto link = d::cs::linked();
+    if (!link) return {};
+    // Who the cloud lists with that node id, from a fresh answer (the cache may predate a join).
+    std::optional<d::cs::VaultStorage::Replica> listed;
+    bool former = false;
+    try {
+        const auto ov = d::cs::overview(*link);
+        for (const auto& v : ov.vaults) {
+            if (v.vault_uid != vaultUid) continue;
+            for (const auto& r : v.replicas)
+                if (r.node_id && *r.node_id == node) listed = r;
+            for (const auto& r : v.former_replicas)
+                if (r.node_id && *r.node_id == node) former = true;
+        }
+    } catch (const std::exception& e) {
+        return fmt::format("Vaulthalla Cloud couldn't be asked whether it still lists {} ({}); if it does, the account "
+                           "holder removes that server from the vault in the portal", node, e.what());
+    }
+    if (!listed)
+        return former ? "Vaulthalla Cloud no longer lists it either"
+                      : "Vaulthalla Cloud doesn't list it as a server of this vault";
+    const auto name = listed->name.empty() ? listed->deployment_id : listed->name;
+    std::string told;
+    try {
+        if (!d::cs::reportUnlisted(*link, vaultUid, node)) return "Vaulthalla Cloud no longer lists it either";
+        told = "it was told, and shows it";
+    } catch (const d::cs::CallError& e) {
+        told = std::string("telling it failed: ") + e.what();
+    }
+    return fmt::format("Vaulthalla Cloud still lists '{}' as a server of this vault, and its storage key works, until the "
+                       "account holder removes it from the vault in the portal ({})",
+                       name, told);
+}
+
+nlohmann::json describeReplicas(const std::string& vaultUid, const nlohmann::json& manifest) {
+    namespace d = cloud_storage_ops_detail;
+    nlohmann::json out = manifest;
+    std::optional<d::cs::VaultStorage> v;
+    {
+        std::lock_guard lock(d::cacheMutex);
+        if (d::cachedOverview)
+            for (const auto& e : d::cachedOverview->vaults)
+                if (e.vault_uid == vaultUid) v = e;
+    }
+    out["cloud_only"] = nlohmann::json::array();
+    if (!out.contains("replicas") || !out["replicas"].is_array()) return out;
+    std::vector<std::string> writers;
+    for (auto& r : out["replicas"]) {
+        const auto node = r.value("node_id", "");
+        writers.push_back(node);
+        if (!v) {
+            r["cloud"] = nullptr;   // not linked, not polled yet, or not a vault of the account at the cloud
+            continue;
+        }
+        const auto match = [&](const auto& list) {
+            return std::ranges::find_if(list, [&](const auto& x) { return x.node_id && *x.node_id == node; });
+        };
+        if (const auto it = match(v->replicas); it != v->replicas.end())
+            r["cloud"] = it->unlisted_by ? "unlisted" : "listed";
+        else if (match(v->former_replicas) != v->former_replicas.end())
+            r["cloud"] = "former";
+        else
+            r["cloud"] = "not_listed";
+    }
+    // The other way round: a server the cloud lists that the manifest doesn't name (joining, or removed here: the
+    // account holder removes it in the portal).
+    if (v)
+        for (const auto& r : v->replicas)
+            if (r.node_id && std::ranges::find(writers, *r.node_id) == writers.end())
+                out["cloud_only"].push_back({{"deployment_id", r.deployment_id}, {"name", r.name}, {"node_id", *r.node_id},
+                                             {"unlisted_by", r.unlisted_by ? nlohmann::json(*r.unlisted_by) : nlohmann::json(nullptr)}});
+    return out;
+}
+
 void wake() { cloud_storage_ops_detail::woken = true; }
 
 bool takeWake() noexcept { return cloud_storage_ops_detail::woken.exchange(false); }
