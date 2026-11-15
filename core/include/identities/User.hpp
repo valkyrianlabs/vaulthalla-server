@@ -161,6 +161,7 @@ namespace vh::identities {
         [[nodiscard]] rbac::permission::admin::S3Gateway s3GatewayPerms() const;
         [[nodiscard]] rbac::permission::admin::Stats statsPerms() const;
         [[nodiscard]] rbac::permission::admin::Upstream upstreamPerms() const;
+        [[nodiscard]] rbac::permission::admin::Cloud cloudPerms() const;
 
         // Replaces a detached object's state (tests). Throws for a canonical object: those change only through
         // identities::Manager.

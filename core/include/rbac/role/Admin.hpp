@@ -27,6 +27,7 @@ namespace vh::rbac::role {
         permission::admin::S3Gateway s3Gateway{};
         permission::admin::Stats stats{};
         permission::admin::Upstream upstream{};
+        permission::admin::Cloud cloud{};
         permission::admin::VaultGlobals vGlobals{};
 
         Admin() = default;
@@ -95,7 +96,8 @@ namespace vh::rbac::role {
             const std::optional<uint32_t> userId = std::nullopt,
             std::optional<permission::admin::VaultGlobals> vGlobals = std::nullopt,
             permission::admin::Stats stats = permission::admin::Stats::None(),
-            permission::admin::Upstream upstream = permission::admin::Upstream::None()
+            permission::admin::Upstream upstream = permission::admin::Upstream::None(),
+            permission::admin::Cloud cloud = permission::admin::Cloud::None()
         ) {
             return make(
                 std::move(name),
@@ -110,6 +112,7 @@ namespace vh::rbac::role {
                 std::move(s3Gateway),
                 std::move(stats),
                 std::move(upstream),
+                std::move(cloud),
                 std::move(vGlobals).value_or(permission::admin::VaultGlobals::NoneIfBound(userId))
             );
         }
@@ -128,6 +131,7 @@ namespace vh::rbac::role {
             permission::admin::S3Gateway s3Gateway,
             permission::admin::Stats stats,
             permission::admin::Upstream upstream,
+            permission::admin::Cloud cloud,
             permission::admin::VaultGlobals vGlobals
         ) {
             Admin a;
@@ -144,6 +148,7 @@ namespace vh::rbac::role {
             a.s3Gateway = std::move(s3Gateway);
             a.stats = std::move(stats);
             a.upstream = std::move(upstream);
+            a.cloud = std::move(cloud);
             a.vGlobals = std::move(vGlobals);
 
             return a;

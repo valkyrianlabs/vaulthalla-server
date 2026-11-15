@@ -45,7 +45,8 @@ void vh::db::Connection::initPreparedAdminRoleAssignments() const {
                 ar.keys_permissions::bigint       AS keys_permissions,
                 ar.s3_gateway_permissions::bigint AS s3_gateway_permissions,
                 ar.stats_permissions::bigint      AS stats_permissions,
-                ar.upstream_permissions::bigint   AS upstream_permissions
+                ar.upstream_permissions::bigint   AS upstream_permissions,
+                ar.cloud_permissions::bigint      AS cloud_permissions
             FROM admin_role_assignments ara
             INNER JOIN admin_role ar
                 ON ar.id = ara.role_id
@@ -75,7 +76,8 @@ void vh::db::Connection::initPreparedAdminRoleAssignments() const {
                 ar.keys_permissions::bigint       AS keys_permissions,
                 ar.s3_gateway_permissions::bigint AS s3_gateway_permissions,
                 ar.stats_permissions::bigint      AS stats_permissions,
-                ar.upstream_permissions::bigint   AS upstream_permissions
+                ar.upstream_permissions::bigint   AS upstream_permissions,
+                ar.cloud_permissions::bigint      AS cloud_permissions
             FROM admin_role_assignments ara
             INNER JOIN admin_role ar
                 ON ar.id = ara.role_id
@@ -132,7 +134,8 @@ void vh::db::Connection::initPreparedAdminRoleAssignments() const {
                 ar.keys_permissions::bigint       AS keys_permissions,
                 ar.s3_gateway_permissions::bigint AS s3_gateway_permissions,
                 ar.stats_permissions::bigint      AS stats_permissions,
-                ar.upstream_permissions::bigint   AS upstream_permissions
+                ar.upstream_permissions::bigint   AS upstream_permissions,
+                ar.cloud_permissions::bigint      AS cloud_permissions
             FROM admin_role_assignments ara
             INNER JOIN admin_role ar
                 ON ar.id = ara.role_id
