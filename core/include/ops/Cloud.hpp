@@ -32,8 +32,8 @@ struct Claim {
     std::string status;  // pending | linked | denied | expired
     std::optional<std::string> installation_id;
     std::optional<int64_t> account_id;
-    std::optional<std::string> deployment_id;
-    std::optional<std::string> account_public_id;
+    std::optional<std::string> deployment_id{};
+    std::optional<std::string> account_public_id{};
 };
 // Asks the cloud whether the pending request was approved (signed by the identity key). On linked the link is
 // recorded; on denied or expired the request and its key are discarded. NotFound when no request is pending.
@@ -57,9 +57,9 @@ Status status(const Actor& actor);
 struct LinkStatus {
     bool linked = false;
     bool detailed = false;
-    std::optional<std::string> installation_id, deployment_id, account_public_id;
-    std::optional<uint32_t> account_key_generation;
-    std::optional<std::string> account_key_fingerprint;
+    std::optional<std::string> installation_id{}, deployment_id{}, account_public_id{};
+    std::optional<uint32_t> account_key_generation{};
+    std::optional<std::string> account_key_fingerprint{};
 };
 LinkStatus linkStatus(const Actor& actor);
 [[nodiscard]] nlohmann::json toJson(const LinkStatus& s);

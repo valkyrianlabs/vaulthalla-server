@@ -113,6 +113,7 @@ struct PinnedKey {
     std::array<uint8_t, 32> x25519_public{};
     std::string fingerprint;
     std::string confirmed_by;
+    std::string statement;  // the pinned generation's statement (account::parseStatement: label::seal takes it)
 };
 [[nodiscard]] std::optional<PinnedKey> pinnedKey();
 

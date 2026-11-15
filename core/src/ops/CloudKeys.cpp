@@ -769,7 +769,7 @@ std::optional<PinnedKey> pinnedKey() {
     if (!p) return std::nullopt;
     return PinnedKey{.account_public_id = p->account_public_id, .generation = p->generation,
                      .x25519_public = p->x25519_public, .fingerprint = p->fingerprint,
-                     .confirmed_by = p->confirmed_by.value_or("?")};
+                     .confirmed_by = p->confirmed_by.value_or("?"), .statement = p->statement};
 }
 
 void applyPolicy(const unsigned int vaultId) noexcept {

@@ -23,14 +23,14 @@ struct LinkRow {
     std::optional<std::time_t> linked_at;
     // What the claim and GET /v1/installation report (migration 141): the deployment this server is and the account's
     // public id (canonical UUID text), which every key statement and recovery policy names.
-    std::optional<std::string> deployment_id;
-    std::optional<std::string> account_public_id;
+    std::optional<std::string> deployment_id{};
+    std::optional<std::string> account_public_id{};
     // The last check of the account recovery key (GET /v1/keys/account): when, ok | none | unreachable | refused |
     // rejected | tampered, and why; the date the cloud records for an offline copy of the current generation.
-    std::optional<std::time_t> key_checked_at;
-    std::optional<std::string> key_check;
-    std::optional<std::string> key_check_detail;
-    std::optional<std::time_t> offline_copy_at;
+    std::optional<std::time_t> key_checked_at{};
+    std::optional<std::string> key_check{};
+    std::optional<std::string> key_check_detail{};
+    std::optional<std::time_t> offline_copy_at{};
 };
 
 struct Link {
