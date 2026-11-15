@@ -6,6 +6,7 @@
 #include "crypto/id/ObjectUid.hpp"
 #include <vl/keykit/kev1.hpp>
 #include "crypto/util/encrypt.hpp"
+#include "db/query/cloud/Storage.hpp"
 #include "db/query/vault/RecoveryGrants.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "identities/User.hpp"
@@ -243,6 +244,73 @@ AddResult add(const Actor& actor, const AddRequest& request, const vault_keys::C
     return out;
 }
 
+std::optional<AddResult> addAccountKeyForManagedVault(const unsigned int vaultId) {
+    using namespace recipients_detail;
+    const auto vault = liveVault(vaultId);
+    const auto managed = db::query::cloud::CloudStorage::get(vault->id);
+    if (!managed || managed->switch_state != "on")
+        throw Conflict("vault '" + vault->name + "' isn't switched on for managed storage: its recovery recipients are "
+                       "added by a person (vh vault keys recipient add --account-key)");
+    if (!vault->uid) throw Conflict("vault '" + vault->name + "' has no uid");
+    const auto pinned = ops::cloud_keys::pinnedKey();
+    if (!pinned)
+        throw Refused("account_key_unconfirmed", "this server has no confirmed account recovery key: a super admin "
+                      "confirms its fingerprint first (`vh cloud key confirm`)");
+    const std::vector<uint8_t> publicKey(pinned->x25519_public.begin(), pinned->x25519_public.end());
+    for (const auto& existing : Grants::usable(vault->id))
+        if (existing.account_key_generation && existing.public_key == publicKey) return std::nullopt;
+    const auto engine = engineFor(vault->id);
+    if (!engine || !engine->encryptionManager)
+        throw Conflict("the keys of vault '" + vault->name + "' are not available on this host");
+
+    db::query::vault::RecoveryGrant g;
+    g.vault_id = vault->id;
+    g.grant_id = vl::keykit::toBase32(crypto::id::newObjectUid());
+    g.recipient_id = hex(vl::keykit::kev1::recipientId(publicKey));
+    g.public_key = publicKey;
+    g.suite = static_cast<uint16_t>(vl::keykit::kev1::Suite::X25519);
+    g.recipient_class = "customer";
+    g.label = "Vaulthalla Cloud recovery key (generation " + std::to_string(pinned->generation) + ")";
+    g.account_key_generation = pinned->generation;
+    g.authorized_by = fmt::format("system:cloud for managed storage; account_key:{} confirmed by {}", pinned->generation,
+                                  pinned->confirmed_by);
+    if (!Grants::add(g)) return std::nullopt;   // added meanwhile
+
+    AddResult out;
+    const auto& keys = *engine->encryptionManager;
+    std::vector<uint32_t> versions;
+    for (const auto v : keys.retainedKeyVersions()) versions.push_back(v);
+    try {
+        out.envelopes_written = vault::envelopes::ensure(vault->id, versions, [&](const uint32_t v) -> crypto::SecretKeyPtr {
+            try {
+                return keys.historicalKeySnapshot(v);
+            } catch (const std::exception&) {
+                return nullptr;
+            }
+        });
+    } catch (const std::exception& e) {
+        out.note = std::string("the account key is a recipient, but its envelopes could not all be written yet (") +
+                   e.what() + ")";
+        log::Registry::crypto()->warn("[ops::recovery_recipients] vault {}: {}", vault->id, *out.note);
+    }
+    ops::cloud_keys::applyPolicy(vault->id);
+    requestPublish(engine);
+    out.recipient = recipientOf(vault->id, g.grant_id);
+    out.versions = out.recipient.envelope_versions;
+    out.recovery = vault_keys::recoveryMaterialOf(vault->id);
+    vh::audit::record({.action = "vault.recovery.recipient.add", .outcome = vh::audit::Outcome::Success,
+                       .actor_id = std::nullopt, .actor = "system:cloud", .vault_id = vault->id,
+                       .details = {{"grant_id", g.grant_id}, {"recipient_id", g.recipient_id}, {"channel", "system"},
+                                   {"envelopes", static_cast<int64_t>(out.envelopes_written)}, {"automatic", true},
+                                   {"account_key_generation", pinned->generation},
+                                   {"confirmed_by", pinned->confirmed_by}}},
+                      fmt::format("[ops::recovery_recipients] system:cloud added the pinned account recovery key "
+                                  "(generation {}, confirmed by {}) as recovery recipient {} of managed vault {}; {} "
+                                  "envelope(s) written", pinned->generation, pinned->confirmed_by, g.grant_id, vault->id,
+                                  out.envelopes_written));
+    return out;
+}
+
 RevokeResult revoke(const Actor& actor, const unsigned int vaultId, const std::string& grantId,
                     const vault_keys::Channel channel) {
     using namespace recipients_detail;
@@ -256,6 +324,11 @@ RevokeResult revoke(const Actor& actor, const unsigned int vaultId, const std::s
                       "recovery recipient " + grantId + " comes from the account's signed recovery policy " +
                           std::to_string(*existing->account_policy_sequence) + "; change the policy from Vaulthalla "
                           "Desktop or your account page instead, and every server revokes it");
+    // A managed vault keeps the account key as its recipient: the managed-storage service would only add it again.
+    if (existing->account_key_generation && db::query::cloud::CloudStorage::managed(vault->id))
+        throw Refused("managed_vault_account_key",
+                      "recovery recipient " + grantId + " is the account recovery key of a vault in managed storage, "
+                      "which keeps it; switch the vault's managed storage off first (vh cloud storage disable)");
     auth::stepup::require(auth::stepup::Family::Keys, "vault.keys.recipients.revoke:" + std::to_string(vault->id));
     if (!Grants::revoke(vault->id, grantId, fmt::format("user:{} via {}", actor->id, channelName(channel))))
         throw Conflict("recovery recipient " + grantId + " is already revoked");

@@ -22,6 +22,12 @@ std::vector<Capability> capabilities() {
          .description = "A linked server pins its account's recovery key (cloud.key.status, .confirm, .refresh; "
                         "cloud.link.status) and adds it as a recovery recipient (vault.keys.recipients.add "
                         "{account_key: true})."},
+        {.name = "cloud.storage.managed_remotes",
+         .since = "1.23.0",
+         .description = "A linked server keeps vaults in managed storage: new vaults may be attached to it "
+                        "automatically (cloud.storage.status, .switch, .offer.accept, .offer.decline, .rotate, "
+                        ".new_vaults, .billing.handoff). Whether it is available is runtime state "
+                        "(cloud.storage.status `available`)."},
         {.name = "device.endpoints",
          .since = "1.20.0",
          .description = "ws device.endpoints answers a paired device with where the listener can be reached; "

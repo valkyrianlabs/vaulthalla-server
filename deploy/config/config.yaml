@@ -282,6 +282,10 @@ caching:
 # the endpoint until a super admin runs `vh cloud link`. Read from this file only.
 cloud:
   endpoint: https://api.vaulthalla.cloud   # https, or http only to localhost (development)
+  storage:
+    poll_minutes: 15                       # how often a linked server asks for its account's storage state
+    default_retention_days: 30             # history kept for overwritten files in a newly managed vault
+    ended_grace_hours: 24                  # an ended plan converts managed vaults to local after this long, or when an admin confirms
 
 
 # === 🔐 Sealed Secrets ===

@@ -243,7 +243,8 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId, const Coll
         // Recovery recipients (#370, spec 03 §5.7): every grant, revoked ones too (with revoked_at), oldest first.
         mf::RecoveryPolicy policy;
         for (const auto row : txn.exec(
-                 fmt::format("SELECT grant_id, recipient_id, class, suite, label, {}, authorized_by, {}, public_key "
+                 fmt::format("SELECT grant_id, recipient_id, class, suite, label, {}, authorized_by, {}, public_key, "
+                             "account_key_generation "
                              "FROM vault_recovery_grant WHERE vault_id = $1 ORDER BY added_at, grant_id",
                              iso("added_at") + " AS added_at", iso("revoked_at") + " AS revoked_at"),
                  pqxx::params{vaultId})) {
@@ -257,7 +258,24 @@ vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId, const Coll
             g.authorized_by = optText(row["authorized_by"]);
             g.revoked_at = optText(row["revoked_at"]);
             g.public_key = crypto::util::b64_encode(encoding::from_hex_bytea(row["public_key"].as<std::string>()));
+            if (!row["account_key_generation"].is_null())
+                g.account_key_generation = row["account_key_generation"].as<uint32_t>();
             policy.grants.push_back(std::move(g));
+        }
+        // The account's signed recovery policy (key-manager.md): carried for a vault the account key covers, as the
+        // pinned row holds it. A reader verifies it against its own pin; nothing here vouches for it.
+        if (!txn.exec("SELECT 1 FROM vault_recovery_grant WHERE vault_id = $1 AND account_key_generation IS NOT NULL AND "
+                      "revoked_at IS NULL LIMIT 1", pqxx::params{vaultId}).empty()) {
+            const auto ap = txn.exec("SELECT policy, encode(policy_signature, 'base64') FROM cloud_account_key WHERE state = "
+                                     "'pinned' AND policy IS NOT NULL ORDER BY generation DESC LIMIT 1");
+            if (!ap.empty()) {
+                // base64url without padding, as the service serves it.
+                auto sig = ap[0][1].as<std::string>();
+                std::erase(sig, '\n');
+                std::erase(sig, '=');
+                for (auto& ch : sig) ch = ch == '+' ? '-' : ch == '/' ? '_' : ch;
+                policy.account_policy = mf::AccountPolicyBytes{.policy = ap[0][0].as<std::string>(), .signature = sig};
+            }
         }
         c.recovery_policy = std::move(policy);
         // KEV1 envelopes by key version (keys[].envelopes): every kid written, a revoked grant's too.

@@ -96,6 +96,11 @@ APIKeyPtr update(const Actor& actor, const Ref& ref, const Update& req) {
     requireActor(actor);
     auto key = requireKey(ref);
     if (!canOnKey(actor, KeyPerm::Edit, key->id)) throw Denied("you do not have permission to edit this API key");
+    // A managed bucket's key is the managed-storage service's to rotate (design/cloud/managed-remotes.md): people see
+    // it, never change it. After an ejection it is an ordinary customer key again.
+    if (key->cloudIssued())
+        throw Conflict("API key '" + key->name + "' was issued by managed storage for a vault's bucket and is read-only; "
+                       "`vh cloud storage rotate <vault>` replaces it");
     const auto previousProvider = key->provider;
     const auto previousEndpoint = key->endpoint;
     const auto previousAccessKey = key->access_key;
@@ -181,6 +186,9 @@ APIKeyPtr remove(const Actor& actor, const Ref& ref) {
     requireActor(actor);
     auto key = requireKey(ref);
     if (!canOnKey(actor, KeyPerm::Remove, key->id)) throw Denied("you do not have permission to remove this API key");
+    if (key->cloudIssued())
+        throw Conflict("API key '" + key->name + "' was issued by managed storage for a vault's bucket and is read-only; "
+                       "switching the vault's managed storage off removes it");
 
     // Removing a key used to cascade into every vault's s3 row (bucket binding gone, silently). Refuse instead;
     // the s3.api_key_id foreign key is ON DELETE RESTRICT (migration 099) for anything racing this check.

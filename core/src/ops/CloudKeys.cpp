@@ -532,6 +532,19 @@ void process(const nlohmann::json& body, const std::string& publicId) {
     (void)applyEverywhere(current);
 }
 
+bool offerPolicyImpl(const std::string& policy, const std::string& signature, const std::string& source) {
+    const auto row = linkedRow();
+    if (!row || !row->account_public_id) return false;
+    const auto checked = ::vh::cloud::pin::load(*row->account_public_id);
+    if (!checked.ok() || !checked.pinned()) return false;
+    const auto before = checked.pinned()->policy_sequence;
+    const auto after = acceptPolicy({{"policy", policy}, {"signature", signature}}, *checked.pinned());
+    if (after.policy_sequence > before)
+        log::Registry::crypto()->info("[ops::cloud_keys] accepted the account's recovery policy {} from {}",
+                                      after.policy_sequence, source);
+    return after.policy_sequence > before;
+}
+
 Status build() {
     Status s;
     const auto row = linkedRow();
@@ -854,6 +867,15 @@ nlohmann::json toJson(const Status& s) {
 
 nlohmann::json toJson(const Confirmed& c) {
     return {{"generation", toJson(c.generation)}, {"replacement", c.replacement}, {"vaults", c.vaults}};
+}
+
+bool offerPolicy(const std::string& policy, const std::string& signature, const std::string& source) noexcept {
+    try {
+        return cloud_keys_detail::offerPolicyImpl(policy, signature, source);
+    } catch (const std::exception& e) {
+        log::Registry::crypto()->warn("[ops::cloud_keys] the recovery policy from {} wasn't considered: {}", source, e.what());
+        return false;
+    }
 }
 
 }

@@ -462,6 +462,13 @@ std::vector<WsModel> statsSystemModels() {
              .desc("The linked account's recovery key as this server pinned it: a stored row that fails its integrity "
                    "check (nothing is wrapped to the account key) or a replacement key waiting for a super admin's "
                    "fingerprint confirmation. null otherwise. Either one makes the node at least degraded."),
+         objectArray("cloud_storage", "",
+                     {str("code").oneOf({"cloud_account_key_unconfirmed", "cloud_recovery_behind", "vault_cloud_moved",
+                                         "vault_cloud_failed", "cloud_account_key_no_offline_copy",
+                                         "cloud_storage_ended_pending"}),
+                      str("severity").oneOf({"degraded", "info"}), uinteger("vault_id").nullable(), str("detail")})
+             .opt()
+             .desc("Managed storage: a degraded entry makes the node at least degraded; info entries don't."),
          object("summary", "",
                 {statsUint("services_ready"), statsUint("services_total"), statsUint("deps_ready"),
                  statsUint("deps_total"), statsUint("protocols_ready"), statsUint("protocols_total"),

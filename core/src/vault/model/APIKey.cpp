@@ -85,6 +85,8 @@ APIKey::APIKey(pqxx::row_ref row)
     if (const auto token = try_get<std::string>(row, "encrypted_provider_token")) encrypted_provider_token = from_hex_bytea(*token);
     if (const auto tokenIv = try_get<std::string>(row, "provider_token_iv")) provider_token_iv = from_hex_bytea(*tokenIv);
     master_version = try_get<unsigned int>(row, "master_version").value_or(1);
+    origin = try_get<std::string>(row, "origin").value_or("customer");
+    cloud_access = try_get<std::string>(row, "cloud_access");
 }
 
 void vh::vault::model::from_json(const nlohmann::json& j, APIKey& key) {
@@ -113,6 +115,9 @@ void vh::vault::model::to_json(nlohmann::json& j, const APIKey& k) {
             {"provider_account_id", k.provider_account_id ? nlohmann::json(*k.provider_account_id) : nlohmann::json(nullptr)},
             {"has_provider_token", k.hasProviderToken()},
             {"admin_validated_at", k.admin_validated_at ? nlohmann::json(timestampToString(*k.admin_validated_at)) : nlohmann::json(nullptr)},
+            // Managed storage (migration 142): a key the cloud issued is shown read-only.
+            {"origin", k.origin},
+            {"editable", k.editable()},
             // Encrypted fields (and the provider token) are never part of the public JSON representation
     };
 }

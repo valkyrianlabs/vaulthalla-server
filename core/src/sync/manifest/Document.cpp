@@ -422,9 +422,13 @@ Json toJson(const RootDocument& r) {
             putIf(gj, "added_at", g.added_at);
             putIf(gj, "authorized_by", g.authorized_by);
             putIf(gj, "public_key", g.public_key);
+            if (g.account_key_generation) gj["account_key_generation"] = *g.account_key_generation;
             grants.push_back(std::move(gj));
         }
         j["recovery_policy"] = {{"v", r.recovery_policy->v}, {"threshold", nullptr}, {"grants", std::move(grants)}};
+        if (r.recovery_policy->account_policy)
+            j["recovery_policy"]["account_policy"] = {{"policy", r.recovery_policy->account_policy->policy},
+                                                      {"signature", r.recovery_policy->account_policy->signature}};
     }
     return j;
 }
@@ -526,7 +530,12 @@ RootDocument rootFromJson(const Json& j, const Uid& expectedVaultUid) {
                 grant.authorized_by = g.optStr("authorized_by");
                 grant.revoked_at = g.optStr("revoked_at");
                 grant.public_key = g.optStr("public_key");
+                if (g.present("account_key_generation")) grant.account_key_generation = g.u32("account_key_generation");
                 policy.grants.push_back(std::move(grant));
+            }
+            if (rp.present("account_policy")) {
+                const Fields ap(rp.at("account_policy"), kBadRoot, "account recovery policy");
+                policy.account_policy = AccountPolicyBytes{.policy = ap.str("policy"), .signature = ap.str("signature")};
             }
         }
         r.recovery_policy = std::move(policy);

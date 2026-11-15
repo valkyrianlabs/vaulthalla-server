@@ -23,6 +23,11 @@ import { QuotaInput, quotaBytes, SLUG_PATTERN, storageTierOptions, validateFuseN
 import { withEncryptionWaiver } from '@/features/vaults/waiver'
 import { UPSTREAM_ENCRYPTION_NEW, UPSTREAM_ENCRYPTION_OFF } from '@/features/vaults/encryptionCopy'
 import { useServerPolicy } from '@/lib/serverPolicy'
+import {
+  applyNewVaultChoice,
+  NewVaultManagedStorageSwitch,
+  useNewVaultManagedStorage,
+} from '@/features/managedStorage/NewVaultSwitch'
 import { useUpstreamPerms, withConfirmation } from '@/features/credentials/upstream/hooks'
 import {
   AdoptBucketFields,
@@ -145,6 +150,9 @@ const NewVaultForm = () => {
   }, [type, apiKeyId, credentials.data, setValue])
 
   const [submitError, setSubmitError] = React.useState<unknown>(null)
+  const managed = useNewVaultManagedStorage()
+  const [managedChoice, setManagedChoice] = React.useState<boolean | null>(null)
+  const managedOn = managedChoice ?? managed.defaultOn
 
   const onSubmit = async (values: NewVaultValues) => {
     setSubmitError(null)
@@ -187,6 +195,13 @@ const NewVaultForm = () => {
       await invalidate('storage.vault.list', 'stats.system.storage')
       notify.success(`Vault “${common.name}” created`)
       const id = (res.vault as { id?: number } | undefined)?.id
+      if (id && values.type === 'local' && managed.shown) {
+        try {
+          await applyNewVaultChoice(id, managedOn, managed.defaultOn)
+        } catch (error) {
+          notify.info('Managed storage', error instanceof Error ? error.message : 'The choice can be changed on the managed storage page.')
+        }
+      }
       router.push(id ? `/vaults/${id}` : '/vaults')
     } catch (error) {
       setSubmitError(error)
@@ -223,6 +238,12 @@ const NewVaultForm = () => {
               )
             })}
           </div>
+
+          {type === 'local' && managed.shown ? (
+            <div className="mt-5">
+              <NewVaultManagedStorageSwitch checked={managedOn} onCheckedChange={setManagedChoice} />
+            </div>
+          ) : null}
 
           {type === 's3' ? (
             <div className="mt-5 space-y-4">

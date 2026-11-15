@@ -369,7 +369,9 @@ TEST_F(RemoteDetachTest, RemoteDetachResumesAfterACrashAtEveryStep) {
         ASSERT_TRUE(crashed);
         const bool cutOver = step == "cutover" || step == "swapped";
         EXPECT_EQ(typeOf(v), cutOver ? "local" : "s3");
-        if (!cutOver) EXPECT_TRUE(rd::inProgress(v.id));
+        if (!cutOver) {
+            EXPECT_TRUE(rd::inProgress(v.id));
+        }
 
         const auto resumed = rd::run(v.id, detachDeps());
         EXPECT_EQ(resumed.state, rd::State::Done) << resumed.error.value_or("");

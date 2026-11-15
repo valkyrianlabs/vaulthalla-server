@@ -44,6 +44,10 @@ struct RecoverGrant {
     std::vector<uint8_t> public_key;
     uint16_t suite{1};
     std::optional<std::string> label, added_at, authorized_by, revoked_at;
+    // Kept as the account key's grant: its key is this server's MAC-verified pin of that generation.
+    std::optional<uint32_t> account_key_generation{};
+    // The root named it the account key's, but it isn't this server's pin: restored as an ordinary customer grant.
+    bool account_key_unmatched{false};
 };
 
 struct RecoverEnvelope {

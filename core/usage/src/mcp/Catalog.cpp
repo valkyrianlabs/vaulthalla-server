@@ -89,6 +89,14 @@ const std::vector<Exclusion>& exclusions() {
         {{"cloud", "recovery", "unenroll"}, "where a vault's recovery records go is decided by a human (D4)"},
         {{"cloud", "key", "confirm"}, "which recovery key every managed vault is wrapped to is decided by a human"},
         {{"cloud", "key", "forget"}, "forgetting the account recovery key pin is decided by a human"},
+        {{"cloud", "storage", "enable"}, "where a vault is stored is decided by a human"},
+        {{"cloud", "storage", "disable"}, "where a vault is stored is decided by a human"},
+        {{"cloud", "storage", "accept"}, "where a vault is stored is decided by a human"},
+        {{"cloud", "storage", "decline"}, "where a vault is stored is decided by a human"},
+        {{"cloud", "storage", "confirm-ended"}, "converting managed vaults to local is decided by a human"},
+        {{"cloud", "storage", "rotate"}, "a vault's bucket key is replaced by a human's decision"},
+        {{"cloud", "storage", "new-vaults"}, "where new vaults are stored is decided by a human"},
+        {{"cloud", "storage", "billing"}, "billing opens in a browser, for the account holder"},
     };
     return list;
 }

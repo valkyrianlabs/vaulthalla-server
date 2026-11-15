@@ -610,3 +610,12 @@ Two hard rules, enforced by `tests/helpers/live_bucket.hpp` (the only way a test
 - Harness wiring: `tools/e2e/load_env.sh` sources it when readable (override path with `VH_TEST_PROVIDERS_ENV`). Run
   provider harnesses as a `vaulthalla`-group user or via sudo. Installed on vh-storage 2026-09-30 (unfilled).
 - Guard: `python3 -m unittest tools.lab.tests.test_provider_scaffold_contract`.
+
+## Managed storage (`CloudStorageTest`, `test_cloud_storage_db.cpp`)
+
+A fake account service answering in the cloud's as-built shapes over the http transport seam (credentials sealed with
+vl-keykit `credential::seal`), real local vaults, a `VersionedBucket` per provisioned bucket (the attach controller
+factory and the envelope store factory point at it) and the attach/detach engines run inline. `ops::cloud_storage::
+setKeyProbeForTesting` replaces the bucket key probe; `tick(true)` forces a fetch. The suites share one schema, so the
+sweep also sees earlier tests' vaults: assert on your own vault ids.
+

@@ -21,7 +21,7 @@
 //
 // Nothing here runs unless the server is linked, and nothing sends a vault key, the account key's private half (the
 // server never has it) or anything unwrapped: the cloud receives only what it already serves back. The network check
-// runs on the CLI's thread (`vh cloud key refresh`, `vh cloud link`) or the background service (cloud::KeyService),
+// runs on the CLI's thread (`vh cloud key refresh`, `vh cloud link`) or the background service (cloud::StorageService),
 // never on a FUSE, sync or ws path; a failed check changes nothing and is retried.
 namespace vh::ops::cloud_keys {
 
@@ -120,6 +120,11 @@ struct PinnedKey {
 // Makes vault `vaultId`'s policy grants equal the accepted policy (a vault that just got the account-key grant).
 // Best effort: what can't be wrapped yet is written by the next check or sync pass. Never throws.
 void applyPolicy(unsigned int vaultId) noexcept;
+
+// A recovery policy from another transport (the manifest root a restore or a replica read): verified exactly as the
+// one the service serves (the pinned key's signature, this link's account, a sequence above the floor) and accepted
+// only if newer. Returns whether it was accepted. Never throws; refusals are audited cloud.policy.refused.
+bool offerPolicy(const std::string& policy, const std::string& signature, const std::string& source) noexcept;
 
 // What health reports (only once a row exists): cloud_account_key_tampered or cloud_account_key_change_pending.
 struct HealthIssue {

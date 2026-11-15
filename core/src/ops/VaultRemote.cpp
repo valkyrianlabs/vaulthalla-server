@@ -2,6 +2,7 @@
 
 #include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
+#include "db/query/cloud/Storage.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/vault/RemoteAttach.hpp"
 #include "db/query/vault/RemoteDetach.hpp"
@@ -66,6 +67,14 @@ void requireAttach(const Actor& actor, const std::shared_ptr<vault::model::Vault
     if (!db::query::vault::APIKey::getAPIKey(*apiKeyId)) throw NotFound("API key not found: " + std::to_string(*apiKeyId));
     if (!rbac::resolver::Admin::has<KeyPerm>({.user = actor, .permission = KeyPerm::Consume, .api_key_id = *apiKeyId}))
         throw Denied("you do not have permission to use api-key " + std::to_string(*apiKeyId) + " for this vault");
+}
+
+// A vault in managed storage is run by its switch (ops::cloud_storage), never by an operator's attach, detach, abort
+// or access change.
+void refuseManaged(const vault::model::Vault& vault) {
+    if (db::query::cloud::CloudStorage::managed(vault.id))
+        throw Refused("managed_storage", "vault '" + vault.name + "' is in managed storage: its switch decides where it "
+                      "is stored (vh cloud storage enable|disable), and its access follows the account");
 }
 
 // A detach (or attach) that ended (done or aborted) says nothing more than the vault's type does.
@@ -195,6 +204,8 @@ nlohmann::json toJson(const Status& s) {
     if (s.detach) {
         const auto& r = *s.detach;
         detach = {{"state", std::string(vault::remote::detach::to_string(r.state))},
+                  {"mode", std::string(vault::remote::detach::to_string(r.mode))},
+                  {"lost", r.lost ? *r.lost : nlohmann::json(nullptr)},
                   {"api_key_id", d::opt(r.api_key_id)},
                   {"bucket", r.bucket},
                   {"started_at", r.started_at},
@@ -242,6 +253,7 @@ Status attach(const Actor& actor, const AttachRequest& request) {
     if (request.api_key_id == 0) throw Invalid("an API key is required (--api-key)");
     if (request.bucket.empty()) throw Invalid("a bucket is required (--bucket)");
     d::requireAttach(actor, vault, request.api_key_id);
+    d::refuseManaged(*vault);
     std::string why;
     if (!storage::upstream::validBucketName(request.bucket, why))
         throw Invalid("invalid bucket name '" + request.bucket + "': " + why);
@@ -321,6 +333,7 @@ Status detach(const Actor& actor, const DetachRequest& request) {
     requireActor(actor);
     const auto vault = d::liveVault(request.vault_id);
     d::requireAttach(actor, vault, std::nullopt);
+    d::refuseManaged(*vault);
     if (vault->type != vault::model::VaultType::S3)
         throw Conflict("vault '" + vault->name + "' is a local vault: only an S3 vault detaches its remote");
     if (const auto existing = d::DQ::get(vault->id); existing && d::rd::running(existing->state))
@@ -362,6 +375,7 @@ Status setAccess(const Actor& actor, const AccessRequest& request) {
     requireActor(actor);
     const auto vault = d::liveVault(request.vault_id);
     d::requireAttach(actor, vault, std::nullopt);
+    d::refuseManaged(*vault);
     if (vault->type != vault::model::VaultType::S3)
         throw Conflict("vault '" + vault->name + "' is a local vault: it has no remote storage whose access to set");
     if (request.reason && request.reason->size() > 500) throw Invalid("the reason is longer than 500 characters");
@@ -375,6 +389,7 @@ Status abort(const Actor& actor, const AbortRequest& request) {
     requireActor(actor);
     const auto vault = d::liveVault(request.vault_id);
     d::requireAttach(actor, vault, std::nullopt);
+    d::refuseManaged(*vault);
 
     // A detach before its cutover is what runs on an S3 vault; an attach before its cutover on a local one.
     if (const auto detaching = d::DQ::get(vault->id); detaching && d::rd::beforeCutover(detaching->state)) {
@@ -411,6 +426,71 @@ Status abort(const Actor& actor, const AbortRequest& request) {
                                   "objects it recorded are deleted from the bucket, the vault was never changed",
                                   actor->name(), vault->id, ra::to_string(row->state)));
     return d::statusOf(*vault);
+}
+
+void attachForCloud(const unsigned int vaultId, const unsigned int apiKeyId, const std::string& bucket) {
+    namespace d = vault_remote_detail;
+    namespace ra = vault::remote;
+    const auto vault = d::liveVault(vaultId);
+    if (vault->type != vault::model::VaultType::Local)
+        throw Conflict("vault '" + vault->name + "' already has remote storage");
+    if (const auto detaching = d::DQ::get(vault->id); d::unfinished(detaching))
+        throw Conflict("vault '" + vault->name + "' has an unfinished remote detach");
+    const auto existing = d::Q::get(vault->id);
+    if (existing && existing->state != ra::State::Failed && existing->state != ra::State::Aborted) return;   // runs
+    const auto& manager = runtime::Deps::get().storageManager;
+    const auto engine = manager ? manager->getEngine(vault->id) : nullptr;
+    if (!engine) throw Conflict("vault '" + vault->name + "' is not loaded on this host");
+    ra::requireManagedReady(vault->id, std::nullopt);   // the account key's grant: precondition 6
+    ra::requireVaultReady(*engine);
+    const auto controller = ra::controllerFor(vault->id, apiKeyId, bucket);
+    const auto check = ra::requireBucketUsable(vault->id, apiKeyId, bucket, *controller, std::nullopt);
+    d::Q::Started started;
+    try {
+        started = d::Q::start({.vault_id = vault->id, .origin = "cloud", .api_key_id = apiKeyId, .bucket = bucket,
+                               .storage_tier_id = std::nullopt, .started_by = std::nullopt, .accept_unpriced = true});
+    } catch (const pqxx::unique_violation&) {
+        throw Conflict("bucket '" + bucket + "' was reserved by another attach meanwhile");
+    }
+    if (started.outcome != d::Q::StartOutcome::Started && started.outcome != d::Q::StartOutcome::Resumed)
+        throw Conflict("vault '" + vault->name + "' can't start an attach to its managed bucket now");
+    const auto publish = check.probe.capability == sync::manifest::WriteCapability::Conditional ? "conditional" : "version_log";
+    d::Q::setProbe(vault->id, std::string(publish), storage::s3::toJson(check.probe), check.versioned);
+    vh::audit::record({.action = "vault.remote.attach", .outcome = vh::audit::Outcome::Success, .actor_id = std::nullopt,
+                       .actor = "system:cloud", .vault_id = vault->id,
+                       .details = {{"api_key_id", static_cast<int64_t>(apiKeyId)}, {"publish", std::string(publish)},
+                                   {"resumed", started.outcome == d::Q::StartOutcome::Resumed}, {"origin", "cloud"}}},
+                      fmt::format("[ops::vault_remote] system:cloud started attaching vault {} to its managed bucket "
+                                  "(manifest publish {}); the vault stays local until the cutover", vault->id, publish));
+}
+
+void detachForCloud(const unsigned int vaultId, const bool inPlace) {
+    namespace d = vault_remote_detail;
+    const auto vault = d::liveVault(vaultId);
+    if (vault->type != vault::model::VaultType::S3) throw Conflict("vault '" + vault->name + "' is a local vault");
+    if (const auto existing = d::DQ::get(vault->id); existing && d::rd::running(existing->state)) return;   // runs
+    const auto& manager = runtime::Deps::get().storageManager;
+    const auto engine = manager ? manager->getEngine(vault->id) : nullptr;
+    if (!engine) throw Conflict("vault '" + vault->name + "' is not loaded on this host");
+    d::rd::requireVaultReady(*engine);
+    const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(vault);
+    const auto started = d::DQ::start({.vault_id = vault->id,
+                                       .api_key_id = s3 && s3->api_key_id ? std::make_optional(s3->api_key_id) : std::nullopt,
+                                       .bucket = s3 ? s3->bucket : std::string{}, .started_by = std::nullopt,
+                                       .mode = inPlace ? d::rd::Mode::InPlace : d::rd::Mode::Hydrate});
+    if (started.outcome == d::DQ::StartOutcome::Busy) throw Conflict("vault '" + vault->name + "' already has a remote detach");
+    vh::audit::record({.action = "vault.remote.detach", .outcome = vh::audit::Outcome::Success, .actor_id = std::nullopt,
+                       .actor = "system:cloud", .vault_id = vault->id,
+                       .details = {{"bucket", s3 ? s3->bucket : std::string{}}, {"in_place", inPlace}, {"origin", "cloud"}}},
+                      fmt::format("[ops::vault_remote] system:cloud started detaching vault {} from its managed bucket{}",
+                                  vault->id, inPlace ? " in place (no request to the bucket)" : ""));
+}
+
+bool abortForCloud(const unsigned int vaultId) {
+    namespace d = vault_remote_detail;
+    const auto row = d::Q::get(vaultId);
+    if (!row || !vault::remote::beforeCutover(row->state) || row->state == vault::remote::State::Aborted) return false;
+    return d::Q::requestAbort(vaultId, std::nullopt);
 }
 
 }

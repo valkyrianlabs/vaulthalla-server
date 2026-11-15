@@ -1,5 +1,6 @@
 #include "stats/model/SystemHealth.hpp"
 #include "ops/CloudKeys.hpp"
+#include "ops/CloudStorage.hpp"
 
 #include "crypto/secrets/KeyProvider.hpp"
 #include "ops/MasterSecrets.hpp"
@@ -132,6 +133,7 @@ SystemHealthStatus computeOverallStatus(const SystemHealth& health) {
         && health.vaultsRemoteRestricted.empty()
         && health.vaultsRemoteUnavailable.empty()
         && !health.cloudAccountKey
+        && std::ranges::all_of(health.cloudStorage, [](const CloudStorageHealth& c) { return c.severity == "info"; })
         && health.deps.secretsWarning.empty()
         && health.database->brokenIdle == 0
         && protocolsHealthy(health.protocols, health.s3Gateway)
@@ -307,6 +309,13 @@ SystemHealth SystemHealth::snapshot() {
                 out.cloudAccountKey = CloudAccountKeyHealth{.issue = issue->code, .detail = issue->detail};
         } catch (const std::exception& e) {
             log::Registry::vaulthalla()->warn("[SystemHealth] account recovery key check failed: {}", e.what());
+        }
+        try {
+            for (const auto& issue : ops::cloud_storage::health())
+                out.cloudStorage.push_back(
+                    {.code = issue.code, .severity = issue.severity, .vault_id = issue.vault_id, .detail = issue.detail});
+        } catch (const std::exception& e) {
+            log::Registry::vaulthalla()->warn("[SystemHealth] managed storage check failed: {}", e.what());
         }
     }
 
@@ -501,6 +510,15 @@ void to_json(nlohmann::json& j, const CloudAccountKeyHealth& health) {
     };
 }
 
+void to_json(nlohmann::json& j, const CloudStorageHealth& health) {
+    j = nlohmann::json{
+        {"code", health.code},
+        {"severity", health.severity},
+        {"vault_id", health.vault_id ? nlohmann::json(*health.vault_id) : nlohmann::json(nullptr)},
+        {"detail", health.detail},
+    };
+}
+
 void to_json(nlohmann::json& j, const LegacyContentHealth& health) {
     j = nlohmann::json{
         {"remaining", health.remaining},
@@ -532,6 +550,7 @@ void to_json(nlohmann::json& j, const SystemHealth& health) {
         {"vault_remote_restricted", health.vaultsRemoteRestricted},
         {"vault_remote_unavailable", health.vaultsRemoteUnavailable},
         {"cloud_account_key", health.cloudAccountKey ? nlohmann::json(*health.cloudAccountKey) : nlohmann::json(nullptr)},
+        {"cloud_storage", health.cloudStorage},
         {"summary", health.summary},
     };
 }

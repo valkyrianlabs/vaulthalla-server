@@ -51,6 +51,15 @@ struct APIKey {
 
     [[nodiscard]] bool hasProviderToken() const { return !encrypted_provider_token.empty() || !provider_token.empty(); }
 
+    // Who issued the key (migration 142): "customer" (every key a person adds) or "cloud" (a managed bucket's key,
+    // delivered sealed to this server by the managed-storage service and owned by the vault's owner). A cloud key is
+    // read-only to people: ops::api_keys refuses to edit or remove it. cloud_access is what the service lets it do
+    // ("full" or "read_delete"), set exactly when origin is "cloud".
+    std::string origin{"customer"};
+    std::optional<std::string> cloud_access;
+    [[nodiscard]] bool cloudIssued() const { return origin == "cloud"; }
+    [[nodiscard]] bool editable() const { return !cloudIssued(); }
+
     APIKey() = default;
     explicit APIKey(pqxx::row_ref row);
     APIKey(unsigned int userId, std::string name,

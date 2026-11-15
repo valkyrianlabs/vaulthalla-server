@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'c12116b3d4ebaea58683952674e3c202483606a21c19da3c266b8baa7a6be120'
+export const WS_CONTRACT_HASH = '64a009cd00663c9efb771f113e6b6598bfa6e51facac18f1a9e49df1d7221032'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '1427024ab1e309b71608b7da8b2903394e714b88de07253553bba968dca0f839'
+export const WS_MODELS_HASH = '2a7b8cbc9ae3209c308ea6fdd3dd8016c3c43fadbae82b5b6b3e6beac858a696'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -19,6 +19,7 @@ export const WS_PROTOCOL_MIN = 1
 export const WS_CAPABILITIES: readonly string[] = [
   'auth.step_up',
   'cloud.account_key',
+  'cloud.storage.managed_remotes',
   'device.endpoints',
   'device.lanes.download',
   'device.lanes.preview',
@@ -57,6 +58,8 @@ export interface WsModels {
     provider_account_id: string | null
     has_provider_token: boolean
     admin_validated_at: string | null
+    origin: 'customer' | 'cloud'
+    editable: boolean
   }
   /**
    * A vault the caller reaches (ops::vaults::toJson(AccessibleVault), core/src/ops/Vaults.cpp): a summary of
@@ -79,6 +82,7 @@ export interface WsModels {
     browse: boolean
     manage: boolean
     via: ('owner' | 'vault_role' | 'group_role' | 'admin_policy' | 'super_admin')[]
+    vault_uid: string | null
   }
   /**
    * An admin role (rbac::role::to_json(Admin), core/src/rbac/role/Admin.cpp): its identity, every admin
@@ -273,6 +277,72 @@ export interface WsModels {
     deployment_id?: string | null
     account_public_id?: string | null
     account_key?: { generation: number; fingerprint: string } | null
+  }
+  /**
+   * ops::cloud_storage::toJson(EndedConfirmation).
+   */
+  'CloudStorageEndedConfirmation': { confirmed: boolean; since: number | null; vaults: number }
+  /**
+   * A billing page address: ops::cloud_storage::toJson(Handoff).
+   */
+  'CloudStorageHandoff': { kind: 'checkout' | 'portal'; url: string; expires_at: number | null }
+  /**
+   * An answer to the offer: ops::cloud_storage::toJson(OfferResult).
+   */
+  'CloudStorageOffer': { vaults: number[]; offer_open: boolean }
+  /**
+   * Managed storage on this server: ops::cloud_storage::toJson(Status). Reads the database only.
+   */
+  'CloudStorageStatus': {
+    linked: boolean
+    account_key: 'unlinked' | 'unconfirmed' | 'pinned' | 'tampered'
+    available: boolean
+    entitlement: string | null
+    plan: string | null
+    quota_bytes: number | null
+    used_bytes: number | null
+    usage_day: string | null
+    storage_access: 'full' | 'read_delete' | 'none' | null
+    cause: string | null
+    managed_local_bytes: number
+    new_vaults: boolean
+    offer_open: boolean
+    offered: WsModels['CloudStorageVault'][]
+    vaults: WsModels['CloudStorageVault'][]
+    billing: object | null
+    ejection: object | null
+    fetched_at: number | null
+    fetch_error: string | null
+    ended: { since: number; converts_at: number; confirmed_by: string | null } | null
+    next_step: string | null
+  }
+  /**
+   * A vault as managed storage sees it: ops::cloud_storage::toJson(VaultEntry).
+   */
+  'CloudStorageVault': {
+    vault_id: number
+    vault_name: string
+    vault_uid: string
+    storage: 'managed' | 'own' | 'local'
+    switch: 'on' | 'off' | 'offered' | 'declined' | null
+    state: string
+    reason: string | null
+    summary: string
+    local_bytes: number
+    access: 'full' | 'read_only' | 'none' | null
+    key_state: 'none' | 'issued' | 'active' | 'superseded'
+    key_access: 'full' | 'read_delete' | null
+    retention_days: number | null
+    retention_sent: number | null
+    retention_pending: boolean
+    recovery: 'ready' | 'behind' | 'none' | null
+    progress: WsModels['VaultRemoteProgress'] | null
+    lost: { files: { file_id: number; path: string; size_bytes: number }[]; envelopes_left_in_bucket?: number } | null
+    last_error: string | null
+    active_at: number | null
+    moved_at: number | null
+    ejected_at: number | null
+    ended_at: number | null
   }
   /**
    * services.connection_lifecycle_manager.* (Config.cpp to_json(ConnectionLifecycleManagerConfig)).
@@ -2145,6 +2215,12 @@ export interface WsModels {
     vault_remote_restricted?: { vault_id: number; vault_name: string; reason: string; set_by: string; since: number }[]
     vault_remote_unavailable?: { vault_id: number; vault_name: string; reason: string; set_by: string; since: number }[]
     cloud_account_key?: { issue: 'cloud_account_key_tampered' | 'cloud_account_key_change_pending'; detail: string } | null
+    cloud_storage?: {
+      code: 'cloud_account_key_unconfirmed' | 'cloud_recovery_behind' | 'vault_cloud_moved' | 'vault_cloud_failed' | 'cloud_account_key_no_offline_copy' | 'cloud_storage_ended_pending'
+      severity: 'degraded' | 'info'
+      vault_id: number | null
+      detail: string
+    }[]
     summary: {
       services_ready: number
       services_total: number
@@ -2482,6 +2558,7 @@ export interface WsModels {
     allow_fs_write: boolean
     is_active: boolean
     created_at: string
+    vault_uid: string | null
     api_key_id?: number
     bucket?: string
     storage_tier_id?: string | null
@@ -3071,6 +3148,8 @@ export interface WsModels {
    */
   'VaultRemoteDetach': {
     state: 'preparing' | 'hydrating' | 'verifying' | 'cutover' | 'done' | 'failed' | 'aborted'
+    mode: 'hydrate' | 'in_place'
+    lost: { files: { file_id: number; path: string; size_bytes: number }[]; envelopes_left_in_bucket?: number } | null
     api_key_id: number | null
     bucket: string
     started_at: number
@@ -4087,6 +4166,151 @@ export interface WsContract {
       deployment_id?: string | null
       account_public_id?: string | null
       account_key?: { generation: number; fingerprint: string } | null
+    }
+  }
+  /**
+   * The address of the account's billing page (checkout: choose a plan; portal: manage it), to open in a
+   * browser; short-lived and never stored. The service polls the account's state fast for a few minutes
+   * afterwards. The admin cloud Billing permission.
+   */
+  'cloud.storage.billing.handoff': {
+    payload: { kind: string; plan?: string | null }
+    response: { kind: 'checkout' | 'portal'; url: string; expires_at: number | null }
+  }
+  /**
+   * Confirm that the account's plan ended: managed vaults become local in place now (files held only in their
+   * buckets are listed as lost; nothing local is deleted) instead of after cloud.storage.ended_grace_hours of
+   * continuous `ended` reports. Conflict unless the service reports `ended`. The admin cloud Storage
+   * permission.
+   */
+  'cloud.storage.ended.confirm': {
+    payload: null
+    response: { confirmed: boolean; since: number | null; vaults: number }
+  }
+  /**
+   * Whether vaults created from now on use managed storage by default (on unless turned off). The admin cloud
+   * Storage permission.
+   */
+  'cloud.storage.new_vaults': {
+    payload: { enabled: boolean }
+    response: { new_vaults: boolean }
+  }
+  /**
+   * Accept the offer for vaults that existed when managed storage became available: the listed ones or,
+   * without vault_ids, every offered vault (their switches go on). Nothing is uploaded before this. The admin
+   * cloud Storage permission and each vault's admin Edit permission.
+   */
+  'cloud.storage.offer.accept': {
+    payload: { vault_ids?: number[] | null }
+    response: { vaults: number[]; offer_open: boolean }
+  }
+  /**
+   * Decline the offer for the listed vaults (or every one still offered): they stay local; each can be
+   * switched on later. The admin cloud Storage permission.
+   */
+  'cloud.storage.offer.decline': {
+    payload: { vault_ids?: number[] | null }
+    response: { vaults: number[]; offer_open: boolean }
+  }
+  /**
+   * Ask for a new bucket key for a vault in managed storage (the service exchanges, probes and acknowledges
+   * it; the old key is revoked then). The admin cloud Storage permission and the vault's admin Edit
+   * permission.
+   */
+  'cloud.storage.rotate': {
+    payload: { vault_id: number }
+    response: {
+      vault_id: number
+      vault_name: string
+      vault_uid: string
+      storage: 'managed' | 'own' | 'local'
+      switch: 'on' | 'off' | 'offered' | 'declined' | null
+      state: string
+      reason: string | null
+      summary: string
+      local_bytes: number
+      access: 'full' | 'read_only' | 'none' | null
+      key_state: 'none' | 'issued' | 'active' | 'superseded'
+      key_access: 'full' | 'read_delete' | null
+      retention_days: number | null
+      retention_sent: number | null
+      retention_pending: boolean
+      recovery: 'ready' | 'behind' | 'none' | null
+      progress: WsModels['VaultRemoteProgress'] | null
+      lost: { files: { file_id: number; path: string; size_bytes: number }[]; envelopes_left_in_bucket?: number } | null
+      last_error: string | null
+      active_at: number | null
+      moved_at: number | null
+      ejected_at: number | null
+      ended_at: number | null
+    }
+  }
+  /**
+   * Managed storage on this server: whether it is available (linked, the account recovery key confirmed, the
+   * account entitled), the plan state, usage against the quota (the account's figure, with its date) beside
+   * this server's own, the offer for vaults that existed before it was available, and every vault's switch
+   * and state in words. Reads the database only. Super admins or the admin cloud View permission.
+   */
+  'cloud.storage.status': {
+    payload: null
+    response: {
+      linked: boolean
+      account_key: 'unlinked' | 'unconfirmed' | 'pinned' | 'tampered'
+      available: boolean
+      entitlement: string | null
+      plan: string | null
+      quota_bytes: number | null
+      used_bytes: number | null
+      usage_day: string | null
+      storage_access: 'full' | 'read_delete' | 'none' | null
+      cause: string | null
+      managed_local_bytes: number
+      new_vaults: boolean
+      offer_open: boolean
+      offered: WsModels['CloudStorageVault'][]
+      vaults: WsModels['CloudStorageVault'][]
+      billing: object | null
+      ejection: object | null
+      fetched_at: number | null
+      fetch_error: string | null
+      ended: { since: number; converts_at: number; confirmed_by: string | null } | null
+      next_step: string | null
+    }
+  }
+  /**
+   * A vault's managed-storage switch. On: the vault is uploaded to a bucket of its own once it is ready (an
+   * empty vault waits for its first file); off: before a bucket exists the request stops, with one every file
+   * is fetched and verified locally and the vault becomes local again (the bucket is left in place; `confirm`
+   * with the vault's name is required then). Records the intent: the background service carries it out, and
+   * cloud.storage.status follows it. No step-up. The admin cloud Storage permission and the vault's admin
+   * Edit permission.
+   */
+  'cloud.storage.switch': {
+    payload: { vault_id: number; enabled: boolean; confirm?: string | null }
+    response: {
+      vault_id: number
+      vault_name: string
+      vault_uid: string
+      storage: 'managed' | 'own' | 'local'
+      switch: 'on' | 'off' | 'offered' | 'declined' | null
+      state: string
+      reason: string | null
+      summary: string
+      local_bytes: number
+      access: 'full' | 'read_only' | 'none' | null
+      key_state: 'none' | 'issued' | 'active' | 'superseded'
+      key_access: 'full' | 'read_delete' | null
+      retention_days: number | null
+      retention_sent: number | null
+      retention_pending: boolean
+      recovery: 'ready' | 'behind' | 'none' | null
+      progress: WsModels['VaultRemoteProgress'] | null
+      lost: { files: { file_id: number; path: string; size_bytes: number }[]; envelopes_left_in_bucket?: number } | null
+      last_error: string | null
+      active_at: number | null
+      moved_at: number | null
+      ejected_at: number | null
+      ended_at: number | null
     }
   }
   /**
@@ -7345,6 +7569,14 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'cloud.key.refresh',
   'cloud.key.status',
   'cloud.link.status',
+  'cloud.storage.billing.handoff',
+  'cloud.storage.ended.confirm',
+  'cloud.storage.new_vaults',
+  'cloud.storage.offer.accept',
+  'cloud.storage.offer.decline',
+  'cloud.storage.rotate',
+  'cloud.storage.status',
+  'cloud.storage.switch',
   'dashboard.preferences.get',
   'dashboard.preferences.reset',
   'dashboard.preferences.update',
@@ -7744,6 +7976,14 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'cloud.key.refresh': 15000,
   'cloud.key.status': 15000,
   'cloud.link.status': 15000,
+  'cloud.storage.billing.handoff': 15000,
+  'cloud.storage.ended.confirm': 15000,
+  'cloud.storage.new_vaults': 15000,
+  'cloud.storage.offer.accept': 15000,
+  'cloud.storage.offer.decline': 15000,
+  'cloud.storage.rotate': 15000,
+  'cloud.storage.status': 15000,
+  'cloud.storage.switch': 15000,
   'dashboard.preferences.get': 15000,
   'dashboard.preferences.reset': 15000,
   'dashboard.preferences.update': 15000,

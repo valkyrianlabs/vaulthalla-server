@@ -269,15 +269,28 @@ struct Grant {
     // base64 of the recipient's public key (32 bytes for suite 1), so a restore can re-enroll the grant: public, like
     // recipient_id (its hash). Absent in roots written before #371.
     std::optional<std::string> public_key;
+    // The grant of the linked account's pinned recovery key (design/cloud/key-manager.md): its generation. A restore
+    // keeps it as such only when the key equals the restoring server's own pin of that generation.
+    std::optional<uint32_t> account_key_generation{};
     [[nodiscard]] bool operator==(const Grant&) const = default;
     // Customer class, not revoked: the only grants a reader may unwrap envelopes for.
     [[nodiscard]] bool usableForDecryption() const;
+};
+
+// The linked account's signed recovery policy (design/cloud/key-manager.md, "Where it travels"): its exact bytes and the
+// base64url of its Ed25519 signature, carried so a replica or a restore gets it from the bucket with the service out of
+// reach. Untrusted here: a reader verifies it against its own pin and its own sequence floor before using it.
+struct AccountPolicyBytes {
+    std::string policy;
+    std::string signature;
+    [[nodiscard]] bool operator==(const AccountPolicyBytes&) const = default;
 };
 
 struct RecoveryPolicy {
     uint32_t v{kRecoveryPolicyVersion};
     bool understood{true};                      // false: a version this reader doesn't know (grants left empty)
     std::vector<Grant> grants;
+    std::optional<AccountPolicyBytes> account_policy{};
     [[nodiscard]] bool operator==(const RecoveryPolicy&) const = default;
 };
 

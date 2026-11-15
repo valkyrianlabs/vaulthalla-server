@@ -275,3 +275,81 @@ never the URL). Never a secret. The attach records its own `vault.remote.*`.
 11. **Default retention for managed vaults.** A configured number of days, shown at acceptance like the existing
     versioning disclosure, rather than indefinite (which bills every overwritten version for ever).
 12. **A moved vault's old copy.** Keep it read-only and say so; never delete it automatically.
+
+## As built (2026-11-14, wave 1 engine)
+
+Work items 2 to 7 are built (migration 142; `cloud/Storage.*`, `cloud/StorageService.*`, `ops/CloudStorage.*`,
+`db/query/cloud/Storage.*`, the in-place detach in `vault/RemoteDetach.*`), every open question as its recommendation.
+The console page (item 8) and the drill (item 9) are not. What the build settled where this document left a choice,
+each small to change:
+
+1. **The contract is the cloud's code** (vaulthalla-cloud `src/storage/ManagedStorage.cpp`, `src/accounts/
+   Deployments.cpp`, `src/billing/Billing.cpp`). There is no retention route: retention is
+   `PUT /v1/storage/vaults/{uid} {content_retention_days}` (1-36500), so "indefinite" is sent as 36500. `GET /v1/storage`
+   carries no ejection portal address, so "Leave managed storage" is the billing portal (`billing --kind portal`).
+   `account_key_confirmed` there is the cloud's offline-copy confirmation, not this server's pin; the server's own
+   gate is the pin. The cloud's `provider` `b2` maps to `S3Provider::BackblazeB2`, anything else (the development
+   provider) to `Other`.
+2. **The service** `CloudStorageService` runs a pass every 30 s or when woken: the account key check (it replaced
+   `cloud::KeyService`; daily, hourly after a failure, at once for `cloud.key.refresh`), then, only with a MAC-verified
+   pin, `GET /v1/storage` and `GET /v1/billing` when due (`cloud.storage.poll_minutes`, every 15 s for five minutes
+   after a step or a billing handoff), the sweep, and one step per vault against the last fetched state. A failed
+   step backs off (1 min doubling to 6 h); an unreachable cloud changes nothing. `Manager::addVault` doesn't wake it:
+   the sweep finds new vaults on the next pass.
+3. **States.** `vault_cloud_storage.state` adds `ended` (converted at the end of the plan). An empty vault stays
+   `unregistered` with reason `empty`. A vault registered by another deployment is `failed`
+   (`registered_elsewhere`). The waiting reason is the cloud's (`payment_required`, `over_quota`,
+   `account_key_unconfirmed`, `bucket_limit`), or its bucket state (`pending`, `created`). A rotation request is
+   recorded as reason `rotation_requested`.
+4. **Keys.** The exchanged key is an ordinary `api_keys` row (named `managed storage <uid>`, owned by the vault's
+   owner, `origin = 'cloud'`), sealed like the others; a rotation or re-request writes into the same row and reloads
+   the engine. It is acknowledged only after the probe (`validateAPICredentials`) passes; a probe failure or a lost
+   response leaves the key unacknowledged (the cloud revokes it) and the next attempt uses a new key pair. `superseded`
+   is re-requested at once; `none` closes the gate.
+5. **The gate** is `full` for `active`/`past_due`, `read_only` for `restricted` (or a `read_delete` key), `none` for
+   `suspended`, a revoked key, a move or an unlink. Only a managed vault's own gate is set; an operator's
+   `vh vault remote access` (and attach, detach, abort) on a managed vault is refused `managed_storage`.
+6. **The attach** is `ops::vault_remote::attachForCloud` (no actor or step-up), run by `RemoteAttachService` like any
+   attach. `vault::remote::setManagedHooks` gives it the account key's system grant
+   (`ops::recovery_recipients::addAccountKeyForManagedVault`, audited `system:cloud`, `automatic: true`, refused
+   without a pin or a switch that isn't on) before precondition 6, and a quota courtesy check instead of the price
+   preflight. Once done, the bucket is bound in `upstream_bucket` (versioning enabled, retention days from
+   `cloud.storage.default_retention_days` unless set) and `vault_recovery_policy.mode = 'provider_versioning'`; the
+   retention the vault's recovery policy asks for is sent until the cloud's view holds it.
+7. **Enrollment** is `ops::cloud_recovery::enrollAutomatic(vault, reason)`: only the account-key grant's envelopes,
+   after the attach, after a key rotation (the vault's key version moved past the one enrolled) and while it is
+   behind; `enroll_behind_since` drives health `cloud_recovery_behind` after a day.
+8. **Switch off** with a bucket is the detach (`hydrate`, no keys step-up), then `/detached`, `enabled: false` and the
+   key row removed; while access is `none` it waits (`waiting_for_access`), because files held only in the bucket
+   can't be fetched. Before a bucket: `enabled: false`; an attach in flight is aborted.
+9. **In place** (`vault_remote_detach.mode = 'in_place'`) is how `ended` and a moved vault kept local convert: no
+   request to the bucket; files held there only are listed in `lost` and moved to the trash (no local bytes, so
+   nothing local is deleted); every usable grant's envelopes are wrapped again into the database
+   (`envelopes::wrapIntoDatabase`, replacing records that pointed into the bucket); a revoked grant's bucket-only
+   records are dropped and counted. The bucket is never touched.
+10. **Ejection** flips in one transaction (`origin = 'customer'`, `cloud_access = NULL`, row `ejected`), opens the gate
+    and reports `/ejected`; the engine and credentials stay.
+11. **Unlink** refuses `managed_vaults` while any row is between `registered` and `detaching`; `--force` closes their
+    gates (state `moved`, reason `unlinked`) and forgets the cached account state.
+12. **The vault's own earlier bucket** (switched off, then on again; an `ended` the cloud reverses): an attach whose
+    bucket isn't empty loads the bucket's manifest root with the vault's uid and its own keys; if it authenticates, the
+    attach refuses `bucket_holds_this_vault` (the operator restores with `vh vault recover`, or the account holder
+    deletes the bucket in the portal) instead of `bucket_not_empty`. Nothing in the bucket is deleted. Rejoining it in
+    place (attach-remote question 6, with files only the bucket holds coming back as remote-only entries) is not built.
+13. **An ended plan waits** (migration 143): the vault stays attached with access `none` (reason
+    `ended_pending_confirmation`, health `cloud_storage_ended_pending`, status `ended {since, converts_at,
+    confirmed_by}`) until an admin confirms (`vh cloud storage confirm-ended`, ws `cloud.storage.ended.confirm`) or
+    the service has answered `ended` without interruption for `cloud.storage.ended_grace_hours` (24). Any other
+    answer clears the run.
+14. **The account policy in the root:** `recovery_policy.account_policy {policy, signature}` carries the pinned row's
+    policy bytes for a vault with an active account-key grant; `vh vault recover` offers it to
+    `ops::cloud_keys::offerPolicy`, which verifies it against this server's own pin and floor like the service's.
+15. **The cloud's announced contract changes** are one place each (`contract::` in `cloud/Storage.cpp`): the
+    offline-copy flag's rename, the ejection portal's address (stored in `ejection.portal_url`, opened by "Leave
+    managed storage"), base64url envelopes, and `moved_to` on a moved vault (state `moved` at once).
+16. **The console** (item 8): `/managed-storage` (`features/managedStorage`, copy in `copy.ts`), a nav item under
+    "Storage & cost" with `NavSignal` `cloudStorage` (the view permission and `available`; a server without the
+    capability has no `cloud.storage.status`), and the new-vault switch (shown with the `meta.hello` capability;
+    a choice that differs from the server's default is sent after the vault is created).
+17. **Not built:** the `403`-from-Backblaze wake, `pending_upload_bytes`/`pending_files` and throughput in
+    `CloudStorageVault`, rejoining a kept bucket in place, and the drill.

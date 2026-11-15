@@ -1063,6 +1063,17 @@ export interface WebSocketCommandMap {
   'cloud.key.confirm': WsContract['cloud.key.confirm']
   'cloud.key.refresh': WsContract['cloud.key.refresh']
   'cloud.link.status': WsContract['cloud.link.status']
+  // Managed storage (design/cloud/managed-remotes.md), behind the cloud.storage.managed_remotes capability. Status reads
+  // the server's database; the switch, the offer, rotation and the default record intents the server's background
+  // service carries out; billing.handoff returns a short-lived billing page address.
+  'cloud.storage.status': WsContract['cloud.storage.status']
+  'cloud.storage.switch': WsContract['cloud.storage.switch']
+  'cloud.storage.offer.accept': WsContract['cloud.storage.offer.accept']
+  'cloud.storage.offer.decline': WsContract['cloud.storage.offer.decline']
+  'cloud.storage.rotate': WsContract['cloud.storage.rotate']
+  'cloud.storage.ended.confirm': WsContract['cloud.storage.ended.confirm']
+  'cloud.storage.new_vaults': WsContract['cloud.storage.new_vaults']
+  'cloud.storage.billing.handoff': WsContract['cloud.storage.billing.handoff']
 }
 
 export type WSCommandPayload<K extends keyof WebSocketCommandMap> = WebSocketCommandMap[K]['payload']

@@ -1205,8 +1205,10 @@ void saveUsage(const Ctx& ctx) {
 }
 
 // preparing: the vault and the bucket as they are now, the recipients' envelopes, the items, and on a fresh start the
-// estimate and the price preflight.
+// estimate and the price preflight (managed storage: the account key's grant first, and the quota instead of a price).
 void prepare(Ctx& ctx) {
+    const bool managed = ctx.row.origin == "cloud";
+    if (managed) requireManagedReady(ctx.vaultId, std::nullopt);
     requireVaultReady(*ctx.engine);
     const auto check = requireBucketUsable(ctx.vaultId, *ctx.row.api_key_id, ctx.row.bucket, *ctx.ctl,
                                            storedProbeOf(ctx.row));
@@ -1223,7 +1225,9 @@ void prepare(Ctx& ctx) {
 
     if (ctx.row.state == State::Preparing) {
         auto estimate = estimateOf(ctx, Q::items(ctx.vaultId), ctx.deps->sampleMinimum);
-        if (ctx.deps->pricePreflight)
+        if (managed)
+            requireManagedReady(ctx.vaultId, estimate);
+        else if (ctx.deps->pricePreflight)
             ctx.deps->pricePreflight({.vault_id = ctx.vaultId, .api_key_id = *ctx.row.api_key_id,
                                       .storage_tier_id = ctx.row.storage_tier_id,
                                       .accept_unpriced = ctx.row.accept_unpriced},
@@ -1421,6 +1425,30 @@ std::shared_ptr<storage::s3::Controller> controllerFor(const uint32_t vaultId, c
     return controller;
 }
 
+// ---- managed storage ----------------------------------------------------------------------------------------------------
+
+namespace remote_managed_detail {
+std::mutex hooksMutex;
+ManagedHooks hooks;
+}
+
+void setManagedHooks(ManagedHooks h) {
+    std::scoped_lock lock(remote_managed_detail::hooksMutex);
+    remote_managed_detail::hooks = std::move(h);
+}
+
+void requireManagedReady(const uint32_t vaultId, const std::optional<Estimate>& estimate) {
+    ManagedHooks h;
+    {
+        std::scoped_lock lock(remote_managed_detail::hooksMutex);
+        h = remote_managed_detail::hooks;
+    }
+    if (!h.accountKeyGrant)
+        throw Refusal("account_key_unconfirmed", "managed storage needs the account recovery key confirmed on this server");
+    if (!estimate) h.accountKeyGrant(vaultId);
+    else if (h.quotaPreflight) h.quotaPreflight(vaultId, *estimate);
+}
+
 // ---- preconditions --------------------------------------------------------------------------------------------------
 
 void requireVaultReady(const storage::Engine& engine) {
@@ -1476,6 +1504,35 @@ void requireVaultReady(const storage::Engine& engine) {
                                : std::string{}));
 }
 
+// Whether the bucket holds this vault's own earlier copy (attach-remote question 6): its manifest root loads and
+// authenticates with this vault's uid and its own keys. Read-only. Anything else (no root, another vault's, a root
+// that doesn't open) is false.
+bool holdsThisVault(const uint32_t vaultId, const storage::s3::Controller& controller) {
+    const auto& manager = runtime::Deps::get().storageManager;
+    const auto engine = manager ? manager->getEngine(vaultId) : nullptr;
+    if (!engine || !engine->vault || !engine->vault->uid || !engine->encryptionManager) return false;
+    const auto em = engine->encryptionManager;
+    const crypto::vhf1::KeyLookup keys = [em](const uint32_t v) -> crypto::vhf1::KeyPtr {
+        try {
+            return em->historicalKeySnapshot(v);
+        } catch (const std::exception&) {
+            return nullptr;
+        }
+    };
+    // Not owned: the store reads through the caller's controller for the length of this call.
+    const std::shared_ptr<storage::s3::Controller> view(std::shared_ptr<void>{},
+                                                        const_cast<storage::s3::Controller*>(&controller));
+    for (const auto mode : {sync::manifest::WriteCapability::Conditional, sync::manifest::WriteCapability::VersionLog}) {
+        try {
+            storage::s3::ManifestStore store(view, mode);
+            (void)sync::manifest::load(store, *engine->vault->uid, keys);
+            return true;
+        } catch (const std::exception&) {
+        }
+    }
+    return false;
+}
+
 BucketCheck requireBucketUsable(const uint32_t vaultId, const uint32_t apiKeyId, const std::string& bucket,
                                 const storage::s3::Controller& controller,
                                 const std::optional<storage::s3::ProbeResult>& storedProbe) {
@@ -1498,7 +1555,19 @@ BucketCheck requireBucketUsable(const uint32_t vaultId, const uint32_t apiKeyId,
         throw Refusal("bucket_listing_failed",
                       std::string("the bucket could not be listed completely, so it can't be shown to be empty: ") + e.what());
     }
-    (void)d::reconcile(vaultId, listed, out.versioned);
+    try {
+        (void)d::reconcile(vaultId, listed, out.versioned);
+    } catch (const Refusal& e) {
+        // The vault's own earlier bucket (switched off, then on again): recognised, never attached over. Rejoining it
+        // means reconciling what only the bucket holds, which is a restore; nothing in it is deleted to make room.
+        if (e.code() == "bucket_not_empty" && holdsThisVault(vaultId, controller))
+            throw Refusal("bucket_holds_this_vault",
+                          "the bucket holds this vault's own earlier copy (its manifest opens with this vault's keys), "
+                          "which an attach never writes over: restore the vault from it (`vh vault recover`), or empty "
+                          "the bucket first (for managed storage: the account holder deletes it in the portal, and the "
+                          "next switch on gets a new one)");
+        throw;
+    }
 
     if (storedProbe && storedProbe->capability != sync::manifest::WriteCapability::Unknown) {
         out.probe = *storedProbe;

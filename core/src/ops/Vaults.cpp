@@ -28,6 +28,8 @@
 #include "storage/Manager.hpp"
 #include "storage/s3/Controller.hpp"
 #include "storage/s3/provider/Registry.hpp"
+
+#include <vl/keykit/uid.hpp>
 #include "storage/upstream/Guard.hpp"
 #include "storage/upstream/Names.hpp"
 #include "sync/Controller.hpp"
@@ -779,6 +781,7 @@ nlohmann::json toJson(const AccessibleVault& entry) {
         {"browse", entry.browse},
         {"manage", entry.manage},
         {"via", std::move(via)},
+        {"vault_uid", v.uid ? nlohmann::json(vl::keykit::toBase32(*v.uid)) : nlohmann::json(nullptr)},
     };
 }
 

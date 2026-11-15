@@ -354,12 +354,16 @@ RecoverResult Recover::apply(const RecoverInput& in) {
                 r.notes.push_back("grant " + g.grant_id + " is restored as " + id + " (its id is taken on this node)");
             }
             grantIds[g.grant_id] = id;
+            if (g.account_key_unmatched)
+                r.notes.push_back("grant " + g.grant_id + " was an account recovery key this server hasn't pinned: it is "
+                                  "restored as an ordinary recovery recipient");
             txn.exec("INSERT INTO vault_recovery_grant (vault_id, grant_id, recipient_id, public_key, suite, class, label, "
-                     "added_at, authorized_by, revoked_at, revoked_by) VALUES ($1, $2, $3, $4::bytea, $5, 'customer', $6, "
-                     "COALESCE($7::timestamptz, NOW()), $8, $9::timestamptz, CASE WHEN $9 IS NULL THEN NULL ELSE "
-                     "'restored' END)",
+                     "added_at, authorized_by, revoked_at, revoked_by, account_key_generation) VALUES ($1, $2, $3, $4::bytea, "
+                     "$5, 'customer', $6, COALESCE($7::timestamptz, NOW()), $8, $9::timestamptz, CASE WHEN $9 IS NULL THEN "
+                     "NULL ELSE 'restored' END, $10)",
                      pqxx::params{vid, id, g.recipient_id, to_hex_bytea(g.public_key), static_cast<int>(g.suite), g.label,
-                                  g.added_at, g.authorized_by.value_or("restored"), g.revoked_at});
+                                  g.added_at, g.authorized_by.value_or("restored"), g.revoked_at,
+                                  g.account_key_generation});
         }
         for (const auto& e : in.envelopes) {
             const auto g = grantIds.find(e.grant_id);

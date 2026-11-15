@@ -1,8 +1,8 @@
 #include "protocols/ws/handler/vault/Keys.hpp"
 
-#include "cloud/KeyService.hpp"
 #include "ops/Cloud.hpp"
 #include "ops/CloudKeys.hpp"
+#include "ops/CloudStorage.hpp"
 #include "ops/Error.hpp"
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
@@ -266,12 +266,80 @@ json VaultKeys::cloudKeyRefresh(const json&, const std::shared_ptr<Session>& ses
     const auto s = ops::cloud_keys::status(actor);
     if (s.state == "unlinked") throw ops::Conflict("this server isn't linked to an account");
     // The network check runs on the background service's thread, never this one.
-    ::vh::cloud::KeyService::requestCheck();
+    ops::cloud_storage::requestKeyCheck();
     return ops::cloud_keys::toJson(s);
 }
 
 json VaultKeys::cloudLinkStatus(const json&, const std::shared_ptr<Session>& session) {
     return ops::cloud::toJson(ops::cloud::linkStatus(actorOf(session)));
+}
+
+// Named, not anonymous: the unity build joins this file with the other handlers.
+namespace cloud_storage_ws {
+
+std::optional<std::vector<unsigned int>> vaultList(const json& payload) {
+    if (!payload.is_object() || !payload.contains("vault_ids") || payload.at("vault_ids").is_null()) return std::nullopt;
+    if (!payload.at("vault_ids").is_array()) throw ops::Invalid("vault_ids must be an array of vault ids");
+    std::vector<unsigned int> out;
+    for (const auto& v : payload.at("vault_ids")) {
+        if (!v.is_number_unsigned() || v.get<uint64_t>() == 0 || v.get<uint64_t>() > UINT32_MAX)
+            throw ops::Invalid("vault_ids must be positive integers");
+        out.push_back(v.get<unsigned int>());
+    }
+    return out;
+}
+
+bool requiredBool(const json& payload, const char* key) {
+    if (!payload.is_object() || !payload.contains(key) || !payload.at(key).is_boolean())
+        throw ops::Invalid(std::string(key) + " is required (true or false)");
+    return payload.at(key).get<bool>();
+}
+
+std::optional<std::string> optionalString(const json& payload, const char* key) {
+    if (!payload.is_object() || !payload.contains(key) || payload.at(key).is_null()) return std::nullopt;
+    if (!payload.at(key).is_string()) throw ops::Invalid(std::string(key) + " must be a string");
+    return payload.at(key).get<std::string>();
+}
+
+}
+
+json VaultKeys::cloudStorageStatus(const json&, const std::shared_ptr<Session>& session) {
+    return ::vh::ops::cloud_storage::toJson(::vh::ops::cloud_storage::status(actorOf(session)));
+}
+
+json VaultKeys::cloudStorageSwitch(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto vaultId = requiredVaultId(payload);
+    const bool on = cloud_storage_ws::requiredBool(payload, "enabled");
+    return ::vh::ops::cloud_storage::toJson(
+        ::vh::ops::cloud_storage::setSwitch(actorOf(session), vaultId, on, cloud_storage_ws::optionalString(payload, "confirm"), channelOf(session)));
+}
+
+json VaultKeys::cloudStorageOfferAccept(const json& payload, const std::shared_ptr<Session>& session) {
+    return ::vh::ops::cloud_storage::toJson(::vh::ops::cloud_storage::acceptOffer(actorOf(session), cloud_storage_ws::vaultList(payload), channelOf(session)));
+}
+
+json VaultKeys::cloudStorageOfferDecline(const json& payload, const std::shared_ptr<Session>& session) {
+    return ::vh::ops::cloud_storage::toJson(::vh::ops::cloud_storage::declineOffer(actorOf(session), cloud_storage_ws::vaultList(payload), channelOf(session)));
+}
+
+json VaultKeys::cloudStorageEndedConfirm(const json&, const std::shared_ptr<Session>& session) {
+    return ::vh::ops::cloud_storage::toJson(::vh::ops::cloud_storage::confirmEnded(actorOf(session), channelOf(session)));
+}
+
+json VaultKeys::cloudStorageRotate(const json& payload, const std::shared_ptr<Session>& session) {
+    return ::vh::ops::cloud_storage::toJson(::vh::ops::cloud_storage::rotate(actorOf(session), requiredVaultId(payload), channelOf(session)));
+}
+
+json VaultKeys::cloudStorageNewVaults(const json& payload, const std::shared_ptr<Session>& session) {
+    const bool on = ::vh::ops::cloud_storage::setNewVaultsDefault(actorOf(session), cloud_storage_ws::requiredBool(payload, "enabled"), channelOf(session));
+    return {{"new_vaults", on}};
+}
+
+json VaultKeys::cloudStorageBillingHandoff(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto kind = cloud_storage_ws::optionalString(payload, "kind");
+    if (!kind) throw ops::Invalid("kind is required (checkout or portal)");
+    return ::vh::ops::cloud_storage::toJson(
+        ::vh::ops::cloud_storage::billingHandoff(actorOf(session), *kind, cloud_storage_ws::optionalString(payload, "plan"), channelOf(session)));
 }
 
 }

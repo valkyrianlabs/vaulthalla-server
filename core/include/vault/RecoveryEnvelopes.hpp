@@ -56,6 +56,10 @@ struct Pending {
 void record(const Pending& pending);
 // The version never came to be: removes the objects put() wrote, best effort (never throws).
 void discard(const Pending& pending) noexcept;
+// An S3 vault about to become local without its bucket (vault/RemoteDetach.hpp, in place): wraps `key` (version
+// `version`) to every usable grant that has no database-held envelope of that version and records each one with its
+// bytes, whatever the bucket holds. No request to any bucket. Returns the number written.
+unsigned wrapIntoDatabase(uint32_t vaultId, uint32_t version, const crypto::SecretKey& key);
 // put() then record(); returns the number written.
 unsigned writeFor(uint32_t vaultId, uint32_t version, const crypto::SecretKey& key);
 

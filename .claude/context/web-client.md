@@ -162,6 +162,16 @@ key and bucket, or detach). The keys step-up is the client's usual flow. When an
 invalidated (the type changed). A restricted vault (`access.mode` read_only/none) shows `accessNotice`. No copy
 mentions the managed service (claims lint).
 
+## Managed storage (`/managed-storage`)
+
+`features/managedStorage`: every sentence in `copy.ts` (neutral "Managed storage" until launch; the claims lint reads
+it), pure helpers in `model.ts` (`model.test.ts`), reads in `queries.ts` (`cloud.storage.status`, 30 s, 3 s while a
+vault uploads or becomes local; the `meta.hello` capability `cloud.storage.managed_remotes`), the page
+(`ManagedStoragePage.tsx`: plan sentence, usage meter against the quota with this server's own figure, new-vault
+default, the ended confirmation, the offer banner, each vault's switch; off on a vault with a bucket types the name),
+and `NewVaultSwitch.tsx` for `NewVaultPage`. The shell's nav signal is `signal.ts` (kept tiny: it is in every
+route's first load). Keys, endpoints, bucket names and providers are never shown.
+
 ## Sync conflicts (#187)
 
 `features/syncConflicts/*`, route `/sync-conflicts`. Open conflicts recorded under the remote `ask` policy, only in

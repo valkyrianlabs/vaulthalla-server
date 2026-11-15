@@ -162,6 +162,15 @@ struct CloudAccountKeyHealth {
     std::string detail;
 };
 
+// Managed storage (ops/CloudStorage.hpp): cloud_account_key_unconfirmed, cloud_recovery_behind, vault_cloud_moved,
+// vault_cloud_failed (degraded) and cloud_account_key_no_offline_copy (info).
+struct CloudStorageHealth {
+    std::string code;
+    std::string severity;
+    std::optional<unsigned int> vault_id;
+    std::string detail;
+};
+
 // Whether legacy-format content remains on this host (#373/#376): encrypting S3 vaults still on path_v0, cut-over
 // layout migrations whose path-named objects are not all gone yet, and legacy (gcm0) live files, recovery blobs and
 // unfinished resumable uploads. The gcm0 readers have no other callers once `remaining` is false; the next release's
@@ -206,6 +215,7 @@ struct SystemHealth {
     std::vector<VaultRemoteAccessHealth> vaultsRemoteRestricted;    // degraded: access read_only
     std::vector<VaultRemoteAccessHealth> vaultsRemoteUnavailable;   // degraded: access none
     std::optional<CloudAccountKeyHealth> cloudAccountKey;           // degraded when set
+    std::vector<CloudStorageHealth> cloudStorage;                   // degraded unless every one is info
     HealthSummary summary;
 
     [[nodiscard]] bool healthy() const noexcept;
@@ -231,6 +241,7 @@ void to_json(nlohmann::json& j, const LegacyContentHealth& health);
 void to_json(nlohmann::json& j, const RemoteAttachFailedHealth& health);
 void to_json(nlohmann::json& j, const VaultRemoteAccessHealth& health);
 void to_json(nlohmann::json& j, const CloudAccountKeyHealth& health);
+void to_json(nlohmann::json& j, const CloudStorageHealth& health);
 void to_json(nlohmann::json& j, const SystemHealth& health);
 
 }

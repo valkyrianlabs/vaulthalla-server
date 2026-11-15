@@ -383,6 +383,13 @@ each small to change:
 9. **Local vaults** (item 6) already kept their envelopes in the database (attach-remote, migration 138); what was
    added is enrollment: `vh cloud recovery enroll` reads a local vault's envelopes from its rows and checks each as it
    checks bucket objects.
-10. **Not built yet:** automatic enrollment and the managed attach's default grant (managed remotes), the offline-copy
-    health code, `--verify` against the scoped fetch, the restore's handling of a restored root's account-key grant,
-    the drill, and vault registration and sealed labels (`POST /v1/vaults`, `PUT /v1/vaults/{uid}/label`).
+10. **Built with managed remotes** (`managed-remotes.md`, "As built"): automatic enrollment
+    (`ops::cloud_recovery::enrollAutomatic`, account-key envelopes only, audited `system:cloud`), the managed attach's
+    default grant (`ops::recovery_recipients::addAccountKeyForManagedVault`), the health codes
+    `cloud_account_key_unconfirmed`, `cloud_recovery_behind` and `cloud_account_key_no_offline_copy` (under health's
+    `cloud_storage`), `vh cloud recovery status --verify` against the scoped fetch, vault registration and sealed labels,
+    and the restore's handling of a restored root's account-key grant: root grants carry `account_key_generation`, and
+    a restore keeps it only when the key is the restoring server's own MAC-verified pin of that generation (otherwise
+    an ordinary customer grant, with a note). The check runs in `CloudStorageService`, which replaced
+    `cloud::KeyService`. **Still not built:** the policy's bytes in the manifest root
+    (`recovery_policy.account_policy`; the cloud stays the only transport) and the drill.

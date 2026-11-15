@@ -48,10 +48,24 @@ struct VaultCoverage {
     std::vector<unsigned int> not_in_cloud;  // needed versions the cloud has no envelope for
     nlohmann::json cloud;                    // the cloud's coverage report, or null
     std::optional<std::string> detail;
+    bool automatic{false};                   // enrolled by the managed-storage service (a managed vault)
+    nlohmann::json verify = nullptr;         // --verify: {versions_checked, missing [versions], mismatched [versions]}
 };
+// Automatic enrollment of a managed vault (design/cloud/key-manager.md, "Enrolling with the cloud"): run by the
+// managed-storage service as the system (`system:cloud`), with no permission check or step-up (the authorization is the
+// pin and the vault's managed-storage switch), when its attach reached done, after a rotation and when its coverage is
+// behind or missing. Sends only the envelopes of the account-key grant, read back from the bucket and checked against
+// their records. Conflict unless the vault is managed, linked and holds an active account-key grant whose envelopes
+// cover every needed version; Refused with the cloud's refusal. `reason`: attached | rotation | behind | missing.
+Enrolled enrollAutomatic(unsigned int vaultId, const std::string& reason);
+
 // The enrolled vaults (or one), compared with what the cloud holds. Super admins or the view encryption keys
 // permission.
-std::vector<VaultCoverage> status(const Actor& actor, std::optional<unsigned int> vaultId = std::nullopt);
+// `verify`: also compare each vault's account-key envelopes the cloud holds (GET /v1/keys/vaults/{uid}/envelopes) with
+// this server's records: a version the cloud has none for, or an envelope that isn't for this vault and version, makes
+// the vault `behind` with the details in `verify`.
+std::vector<VaultCoverage> status(const Actor& actor, std::optional<unsigned int> vaultId = std::nullopt,
+                                  bool verify = false);
 
 // Deletes the cloud's records of the vault and forgets the enrollment here. Same permission and channels as enroll.
 // NotFound when the vault isn't enrolled from this server.

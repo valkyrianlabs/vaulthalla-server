@@ -482,6 +482,13 @@ std::string to_string(const NeedReason reason) {
     return "current";
 }
 
+KeyStatus systemStatus(const unsigned int vaultId) {
+    const auto vault = db::query::vault::Vault::getVault(vaultId);
+    if (!vault) throw NotFound("no vault with ID " + std::to_string(vaultId));
+    Unsealer unsealer;
+    return statusOf(liveSource(vault), unsealer);
+}
+
 std::vector<KeyStatus> status(const Actor& actor, const std::optional<unsigned int> vaultId) {
     requireView(actor);
     Unsealer unsealer;

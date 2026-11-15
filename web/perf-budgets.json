@@ -4,9 +4,11 @@
   "routes": {
     "/": 150,
     "/login": 170,
-    "/files/[[...slug]]": 230,
+    "/files/[[...slug]]": 232,
     "/share": 220,
-    "/sync-conflicts": 220
+    "/sync-conflicts": 220,
+    "/account": 242,
+    "/users/[name]": 242
   },
   "lazy": {
     "modelViewer": 325,

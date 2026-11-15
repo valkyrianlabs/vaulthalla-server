@@ -145,6 +145,9 @@ struct KeyStatus {
 // Every vault the caller may inspect (live, and deleted ones within key retention they may remove), or one vault.
 // Never key bytes.
 [[nodiscard]] std::vector<KeyStatus> status(const Actor& actor, std::optional<unsigned int> vaultId = std::nullopt);
+// The same for one live vault, for the system (the managed-storage service's automatic enrollment): no permission
+// check. Public values only, as status.
+[[nodiscard]] KeyStatus systemStatus(unsigned int vaultId);
 // The ws/`--json` shape of one vault's status (times as Unix seconds or null).
 [[nodiscard]] nlohmann::json toJson(const KeyStatus& status);
 

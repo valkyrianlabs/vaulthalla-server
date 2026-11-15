@@ -411,9 +411,22 @@ superseded, refused) with an HMAC under the KeyProvider slot `cloud_account_pin`
 lives in the pinned row), pins only after a super admin's `vh cloud key confirm` (CLI, or ws `cloud.key.confirm` from
 a paired device with the keys step-up), follows signed rotations itself, and keeps covered vaults' account-managed
 grants (`vault_recovery_grant.account_key_generation`, `.account_policy_sequence`) equal to the accepted policy.
-`vault::envelopes::put` wraps to such grants only while the MAC-verified pin agrees. `cloud::KeyService`
-(`CloudKeyService`) runs the check daily while linked. Tests: `AccountKey*`, `AccountPolicy`, `LocalVaultEnvelopes` in
-`test_recovery_recipients.cpp`.
+`vault::envelopes::put` wraps to such grants only while the MAC-verified pin agrees. `cloud::StorageService`
+(`CloudStorageService`, which replaced `CloudKeyService`) runs the check daily while linked. Tests: `AccountKey*`,
+`AccountPolicy`, `LocalVaultEnvelopes` in `test_recovery_recipients.cpp`.
+Managed storage (`design/cloud/managed-remotes.md`, "As built"; migration 142): `cloud/Storage` makes the signed
+`/v1/vaults`, `/v1/storage`, `/v1/billing` and credential calls (the bucket key arrives sealed to a one-time X25519
+key, `credential::open`, wiped); `ops::cloud_storage` holds the people's operations (`vh cloud storage …`, ws
+`cloud.storage.*`, admin module `cloud`: view/storage/billing, no step-up; agents read only) and the engine `tick()`,
+which `CloudStorageService` runs every 30 s: nothing unless linked and the account key pinned; it caches the account
+(`cloud_storage_account`), sweeps vaults into `vault_cloud_storage` (new local vaults on by default, existing ones
+offered, empty ones not registered), and moves each one step (register + sealed label, switch on, key exchange into an
+`api_keys` row with `origin = 'cloud'`, attach via `ops::vault_remote::attachForCloud` with the managed hooks: the
+account key's system grant `recovery_recipients::addAccountKeyForManagedVault` and a quota check; retention; automatic
+enrollment `cloud_recovery::enrollAutomatic`; the gate from `storage_access`; rotation; switch-off via
+`detachForCloud`; moved; ejection in place; `ended` via the in-place detach). Operator attach/detach/abort/access refuse
+managed vaults (`managed_storage`); `vh cloud unlink` refuses while any is managed unless `--force`. Tests:
+`CloudStorageTest` in `test_cloud_storage_db.cpp` (a fake account service in the cloud's as-built shapes).
 
 ### WebAuthn verifier (vl-webauthn, from #355)
 

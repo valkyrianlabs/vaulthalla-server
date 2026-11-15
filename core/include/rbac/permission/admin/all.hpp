@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Audits.hpp"
+#include "Cloud.hpp"
 #include "Identities.hpp"
 #include "Keys.hpp"
 #include "Roles.hpp"
