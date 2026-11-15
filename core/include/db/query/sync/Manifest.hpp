@@ -38,6 +38,9 @@ public:
     // The local base copy of the recorded root (migration 145): the root's sealed bytes and those of the segments it
     // names, as recordRoot stored them; nullopt when none is stored.
     [[nodiscard]] static std::optional<vh::sync::manifest::BaseCopy> base(uint32_t vaultId);
+    // This server is about to PUT the root of this hash (added to remote_manifest_state.publishing_roots, migration
+    // 146, the oldest dropped past 256; recordRoot resets the set to the recorded root).
+    static void notePublishing(uint32_t vaultId, const std::string& rootSha256);
     // An apply of this root begins (remote_manifest_state.applying_*); recordRoot of the same root clears it.
     static void markApplying(uint32_t vaultId, uint64_t epoch, const std::string& rootSha256);
 

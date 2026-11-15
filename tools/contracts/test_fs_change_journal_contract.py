@@ -51,6 +51,15 @@ WRITERS: dict[str, dict[tuple[str, str], int]] = {
     "core/src/db/preparedStatements/fs/fsEntries.cpp": {("UPDATE", "fs_entry"): 2, ("DELETE FROM", "fs_entry"): 3},
     # insert_symlink_full: create (symlinks insert).
     "core/src/db/preparedStatements/fs/symlinks.cpp": {("INSERT INTO", "fs_entry"): 1, ("INSERT INTO", "symlinks"): 1},
+    # The manifest applier (design/sync/manifest-applier.md, item 4): another writer's entries created (the typed
+    # inserts: create), a content replacement (files update: update), attributes and a symlink's target (fs_entry /
+    # symlinks update: update), the replaced file's updated_at (fs_entry update: update), a remote-only file's move
+    # (fs_entry update: move or rename). Other moves, trash and deletes go through Filesystem::rename / remove and
+    # Engine::removeLocally (classified with them).
+    "core/src/db/query/sync/ManifestApply.cpp": {
+        ("INSERT INTO", "fs_entry"): 1, ("INSERT INTO", "directories"): 1, ("INSERT INTO", "files"): 1,
+        ("INSERT INTO", "symlinks"): 1, ("UPDATE", "files"): 1, ("UPDATE", "fs_entry"): 3, ("UPDATE", "symlinks"): 1,
+    },
     # `vh vault recover` (#371): the restored vault's tree, created in one transaction: creates (the typed inserts).
     "core/src/db/query/vault/Recover.cpp": {
         ("INSERT INTO", "fs_entry"): 1, ("INSERT INTO", "directories"): 2, ("INSERT INTO", "files"): 1,

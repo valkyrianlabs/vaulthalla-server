@@ -13,6 +13,7 @@
 #include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "db/query/sync/Manifest.hpp"
+#include "db/query/sync/ManifestApply.hpp"
 #include "notifications/OperatorNotificationBus.hpp"
 #include "storage/Engine.hpp"
 #include "storage/s3/ManifestStore.hpp"
@@ -598,7 +599,7 @@ TEST_F(ManifestDbTest, TheBaseCopyFollowsEveryRecordedRootAndOpensToItsContent) 
     EXPECT_NE(sidSet(first), sidSet(second));
     ASSERT_TRUE(openStored(second.published.known));
 
-    // Another writer's root, read by verifyRemote: the copy follows `known`.
+    // Another writer's root, applied (items 4-5: a read no longer records it, the apply does): the copy follows `known`.
     const auto k = keys->currentKey();
     auto theirs = mf::load(*store, vaultUid, service.keyLookup()).content;
     theirs.producer.node_id = "another-node";
@@ -607,15 +608,21 @@ TEST_F(ManifestDbTest, TheBaseCopyFollowsEveryRecordedRootAndOpensToItsContent) 
     o.now = mf::isoTime(std::time(nullptr));
     const auto third = mf::publish(*store, vaultUid, service.keyLookup(), {k.version, k.key}, theirs,
                                    second.published.known, other, o);
-    ASSERT_TRUE(service.verifyRemote());
+    const auto verified = service.verifyRemote();
+    ASSERT_TRUE(verified && verified->head);
+    EXPECT_EQ(db::query::sync::Manifest::state(vaultId).epoch, second.published.known.epoch) << "a read records nothing";
+    const auto applied = service.applyRemote();
+    ASSERT_TRUE(applied && applied->recorded);
+    EXPECT_FALSE(applied->union_base);
     EXPECT_EQ(db::query::sync::Manifest::state(vaultId).epoch, third.published.known.epoch);
     EXPECT_EQ(baseSids(vaultId), sidSet(third));
     ASSERT_TRUE(openStored(third.published.known));
 }
 
-// Spec 06 §5.5's gap, closed for the case the copy can close alone: a server restarted from its database while another
-// writer published on its known root keeps that writer's new entry (before: "deleted by us", reverted). Without a
-// copy (dropped here) the cold start merges on the head as before and drops it.
+// Spec 06 §5.5's gap: a server restarted from its database while another writer published on its known root takes
+// that writer's new entry in (its publish meets the moved head, applies it, publishes again) instead of reverting it
+// as "deleted by us". With the base copy it is a three-way merge; without one (dropped here, as in a state from before
+// migration 145) the apply is a union, which deletes nothing, so the entry is kept either way.
 TEST_F(ManifestDbTest, AColdStartPublishKeepsWhatAnotherWriterAddedSinceTheKnownRoot) {
     for (const bool withCopy : {true, false}) {
         SCOPED_TRACE(withCopy);
@@ -657,11 +664,12 @@ TEST_F(ManifestDbTest, AColdStartPublishKeepsWhatAnotherWriterAddedSinceTheKnown
         sync::vault_manifest::Service restarted(vaultId, vaultUid, store, keys);   // a cold cache
         write("/a.txt", "a local change after the restart");
         const auto r = restarted.publish();
-        EXPECT_TRUE(r.merged);
         const bool kept = std::ranges::any_of(r.published.content.entries, [&](const mf::Entry& e) {
             return e.uid == added.uid;
         });
-        EXPECT_EQ(kept, withCopy);
+        EXPECT_TRUE(kept);
+        EXPECT_TRUE(db::query::sync::ManifestApply::row(vaultId, added.uid)) << "the database took it in";
+        EXPECT_EQ(r.published.known.epoch, 3u) << "applied (epoch 2), then published on it";
     }
 }
 

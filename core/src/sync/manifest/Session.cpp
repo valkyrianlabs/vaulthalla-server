@@ -105,6 +105,8 @@ PublishReport Session::publishLocked(const Content& produced) {
     options.self_node = produced.producer.node_id;
     options.own_epoch = state.own_epoch;
     options.settled = d::settledOf(state);
+    options.apply_on_lost = true;
+    options.before_root_put = [this](const std::string& sha) { state_->notePublishing(sha); };
     try {
         auto report = manifest::publish(*store_, vaultUid_, host_.keys, current, produced, knownState, cache_, options);
         state_->recordRoot({.epoch = report.published.known.epoch,
@@ -144,13 +146,50 @@ PublishReport Session::publishLocked(const Content& produced) {
     }
 }
 
-std::optional<Acceptance> Session::verifyRemoteVersionLog() {
+void Session::settleMoved(RemoteHead& out, Loaded&& loaded, const ChainState& state,
+                          const std::optional<Known>& knownState) {
+    switch (originOf(loaded.root, loaded.acceptance.root_sha256, loaded.base_version_id, knownState, host_.nodeId(),
+                     host_.vaultId, state.publishing_roots)) {
+    case HeadOrigin::OwnPast:
+        // Our own root, PUT and not recorded: the database is at it or past it. Recorded, never reconciled.
+        state_->recordRoot({.epoch = loaded.acceptance.epoch,
+                            .root_sha256 = loaded.acceptance.root_sha256,
+                            .etag = loaded.etag,
+                            .sids = session_detail::sidsOf(loaded.root),
+                            .version_id = loaded.version_id,
+                            .base_version_id = loaded.base_version_id,
+                            .settle_window = loaded.settle_window,
+                            .own = true,
+                            .base = baseCopyOf(loaded.root, loaded.root_bytes, loaded.segments, loaded.snapshots)});
+        if (cache_.base && cache_.base->known != loaded.known()) cache_.base.reset();
+        out.adopted = true;
+        note(Notice::Info, std::format("recorded this server's own root of epoch {}, which was published but not "
+                                       "recorded",
+                                       loaded.acceptance.epoch));
+        return;
+    case HeadOrigin::OwnUnexplained:
+        out.own_unexplained = true;
+        out.head = std::move(loaded);
+        return;
+    case HeadOrigin::Foreign:
+        out.head = std::move(loaded);   // recorded by the apply, not here
+        return;
+    }
+}
+
+void Session::applied() {
+    std::scoped_lock lock(mutex_);
+    cache_.base.reset();
+    cache_.last_produced.reset();   // the base copy is the recorded head now
+}
+
+std::optional<RemoteHead> Session::verifyRemoteVersionLog() {
     namespace d = session_detail;
     const auto state = state_->state();
     // A pass that changed nothing still costs one HEAD: the settled head is the current version until someone writes.
     if (state.etag && state.epoch && state.root_sha256)
         if (const auto etag = store_->headEtag(std::string(kRootKey)); etag && *etag == *state.etag)
-            return Acceptance{*state.epoch, *state.root_sha256, false};
+            return RemoteHead{{*state.epoch, *state.root_sha256, false}, std::nullopt};
     const std::optional<Known> knownState = state.epoch && state.root_sha256
         ? std::make_optional(Known{*state.epoch, *state.root_sha256, state.root_version_id})
         : std::nullopt;
@@ -161,18 +200,10 @@ std::optional<Acceptance> Session::verifyRemoteVersionLog() {
     try {
         auto loaded = load(*store_, vaultUid_, host_.keys, options);
         const auto sids = d::sidsOf(loaded.root);
-        if (!knownState || loaded.known() != *knownState) {
+        RemoteHead out{loaded.acceptance, std::nullopt};
+        const bool moved = !knownState || loaded.known() != *knownState;
+        if (moved) {
             checkHeadForWriter(loaded.root, loaded.acceptance.root_sha256, *store_, host_.nodeId(), state.own_epoch);
-            state_->recordRoot({.epoch = loaded.acceptance.epoch,
-                                .root_sha256 = loaded.acceptance.root_sha256,
-                                .etag = loaded.etag,
-                                .sids = sids,
-                                .version_id = loaded.version_id,
-                                .base_version_id = loaded.base_version_id,
-                                .settle_window = loaded.settle_window,
-                                .own = false,
-                                .base = baseCopyOf(loaded.root, loaded.root_bytes, loaded.segments, loaded.snapshots)});
-            cache_.base.reset();
         } else if (loaded.version_id && loaded.version_id != state.root_version_id) {
             // The same root, found by its hash (a state from before version ids were recorded, or recorded by a
             // restore).
@@ -196,7 +227,8 @@ std::optional<Acceptance> Session::verifyRemoteVersionLog() {
         }
         if (!loaded.strays.empty())
             note(Notice::Info, std::format("deleted {} stray root version(s) above the head", loaded.strays.size()));
-        return loaded.acceptance;
+        if (moved) settleMoved(out, std::move(loaded), state, knownState);
+        return out;
     } catch (const ChainRejected& e) {
         if (d::refusal(e.code())) refused(e, e.epoch(), e.rootSha256());
         cache_ = {};
@@ -206,7 +238,7 @@ std::optional<Acceptance> Session::verifyRemoteVersionLog() {
     }
 }
 
-std::optional<Acceptance> Session::verifyRemote() {
+std::optional<RemoteHead> Session::verifyRemote() {
     namespace d = session_detail;
     std::scoped_lock lock(mutex_);
     const auto state = state_->state();
@@ -214,31 +246,23 @@ std::optional<Acceptance> Session::verifyRemote() {
     // A pass that changed nothing costs one HEAD of the root (spec 01 §5): its ETag still the one we recorded.
     if (state.etag && state.epoch && state.root_sha256)
         if (const auto etag = store_->headEtag(std::string(kRootKey)); etag && *etag == *state.etag)
-            return Acceptance{*state.epoch, *state.root_sha256, false};
+            return RemoteHead{{*state.epoch, *state.root_sha256, false}, std::nullopt};
     auto obj = store_->get(std::string(kRootKey));
     if (!obj) return std::nullopt;
     if (state.etag && obj->etag && *state.etag == *obj->etag && state.epoch && state.root_sha256)
-        return Acceptance{*state.epoch, *state.root_sha256, false};
+        return RemoteHead{{*state.epoch, *state.root_sha256, false}, std::nullopt};
     const std::optional<Known> knownState =
         state.epoch && state.root_sha256 ? std::make_optional(Known{*state.epoch, *state.root_sha256}) : std::nullopt;
     try {
         // A full load: it authenticates the segments the new root pins and walks a gap through retained roots.
         auto loaded = load(*store_, vaultUid_, host_.keys, {knownState, true, std::move(obj)});
+        RemoteHead out{loaded.acceptance, std::nullopt};
         if (!knownState || loaded.known() != *knownState) {
             // spec 06 §5.5, both modes: a head that excludes this writer after its last own root stops it here.
             checkHeadForWriter(loaded.root, loaded.acceptance.root_sha256, *store_, host_.nodeId(), state.own_epoch);
-            state_->recordRoot({.epoch = loaded.acceptance.epoch,
-                                .root_sha256 = loaded.acceptance.root_sha256,
-                                .etag = loaded.etag,
-                                .sids = d::sidsOf(loaded.root),
-                                .version_id = std::nullopt,
-                                .base_version_id = std::nullopt,
-                                .settle_window = {},
-                                .own = false,
-                                .base = baseCopyOf(loaded.root, loaded.root_bytes, loaded.segments, loaded.snapshots)});
-            cache_.base.reset();
+            settleMoved(out, std::move(loaded), state, knownState);
         }
-        return loaded.acceptance;
+        return out;
     } catch (const ChainRejected& e) {
         if (d::refusal(e.code())) refused(e, e.epoch(), e.rootSha256());
         cache_ = {};

@@ -44,6 +44,7 @@
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Publisher.hpp"
 #include "sync/manifest/Reader.hpp"
+#include "sync/manifest/Reconcile.hpp"
 #include "sync/manifest/Store.hpp"
 
 #include <gtest/gtest.h>
@@ -123,6 +124,7 @@ Content baseContent() {
 
 std::string nodeName(const std::size_t i) { return "node-" + std::to_string(i); }
 std::string fileOf(const std::size_t i) { return "from-" + nodeName(i); }
+std::string movedOf(const std::size_t i) { return fileOf(i) + "-moved"; }
 
 // What writer i publishes: the base plus one file of its own (its pending change).
 Content producedBy(const std::size_t i) {
@@ -238,6 +240,10 @@ struct Scenario {
     std::time_t listing_lag{0};
     bool order_by_start{false};
     Backend backend{Backend::HttpFake};
+    // design/sync/manifest-applier.md, testing item 2: each writer keeps a model database (a Content) and its base
+    // copy (the content of `known`), both surviving a crash. A publish that meets another writer's root applies it
+    // with reconcile instead of merging in memory (apply_on_lost) and publishes the model again.
+    bool model_db{false};
 };
 
 Scenario on(const Backend backend, Scenario sc) {
@@ -278,6 +284,9 @@ struct Db {
     std::optional<Known> known;
     std::optional<uint64_t> own_epoch;
     std::optional<SettledWindow> settled;
+    Content model;                  // model_db: the database's content
+    std::optional<Content> base;    // model_db: the base copy (the content of `known`)
+    std::vector<std::string> noted;   // model_db: the roots PUT since the last record, and the recorded one
 };
 
 struct WriterState {
@@ -286,6 +295,11 @@ struct WriterState {
     PublisherCache cache;
     bool pending{true};
     unsigned crashes{0};
+    unsigned adopted{0};   // model_db: own roots met unrecorded after a crash, adopted
+    // model_db: another writer built on this writer's own unrecorded root before it adopted it. The apply's base is
+    // then `known`, not that root, so changes made since may be read as conflicts (a replicated-vault gap: design,
+    // item 6 prerequisites). Counted, not judged.
+    bool built_on{false};
     unsigned lost{0};
     std::optional<ChainError> refused;
     std::string failure;
@@ -453,6 +467,8 @@ struct RunReport {
     bool deleted_canonical{false};          // repair or GC deleted a version that had been canonical
     bool order_violation_seen{false};
     bool reverted_by_restart{false};
+    unsigned adopted{0};                    // model_db: own unrecorded roots adopted after a restart
+    bool built_on{false};                   // model_db: a crashed writer's own root built on before it adopted it
 };
 
 class Run {
@@ -524,6 +540,8 @@ private:
             w.db.known = base;
             if (i == 0) w.db.own_epoch = 1;
             w.cache.last_produced = baseContent();   // the base of its pending change: what it last saw
+            w.db.model = producedBy(i);
+            w.db.base = baseContent();
         }
         reader_.anchor = base;
         world_.bucket->advance(60);   // the setup is long settled: every listing shows it, however it lags
@@ -590,8 +608,100 @@ private:
         return o;
     }
 
+    // model_db: the head applied to the model database as the applier does (reconcile on the base copy), recorded.
+    void applyHead(ObjectStore& store, WriterState& w) {
+        LoadOptions o;
+        o.known = w.db.known;
+        o.settled = w.db.settled;
+        o.root_cache = &w.cache.roots;
+        const auto head = load(store, world_.vault, world_.lookup(), o);
+        const auto origin = originOf(head.root, head.acceptance.root_sha256, head.base_version_id, w.db.known,
+                                     nodeName(w.index), std::nullopt, w.db.noted);
+        if (origin == HeadOrigin::OwnUnexplained) {
+            violation(nodeName(w.index) + " met a root naming it that it did not publish");
+            throw std::runtime_error("own unexplained");
+        }
+        if (origin == HeadOrigin::OwnPast) {   // its own root, PUT before a crash: adopted, the model kept as it is
+            ++w.adopted;
+            w.db.base = head.content;
+            w.db.known = head.known();
+            if (head.version_id && head.base_version_id)
+                w.db.settled = SettledWindow{*head.base_version_id, *head.version_id, head.settle_window};
+            else w.db.settled.reset();
+            w.db.own_epoch = head.acceptance.epoch;
+            w.db.noted = {head.acceptance.root_sha256};
+            w.cache.base.reset();
+            return;
+        }
+        {
+            const auto t = truthOf(world_, opened_);
+            for (const auto& sha : w.db.noted) {
+                if ((w.db.known && sha == w.db.known->root_sha256) || sha == head.acceptance.root_sha256) continue;
+                for (const auto& id : t.chain)
+                    if (const auto it = t.roots.find(id); it != t.roots.end() && it->second.second == sha)
+                        w.built_on = true;
+            }
+        }
+        auto r = reconcile(w.db.base ? *w.db.base : Content{}, head.content, w.db.model);
+        if (r.stopped()) throw std::runtime_error("the apply stopped");
+        for (const auto& p : treeProblems(r.result)) violation(nodeName(w.index) + "'s model broke: " + p);
+        w.db.model = std::move(r.result);   // one transaction in the model: a crash keeps the old database or this
+        w.db.base = head.content;
+        w.db.known = head.known();
+        w.db.noted = {head.acceptance.root_sha256};
+        if (head.version_id && head.base_version_id)
+            w.db.settled = SettledWindow{*head.base_version_id, *head.version_id, head.settle_window};
+        else w.db.settled.reset();
+        w.cache.base.reset();
+        w.cache.last_produced.reset();
+    }
+
     // One publish attempt sequence; false when it ended without settling (the changes stay pending).
     void publishOnce(ObjectStore& store, WriterState& w) {
+        if (sc_.model_db) {
+            for (unsigned round = 0;; ++round) {
+                try {
+                    auto o = optionsFor(w);
+                    o.apply_on_lost = true;
+                    o.before_root_put = [&w](const std::string& sha) { w.db.noted.push_back(sha); };
+                    if (!w.cache.last_produced) o.pending_base = w.db.base;
+                    const auto r = publish(store, world_.vault, world_.lookup(), world_.sealing(), w.db.model,
+                                           w.db.known, w.cache, o);
+                    w.lost += r.lost;
+                    w.db.known = r.published.known;
+                    w.db.own_epoch = r.published.known.epoch;
+                    w.db.base = r.published.content;
+                    w.db.noted = {r.published.known.root_sha256};
+                    if (r.settled.version_id && r.settled.base_version_id)
+                        w.db.settled = SettledWindow{*r.settled.base_version_id, *r.settled.version_id, r.settled.window};
+                    else w.db.settled.reset();
+                    if (r.settled.version_id) w.recorded.push_back(*r.settled.version_id);
+                    w.pending = false;
+                    return;
+                } catch (const HeadMoved&) {
+                    ++w.lost;
+                    if (round > 2 * sc_.writers + 2) {
+                        w.failure = "too many rounds";
+                        return;
+                    }
+                    try {
+                        applyHead(store, w);
+                    } catch (const ChainRejected& e) {
+                        w.refused = e.code();
+                        return;
+                    } catch (const std::exception& e) {
+                        w.failure = e.what();
+                        return;
+                    }
+                } catch (const ChainRejected& e) {
+                    w.refused = e.code();
+                    return;
+                } catch (const std::exception& e) {
+                    w.failure = e.what();
+                    return;
+                }
+            }
+        }
         const auto produced = producedBy(w.index);
         try {
             const auto r = publish(store, world_.vault, world_.lookup(), world_.sealing(), produced, w.db.known, w.cache,
@@ -626,6 +736,11 @@ private:
                 // Restart from the database only: the publisher's cache (its pending base among it) is gone.
                 ++w.crashes;
                 w.cache = {};
+                if (sc_.model_db)
+                    // A local change before its next step: its own file renamed. An apply of its own unrecorded root
+                    // as another writer's would undo it (placement changed on both sides: the head's).
+                    for (auto& e : w.db.model.entries)
+                        if (e.name == fileOf(w.index)) e.name = movedOf(w.index);
             }
         }
     }
@@ -697,7 +812,10 @@ private:
         world_.free = true;
         world_.bucket->listingLag(0);
         auto store = world_.plainStore();
-        for (auto& w : writers_) report_.lost_rounds += w.lost;
+        for (auto& w : writers_) {
+            report_.lost_rounds += w.lost;
+            report_.adopted += w.adopted;
+        }
         for (unsigned pass = 0; pass < 3; ++pass)
             for (auto& w : writers_)
                 if (w.pending && !w.refused) {
@@ -770,8 +888,26 @@ private:
         if (!t.chain.empty() && head.version_id != t.chain.back()) violation("the head read is not the canonical head");
         std::set<std::string> names;
         for (const auto& e : head.content.entries) names.insert(e.name);
+        if (sc_.model_db)
+            // At quiescence every model database equals the head (each applies it once more if it moved).
+            for (auto& w : writers_) {
+                if (w.refused) continue;
+                if (!w.db.known || *w.db.known != head.known()) applyHead(*store, w);
+                std::set<std::string> model;
+                for (const auto& e : w.db.model.entries) model.insert(e.name);
+                if (model != names) violation(nodeName(w.index) + "'s model database is not the head");
+            }
         const bool restarted = sc_.fault.kind != Fault::None && writers_[sc_.fault.actor].crashes > 0;
-        for (std::size_t i = 0; i < sc_.writers; ++i)
+        for (std::size_t i = 0; i < sc_.writers; ++i) {
+            if (sc_.model_db && writers_[i].crashes > 0) {
+                // its rename after the crash is kept: never reverted by its own earlier root
+                const bool kept = names.contains(movedOf(i)) && !names.contains(fileOf(i));
+                if (!kept && writers_[i].built_on) report_.built_on = true;
+                else if (!kept) violation("I4: " + nodeName(i) + "'s rename after its restart is not the head's");
+                if (!names.contains(movedOf(i)) && !names.contains(fileOf(i)))
+                    violation("I4: " + nodeName(i) + "'s file is not in the head");
+                continue;
+            }
             if (!names.contains(fileOf(i))) {
                 // spec 06 §5.5: a server restarted from its database alone (no pending base in memory) merges as if
                 // the head were its base, so another writer's change its database lacks goes. Never its own change,
@@ -781,6 +917,7 @@ private:
                 if (restarted && i != sc_.fault.actor) report_.reverted_by_restart = true;
                 else violation("I4: " + fileOf(i) + " is not in the head");
             }
+        }
     }
 
     Scenario sc_;
@@ -806,6 +943,8 @@ struct Explored {
     unsigned forks{0}, order_violations{0}, deleted_canonical{0};
     unsigned order_violation{0};
     unsigned reverted_by_restart{0};
+    unsigned adopted{0};
+    unsigned built_on{0};
     bool nondeterministic{false};
     std::vector<std::string> first_violations;
 };
@@ -822,6 +961,8 @@ void tally(Explored& e, const RunReport& r, const std::string& label) {
     if (r.deleted_canonical) ++e.deleted_canonical;
     if (r.order_violation_seen) ++e.order_violation;
     if (r.reverted_by_restart) ++e.reverted_by_restart;
+    e.adopted += r.adopted;
+    if (r.built_on) ++e.built_on;
     if (!r.violations.empty() && e.first_violations.size() < 5)
         e.first_violations.push_back(label + ": " + r.violations.front());
 }
@@ -924,6 +1065,38 @@ TEST_P(ManifestVersionLogFaults, ACrashAtEveryStepRestartsFromTheDatabaseOnly) {
     EXPECT_GT(all.reverted_by_restart, 0u);
     RecordProperty("runs", static_cast<int>(all.runs));
     RecordProperty("reverted_by_restart", static_cast<int>(all.reverted_by_restart));
+}
+
+// The same crashes with the applier (design/sync/manifest-applier.md, testing item 2): each writer's database takes in
+// the heads it meets (reconcile on its base copy), adopts its own root a crash left unrecorded, and a restart keeps
+// both; the crashed writer renames its own file before its next step. Nothing is reverted by a restart (not even that
+// rename by its own earlier root), and at quiescence every model database is the head.
+TEST_P(ManifestVersionLogFaults, WithTheApplierACrashAtEveryStepRevertsNothing) {
+    f::Explored all;
+    for (const auto kind : {f::Fault::CrashBefore, f::Fault::CrashAfter})
+        for (unsigned at = 0; at < 8; ++at) {
+            const std::string label = std::string(kind == f::Fault::CrashBefore ? "crash before" : "crash after") +
+                                      " point " + std::to_string(at) + " (model db)";
+            for (const auto& e : {f::exhaust(GetParam(), {.reader = false, .gating = f::Gating::FaultyActorFull,
+                                                          .fault = {0, at, kind}, .model_db = true}, label),
+                                  f::sample(GetParam(), {.reader = false, .fault = {0, at, kind}, .model_db = true}, 30,
+                                            label)}) {
+                f::expectClean(e);
+                all.runs += e.runs;
+                all.with_fault += e.with_fault;
+                all.reverted_by_restart += e.reverted_by_restart;
+                all.adopted += e.adopted;
+                all.built_on += e.built_on;
+            }
+        }
+    EXPECT_GT(all.with_fault, 100u);
+    EXPECT_EQ(all.reverted_by_restart, 0u);
+    EXPECT_GT(all.adopted, 0u) << "some crash left an own root unrecorded (after its PUT), adopted at the restart";
+    RecordProperty("adopted", static_cast<int>(all.adopted));
+    // The replicated-vault gap (design item 6 prerequisites), measured: runs where another writer built on a crashed
+    // writer's unrecorded root before its restart, so the crashed writer's later rename lost to that root.
+    RecordProperty("own_root_built_on", static_cast<int>(all.built_on));
+    RecordProperty("runs", static_cast<int>(all.runs));
 }
 
 TEST_P(ManifestVersionLogFaults, LostRepliesAndFailuresBeforeTheCommitAtEveryStep) {

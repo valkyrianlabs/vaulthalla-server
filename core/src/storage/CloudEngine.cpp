@@ -522,6 +522,10 @@ void CloudEngine::publishManifestV2(const bool onlyIfChanged) const {
         throw SyncStalled("manifest_publish_unsupported: " + bucket_capability::unpublishableReason(mode));
     } catch (const vh::sync::manifest::ConditionsUnsupported& e) {
         throw SyncStalled(bucket_capability::noteChanged(vault->id, e.what()));
+    } catch (const vh::sync::manifest::ApplyIncomplete& e) {
+        throw SyncStalled(e.what());
+    } catch (const vh::sync::vault_manifest::ApplyStopped& e) {
+        throw SyncStalled(std::string("manifest_apply_stopped: ") + e.what());
     }
     try {
         (void)manifestV2()->collectGarbageIfDue();
@@ -533,12 +537,15 @@ void CloudEngine::publishManifestV2(const bool onlyIfChanged) const {
 
 bool CloudEngine::refreshRemoteIndexFromManifestIfChanged() const {
     if (usesManifestV2()) {
-        // The v2 manifest is verified (chain rules, operator alert on rollback or fork), never loaded into the
-        // path-keyed remote index: the pass lists or uses its index as before.
+        // The v2 manifest is verified (chain rules, operator alert on rollback or fork) and, when another writer's
+        // root is the head, applied to the database (design/sync/manifest-applier.md): its index rows are written
+        // there, so the pass reads its index as before (never the path-keyed manifest load below).
         try {
-            (void)manifestV2()->verifyRemote();
+            (void)manifestV2()->applyRemote();
         } catch (const vh::sync::manifest::ChainRejected& e) {
             throw SyncStalled(std::string("the bucket's manifest root was refused: ") + e.what());
+        } catch (const vh::sync::vault_manifest::ApplyStopped& e) {
+            throw SyncStalled(std::string("manifest_apply_stopped: ") + e.what());
         }
         return false;
     }

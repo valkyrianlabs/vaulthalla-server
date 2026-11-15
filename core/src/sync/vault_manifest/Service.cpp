@@ -27,6 +27,9 @@ public:
     void markApplying(const uint64_t epoch, const std::string& rootSha256) override {
         db::query::sync::Manifest::markApplying(vaultId_, epoch, rootSha256);
     }
+    void notePublishing(const std::string& rootSha256) override {
+        db::query::sync::Manifest::notePublishing(vaultId_, rootSha256);
+    }
     bool recordRefused(const std::string& reason, const uint64_t epoch, const std::string& rootSha256) override {
         return db::query::sync::Manifest::recordRefused(vaultId_, reason, epoch, rootSha256);
     }
@@ -69,6 +72,7 @@ manifest::SessionHost hostOf(const uint32_t vaultId, const std::shared_ptr<vault
     };
     host.keys = lookupOf(keys);
     host.nodeId = [] { return db::query::device::Devices::nodeId(); };
+    host.vaultId = vaultId;
     host.now = [] { return std::time(nullptr); };
     host.alert = [vaultId](const manifest::Refusal& r) {
         notifyRefusedRoot(vaultId, r.reason, r.epoch, r.root_sha256, r.known);
@@ -88,17 +92,52 @@ manifest::SessionHost hostOf(const uint32_t vaultId, const std::shared_ptr<vault
 
 Service::Service(const uint32_t vaultId, const manifest::Uid& vaultUid, std::shared_ptr<manifest::ObjectStore> store,
                  std::shared_ptr<vault::EncryptionManager> keys)
-    : keys_(std::move(keys)),
+    : vaultId_(vaultId), vaultUid_(vaultUid), keys_(std::move(keys)),
       session_(vaultUid, service_detail::required(std::move(store), keys_),
                std::make_shared<service_detail::DatabaseState>(vaultId), service_detail::hostOf(vaultId, keys_)) {}
 
 crypto::vhf1::KeyLookup Service::keyLookup() const { return service_detail::lookupOf(keys_); }
 
-manifest::PublishReport Service::publish() { return session_.publish(); }
+template <typename F>
+auto Service::publishRounds(F&& once) -> decltype(once()) {
+    for (unsigned round = 1;; ++round) {
+        try {
+            return once();
+        } catch (const manifest::HeadMoved& e) {
+            if (round >= kPublishRounds)
+                throw manifest::PublishConflict(
+                    fmt::format("manifest publish conflict after {} rounds of applying another writer's root", round));
+            log::Registry::cloud()->info("[manifest] Vault {}: {}; applying it before publishing", vaultId_, e.what());
+            (void)applyRemote();
+        }
+    }
+}
 
-std::optional<manifest::PublishReport> Service::publishIfChanged() { return session_.publishIfChanged(); }
+manifest::PublishReport Service::publish() {
+    return publishRounds([&] { return session_.publish(); });
+}
 
-std::optional<manifest::Acceptance> Service::verifyRemote() { return session_.verifyRemote(); }
+std::optional<manifest::PublishReport> Service::publishIfChanged() {
+    return publishRounds([&] { return session_.publishIfChanged(); });
+}
+
+std::optional<manifest::RemoteHead> Service::verifyRemote() { return session_.verifyRemote(); }
+
+std::optional<ApplyReport> Service::applyRemote(const ApplyOptions& options) {
+    // One apply per vault at a time: a pass and a publish meeting HeadMoved on another thread both come here.
+    std::scoped_lock lock(applyMutex_);
+    (void)finishDeferred(vaultId_, options);
+    auto verified = session_.verifyRemote();
+    if (verified && verified->own_unexplained)
+        throw ApplyStopped(fmt::format("the bucket's root of epoch {} names this server and vault as its producer but is "
+                                       "not a root this server published on its recorded one: another installation "
+                                       "may be publishing under this server's identity (a cloned database)",
+                                       verified->epoch));
+    if (!verified || !verified->head) return std::nullopt;
+    auto report = apply(vaultId_, vaultUid_, keyLookup(), *verified->head, db::query::device::Devices::nodeId(), options);
+    if (report.recorded) session_.applied();
+    return report;
+}
 
 std::optional<manifest::GcReport> Service::collectGarbageIfDue(const std::time_t now) {
     return session_.collectGarbageIfDue(now);

@@ -1,0 +1,376 @@
+#include "db/query/sync/ManifestApply.hpp"
+
+#include "crypto/id/Generator.hpp"
+#include "crypto/id/ObjectUid.hpp"
+#include "crypto/util/encrypt.hpp"
+#include "db/Transactions.hpp"
+#include "db/query/fs/Directory.hpp"
+#include "sync/manifest/Objects.hpp"
+#include "vault/Content.hpp"
+
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
+#include <map>
+#include <stdexcept>
+
+namespace vh::db::query::sync {
+
+namespace manifest_apply_detail {
+
+namespace mf = vh::sync::manifest;
+
+std::string uuidOf(const std::string& uid) { return vh::crypto::id::toUuid(mf::parseUid(uid, "bad_segment", "entry uid")); }
+
+std::string uidOfUuid(const std::string& uuid) { return mf::uidText(vh::crypto::id::fromUuid(uuid)); }
+
+std::optional<std::string> optText(const pqxx::field_ref& f) {
+    if (f.is_null()) return std::nullopt;
+    return f.as<std::string>();
+}
+
+std::string alias(const std::string& token) { return vh::crypto::id::Generator({.namespace_token = token}).generate(); }
+
+std::string objectKey(const std::string& uid) { return std::string(mf::kObjectPrefix) + uid; }
+
+ApplyRow::Kind kindOf(const std::string& k) {
+    if (k == "dir") return ApplyRow::Kind::Dir;
+    if (k == "symlink") return ApplyRow::Kind::Symlink;
+    return ApplyRow::Kind::File;
+}
+
+}
+
+std::optional<std::string> ManifestApply::hexOfB64(const std::optional<std::string>& b64) {
+    if (!b64 || b64->empty()) return std::nullopt;
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out;
+    for (const auto b : vh::crypto::util::b64_decode(*b64)) {
+        out += kHex[b >> 4];
+        out += kHex[b & 0x0f];
+    }
+    return out;
+}
+
+std::optional<std::string> ManifestApply::b64OfHex(const std::optional<std::string>& hex) {
+    if (!hex || hex->empty() || hex->size() % 2) return std::nullopt;
+    std::vector<uint8_t> bytes;
+    for (std::size_t i = 0; i < hex->size(); i += 2) bytes.push_back(static_cast<uint8_t>(std::stoi(hex->substr(i, 2), nullptr, 16)));
+    return vh::crypto::util::b64_encode(bytes);
+}
+
+std::optional<ApplyRow> ManifestApply::row(const uint32_t vaultId, const std::string& uid) {
+    return Transactions::exec("ManifestApply::row", [&](pqxx::work& txn) { return row(txn, vaultId, uid); });
+}
+
+std::optional<ApplyRow> ManifestApply::row(pqxx::work& txn, const uint32_t vaultId, const std::string& uid) {
+    using namespace manifest_apply_detail;
+    const auto uuid = uuidOf(uid);
+    const auto live = txn.exec(
+        "SELECT e.id, e.parent_id, e.name, e.path, e.inode, pd.uid::text AS parent_uid, f.encryption_iv, "
+        "       roi.encryption_iv AS index_iv, "
+        "       CASE WHEN d.fs_entry_id IS NOT NULL THEN 'dir' WHEN f.fs_entry_id IS NOT NULL THEN 'file' "
+        "            ELSE 'symlink' END AS kind "
+        "FROM fs_entry e LEFT JOIN directories d ON d.fs_entry_id = e.id LEFT JOIN files f ON f.fs_entry_id = e.id "
+        "LEFT JOIN symlinks s ON s.fs_entry_id = e.id LEFT JOIN directories pd ON pd.fs_entry_id = e.parent_id "
+        "LEFT JOIN remote_object_index roi ON roi.vault_id = e.vault_id AND roi.object_key = $3 "
+        "WHERE e.vault_id = $1 AND (d.uid = $2::uuid OR f.object_uid = $2::uuid OR s.uid = $2::uuid)",
+        pqxx::params{vaultId, uuid, objectKey(uid)});
+    if (!live.empty()) {
+        const auto r = live[0];
+        ApplyRow out;
+        out.kind = kindOf(r["kind"].as<std::string>());
+        out.id = r["id"].as<unsigned int>();
+        if (!r["parent_id"].is_null()) out.parent_id = r["parent_id"].as<unsigned int>();
+        if (const auto p = optText(r["parent_uid"])) out.parent_uid = uidOfUuid(*p);
+        out.name = r["name"].as<std::string>();
+        out.path = r["path"].as<std::string>();
+        if (!r["inode"].is_null()) out.inode = r["inode"].as<uint64_t>();
+        out.files_generation = hexOfB64(optText(r["encryption_iv"]));
+        out.index_generation = hexOfB64(optText(r["index_iv"]));
+        return out;
+    }
+    const auto trashed = txn.exec(
+        "SELECT t.id, t.path, t.backing_path, roi.encryption_iv AS index_iv FROM files_trashed t "
+        "LEFT JOIN remote_object_index roi ON roi.vault_id = t.vault_id AND roi.object_key = $3 "
+        "WHERE t.vault_id = $1 AND t.object_uid = $2::uuid AND t.deleted_at IS NULL ORDER BY t.id DESC LIMIT 1",
+        pqxx::params{vaultId, uuid, objectKey(uid)});
+    if (trashed.empty()) return std::nullopt;
+    ApplyRow out;
+    out.trashed = true;
+    out.id = trashed[0]["id"].as<unsigned int>();
+    out.path = trashed[0]["path"].as<std::string>();
+    out.backing_path = optText(trashed[0]["backing_path"]);
+    out.index_generation = hexOfB64(optText(trashed[0]["index_iv"]));
+    return out;
+}
+
+std::optional<unsigned int> ManifestApply::createEntry(pqxx::work& txn, const uint32_t vaultId, const unsigned int ownerId,
+                                                       const vh::sync::manifest::Entry& e, const unsigned int parentId,
+                                                       const std::string& path, const std::optional<uint64_t> inode) {
+    using namespace manifest_apply_detail;
+    if (const auto r = row(txn, vaultId, e.uid); r && !r->trashed) return std::nullopt;   // the uid is live already
+    const auto mode = e.mode.value_or(e.kind == mf::EntryKind::Dir ? 0755u : 0644u);
+    const auto inserted = txn.exec(
+        "INSERT INTO fs_entry (vault_id, parent_id, name, base32_alias, created_by, created_at, updated_at, "
+        "  last_modified_by, path, mode, owner_uid, group_gid, is_hidden, is_system, inode) "
+        "VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, NOW()), COALESCE($7::timestamptz, NOW()), $5, $8, $9, "
+        "  $10, $11, false, false, $12) ON CONFLICT DO NOTHING RETURNING id",
+        pqxx::params{vaultId, parentId, e.name, alias(e.name), ownerId, e.ctime, e.mtime, path, static_cast<int>(mode),
+                     e.owner ? std::optional<int64_t>(e.owner->uid) : std::nullopt,
+                     e.owner ? std::optional<int64_t>(e.owner->gid) : std::nullopt,
+                     inode ? std::optional<int64_t>(static_cast<int64_t>(*inode)) : std::nullopt});
+    if (inserted.empty()) return std::nullopt;   // the name is taken in that folder
+    const auto id = inserted[0][0].as<unsigned int>();
+    const auto uuid = uuidOf(e.uid);
+    switch (e.kind) {
+    case mf::EntryKind::Dir:
+        txn.exec("INSERT INTO directories (fs_entry_id, file_count, subdirectory_count, size_bytes, uid) "
+                 "VALUES ($1, 0, 0, 0, $2)",
+                 pqxx::params{id, uuid});
+        db::query::fs::Directory::addToAncestorStats(txn, parentId, 0, 0, 1);
+        break;
+    case mf::EntryKind::File: {
+        const auto gen = b64OfHex(e.generation);
+        txn.exec("INSERT INTO files (fs_entry_id, size_bytes, mime_type, content_hash, encryption_iv, "
+                 "encrypted_with_key_version, object_uid) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                 pqxx::params{id, static_cast<int64_t>(e.size.value_or(0)), e.mime, e.content_hash, gen.value_or(""),
+                              static_cast<int>(gen ? e.key_version.value_or(0) : 0), uuid});
+        db::query::fs::Directory::addToAncestorStats(txn, parentId, static_cast<int64_t>(e.size.value_or(0)), 1, 0);
+        break;
+    }
+    case mf::EntryKind::Symlink:
+        txn.exec("INSERT INTO symlinks (fs_entry_id, target, uid) VALUES ($1, $2, $3)",
+                 pqxx::params{id, e.target.value_or(""), uuid});
+        db::query::fs::Directory::addToAncestorStats(txn, parentId, 0, 1, 0);
+        break;
+    case mf::EntryKind::Tombstone: throw std::invalid_argument("a tombstone is not an entry");
+    }
+    return id;
+}
+
+void ManifestApply::createTrashed(pqxx::work& txn, const uint32_t vaultId, const unsigned int ownerId,
+                                  const vh::sync::manifest::Entry& e, const std::string& path) {
+    using namespace manifest_apply_detail;
+    txn.exec("INSERT INTO files_trashed (vault_id, path, backing_path, base32_alias, size_bytes, trashed_at, trashed_by, "
+             "  object_uid) VALUES ($1, $2, '', $3, $4, COALESCE(NULLIF($5, '')::timestamptz, NOW()), $6, $7)",
+             pqxx::params{vaultId, path, alias(path + ":" + e.uid), static_cast<int64_t>(e.size.value_or(0)),
+                          e.trashed ? std::optional(e.trashed->at) : std::nullopt, ownerId, uuidOf(e.uid)});
+}
+
+void ManifestApply::upsertIndex(pqxx::work& txn, const uint32_t vaultId, const vh::sync::manifest::Entry& e) {
+    using namespace manifest_apply_detail;
+    if (!e.object) return;
+    const auto gen = b64OfHex(e.generation);
+    const auto size = gen ? e.size.value_or(0) : e.object->size;
+    txn.exec("INSERT INTO remote_object_index (vault_id, object_key, size_bytes, last_modified, etag, storage_class, "
+             "  version_id, source, content_hash, encrypted, encryption_iv, encrypted_with_key_version) "
+             "VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7, 'manifest', $8, true, $9, $10) "
+             "ON CONFLICT (vault_id, object_key) DO UPDATE SET size_bytes = EXCLUDED.size_bytes, "
+             "  last_modified = EXCLUDED.last_modified, etag = EXCLUDED.etag, storage_class = EXCLUDED.storage_class, "
+             "  version_id = EXCLUDED.version_id, source = 'manifest', content_hash = EXCLUDED.content_hash, "
+             "  encrypted = true, encryption_iv = EXCLUDED.encryption_iv, "
+             "  encrypted_with_key_version = EXCLUDED.encrypted_with_key_version",
+             pqxx::params{vaultId, objectKey(e.uid), static_cast<int64_t>(size), e.mtime, e.object->etag,
+                          e.object->storage_class, e.object->version_id, e.content_hash, gen,
+                          gen ? std::optional<int>(static_cast<int>(e.key_version.value_or(0))) : std::nullopt});
+}
+
+void ManifestApply::deleteIndex(pqxx::work& txn, const uint32_t vaultId, const std::string& uid) {
+    using namespace manifest_apply_detail;
+    txn.exec("DELETE FROM remote_object_index WHERE vault_id = $1 AND object_key = $2", pqxx::params{vaultId, objectKey(uid)});
+}
+
+bool ManifestApply::replaceContent(pqxx::work& txn, const unsigned int fileId, const vh::sync::manifest::Entry& e,
+                                   const std::optional<std::string>& expectedHex) {
+    const auto gen = b64OfHex(e.generation);
+    const auto before = txn.exec("SELECT f.size_bytes, f.encryption_iv, e.parent_id FROM files f "
+                                 "JOIN fs_entry e ON e.id = f.fs_entry_id WHERE f.fs_entry_id = $1 FOR UPDATE",
+                                 pqxx::params{fileId});
+    if (before.empty()) return false;
+    std::optional<std::string> iv;
+    if (!before[0][1].is_null()) iv = before[0][1].as<std::string>();
+    if (hexOfB64(iv) != expectedHex) return false;
+    const auto oldSize = before[0][0].as<int64_t>();
+    txn.exec("UPDATE files SET size_bytes = $2, mime_type = COALESCE($3, mime_type), content_hash = $4, "
+             "  encryption_iv = $5, encrypted_with_key_version = $6 WHERE fs_entry_id = $1",
+             pqxx::params{fileId, static_cast<int64_t>(e.size.value_or(0)), e.mime, e.content_hash, gen.value_or(""),
+                          static_cast<int>(gen ? e.key_version.value_or(0) : 0)});
+    txn.exec("UPDATE fs_entry SET updated_at = COALESCE($2::timestamptz, NOW()) WHERE id = $1",
+             pqxx::params{fileId, e.mtime});
+    if (!before[0][2].is_null())
+        db::query::fs::Directory::addToAncestorStats(txn, before[0][2].as<unsigned int>(),
+                                      static_cast<int64_t>(e.size.value_or(0)) - oldSize, 0, 0);
+    return true;
+}
+
+bool ManifestApply::moveRow(pqxx::work& txn, const unsigned int id, const unsigned int fromParentId,
+                            const std::string& fromName, const unsigned int toParentId, const std::string& toName,
+                            const std::string& toPath) {
+    const auto totals = db::query::fs::Directory::subtreeTotalsOf(txn, id);
+    if (!totals) return false;
+    const auto moved = txn.exec("UPDATE fs_entry SET parent_id = $2, name = $3, path = $4, updated_at = NOW() "
+                                "WHERE id = $1 AND parent_id = $5 AND name = $6 RETURNING id",
+                                pqxx::params{id, toParentId, toName, toPath, fromParentId, fromName});
+    if (moved.empty()) return false;
+    db::query::fs::Directory::shiftSubtreeTotals(txn, fromParentId, toParentId, *totals);
+    return true;
+}
+
+bool ManifestApply::setAttributes(pqxx::work& txn, const unsigned int entryId, const vh::sync::manifest::Entry& ours,
+                                  const vh::sync::manifest::Entry& target) {
+    const auto opt = [](const auto& o) {
+        return o ? std::optional<int64_t>(static_cast<int64_t>(*o)) : std::nullopt;
+    };
+    const auto updated = txn.exec(
+        "UPDATE fs_entry SET mode = COALESCE($2, mode), owner_uid = $3, group_gid = $4 WHERE id = $1 "
+        "AND mode IS NOT DISTINCT FROM COALESCE($5, mode) AND owner_uid IS NOT DISTINCT FROM $6 "
+        "AND group_gid IS NOT DISTINCT FROM $7 RETURNING id",
+        pqxx::params{entryId, opt(target.mode), target.owner ? std::optional(target.owner->uid) : std::nullopt,
+                     target.owner ? std::optional(target.owner->gid) : std::nullopt, opt(ours.mode),
+                     ours.owner ? std::optional(ours.owner->uid) : std::nullopt,
+                     ours.owner ? std::optional(ours.owner->gid) : std::nullopt});
+    if (updated.empty()) return false;
+    if (target.kind == vh::sync::manifest::EntryKind::Symlink && target.target != ours.target)
+        txn.exec("UPDATE symlinks SET target = $2 WHERE fs_entry_id = $1 AND target IS NOT DISTINCT FROM $3",
+                 pqxx::params{entryId, target.target.value_or(""), ours.target});
+    return true;
+}
+
+void ManifestApply::addHistory(pqxx::work& txn, const uint32_t vaultId, const vh::sync::manifest::Entry& e) {
+    using namespace manifest_apply_detail;
+    for (std::size_t i = 0; i < e.versions.size(); ++i) {
+        const auto& v = e.versions[i];
+        const auto vgen = b64OfHex(v.generation);
+        const bool latest = e.object ? (e.object->version_id && *e.object->version_id == v.version_id) : false;
+        std::optional<int64_t> plain;
+        if (v.size && vgen)
+            if (const auto p = vh::vault::content::plaintextSizeOfGeneration(*v.size, *vgen)) plain = static_cast<int64_t>(*p);
+        txn.exec("INSERT INTO upstream_object_version (vault_id, object_key, version_id, is_delete_marker, is_latest, "
+                 "  etag, size_bytes, last_modified, origin, encrypted, encryption_iv, key_version, plaintext_bytes, "
+                 "  became_noncurrent_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, 'observed', $9, $10, "
+                 "  $11, $12, $13::timestamptz) ON CONFLICT (vault_id, object_key, version_id) DO NOTHING",
+                 pqxx::params{vaultId, objectKey(e.uid), v.version_id, v.delete_marker, latest, v.etag,
+                              v.size ? std::optional<int64_t>(static_cast<int64_t>(*v.size)) : std::nullopt,
+                              v.last_modified, !v.delete_marker, vgen,
+                              v.key_version ? std::optional<int>(static_cast<int>(*v.key_version)) : std::nullopt,
+                              plain, v.noncurrent_at});
+    }
+}
+
+void ManifestApply::createSnapshot(pqxx::work& txn, const uint32_t vaultId, const unsigned int ownerId,
+                                   const vh::sync::manifest::SnapshotRecord& s,
+                                   const vh::sync::manifest::Content& result) {
+    using namespace manifest_apply_detail;
+    (void)ownerId;
+    const auto sid = txn.exec("INSERT INTO recovery_snapshot (vault_id, name, root_path, root_type, state, file_count, "
+                              "  directory_count, plaintext_bytes, created_at, completed_at, uid) "
+                              "VALUES ($1, $2, $3, 'directory', 'ready', $4, 0, 0, "
+                              "  COALESCE(NULLIF($5, '')::timestamptz, NOW()), COALESCE(NULLIF($5, '')::timestamptz, NOW()), "
+                              "  $6::uuid) ON CONFLICT DO NOTHING RETURNING id",
+                              pqxx::params{vaultId, s.name, s.root_path.empty() ? "/" : s.root_path,
+                                           static_cast<int64_t>(s.members.size()), s.created_at, uuidOf(s.uid)});
+    if (sid.empty()) return;   // a local snapshot of that name, or the uid exists
+    const auto snapshotId = sid[0][0].as<int64_t>();
+    std::map<std::string, int> numbers;
+    int64_t bytes = 0;
+    for (const auto& m : s.members) {
+        std::optional<unsigned int> fileId;
+        uint64_t size = 0;
+        if (m.uid) {
+            const auto f = txn.exec("SELECT f.fs_entry_id FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id "
+                                    "WHERE e.vault_id = $1 AND f.object_uid = $2::uuid",
+                                    pqxx::params{vaultId, uuidOf(*m.uid)});
+            if (!f.empty()) fileId = f[0][0].as<unsigned int>();
+            if (const auto e = std::ranges::find(result.entries, *m.uid, &mf::Entry::uid); e != result.entries.end())
+                size = e->size.value_or(0);
+        }
+        bytes += static_cast<int64_t>(size);
+        const int number = m.uid ? ++numbers[*m.uid] : 1;
+        std::string rel = m.path_at_capture;
+        if (const auto& rp = s.root_path; !rp.empty() && rp != "/" && rel.starts_with(rp + "/")) rel = rel.substr(rp.size() + 1);
+        else if (rel.starts_with("/")) rel = rel.substr(1);
+        const bool fromBucket = m.restorable_from_bucket && m.uid.has_value();
+        txn.exec("INSERT INTO file_versions (vault_id, file_id, snapshot_id, blob_id, version_number, content_hash, "
+                 "  size_bytes, path, rel_path, created_at, origin, upstream_state, upstream_key, upstream_version_id) "
+                 "VALUES ($1, $2, $3, NULL, $4, NULL, $5, $6, $7, COALESCE(NULLIF($8, '')::timestamptz, NOW()), "
+                 "  'snapshot', $9, $10, $11)",
+                 pqxx::params{vaultId, fileId, snapshotId, number, static_cast<int64_t>(size), m.path_at_capture, rel,
+                              s.created_at, fromBucket ? "sent" : "none",
+                              fromBucket ? std::optional<std::string>(objectKey(*m.uid)) : std::nullopt,
+                              fromBucket ? m.provider_version_id : std::nullopt});
+    }
+    txn.exec("UPDATE recovery_snapshot SET plaintext_bytes = $2 WHERE id = $1", pqxx::params{snapshotId, bytes});
+}
+
+std::optional<int64_t> ManifestApply::snapshotId(const uint32_t vaultId, const std::string& uid) {
+    using namespace manifest_apply_detail;
+    return Transactions::exec("ManifestApply::snapshotId", [&](pqxx::work& txn) -> std::optional<int64_t> {
+        const auto r = txn.exec("SELECT id FROM recovery_snapshot WHERE vault_id = $1 AND uid = $2::uuid",
+                                pqxx::params{vaultId, uuidOf(uid)});
+        if (r.empty()) return std::nullopt;
+        return r[0][0].as<int64_t>();
+    });
+}
+
+std::vector<std::string> ManifestApply::setVault(pqxx::work& txn, const uint32_t vaultId,
+                                                 const vh::sync::manifest::VaultInfo& ours,
+                                                 const vh::sync::manifest::VaultInfo& target) {
+    std::vector<std::string> notes;
+    if (target.name != ours.name) {
+        const auto taken = txn.exec("SELECT 1 FROM vault WHERE name = $1 AND id <> $2", pqxx::params{target.name, vaultId});
+        if (taken.empty())
+            txn.exec("UPDATE vault SET name = $2 WHERE id = $1 AND name = $3", pqxx::params{vaultId, target.name, ours.name});
+        else notes.push_back("the vault name is held by another vault on this server; kept");
+    }
+    if (target.quota_bytes != ours.quota_bytes)
+        txn.exec("UPDATE vault SET quota = $2 WHERE id = $1",
+                 pqxx::params{vaultId, static_cast<int64_t>(target.quota_bytes.value_or(0))});
+    if (target.sync_strategy != ours.sync_strategy) {
+        if (target.sync_strategy == "cache" || target.sync_strategy == "sync")
+            txn.exec("UPDATE rsync r SET strategy = $2 FROM sync s WHERE s.id = r.sync_id AND s.vault_id = $1",
+                     pqxx::params{vaultId, *target.sync_strategy});
+        else notes.push_back("the sync strategy " + target.sync_strategy.value_or("(none)") + " is not taken by a replica");
+    }
+    if (target.recovery_policy != ours.recovery_policy)
+        notes.push_back("the file-recovery policy is set on each server (vh vault recovery); kept");
+    return notes;
+}
+
+void ManifestApply::defer(pqxx::work& txn, const uint32_t vaultId, const DeferredEntry& d) {
+    using namespace manifest_apply_detail;
+    txn.exec("INSERT INTO manifest_apply_deferred (vault_id, uid, op, target, ours_generation, root_epoch, root_sha256) "
+             "VALUES ($1, $2::uuid, $3, $4::jsonb, $5, $6, $7) ON CONFLICT (vault_id, uid) DO UPDATE SET op = EXCLUDED.op, "
+             "  target = EXCLUDED.target, ours_generation = EXCLUDED.ours_generation, root_epoch = EXCLUDED.root_epoch, "
+             "  root_sha256 = EXCLUDED.root_sha256, deferred_at = CURRENT_TIMESTAMP",
+             pqxx::params{vaultId, uuidOf(d.uid), d.op,
+                          d.target ? std::optional<std::string>(mf::canonicalJson(mf::toJson(*d.target))) : std::nullopt,
+                          d.ours_generation, static_cast<int64_t>(d.root_epoch), d.root_sha256});
+}
+
+std::vector<DeferredEntry> ManifestApply::deferred(const uint32_t vaultId) {
+    using namespace manifest_apply_detail;
+    return Transactions::exec("ManifestApply::deferred", [&](pqxx::work& txn) {
+        std::vector<DeferredEntry> out;
+        for (const auto r : txn.exec("SELECT uid::text, op, target::text, ours_generation, root_epoch, root_sha256 "
+                                     "FROM manifest_apply_deferred WHERE vault_id = $1 ORDER BY deferred_at",
+                                     pqxx::params{vaultId})) {
+            DeferredEntry d;
+            d.uid = uidOfUuid(r[0].as<std::string>());
+            d.op = r[1].as<std::string>();
+            if (const auto t = optText(r[2])) d.target = mf::entryFromJson(nlohmann::json::parse(*t));
+            d.ours_generation = optText(r[3]);
+            d.root_epoch = r[4].as<uint64_t>();
+            d.root_sha256 = r[5].as<std::string>();
+            out.push_back(std::move(d));
+        }
+        return out;
+    });
+}
+
+void ManifestApply::dropDeferred(pqxx::work& txn, const uint32_t vaultId, const std::string& uid) {
+    using namespace manifest_apply_detail;
+    txn.exec("DELETE FROM manifest_apply_deferred WHERE vault_id = $1 AND uid = $2::uuid", pqxx::params{vaultId, uuidOf(uid)});
+}
+
+}
