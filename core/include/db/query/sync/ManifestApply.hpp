@@ -6,6 +6,7 @@
 #include <pqxx/transaction>
 
 #include <cstdint>
+#include <ctime>
 #include <optional>
 #include <set>
 #include <string>
@@ -70,11 +71,15 @@ public:
                                              const std::optional<std::string>& expectedHex);
     // A file with no local bytes (remote-only under cache) moved or renamed in the rows alone, ancestors' totals
     // shifted, while it is still at (fromParentId, fromName): Filesystem::rename moves backing bytes it doesn't have.
+    // `mtime`: the entry's in the applied root (the mover's), so both writers date the entry alike; nullopt: now.
     [[nodiscard]] static bool moveRow(pqxx::work& txn, unsigned int id, unsigned int fromParentId,
                                       const std::string& fromName, unsigned int toParentId, const std::string& toName,
-                                      const std::string& toPath);
+                                      const std::string& toPath, const std::optional<std::string>& mtime = std::nullopt);
 
-    // mode, owner (fs_entry) and a symlink's target, while they are still ours'.
+    // The entry's modification time from the applied root (after a rename through the filesystem, which stamps now).
+    static void setMtime(pqxx::work& txn, unsigned int entryId, const std::string& mtime);
+
+    // mode, owner (fs_entry) and a symlink's target, while they are still ours'; the entry takes target's mtime.
     [[nodiscard]] static bool setAttributes(pqxx::work& txn, unsigned int entryId, const vh::sync::manifest::Entry& ours,
                                             const vh::sync::manifest::Entry& target);
 
@@ -115,6 +120,12 @@ public:
     // What storage.vault.get and `vh vault sync info` show: the recorded root, the apply in progress, the writers and
     // the last apply (null members when unknown).
     [[nodiscard]] static nlohmann::json status(uint32_t vaultId);
+
+    // ---- shared-vault trash purged locally only (migration 148) ----
+    static void notePurgedLocally(uint32_t vaultId, const std::string& objectKey);
+    // The objects purged here before `cutoff` (Unix time), oldest first.
+    [[nodiscard]] static std::vector<std::string> purgedLocallyBefore(uint32_t vaultId, std::time_t cutoff);
+    static void dropPurgedLocally(uint32_t vaultId, const std::string& objectKey);
 
     static void defer(pqxx::work& txn, uint32_t vaultId, const DeferredEntry& d);
     [[nodiscard]] static std::vector<DeferredEntry> deferred(uint32_t vaultId);

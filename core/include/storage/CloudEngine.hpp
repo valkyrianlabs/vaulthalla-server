@@ -44,6 +44,9 @@ namespace vh::storage {
         // The recorded manifest root names a writer other than this server (remote_manifest_state.writers): a trash
         // is then purged here without a remote DELETE (sync::Local::removeTrashedFiles).
         [[nodiscard]] bool manifestNamesOtherWriters() const;
+        // The bucket keeps the versions an overwrite replaces: the vault's file recovery is provider_versioning (its
+        // versioning was checked when that was set) or it publishes on the version log (spec 06).
+        [[nodiscard]] bool bucketKeepsVersions() const;
         struct RemoteEncryptionResolveOptions {
             bool trust_file_encryption_metadata{false};
             bool allow_local_db_recovery{false};

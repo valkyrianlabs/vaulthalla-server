@@ -4,7 +4,7 @@ void vh::db::Connection::initPreparedFiles() const {
     conn_->prepare("update_file_only",
                    "WITH updated_entry AS ("
                    "  UPDATE fs_entry "
-                   "  SET last_modified_by = $7, updated_at = NOW() "
+                   "  SET last_modified_by = $7, updated_at = COALESCE(to_timestamp($8::double precision), NOW()) "
                    "  WHERE id = $1 "
                    "  RETURNING id"
                    ") "

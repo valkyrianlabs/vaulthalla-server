@@ -4,6 +4,7 @@
 #include "crypto/util/encrypt.hpp"
 #include "db/Transactions.hpp"
 #include "db/encoding/bytea.hpp"
+#include "db/query/fs/Directory.hpp"
 #include "db/query/fs/Entry.hpp"
 #include "fs/model/Entry.hpp"
 #include "sync/manifest/Objects.hpp"
@@ -79,10 +80,13 @@ RecoverResult Recover::apply(const RecoverInput& in) {
 
         // ---- the vault: S3, opaque_v1, cache strategy (nothing is downloaded until a file is read)
         txn.exec("INSERT INTO vault (id, name, type, description, owner_id, mount_point, quota, is_active, slug, "
-                 "fuse_name, uid) VALUES ($1, $2, $3, $4, $5, $6, $7, true, NULL, NULL, $8)",
+                 "fuse_name, uid, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, true, NULL, NULL, $8, "
+                 "COALESCE($9::timestamptz, now()))",
                  pqxx::params{vid, in.name, vh::vault::model::to_string(vh::vault::model::VaultType::S3), in.description,
                               in.owner_id, in.mount_point, static_cast<int64_t>(in.quota),
-                              vh::crypto::id::toUuid(in.vault_uid)});
+                              vh::crypto::id::toUuid(in.vault_uid),
+                              // the vault's creation, not this restore's: a replica's roots then agree on it
+                              in.content->vault ? in.content->vault->created_at : std::nullopt});
         const auto syncId = txn.exec("INSERT INTO sync (vault_id, interval) VALUES ($1, $2) RETURNING id",
                                      pqxx::params{vid, in.sync_interval_seconds})
                                 .one_field_ref()
@@ -158,6 +162,9 @@ RecoverResult Recover::apply(const RecoverInput& in) {
                      "VALUES ($1, $2, $3, $4, $5)",
                      pqxx::params{rootId, t.files, t.dirs, t.bytes,
                                   vh::crypto::id::toUuid(mf::parseUid(root.uid, "bad_segment", "root uid"))});
+            // The directories above count it too, as a created vault's root and everything written into it (found by
+            // the mirror drill: the restored node's filesystem root went below zero on its first deletes).
+            vh::db::query::fs::Directory::addToAncestorStats(txn, fsRoot->id, t.bytes, t.files, t.dirs + 1);
         }
         placed[root.uid] = {rootId, "/"};
         ++r.dirs;

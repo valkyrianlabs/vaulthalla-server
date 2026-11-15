@@ -1190,6 +1190,107 @@ TEST_F(SqlDeployerHistoryDb, ManifestApplierBaseMigrationIsAdditiveAndIdempotent
     });
 }
 
+// 146-148 (the manifest applier, its replica prerequisites and the shared-trash collection) on a 145-era database:
+// additive (new tables, nullable or defaulted columns), existing state rows keep their values and read the defaults, the
+// CHECKs hold, and running the files again changes nothing.
+TEST_F(SqlDeployerHistoryDb, ManifestApplierMigrations146To148AreAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        for (const auto* t : {"manifest_apply_deferred", "manifest_foreign_envelope", "remote_manifest_pending",
+                              "manifest_apply_report", "manifest_shared_purge"})
+            txn.exec(std::string("DROP TABLE IF EXISTS ") + t);
+        for (const auto* c : {"publishing_roots", "writers"})
+            txn.exec(std::string("ALTER TABLE remote_manifest_state DROP COLUMN IF EXISTS ") + c);
+        txn.exec("DELETE FROM schema_migrations WHERE filename IN ('146_manifest_apply.sql', "
+                 "'147_manifest_replicas.sql', '148_manifest_shared_purge.sql')");
+        ASSERT_FALSE(columnExists(txn, "remote_manifest_state", "writers"));
+
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_146_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES "
+                                    "('claude_test_146', $1, 's3', 'claude_test_146', gen_random_uuid()) RETURNING id",
+                                    pqxx::params{owner}).one_field_ref().as<int>();
+        txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, etag, epoch, root_sha256) VALUES "
+                 "($1, '.vaulthalla/root', '\"e1\"', 4, repeat('b', 64))", pqxx::params{vault});
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        for (const auto* f : {"146_manifest_apply.sql", "147_manifest_replicas.sql", "148_manifest_shared_purge.sql"}) {
+            EXPECT_TRUE(applied(report, f)) << f;
+            EXPECT_EQ(recordedHash(txn, f), currentHash(f)) << f;
+        }
+        const auto row = txn.exec("SELECT etag, epoch, cardinality(publishing_roots), cardinality(writers) "
+                                  "FROM remote_manifest_state WHERE vault_id = $1", pqxx::params{vault}).one_row();
+        EXPECT_EQ(row[0].as<std::string>(), "\"e1\"") << "existing rows keep their values";
+        EXPECT_EQ(row[1].as<int>(), 4);
+        EXPECT_EQ(row[2].as<int>(), 0);
+        EXPECT_EQ(row[3].as<int>(), 0);
+
+        const auto refused = [&](const std::string& sql) {
+            pqxx::subtransaction sub(txn, "check");
+            try {
+                sub.exec(sql, pqxx::params{vault});
+            } catch (const pqxx::sql_error&) {
+                return true;
+            }
+            return false;
+        };
+        EXPECT_TRUE(refused("INSERT INTO manifest_apply_deferred (vault_id, uid, op, target, root_epoch, root_sha256) "
+                            "VALUES ($1, gen_random_uuid(), 'delete', '{}'::jsonb, 1, repeat('a', 64))"))
+            << "a delete carries no target";
+        EXPECT_TRUE(refused("INSERT INTO manifest_foreign_envelope (vault_id, kid, key_version, recipient_id) "
+                            "VALUES ($1, 'not a kid', 1, repeat('a', 64))"));
+        EXPECT_TRUE(refused("INSERT INTO manifest_shared_purge (vault_id, object_key) VALUES ($1, 'seg/x')"));
+        EXPECT_FALSE(refused("INSERT INTO manifest_shared_purge (vault_id, object_key) VALUES "
+                             "($1, 'o/aaaaaaaaaaaaaaaaaaaaaaaaaa')"));
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        for (const auto* f : {"146_manifest_apply.sql", "147_manifest_replicas.sql", "148_manifest_shared_purge.sql"})
+            ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / f))) << f;
+    });
+}
+
+// 149: on a 148-era database (the generic trigger), an explicit fs_entry.updated_at was overwritten with the current
+// time; after it an explicit value is kept and any other update is stamped as before. Running it again changes nothing.
+TEST_F(SqlDeployerHistoryDb, FsEntryMtimeMigration149KeepsAnExplicitTimeAndStampsTheRest) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("DROP TRIGGER IF EXISTS set_fs_entry_updated_at ON fs_entry");
+        txn.exec("CREATE TRIGGER set_fs_entry_updated_at BEFORE UPDATE ON fs_entry FOR EACH ROW "
+                 "EXECUTE FUNCTION set_updated_at()");
+        txn.exec("DROP FUNCTION IF EXISTS vh_fs_entry_updated_at()");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '149_fs_entry_explicit_mtime.sql'");
+        const auto id = txn.exec("INSERT INTO fs_entry (name, path) VALUES ('claude_test_149', '/claude_test_149') "
+                                 "RETURNING id").one_field_ref().as<long long>();
+        const auto year = [&] {
+            return txn.exec("SELECT extract(year FROM updated_at)::int FROM fs_entry WHERE id = $1", pqxx::params{id})
+                .one_field_ref().as<int>();
+        };
+        txn.exec("UPDATE fs_entry SET updated_at = '2020-01-02T03:04:05Z' WHERE id = $1", pqxx::params{id});
+        EXPECT_NE(year(), 2020) << "before 149: the explicit time is lost";
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "149_fs_entry_explicit_mtime.sql"));
+        EXPECT_EQ(recordedHash(txn, "149_fs_entry_explicit_mtime.sql"), currentHash("149_fs_entry_explicit_mtime.sql"));
+        txn.exec("UPDATE fs_entry SET updated_at = '2020-01-02T03:04:05Z' WHERE id = $1", pqxx::params{id});
+        EXPECT_EQ(year(), 2020) << "an explicit time is kept";
+        txn.exec("UPDATE fs_entry SET name = name WHERE id = $1", pqxx::params{id});
+        EXPECT_NE(year(), 2020) << "any other update is stamped";
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "149_fs_entry_explicit_mtime.sql")));
+        txn.exec("UPDATE fs_entry SET updated_at = '2020-01-02T03:04:05Z' WHERE id = $1", pqxx::params{id});
+        EXPECT_EQ(year(), 2020);
+        // A transaction that writes the times itself keeps them, an unchanged one included.
+        txn.exec("SELECT set_config('vh.keep_mtime', 'on', true)");
+        txn.exec("UPDATE fs_entry SET name = name WHERE id = $1", pqxx::params{id});
+        EXPECT_EQ(year(), 2020) << "vh.keep_mtime: kept";
+    });
+}
+
 TEST_F(SqlDeployerHistoryDb, RecoveryRecipientsMigrationIsAdditiveIdempotentAndCustomerOnly) {
     inRolledBackTxn([](pqxx::work& txn) {
         txn.exec("DROP TABLE IF EXISTS vault_key_envelope");

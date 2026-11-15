@@ -23,6 +23,7 @@
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
+#include "vault/KeyCheck.hpp"
 #include "vault/model/Vault.hpp"
 
 #include <fmt/format.h>
@@ -72,9 +73,10 @@ struct Ctx {
     void note(std::string text) const { report->notes.push_back(std::move(text)); }
     void cacheFresh(const unsigned int id) const {
         if (!cache) return;
+        // The cache takes the row as the apply wrote it; never Registry::updateEntry, which writes the entry back
+        // and stamps it with the current time (the drill: another writer's mtime was lost that way).
         if (const auto entry = db::query::fs::Entry::getFSEntryById(id)) {
-            if (cache->entryExists(entry->fuse_path)) cache->updateEntry(entry);
-            else cache->cacheEntry(entry);
+            cache->cacheEntry(entry);
             if (entry->parent_id) (void)cache->refreshDirStats(*entry->parent_id);
         }
     }
@@ -191,7 +193,8 @@ Outcome move(const Ctx& c, const mf::Op& op) {
         // No local bytes (a remote-only file under cache): the rows move; the next open hydrates at the new place.
         if (!cur->parent_id) return Outcome::Skipped;
         const bool moved = db::Transactions::exec("ManifestApply::moveRow", [&](pqxx::work& txn) {
-            return Q::moveRow(txn, cur->id, *cur->parent_id, cur->name, parent->first, op.target->name, to);
+            return Q::moveRow(txn, cur->id, *cur->parent_id, cur->name, parent->first, op.target->name, to,
+                              op.target->mtime);
         });
         if (!moved) return Outcome::Skipped;
         if (c.cache) {
@@ -204,7 +207,11 @@ Outcome move(const Ctx& c, const mf::Op& op) {
     // A folder another writer created here (or a restore did) may have no backing directory yet.
     if (cur->kind == ApplyRow::Kind::Dir) std::filesystem::create_directories(entry->backing_path, ec);
     const int rc = fs::Filesystem::rename(c.fuse(cur->path), c.fuse(to), nullptr, c.engine, fs::RenameMode::NoReplace);
-    return rc == 0 ? Outcome::Applied : Outcome::Skipped;
+    if (rc != 0) return Outcome::Skipped;
+    if (op.target->mtime)   // the mover's date, as the moved-rows path above
+        db::Transactions::exec("ManifestApply::setMtime", [&](pqxx::work& txn) { Q::setMtime(txn, cur->id, *op.target->mtime); });
+    c.cacheFresh(cur->id);
+    return Outcome::Applied;
 }
 
 Outcome setAttributes(const Ctx& c, const mf::Op& op) {
@@ -473,7 +480,15 @@ ApplyReport apply(const uint32_t vaultId, const manifest::Uid& vaultUid, const c
         base = mf::Content{};
     }
     const auto ours = db::query::sync::Manifest::collect(vaultId);
-    auto rec = mf::reconcile(*base, head.content, ours);
+    // Theirs' key checks are over the producer's vault id: recomputed with our key (vault/KeyCheck.hpp).
+    const mf::SameKey sameKey = [&](const mf::KeyRecord& t, const mf::KeyRecord& o, const mf::Producer& producer) {
+        if (!producer.vault_id || *producer.vault_id == vaultId) return *t.key_check == *o.key_check;
+        const auto key = keys(t.version);
+        if (!key) return false;
+        return vault::keyCheckEquals(vault::keyCheck(key->bytes(), static_cast<unsigned>(*producer.vault_id), t.version),
+                                     *t.key_check);
+    };
+    auto rec = mf::reconcile(*base, head.content, ours, sameKey);
     if (rec.stopped()) {
         std::string codes;
         for (const auto& p : rec.key_problems) codes += fmt::format("{}{} (version {})", codes.empty() ? "" : ", ", p.code, p.version);
@@ -481,6 +496,25 @@ ApplyReport apply(const uint32_t vaultId, const manifest::Uid& vaultUid, const c
                 "the root of epoch " + std::to_string(head.acceptance.epoch) + " can't be applied: " + codes);
     }
     report.conflicts = rec.conflicts;
+    if (shared) {
+        // Replicas hold the same grants (the account's policy): a recipient one writer has and the other lacks makes
+        // their roots name different envelopes, and alternate. Detected here, in the report and the log.
+        const auto recipients = [](const mf::Content& c) {
+            std::set<std::string> out;
+            if (c.recovery_policy)
+                for (const auto& g : c.recovery_policy->grants)
+                    if (g.usableForDecryption()) out.insert(g.recipient_id);
+            return out;
+        };
+        if (const auto t = recipients(head.content), o = recipients(ours); t != o) {
+            report.notes.push_back(fmt::format("grants_differ: the writers' recovery grants differ ({} there, {} here); "
+                                               "their roots will name different envelopes",
+                                               t.size(), o.size()));
+            log::Registry::sync()->warn("[ManifestApply] Vault {}: the other writer's recovery grants differ from this "
+                                        "server's; replicas must hold the account's grants only",
+                                        vaultId);
+        }
+    }
     std::size_t openConflicts = 0;
     for (const auto& k : rec.conflicts) openConflicts += k.open ? 1 : 0;
     const auto save = [&] {

@@ -96,7 +96,7 @@ void File::updateFile(const FilePtr& file) {
     Transactions::exec("File::updateFile", [&](pqxx::work& txn) { updateFile(txn, file); });
 }
 
-void File::updateFile(pqxx::work& txn, const FilePtr& file) {
+void File::updateFile(pqxx::work& txn, const FilePtr& file, const std::optional<std::time_t> mtime) {
     if (!file) throw std::invalid_argument("File cannot be null");
     if (file->id == 0) throw std::invalid_argument("File ID cannot be zero");
     if (!file->path.string().starts_with("/")) file->setPath("/" + to_utf8_string(file->path.u8string()));
@@ -113,8 +113,10 @@ void File::updateFile(pqxx::work& txn, const FilePtr& file) {
     p.append(file->encryption_iv);
     p.append(file->encrypted_with_key_version);
     p.append(file->last_modified_by);
+    p.append(mtime ? std::optional<double>(static_cast<double>(*mtime)) : std::nullopt);
 
-    file->updated_at = std::time(nullptr);
+    file->updated_at = mtime.value_or(std::time(nullptr));
+    if (mtime) txn.exec("SELECT set_config('vh.keep_mtime', 'on', true)");   // migration 149: kept as given
     txn.exec(pqxx::prepped{"update_file_only"}, p);
     txn.exec(
         pqxx::prepped{"insert_file_activity"},

@@ -123,6 +123,7 @@ static void updateFile(pqxx::work& txn, const std::shared_ptr<File>& file) {
     p.append(file->encryption_iv);
     p.append(file->encrypted_with_key_version);
     p.append(file->last_modified_by);
+    p.append(std::optional<double>{});   // now
 
     file->updated_at = std::time(nullptr);
     txn.exec(pqxx::prepped{"update_file_only"}, p);
@@ -996,7 +997,7 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
                 {.actor = ctx.user ? std::make_optional(ctx.user->id) : std::nullopt});
             db::Transactions::exec("Filesystem::createFile overwrite", [&](pqxx::work& txn) {
                 kept.attach(txn);
-                db::query::fs::File::updateFile(txn, staged);
+                db::query::fs::File::updateFile(txn, staged, ctx.mtime);
             });
             kept.committed();
         } catch (...) {
@@ -1509,7 +1510,9 @@ int Filesystem::handleRename(const RenameContext& ctx) {
     }
 
     const auto oldBackingPath = entry->backing_path;
-    if (!symlinkStatusExists(oldBackingPath)) {
+    // A directory a restore or an apply created has no backing directory until something is stored in it (the drill:
+    // moving an empty restored folder failed with ENOENT); the destination's is created below.
+    if (!symlinkStatusExists(oldBackingPath) && !entry->isDirectory()) {
         log::Registry::fs()->error(
             "[Filesystem::handleRename] Source backing path does not exist: {}",
             oldBackingPath.string());

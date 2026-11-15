@@ -554,9 +554,103 @@ vault's or key version's envelope, a kid that isn't its bytes' hash), `.AMirrorV
    `vh vault recover --into` on a replicated vault.
 2. Key rotation by one replica: the other can't open roots sealed under the new key (`manifest_key_missing`, a stall,
    no loss); the rotation owner and the key hand-over are `mirrors.md`'s.
-3. Content edit/edit across replicas resolves through the planner under the vault's policy (`keep_local` by default:
-   the losing generation survives only as a provider version, so replicated vaults need bucket versioning, or `ask`).
-4. An orphan collection for the objects shared vaults' trash leaves in the bucket.
-5. The drill: two daemons on one fake bucket in the Tier B harness, asserting journals and FUSE views on both, then
-   Backblaze once spec 06's A3 and A4 are confirmed.
+3. ~~Content edit/edit across replicas~~, 4. ~~an orphan collection~~ and 5. ~~the drill on a fake bucket~~: done,
+   see "As built: the mirror drill" below. Backblaze still waits for spec 06's A3 and A4.
 
+
+## As built: the mirror drill (branch `feat/replica-drill`; migrations 148, 149)
+
+`sudo tools/harness/vhh.sh drill mirror --build build` (`tools/harness/vhh/drill_mirror.py`): two private daemons
+(own database, swtpm, FUSE mount) on one versioned fake-S3 bucket. A writes an opaque_v1 vault and enrolls a recovery
+kit; B restores it with the kit (`vh vault recover --kit`). There is no join, so both become writers by a test-only
+path: B's daemon runs with `VH_TEST_MANIFEST_WRITERS=<A's node id>`, read only in test mode (`paths::testMode`; an
+installed service never enters it), which adds A to the writers of B's roots (`PublishOptions::extra_writers`); A's
+roots carry the set after it. `VH_TEST_FAULT_DIR/crash-after-root-put` (test mode only) ends a daemon with
+`_Exit(137)` between a root's PUT and its record (`SessionHost::afterRootPut`). Undo: drop both hooks in
+`Service::hostOf`.
+
+Every phase changes files through the real mounts and runs real passes (`vh vault sync`, waited for in each database;
+an hourly interval, so no pass runs unasked), then requires both nodes to record the same root and both FUSE views to
+be equal (path, kind, size, mode, bytes, symlink target): creates, edits, renames, moves, deletes and the change
+journals on both; trash; every conflict rule (rename/rename, two creates of one name, a move closing a cycle,
+edit/delete, trash/trash, delete/delete, a folder deleted while a file is added elsewhere, content edit/edit); a file
+held open on B through a real handle (deferred, applied after the close); B dying between its PUT and its record
+while A builds on that root (both changes on both after B's restart); a remote-only file hydrated on B after A moved
+it; the trash race (A deletes, B edits: the edit wins, no remote DELETE from either purge, the purge remembered); four
+passes with nothing changed publish nothing; a recovery grant on B only is detected on A. chmod/chown through FUSE is
+a no-op by design (`fuse::Bridge` setattr), so the attribute rule is covered by `ManifestReconcile` and
+`ManifestApplyDb.AnAttributeChangeAppliesToAFileWithoutAGroup` only. Trash and restore across writers is not
+observable with real passes (a cloud vault's trash is purged at the trashing node's next pass); the restore-in-between
+case is a DB test.
+
+**What the drill found, each fixed at the source with a test beside it:**
+
+1. *Key checks are bound to the vault id.* A key check is BLAKE2b over the vault id, so a replica's root never matched
+   (`manifest_key_mismatch` on the first apply). The applier recomputes theirs with this server's key over the
+   producer's vault id (`reconcile` takes a `SameKey`); a wrong key is still a mismatch and stops the apply
+   (`ManifestApplyDb.AnotherServersKeyChecksAreRecomputedOverItsVaultId`, which also shows the plain comparison
+   refuses the right key under another id).
+2. *Alternating roots.* After applying a root that already says what this server holds, every pass republished it
+   (its producer, key checks, attestations, a tombstone's carried name are this server's) and the other writer did
+   the same. `Session::publishIfChanged` now compares what a publish would write (`mergePending` and `carryHistory` on
+   the recorded content) with the recorded root, ignoring producer-specific values (`differsFromRecorded`: producer;
+   another node's key check, attestation and origin; a directory's mtime; when a version became noncurrent), and
+   publishes nothing while equal (`.AnotherWritersRootThatSaysWhatThisServerHoldsIsNotRestamped`, same and different
+   vault ids). Undo: drop the `unchanged_` branch.
+3. *The restore's created_at.* A restored vault took the restore's time; its roots then differed on `vault.created_at`.
+   `Recover::apply` keeps the root's (`VaultRecoverDb.RestoresTheVault*`).
+4. *mtimes lost four ways:* the fs_entry trigger stamped every update (migration 149: it stamps only when the
+   statement leaves `updated_at` alone and the transaction hasn't set `vh.keep_mtime`), the apply's cache refresh wrote
+   the row back (`Registry::updateEntry`; now `cacheEntry`), a sync download stamped its own time (opaque_v1 keeps the
+   row's: `NewFileContext::mtime`, `File::updateFile(..., mtime)`), and an mtime only followed content (a rename or a
+   chmod restamps the writer's copy; reconcile now carries an mtime one side changed, with the move or as an attribute,
+   never as a ReplaceContent). Tests: `.ADownloadKeepsTheMtimeTheManifestGaveTheFile`,
+   `ManifestReconcile.AnMtimeOnlyOneSideChangedTravelsWithoutTheContent`,
+   `SqlDeployerHistoryDb.FsEntryMtimeMigration149KeepsAnExplicitTimeAndStampsTheRest`.
+5. *Noncurrent dates.* The writer whose PUT replaced a version knows when it became noncurrent; the union kept the
+   other's record. It takes the date either side knows and AddHistory writes it once
+   (`ManifestReconcile.AVersionTheOtherWriterKnowsIsNoncurrentIsTakenOnce`).
+6. *The collector mixed a local edit with the bucket's object* (size and hash from the files row, object from the
+   index), so a local edit not uploaded yet read as a change of ours and the planner overwrote theirs. An entry takes
+   size and hash from the index row of its generation (`.TheCollectorDescribesTheObjectNotALocalEditWaitingForUpload`).
+7. *A restored node's filesystem root went below zero* (its totals never counted the restored files) and the first
+   deletes failed with EIO (`VaultRecoverDb.RestoresTheVault*` checks the totals).
+8. *An empty restored folder couldn't be moved* (no backing directory: ENOENT;
+   `.AFolderWithoutABackingDirectoryMovesThroughTheFilesystem`).
+9. *An attribute write never applied to a file without a group* (the compare-and-set compared the collector's 0 with
+   NULL; the root was skipped on every pass; `.AnAttributeChangeAppliesToAFileWithoutAGroup`).
+
+Not a product defect, recorded: a daemon that dies mid-pass leaves its `sync_event` row `running` (the stats read it
+as stale by heartbeat); the drill waits only for its own trigger's events.
+
+**Content edit/edit on a shared vault (item 2 of the brief).** With another writer named and a bucket that keeps no
+versions for Vaulthalla (no VersionLog capability, no `provider_versioning` recovery policy), the conflict is forced to
+`ask` whatever the policy (`Cloud::askTwoSided`, Planner, `handleConflict`): recorded and open, never decided. Ours is
+the local copy (read through the engine), theirs the bucket's current object (read back and opened). A bucket that
+keeps versions lets the policy decide (`keep_local` uploads ours): theirs survives as the object's previous provider
+version, read back too (`.AContentEditOnBothSidesWithAnotherWriterKeepsBothGenerations`). In the drill the conflict is
+open on the node that saw both sides, each node reads its own edit, and `vh sync resolve --keep-remote` converges
+both. Undo: drop `askTwoSided`.
+
+**Orphan collection for shared-vault trash (item 3).** A shared purge remembers the object (`manifest_shared_purge`,
+migration 148). `Service::collectSharedOrphans` (each publish, after the pass) deletes one only when it was purged
+more than `kSharedOrphanGrace` (7 days) ago, and only while the recorded head is still the bucket's head (HEAD), the
+base copy, the deferred entries and the pending own roots don't name it; a named one is forgotten; the head is read
+again right before each DELETE. Only objects this server purged itself. Remaining window: between that last HEAD and
+the DELETE (milliseconds), a root the other writer publishes naming the object again; on a versioned bucket the
+DELETE only adds a delete marker (the bytes stay a provider version). Tests:
+`.SharedTrashObjectsAreCollectedOnlyAfterTheGraceAndWhenNoRootNamesThem` (in the grace, restored in between, named
+between the check and the DELETE, unnamed after the grace). Undo: drop the call in `publishManifestV2`.
+
+**Grants on one replica only (item 4).** Detected on every apply of a shared root: the usable grant recipients of
+theirs and ours differ → report note `grants_differ` and a warning (drill phase 8). Not enforced: the join makes
+replicated vaults take the account's grants only. Upgrade tests: `SqlDeployerHistoryDb.ManifestApplierMigrations146To148*`
+and `.FsEntryMtimeMigration149*`.
+
+**What the join still needs from the server:**
+
+1. `writersFor` in `Publisher.cpp` naming the joined node, replacing the test-only `extra_writers`.
+2. Key hand-over through the account key manager, without a takeover of the other server's roots.
+3. Refusals on a replicated vault: `mirror` (refused on apply today), layout migration, key salvage, key rotation by a
+   non-owner, `vh vault recover --into`, local-only grants, and non-`ask` conflict policies on a bucket that keeps no
+   versions (forced to `ask` today rather than refused).

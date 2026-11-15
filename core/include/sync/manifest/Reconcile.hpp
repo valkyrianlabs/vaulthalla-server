@@ -3,6 +3,7 @@
 #include "sync/manifest/Content.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -132,6 +133,13 @@ struct Reconciliation {
 };
 
 [[nodiscard]] Reconciliation reconcile(const Content& base, const Content& theirs, const Content& ours);
+
+// Whether theirs' key record is the key ours holds at that version. A key check is computed over the producing
+// server's own vault id (vault/KeyCheck.hpp), so two replicas' checks of one key differ: the server recomputes theirs
+// with its key and the producer's vault id. Without one, the checks are compared as text (one vault id).
+using SameKey = std::function<bool(const KeyRecord& theirs, const KeyRecord& ours, const Producer& producer)>;
+[[nodiscard]] Reconciliation reconcile(const Content& base, const Content& theirs, const Content& ours,
+                                       const SameKey& sameKey);
 
 // The plan applied to `ours` as a model (no compare-and-set: nothing changes in between): result. The reference the DB
 // executor is tested against, and the Desktop engine's model.

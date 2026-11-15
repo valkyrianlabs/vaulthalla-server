@@ -1,5 +1,6 @@
 #include "sync/manifest/Session.hpp"
 
+#include <algorithm>
 #include <format>
 #include <stdexcept>
 #include <utility>
@@ -9,6 +10,55 @@ namespace vh::sync::manifest {
 namespace session_detail {
 
 bool versionLog(const ObjectStore& store) { return store.mode() == WriteCapability::VersionLog; }
+
+}
+
+std::string_view differsFromRecorded(const Content& produced, const Content& recorded) {
+    // Producer-specific values: the producer itself, and when the recorded root is another server's (another node, or
+    // another vault id: replicas may well share an id), its key records' check, attestation and origin (over its vault
+    // id and its own TPM; the apply checked the keys are ours).
+    const bool otherServer = recorded.producer.node_id != produced.producer.node_id ||
+                             recorded.producer.vault_id != produced.producer.vault_id;
+    const auto keysDiffer = [&] {
+        if (produced.keys.size() != recorded.keys.size()) return true;
+        for (std::size_t i = 0; i < produced.keys.size(); ++i) {
+            auto a = produced.keys[i], b = recorded.keys[i];
+            if (otherServer) {
+                a.key_check = b.key_check;
+                a.attestation = b.attestation;
+                a.origin = b.origin;
+            }
+            if (a != b) return true;
+        }
+        return false;
+    };
+    if (produced.vault != recorded.vault) {
+        if (!produced.vault || !recorded.vault) return "vault";
+        if (produced.vault->name != recorded.vault->name) return "vault.name";
+        if (produced.vault->created_at != recorded.vault->created_at) return "vault.created_at";
+        if (produced.vault->quota_bytes != recorded.vault->quota_bytes) return "vault.quota_bytes";
+        if (produced.vault->sync_strategy != recorded.vault->sync_strategy) return "vault.sync_strategy";
+        return "vault.recovery_policy";
+    }
+    if (keysDiffer()) return "keys";
+    if (produced.recovery_policy != recorded.recovery_policy) return "recovery_policy";
+    // Each writer's own observations: when a provider version became noncurrent (whether it did is the fact), and a
+    // directory's mtime (when this server's tree last changed in it: an apply stamps its own time). Neither is a
+    // reason for a root; the next real change carries this server's values.
+    const auto entries = [](std::vector<Entry> es) {
+        for (auto& e : es) {
+            if (e.kind == EntryKind::Dir) e.mtime.reset();
+            for (auto& v : e.versions)
+                if (v.noncurrent_at) v.noncurrent_at = "";
+        }
+        return es;
+    };
+    if (entries(produced.entries) != entries(recorded.entries)) return "entries";
+    if (produced.snapshots != recorded.snapshots) return "snapshots";
+    return {};
+}
+
+namespace session_detail {
 
 std::optional<SettledWindow> settledOf(const ChainState& state) {
     if (!state.root_version_id || !state.base_version_id) return std::nullopt;
@@ -77,6 +127,32 @@ std::optional<PublishReport> Session::publishIfChanged() {
     if (cache_.base && cache_.last_produced && knownState && cache_.base->known == *knownState &&
         *cache_.last_produced == produced)
         return std::nullopt;
+    if (knownState && unchanged_ && unchanged_->first == *knownState && unchanged_->second == produced)
+        return std::nullopt;
+    unchanged_.reset();
+    // Another writer's root, applied, that already says what this server holds: publishing would only restamp it, and
+    // the other writer would restamp that (two writers alternating roots every pass). Kept until either side changes.
+    if (const auto state = state_->state(); knownState && !(cache_.base && cache_.base->known == *knownState) &&
+                                            state.own_epoch != knownState->epoch && !state.applying_epoch) {
+        auto writers = host_.extraWriters ? host_.extraWriters() : std::vector<std::string>{};
+        writers.push_back(produced.producer.node_id);
+        const bool named = std::ranges::all_of(writers, [&](const std::string& w) {
+            return w.empty() || std::ranges::find(state.writers, w) != state.writers.end();
+        });
+        if (const auto copy = named ? state_->base() : std::nullopt) {
+            std::string why;
+            if (const auto recorded = openBaseCopy(*copy, vaultUid_, host_.keys, *knownState, &why)) {
+                // What a publish would write: ours merged on it, with the history the database doesn't hold.
+                auto next = mergePending(*recorded, *recorded, produced);
+                carryHistory(*recorded, next, isoTime(host_.now()));
+                const auto differs = differsFromRecorded(next, *recorded);
+                if (differs.empty()) {
+                    unchanged_.emplace(*knownState, produced);
+                    return std::nullopt;
+                }
+            }
+        }
+    }
     return publishLocked(produced);
 }
 
@@ -106,11 +182,13 @@ PublishReport Session::publishLocked(const Content& produced) {
     options.own_epoch = state.own_epoch;
     options.settled = d::settledOf(state);
     options.apply_on_lost = true;
+    if (host_.extraWriters) options.extra_writers = host_.extraWriters();
     options.before_root_put = [this](const std::string& sha, const BaseCopy& pending) {
         state_->notePublishing(sha, pending);
     };
     try {
         auto report = manifest::publish(*store_, vaultUid_, host_.keys, current, produced, knownState, cache_, options);
+        if (host_.afterRootPut) host_.afterRootPut();
         state_->recordRoot({.epoch = report.published.known.epoch,
                             .root_sha256 = report.published.known.root_sha256,
                             .etag = report.published.etag,
@@ -237,6 +315,7 @@ void Session::applied() {
     std::scoped_lock lock(mutex_);
     cache_.base.reset();
     cache_.last_produced.reset();   // the base copy is the recorded head now
+    unchanged_.reset();
 }
 
 std::optional<RemoteHead> Session::verifyRemoteVersionLog() {

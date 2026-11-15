@@ -3,11 +3,18 @@
 #include "crypto/SecretKey.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/sync/Manifest.hpp"
+#include "db/query/sync/ManifestApply.hpp"
 #include "log/Registry.hpp"
 #include "notifications/OperatorNotificationBus.hpp"
 #include "vault/EncryptionManager.hpp"
 
 #include <fmt/format.h>
+#include <paths.h>
+
+#include <cstdlib>
+#include <set>
+#include <filesystem>
+#include <string_view>
 
 namespace vh::sync::vault_manifest {
 
@@ -76,6 +83,29 @@ manifest::SessionHost hostOf(const uint32_t vaultId, const std::shared_ptr<vault
     host.keys = lookupOf(keys);
     host.nodeId = [] { return db::query::device::Devices::nodeId(); };
     host.vaultId = vaultId;
+    if (paths::testMode) {
+        // The Tier B mirror drill (tools/harness/vhh/drill_mirror.py) only, never a packaged daemon: an installed service
+        // refuses test mode (runtime::test_instance). VH_TEST_MANIFEST_WRITERS names writers beside this node (the
+        // join's stand-in); a file `crash-after-root-put` in VH_TEST_FAULT_DIR ends the process between a root's PUT and
+        // its record, once.
+        host.extraWriters = [] {
+            std::vector<std::string> out;
+            if (const char* v = std::getenv("VH_TEST_MANIFEST_WRITERS"))
+                for (std::string_view rest(v); !rest.empty();) {
+                    const auto comma = rest.find(',');
+                    out.emplace_back(rest.substr(0, comma));
+                    rest = comma == std::string_view::npos ? std::string_view() : rest.substr(comma + 1);
+                }
+            return out;
+        };
+        host.afterRootPut = [] {
+            const char* dir = std::getenv("VH_TEST_FAULT_DIR");
+            if (!dir) return;
+            const auto trigger = std::filesystem::path(dir) / "crash-after-root-put";
+            std::error_code ec;
+            if (std::filesystem::remove(trigger, ec)) std::_Exit(137);
+        };
+    }
     host.now = [] { return std::time(nullptr); };
     host.alert = [vaultId](const manifest::Refusal& r) {
         notifyRefusedRoot(vaultId, r.reason, r.epoch, r.root_sha256, r.known);
@@ -142,6 +172,57 @@ std::optional<ApplyReport> Service::applyRemote(const ApplyOptions& options) {
     auto report = apply(vaultId_, vaultUid_, keyLookup(), *verified->head, db::query::device::Devices::nodeId(), withStore);
     if (report.recorded) session_.applied();
     return report;
+}
+
+std::size_t Service::collectSharedOrphans(const std::time_t now, const std::time_t grace,
+                                         const std::function<void(const std::string&)>& beforeDelete) {
+    const auto due = db::query::sync::ManifestApply::purgedLocallyBefore(vaultId_, now - grace);
+    if (due.empty()) return 0;
+    std::scoped_lock lock(applyMutex_);   // no apply in between
+    const auto state = db::query::sync::Manifest::state(vaultId_);
+    if (!state.epoch || !state.root_sha256 || !state.etag || state.applying_epoch) return 0;
+    const auto stillHead = [&] {
+        const auto etag = store_->headEtag(std::string(manifest::kRootKey));
+        return etag && *etag == *state.etag;
+    };
+    if (!stillHead()) return 0;   // a newer root: the next pass applies it first
+    const auto copy = db::query::sync::Manifest::base(vaultId_);
+    if (!copy) return 0;
+    const auto known = manifest::openBaseCopy(*copy, vaultUid_, keyLookup(), {*state.epoch, *state.root_sha256});
+    if (!known) return 0;   // nothing to prove the head doesn't name them with
+    std::set<std::string> named;
+    for (const auto& e : known->entries) named.insert(e.uid);
+    for (const auto& d : db::query::sync::ManifestApply::deferred(vaultId_)) named.insert(d.uid);
+    for (const auto& sha : state.publishing_roots)
+        if (const auto pending = db::query::sync::Manifest::pendingBase(vaultId_, sha))
+            if (const auto root = [&]() -> std::optional<manifest::RootDocument> {
+                    try {
+                        return manifest::openRoot(pending->root, vaultUid_, keyLookup());
+                    } catch (const std::exception&) {
+                        return std::nullopt;
+                    }
+                }())
+                if (const auto c = manifest::openBaseCopy(*pending, vaultUid_, keyLookup(), {root->epoch, sha}))
+                    for (const auto& e : c->entries) named.insert(e.uid);
+    std::size_t deleted = 0;
+    for (const auto& key : due) {
+        const auto uid = manifest::uidOfObjectKey(key);
+        if (!uid) continue;
+        if (named.contains(manifest::uidText(*uid))) {
+            db::query::sync::ManifestApply::dropPurgedLocally(vaultId_, key);   // named again: live, not ours to delete
+            continue;
+        }
+        if (beforeDelete) beforeDelete(key);
+        if (!stillHead()) break;   // another writer published meanwhile: judged again after the next apply
+        store_->remove(key);
+        db::query::sync::ManifestApply::dropPurgedLocally(vaultId_, key);
+        ++deleted;
+    }
+    if (deleted)
+        log::Registry::cloud()->info("[manifest] Vault {}: deleted {} object(s) of trash purged here {} day(s) ago that "
+                                     "no root names",
+                                     vaultId_, deleted, grace / 86400);
+    return deleted;
 }
 
 std::optional<manifest::GcReport> Service::collectGarbageIfDue(const std::time_t now) {
