@@ -1160,4 +1160,23 @@ TEST_F(CloudStorageTest, NoRestoreKeyWithoutAConfirmedAccountKey) {
               "managed_storage_unavailable");
 }
 
+
+TEST_F(CloudStorageTest, ABucketTheCloudIsDeletingWhileThePlanIsActiveMakesTheVaultLocalInPlace) {
+    linkAndPin();
+    const auto id = activeVault();
+    const auto bucket = bucketOf(id);
+    const auto objectsBefore = bucket->keys();
+    // Paid again after `ended`: the plan is active, but the end began deleting the vault's bucket.
+    cloud_.vaults[uidOf(id)].state = "emptying";
+    (void)tick();
+    EXPECT_EQ(state(id), "detaching");
+    ASSERT_EQ(db::query::vault::RemoteDetach::get(id)->mode, rd::Mode::InPlace);
+    EXPECT_EQ(runDetach(id).state, rd::State::Done);
+    (void)tick();
+    EXPECT_EQ(state(id), "ended");
+    EXPECT_EQ(db::query::vault::Vault::getVault(id)->type, vault::model::VaultType::Local);
+    EXPECT_EQ(readLocal(id, "/a.txt"), "alpha");
+    EXPECT_EQ(bucket->keys(), objectsBefore) << "in place: nothing in the bucket is touched";
+}
+
 }

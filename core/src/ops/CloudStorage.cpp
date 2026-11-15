@@ -717,6 +717,15 @@ void stepActive(Row& r, const Ctx& ctx, const vault::model::Vault& vault) {
         ejectInPlace(r, ctx);
         return;
     }
+    if (v && (v->state == "emptying" || v->state == "deleted") && ctx.account.state != std::optional<std::string>("ended")) {
+        // The account's service is deleting this vault's bucket while the plan isn't (or no longer) ended: the end of an
+        // earlier plan began it, or the account holder deleted the bucket in the portal with its confirmations. Nothing
+        // is left to sync with, and waiting would leave the vault without access for good (the drill's finding: paying
+        // again after `ended`), so it becomes local in place now, as at a confirmed end. Nothing local is deleted; what
+        // only the bucket held is listed. While the plan is ended, the confirmation below decides.
+        startDetach(r, true, "ended");
+        return;
+    }
     if (ctx.account.state == std::optional<std::string>("ended")) {
         // One report must not convert every vault: an admin confirms it, or the service keeps saying so for
         // cloud.storage.ended_grace_hours. Until then the vault stays attached with access none.
