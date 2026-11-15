@@ -416,7 +416,8 @@ nlohmann::json ManifestApply::status(const uint32_t vaultId) {
     return Transactions::exec("ManifestApply::status", [&](pqxx::work& txn) {
         nlohmann::json out{{"epoch", nullptr}, {"own_epoch", nullptr}, {"applying_epoch", nullptr},
                            {"writers", nlohmann::json::array()}, {"deferred", 0}, {"last_apply", nullptr},
-                           {"replicas", nlohmann::json::array()}, {"writers_change", nullptr}, {"behind", false}};
+                           {"replicas", nlohmann::json::array()}, {"writers_change", nullptr}, {"behind", false},
+                           {"cloud_only", nlohmann::json::array()}};   // the cloud's side: ops::cloud_storage::describeReplicas
         const auto s = txn.exec("SELECT epoch, own_epoch, applying_epoch, array_to_json(writers)::text, "
                                 "  writers_change::text FROM remote_manifest_state WHERE vault_id = $1 AND "
                                 "  manifest_key = '.vaulthalla/root'",
@@ -432,7 +433,7 @@ nlohmann::json ManifestApply::status(const uint32_t vaultId) {
         for (const auto& w : out["writers"]) {
             const auto node = w.get<std::string>();
             nlohmann::json rep{{"node_id", node}, {"self", node == self}, {"last_epoch", nullptr},
-                               {"last_root_sha256", nullptr}, {"last_published_at", nullptr}};
+                               {"last_root_sha256", nullptr}, {"last_published_at", nullptr}, {"cloud", nullptr}};
             const auto r = txn.exec("SELECT epoch, root_sha256, to_char(published_at AT TIME ZONE 'UTC', "
                                     "'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM manifest_writer_root WHERE vault_id = $1 AND "
                                     "node_id = $2",
