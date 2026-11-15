@@ -21,6 +21,7 @@
 #include "crypto/SecretKey.hpp"
 #include "crypto/vhf1/Format.hpp"
 #include "crypto/vhf1/Writer.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "sync/manifest/Chain.hpp"
 #include "sync/manifest/Content.hpp"
 #include "sync/manifest/Document.hpp"
@@ -192,8 +193,8 @@ struct Writer {
     std::optional<SettledWindow> settled;
 
     explicit Writer(std::shared_ptr<VersionedBucket> b,
-                    const storage::s3::WriteCapability mode = storage::s3::WriteCapability::Unknown)
-        : bucket(std::move(b)), store(std::make_shared<S3Store>(bucket, mode)) {}
+                    const WriteCapability mode = WriteCapability::Unknown)
+        : bucket(std::move(b)), store(std::make_shared<storage::s3::ManifestStore>(bucket, mode)) {}
     explicit Writer(const Versioning v = Versioning::Enabled) : Writer(std::make_shared<VersionedBucket>(v)) {}
 
     [[nodiscard]] crypto::vhf1::KeyLookup lookup() const { return lookupOf(keys); }
@@ -348,6 +349,17 @@ TEST(ManifestVectors, EveryChainErrorNameIsKnown) {
 }
 
 // ── ManifestDocument ─────────────────────────────────────────────────────────────────────────────────────────────
+
+TEST(ManifestDocument, IsoTimeIsTheUtcCalendarTimeToTheSecond) {
+    // The documents' timestamps (isoTime, <chrono>): what gmtime gives, leap days and times before 1970 included.
+    EXPECT_EQ(isoTime(0), "1970-01-01T00:00:00Z");
+    EXPECT_EQ(isoTime(-1), "1969-12-31T23:59:59Z");
+    EXPECT_EQ(isoTime(951782399), "2000-02-28T23:59:59Z");
+    EXPECT_EQ(isoTime(951782400), "2000-02-29T00:00:00Z");
+    EXPECT_EQ(isoTime(1709251199), "2024-02-29T23:59:59Z");
+    EXPECT_EQ(isoTime(1793880000), "2026-11-05T12:00:00Z");
+    EXPECT_EQ(isoTime(4102444799), "2099-12-31T23:59:59Z");
+}
 
 TEST(ManifestDocument, RichRootSegmentAndSnapshotRoundTrip) {
     const auto content = richContent();
@@ -675,27 +687,26 @@ TEST(ManifestPublish, AConflictingRootThatForksIsNeverOverwritten) {
 // ── ManifestStore: buckets without conditional writes (spec 06 §7) ──────────────────────────────────────────────
 
 TEST(ManifestStore, PutOnceSendsAConditionOnlyWhereTheBucketHonoursIt) {
-    using storage::s3::WriteCapability;
     const auto bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
     const Bytes body{1, 2, 3};
 
     // Conditional (and Unknown: never probed, no silent downgrade): If-None-Match: *, so an existing name refuses.
     for (const auto mode : {WriteCapability::Conditional, WriteCapability::Unknown}) {
-        S3Store store(bucket, mode);
+        storage::s3::ManifestStore store(bucket, mode);
         const auto key = ".vaulthalla/seg/" + uidText(uidOf(static_cast<uint8_t>(mode), 1));
         (void)store.putOnce(key, body);
-        EXPECT_THROW((void)store.putOnce(key, body), PreconditionFailed) << storage::s3::to_string(mode);
+        EXPECT_THROW((void)store.putOnce(key, body), PreconditionFailed) << to_string(mode);
     }
 
     // Backblaze B2: a condition is refused outright (typed, nothing written)...
     bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
-    S3Store unprobed(bucket);
+    storage::s3::ManifestStore unprobed(bucket);
     const auto key = std::string(".vaulthalla/key/") + uidText(uidOf(9, 9));
     EXPECT_THROW((void)unprobed.putIfAbsent(key, body), ConditionsUnsupported);
     EXPECT_TRUE(bucket->history(key).empty()) << "a refused condition writes nothing";
 
     // ...and a store whose bucket was probed version_log writes plainly, with the version id.
-    S3Store plain(bucket, WriteCapability::VersionLog);
+    storage::s3::ManifestStore plain(bucket, WriteCapability::VersionLog);
     EXPECT_EQ(plain.mode(), WriteCapability::VersionLog);
     (void)plain.putOnce(key, body);
     const auto second = plain.put(key, Bytes{4, 5});
@@ -722,7 +733,7 @@ TEST(ManifestStore, AVersionListingStopsAtTheVersionItNeeds) {
     bucket->versionPageSize = 2;
     std::vector<std::string> ids;   // oldest first
     for (int i = 0; i < 7; ++i) ids.push_back(bucket->seed("k", "v" + std::to_string(i)));
-    S3Store store(bucket, storage::s3::WriteCapability::VersionLog);
+    storage::s3::ManifestStore store(bucket, WriteCapability::VersionLog);
     bucket->resetCounters();
     EXPECT_EQ(store.versions("k").size(), 7u);
     EXPECT_EQ(bucket->counters().list, 4u) << "pages of 2";
@@ -742,14 +753,14 @@ TEST(ManifestStore, TheBaseStoreRefusesPlainWritesItCannotMake) {
     RecordingStore rec(*w.store);
     EXPECT_THROW((void)rec.put("k", {}), std::logic_error);
     EXPECT_THROW(rec.removeVersion("k", "v"), std::logic_error);
-    EXPECT_EQ(rec.mode(), storage::s3::WriteCapability::Unknown);
+    EXPECT_EQ(rec.mode(), WriteCapability::Unknown);
 }
 
 TEST(ManifestPublish, ABucketThatCanArbitrateNothingRefusesBeforeAnyRequest) {
     // Neither conditional writes nor versions (spec 06 §7, Insufficient): never half a publish.
     Writer w;
     w.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
-    w.store = std::make_shared<S3Store>(w.bucket, storage::s3::WriteCapability::Insufficient);
+    w.store = std::make_shared<storage::s3::ManifestStore>(w.bucket, WriteCapability::Insufficient);
     w.bucket->resetCounters();
     EXPECT_THROW((void)w.publish(smallVault(3)), PublishUnsupported);
     const auto c = w.bucket->counters();
@@ -1142,7 +1153,7 @@ std::shared_ptr<VersionedBucket> b2Bucket() {
 }
 
 Writer vlWriter(std::shared_ptr<VersionedBucket> b, std::string node) {
-    Writer w(std::move(b), storage::s3::WriteCapability::VersionLog);
+    Writer w(std::move(b), WriteCapability::VersionLog);
     w.node = std::move(node);
     return w;
 }
@@ -1441,7 +1452,7 @@ TEST(ManifestPublishVersionLog, AServerTheHeadNoLongerNamesStopsAndANewcomerDoes
 TEST(ManifestPublishVersionLog, AnotherWritersRootInAnotherModeIsRefusedOurOwnModeSwitchIsNot) {
     namespace f = version_log_fixture;
     // A conditional bucket whose head another server published as version_log.
-    Writer cond(std::make_shared<VersionedBucket>(Versioning::Enabled), storage::s3::WriteCapability::Conditional);
+    Writer cond(std::make_shared<VersionedBucket>(Versioning::Enabled), WriteCapability::Conditional);
     cond.node = "node-c";
     auto other = f::vlWriter(cond.bucket, "node-o");
     other.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Ignore;   // so its plain PUTs land
@@ -1453,11 +1464,11 @@ TEST(ManifestPublishVersionLog, AnotherWritersRootInAnotherModeIsRefusedOurOwnMo
         EXPECT_EQ(e.code(), ChainError::PublishModeMismatch);
     }
     // One writer that re-probed its bucket switches mode on top of its own roots.
-    auto solo = Writer(std::make_shared<VersionedBucket>(Versioning::Enabled), storage::s3::WriteCapability::Conditional);
+    auto solo = Writer(std::make_shared<VersionedBucket>(Versioning::Enabled), WriteCapability::Conditional);
     solo.node = "node-s";
     auto c = f::ofNode(smallVault(2), "node-s");
     (void)solo.publish(c);
-    solo.store = std::make_shared<S3Store>(solo.bucket, storage::s3::WriteCapability::VersionLog);
+    solo.store = std::make_shared<storage::s3::ManifestStore>(solo.bucket, WriteCapability::VersionLog);
     nthFile(c, 0).size = 5;
     const auto r = solo.publish(c);
     EXPECT_EQ(r.published.known.epoch, 2u);
@@ -1528,7 +1539,7 @@ TEST(ManifestChainVersionLog, ReadersTakeTheCanonicalHeadWhateverTheyKnowOrTheBu
     EXPECT_EQ(load(*w.store, w.vault, w.lookup(), fromE1).known(), e2) << "rule C1 from the anchor";
     EXPECT_EQ(load(*w.store, w.vault, w.lookup(), {}).known(), e2) << "blind: equal chains, the earliest end";
     // A reader that doesn't know the bucket's capability (a restore) follows the root's declared mode.
-    S3Store unknown(w.bucket);
+    storage::s3::ManifestStore unknown(w.bucket);
     EXPECT_EQ(load(unknown, w.vault, w.lookup(), {}).known(), e2);
     EXPECT_EQ(loadForRestore(unknown, w.vault, w.lookup(), Checkpoint{1, e1.root_sha256, std::nullopt}).loaded.known(), e2);
     // Also when the current object is no root at all (a delete marker above the sibling): the newest authentic version

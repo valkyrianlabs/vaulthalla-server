@@ -1,6 +1,7 @@
 #include "vault/FormatConversionService.hpp"
 
 #include "config/Registry.hpp"
+#include "crypto/SecretKey.hpp"
 #include "db/query/vault/FormatConversion.hpp"
 #include "db/query/vault/Key.hpp"
 #include "fs/model/File.hpp"

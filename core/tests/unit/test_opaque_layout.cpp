@@ -14,6 +14,7 @@
 
 #include <vl/keykit/kev1.hpp>
 #include <vl/keykit/seed.hpp>
+#include "crypto/id/ObjectUid.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/vhf1/Format.hpp"
 #include "db/query/fs/File.hpp"
@@ -30,6 +31,7 @@
 #include "recovery/provider/Restore.hpp"
 #include "storage/ObjectKeys.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "sync/Planner.hpp"
 #include "sync/manifest/Store.hpp"
 #include "sync/rotation/Runtime.hpp"
@@ -70,20 +72,20 @@ std::string lower(std::string s) {
 TEST(OpaqueObjectKeys, KeysAreBuiltParsedAndClassifiedInOnePlace) {
     const auto uid = crypto::id::newObjectUid();
     const auto key = keys::contentKey(uid);
-    EXPECT_EQ(key, "o/" + crypto::id::toBase32(uid));
+    EXPECT_EQ(key, "o/" + vl::keykit::toBase32(uid));
     EXPECT_EQ(keys::uidOfContentKey(key), uid);
     EXPECT_EQ(keys::uidOfContentKey("/" + key), uid) << "scope keys and index paths carry a leading slash";
-    EXPECT_FALSE(keys::uidOfContentKey("o/" + lower(crypto::id::toBase32(uid)) + "x"));
+    EXPECT_FALSE(keys::uidOfContentKey("o/" + lower(vl::keykit::toBase32(uid)) + "x"));
     EXPECT_FALSE(keys::uidOfContentKey("o/OO"));
 
     EXPECT_EQ(keys::classify(key), keys::KeyClass::Content);
     for (const auto* k : {".vaulthalla/layout.json", ".vaulthalla/root"})
         EXPECT_EQ(keys::classify(k), keys::KeyClass::Metadata) << k;
-    EXPECT_EQ(keys::classify(".vaulthalla/seg/" + crypto::id::toBase32(uid)), keys::KeyClass::Metadata);
-    EXPECT_EQ(keys::classify(".vaulthalla/key/" + crypto::id::toBase32(uid)), keys::KeyClass::Metadata);
+    EXPECT_EQ(keys::classify(".vaulthalla/seg/" + vl::keykit::toBase32(uid)), keys::KeyClass::Metadata);
+    EXPECT_EQ(keys::classify(".vaulthalla/key/" + vl::keykit::toBase32(uid)), keys::KeyClass::Metadata);
     const auto envelopeKey = vl::keykit::kev1::objectKey(vl::keykit::kev1::kid(bytes("any envelope bytes")));
     EXPECT_EQ(keys::classify(envelopeKey), keys::KeyClass::Metadata) << "KEV1 envelopes (#370) are allowlisted";
-    EXPECT_EQ(keys::classify(".vaulthalla/probe/" + crypto::id::toBase32(uid)), keys::KeyClass::Metadata)
+    EXPECT_EQ(keys::classify(".vaulthalla/probe/" + vl::keykit::toBase32(uid)), keys::KeyClass::Metadata)
         << "the bucket capability probe's object (spec 06 §7)";
     for (const auto* k : {"Reports/Q3 board pack.pdf", ".vaulthalla/index-v1.json", ".vaulthalla/seg/nope", "o/",
                           "o/x/y", "/o/abc", ".vaulthalla/probe/Reports"})
@@ -401,7 +403,7 @@ TEST_F(OpaqueLayoutTest, OpaqueRequestAudit) {
     // A recovery recipient (#370): its KEV1 envelopes go to the same bucket (.vaulthalla/key/<kid>), under the same
     // request rules, at enrollment and at every rotation.
     vault::envelopes::setStoreFactoryForTesting([bucket = v.bucket](uint32_t) -> std::shared_ptr<sync::manifest::ObjectStore> {
-        return std::make_shared<sync::manifest::S3Store>(bucket);
+        return std::make_shared<storage::s3::ManifestStore>(bucket);
     });
     struct ResetEnvelopeStore {
         ~ResetEnvelopeStore() { vault::envelopes::setStoreFactoryForTesting({}); }
@@ -755,7 +757,7 @@ TEST_F(OpaqueLayoutTest, OpaqueManifestNamesTheObjectsItsFilesAreStoredIn) {
     ASSERT_TRUE(object);
     const auto content = db::query::sync::Manifest::collect(v.id());
     const auto entry = std::ranges::find_if(content.entries, [&](const auto& e) {
-        return e.uid == crypto::id::toBase32(*f->object_uid);
+        return e.uid == vl::keykit::toBase32(*f->object_uid);
     });
     ASSERT_NE(entry, content.entries.end());
     ASSERT_TRUE(entry->object);

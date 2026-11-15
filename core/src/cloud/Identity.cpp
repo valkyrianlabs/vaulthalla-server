@@ -14,14 +14,14 @@ std::string slot() { return paths::testMode ? "test_cloud_identity" : "cloud_ide
 
 }
 
-crypto::SecretBytes create() {
-    auto seed = crypto::SecretBytes::random(kSeedSize);
+vl::keykit::SecretBytes create() {
+    auto seed = vl::keykit::SecretBytes::random(kSeedSize);
     crypto::secrets::KeyProvider provider(identity_detail::slot());
     provider.updateMasterKey(seed.bytes());
     return seed;
 }
 
-std::optional<crypto::SecretBytes> load() {
+std::optional<vl::keykit::SecretBytes> load() {
     crypto::secrets::KeyProvider provider(identity_detail::slot());
     if (!provider.sealedExists()) return std::nullopt;
     try {
@@ -32,7 +32,7 @@ std::optional<crypto::SecretBytes> load() {
         return std::nullopt;
     }
     if (provider.getMasterKey().size() != kSeedSize) return std::nullopt;
-    return crypto::SecretBytes(provider.getMasterKey());
+    return vl::keykit::SecretBytes(provider.getMasterKey());
 }
 
 void destroy() {

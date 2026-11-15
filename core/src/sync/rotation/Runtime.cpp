@@ -1,4 +1,5 @@
 #include "sync/rotation/Runtime.hpp"
+#include "crypto/SecretKey.hpp"
 #include "fs/Filesystem.hpp"
 
 #include "crypto/util/encrypt.hpp"

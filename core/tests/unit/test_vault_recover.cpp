@@ -20,6 +20,8 @@
 #include "cloud/Identity.hpp"
 #include "cloud/Signing.hpp"
 #include "config/Registry.hpp"
+#include "crypto/SecretKey.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "crypto/secrets/KeyProvider.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "db/query/fs/File.hpp"
@@ -38,6 +40,7 @@
 #include "storage/ObjectKeys.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/Capability.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "storage/s3/curl/Http.hpp"
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Store.hpp"
@@ -281,11 +284,11 @@ protected:
     }
 
     static void useBucket(const std::shared_ptr<VersionedBucket>& bucket,
-                          const storage::s3::WriteCapability mode = storage::s3::WriteCapability::Unknown) {
+                          const sync::manifest::WriteCapability mode = sync::manifest::WriteCapability::Unknown) {
         vault::envelopes::setStoreFactoryForTesting(
-            [bucket, mode](uint32_t) { return std::make_shared<mf::S3Store>(bucket, mode); });
+            [bucket, mode](uint32_t) { return std::make_shared<storage::s3::ManifestStore>(bucket, mode); });
         ops::vault_recover::setStoreFactoryForTesting(
-            [bucket](unsigned, const std::string&) { return std::make_shared<mf::S3Store>(bucket); });
+            [bucket](unsigned, const std::string&) { return std::make_shared<storage::s3::ManifestStore>(bucket); });
         ops::vault_recover::setEngineHookForTesting([bucket](const std::shared_ptr<storage::Engine>& engine) {
             const auto cloud = std::static_pointer_cast<storage::CloudEngine>(engine);
             cloud->setS3ControllerForTesting(bucket);
@@ -301,7 +304,7 @@ protected:
         o.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
         o.bucket->md5Etags = true;
         db::query::vault::BucketCapability::record(o.id, storage::s3::probeBucket(*o.bucket));
-        useBucket(o.bucket, storage::s3::WriteCapability::VersionLog);
+        useBucket(o.bucket, sync::manifest::WriteCapability::VersionLog);
         storage::bucket_capability::setControllerFactoryForTesting(
             [b = o.bucket](unsigned int, const std::string&) -> std::shared_ptr<storage::s3::Controller> { return b; });
     }
@@ -406,7 +409,7 @@ protected:
             txn.exec("UPDATE device_node SET node_id = gen_random_uuid()::text");
         });
         crypto::secrets::KeyProvider provider(paths::testMode ? "test_key_attest" : "key_attest");
-        const auto fresh = crypto::SecretBytes::random(32);
+        const auto fresh = vl::keykit::SecretBytes::random(32);
         provider.updateMasterKey(fresh.bytes());
         vault::attestation::resetForTesting();
     }
@@ -568,7 +571,7 @@ TEST_F(VaultRecoverDb, OnABackblazeLikeBucketTheRestoreTakesTheCanonicalHeadAndP
     // reads the canonical head by rule C1 although a losing sibling and a delete marker sit above it, and its first
     // publish (in version_log mode, after the restore's probe) chains on it and takes the vault over.
     auto o = populated(Versioning::Enabled, /*backblaze=*/true);
-    ASSERT_EQ(db::query::vault::BucketCapability::get(o.id).capability, storage::s3::WriteCapability::VersionLog);
+    ASSERT_EQ(db::query::vault::BucketCapability::get(o.id).capability, sync::manifest::WriteCapability::VersionLog);
     const auto state = db::query::sync::Manifest::state(o.id);
     ASSERT_TRUE(state.epoch);
     ASSERT_TRUE(state.root_version_id) << "the origin published its roots as versions";
@@ -594,7 +597,7 @@ TEST_F(VaultRecoverDb, OnABackblazeLikeBucketTheRestoreTakesTheCanonicalHeadAndP
     const auto restored = db::query::sync::Manifest::collect(*r.vault_id);
     EXPECT_EQ(shape(restored), shape(expected));
     EXPECT_EQ(restored.vault->name, expected.vault->name);
-    EXPECT_EQ(db::query::vault::BucketCapability::get(*r.vault_id).capability, storage::s3::WriteCapability::VersionLog);
+    EXPECT_EQ(db::query::vault::BucketCapability::get(*r.vault_id).capability, sync::manifest::WriteCapability::VersionLog);
 
     // The first publish settles on the head, as this node alone (a restore takes the vault over).
     ASSERT_TRUE(r.published_epoch) << r.note.value_or("");
@@ -745,7 +748,7 @@ TEST_F(VaultRecoverDb, AWrongSeedOrAnotherVaultsKitIsRefused) {
     becomeAnotherNode(o.id);
     // A kit for another vault.
     auto other = kit;
-    other["vaults"][0]["vault_uid"] = crypto::id::toBase32(crypto::id::newObjectUid());
+    other["vaults"][0]["vault_uid"] = vl::keykit::toBase32(crypto::id::newObjectUid());
     EXPECT_EQ(code([&] { return recover(o, &other, nullptr); }), "kit_vault_mismatch");
     // The right vault, another seed.
     auto wrongSeed = kit;
@@ -884,7 +887,7 @@ protected:
                                                : json(nullptr);
         // The deliverer's side: the vault keys, opened from the bucket's envelopes with the recipient's secret.
         const auto sk = vl::keykit::RecoverySeed::parse(o.seed).x25519SecretKey();
-        mf::S3Store store(o.bucket);
+        storage::s3::ManifestStore store(o.bucket);
         for (const auto& obj : store.list(std::string(vl::keykit::kev1::kObjectPrefix))) {
             const auto got = store.get(obj.key, std::nullopt);
             try {
@@ -892,7 +895,7 @@ protected:
                 keys_[u.key_version] = Bytes(u.key.bytes().begin(), u.key.bytes().end());
             } catch (const vl::keykit::kev1::Error&) {}
         }
-        vaultUid_ = crypto::id::toBase32(o.uid);
+        vaultUid_ = vl::keykit::toBase32(o.uid);
     }
 
     storage::s3::curl::http::Response cloud(const storage::s3::curl::http::Request& r) {

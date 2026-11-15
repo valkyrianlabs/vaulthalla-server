@@ -1,5 +1,6 @@
 #include "db/query/vault/FormatConversion.hpp"
 
+#include "crypto/id/ObjectUid.hpp"
 #include "db/Transactions.hpp"
 #include "db/encoding/u8.hpp"
 #include "fs/model/File.hpp"

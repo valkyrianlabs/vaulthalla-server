@@ -1,6 +1,8 @@
 // Remote-only reads for cloud vaults: CloudEngine::openMissingReader (hydrate | ranged | off) and the hydrate
 // protocol. See CloudEngine::hydrate and storage/RemoteRangedReader.hpp for the contracts.
 
+#include "crypto/SecretKey.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "storage/CloudEngine.hpp"
 #include "sync/events/Subscriptions.hpp"
 #include "platform/Durable.hpp"

@@ -93,20 +93,20 @@ std::size_t Manager::rotateJWTSecret() const {
                 txn.exec("UPDATE refresh_tokens SET revoked = TRUE WHERE revoked IS NOT TRUE").affected_rows());
         });
     } catch (...) {
-        wipeSecret(fresh);
+        vl::keykit::wipe(fresh);
         throw;
     }
     // What is stored is what will be served: read back under the host master before the switch in memory.
     auto back = getSecret("jwt_secret");
     const bool same = back && *back == fresh;
-    if (back) wipeSecret(*back);
+    if (back) vl::keykit::wipe(*back);
     if (!same) {
-        wipeSecret(fresh);
+        vl::keykit::wipe(fresh);
         throw std::runtime_error("the rotated JWT secret did not read back identically; the previous one is still "
                                  "served in memory, and stored sessions were revoked");
     }
     jwtSecret_.store(std::make_shared<const std::string>(fresh));
-    wipeSecret(fresh);
+    vl::keykit::wipe(fresh);
     return revoked;
 }
 
@@ -141,7 +141,7 @@ bool Manager::hasSecret(const std::string& key) const {
     return db::query::crypto::Secret::secretExists(key);
 }
 
-crypto::SecretBytes Manager::sealedKey(const std::string& key, const std::size_t size,
+vl::keykit::SecretBytes Manager::sealedKey(const std::string& key, const std::size_t size,
                                       const DependentsCheck& dependents) const {
     if (size == 0) throw std::invalid_argument("a sealed key needs a size");
 
@@ -149,11 +149,11 @@ crypto::SecretBytes Manager::sealedKey(const std::string& key, const std::size_t
         auto stored = getSecret(key);  // throws when the master can't open it
         if (!stored) throw std::runtime_error("internal secret '" + key + "' vanished while loading");
         if (stored->size() != size) {
-            wipeSecret(*stored);
+            vl::keykit::wipe(*stored);
             throw std::runtime_error("internal secret '" + key + "' has the wrong length");
         }
-        SecretBytes out(viewBytes(*stored));
-        wipeSecret(*stored);
+        vl::keykit::SecretBytes out(viewBytes(*stored));
+        vl::keykit::wipe(*stored);
         return out;
     }
 
@@ -164,18 +164,18 @@ crypto::SecretBytes Manager::sealedKey(const std::string& key, const std::size_t
                                    "Restore the database's internal_secrets row together with this host's sealed "
                                    "master, or reset the affected accounts' factors.");
 
-    auto fresh = SecretBytes::random(size);
+    auto fresh = vl::keykit::SecretBytes::random(size);
     std::string text(fresh.bytes().begin(), fresh.bytes().end());
     try {
         setSecret(key, text);
     } catch (...) {
-        wipeSecret(text);
+        vl::keykit::wipe(text);
         throw;
     }
-    wipeSecret(text);
+    vl::keykit::wipe(text);
     auto back = getSecret(key);
     const bool same = back && std::ranges::equal(viewBytes(*back), fresh.bytes());
-    if (back) wipeSecret(*back);
+    if (back) vl::keykit::wipe(*back);
     if (!same) throw std::runtime_error("internal secret '" + key + "' did not read back identically after sealing");
     return fresh;
 }

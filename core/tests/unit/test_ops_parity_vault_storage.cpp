@@ -42,7 +42,7 @@ namespace vh::test_ops_parity_vault_storage {
 
 using json = nlohmann::json;
 using UserPtr = std::shared_ptr<identities::User>;
-using storage::s3::WriteCapability;
+using sync::manifest::WriteCapability;
 using test_support::versioned::Versioning;
 using test_support::versioned::VersionedBucket;
 using vh::test::parity::tag;

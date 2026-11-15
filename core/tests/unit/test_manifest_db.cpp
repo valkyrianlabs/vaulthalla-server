@@ -10,16 +10,18 @@
 //                    keeps its object uid.
 
 #include "../helpers/db_suite.hpp"
+#include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "db/query/sync/Manifest.hpp"
 #include "notifications/OperatorNotificationBus.hpp"
 #include "storage/Engine.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "sync/Controller.hpp"
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Publisher.hpp"
 #include "sync/manifest/Reader.hpp"
-#include "sync/manifest/Service.hpp"
 #include "sync/manifest/Store.hpp"
+#include "sync/vault_manifest/Service.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/model/Vault.hpp"
@@ -45,7 +47,7 @@ std::string storageName() {
     return text;
 }
 
-std::string uuidOf(const std::string& b32) { return crypto::id::toUuid(*crypto::id::fromBase32(b32)); }
+std::string uuidOf(const std::string& b32) { return crypto::id::toUuid(*vl::keykit::fromBase32(b32)); }
 
 std::vector<uint8_t> keyBytes(const uint8_t seed) {
     std::vector<uint8_t> k(32);
@@ -312,7 +314,7 @@ TEST_F(ManifestDbTest, ContentRoundTripsDatabaseToBucketToScratchSchema) {
     const auto collected = db::query::sync::Manifest::collect(vaultId);
 
     auto bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
-    mf::S3Store store(bucket);
+    storage::s3::ManifestStore store(bucket);
     const auto key = std::make_shared<const crypto::SecretKey>(keyBytes(9));
     const auto lookup = [key](uint32_t) { return key; };
     mf::PublisherCache cache;
@@ -365,7 +367,7 @@ TEST_F(ManifestDbTest, ContentRoundTripsDatabaseToBucketToScratchSchema) {
                                        "AND object_key LIKE 'o/%' AND object_key NOT IN (SELECT key FROM keys_)",
                                        pqxx::params{vaultId})) {
             const auto key = row[0].as<std::string>();
-            if (const auto uid = crypto::id::fromBase32(key.substr(2)))
+            if (const auto uid = vl::keykit::fromBase32(key.substr(2)))
                 txn.exec("INSERT INTO keys_ VALUES ($1::uuid, $2)", pqxx::params{crypto::id::toUuid(*uid), key});
         }
         loadScratch(txn, s, loaded.content);
@@ -394,7 +396,7 @@ TEST_F(ManifestDbTest, UidsAreAssignedOnceAndTrashKeepsTheObjectUid) {
     const auto first = db::query::sync::Manifest::collect(vaultId);
     const auto second = db::query::sync::Manifest::collect(vaultId);
     EXPECT_EQ(first.entries, second.entries);
-    for (const auto& e : first.entries) { EXPECT_TRUE(crypto::id::fromBase32(e.uid)) << e.name; }
+    for (const auto& e : first.entries) { EXPECT_TRUE(vl::keykit::fromBase32(e.uid)) << e.name; }
 
     fs::Filesystem::remove(engine->vaultPathToFusePath("/A/f.txt"), superUser->id);
     const auto after = db::query::sync::Manifest::collect(vaultId);
@@ -414,7 +416,7 @@ TEST_F(ManifestDbTest, UidsAreAssignedOnceAndTrashKeepsTheObjectUid) {
 TEST_F(ManifestDbTest, StateRecordsEveryPublishAndKeepsThreeRoots) {
     write("/a.txt", "a");
     auto bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
-    mf::Service service(vaultId, vaultUid, std::make_shared<mf::S3Store>(bucket), testKeys());
+    sync::vault_manifest::Service service(vaultId, vaultUid, std::make_shared<storage::s3::ManifestStore>(bucket), testKeys());
     std::vector<mf::PublishReport> reports;
     for (int i = 0; i < 4; ++i) {
         write("/a.txt", "a" + std::to_string(i));
@@ -455,7 +457,7 @@ TEST_F(ManifestDbTest, RollbackAndForkAreRefusedRecordedAndAlertedOnce) {
     write("/a.txt", "a");
     auto bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
     const auto keys = testKeys();
-    mf::Service service(vaultId, vaultUid, std::make_shared<mf::S3Store>(bucket), keys);
+    sync::vault_manifest::Service service(vaultId, vaultUid, std::make_shared<storage::s3::ManifestStore>(bucket), keys);
     (void)drainManifestAlerts("");
     (void)service.publish();
     const auto epoch1 = *bucket->current(std::string(mf::kRootKey));

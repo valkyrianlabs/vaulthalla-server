@@ -94,8 +94,8 @@ protected:
             (void)keys::seal();
             (void)keys::pepper();
         } catch (const std::exception&) {
-            keys::setForTesting(std::make_shared<const crypto::SecretBytes>(crypto::SecretBytes::random(32)),
-                                std::make_shared<const crypto::SecretBytes>(crypto::SecretBytes::random(32)));
+            keys::setForTesting(std::make_shared<const vl::keykit::SecretBytes>(vl::keykit::SecretBytes::random(32)),
+                                std::make_shared<const vl::keykit::SecretBytes>(vl::keykit::SecretBytes::random(32)));
         }
         if (!runtime::Deps::get().shellUsageManager)
             runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();

@@ -15,6 +15,7 @@
 #include "../helpers/versioned_bucket.hpp"
 
 #include "crypto/IntegrityRegistry.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/util/hash.hpp"

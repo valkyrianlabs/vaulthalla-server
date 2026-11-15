@@ -211,7 +211,7 @@ std::vector<ExportedVault> parseExport(const nlohmann::json& doc) {
             v.vault_id = entry.at("vault_id").get<uint64_t>();
         if (entry.contains("node_id") && entry.at("node_id").is_string()) v.node_id = entry.at("node_id").get<std::string>();
         if (entry.contains("vault_uid") && entry.at("vault_uid").is_string()) {
-            v.vault_uid = crypto::id::fromBase32(entry.at("vault_uid").get<std::string>());
+            v.vault_uid = vl::keykit::fromBase32(entry.at("vault_uid").get<std::string>());
             if (!v.vault_uid) throw std::invalid_argument("the export's vault_uid is not a vault uid");
         }
         const auto fieldIn = [](const nlohmann::json& e, const char* name) -> const nlohmann::json* {
@@ -478,7 +478,7 @@ Plan plan(sync::manifest::ObjectStore& inner, const Material& material, const Op
         if (const auto layout = store.get(std::string(mf::kLayoutKey), std::nullopt)) {
             const auto j = nlohmann::json::parse(layout->bytes.begin(), layout->bytes.end(), nullptr, false);
             if (j.is_object() && j.contains("vault_uid") && j["vault_uid"].is_string())
-                hint = crypto::id::fromBase32(j["vault_uid"].get<std::string>());
+                hint = vl::keykit::fromBase32(j["vault_uid"].get<std::string>());
         }
     } catch (const std::exception& e) {
         log::Registry::crypto()->info("[vault::recover] the bucket's layout hint is unreadable ({}); ignored", e.what());

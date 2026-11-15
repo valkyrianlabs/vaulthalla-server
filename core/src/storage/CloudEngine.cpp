@@ -1,4 +1,6 @@
 #include "storage/CloudEngine.hpp"
+#include "crypto/SecretKey.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "storage/s3/Controller.hpp"
 #include "storage/BucketCapability.hpp"
@@ -24,7 +26,7 @@
 #include "config/Registry.hpp"
 #include "sync/model/RemotePolicy.hpp"
 #include "sync/model/RemoteManifest.hpp"
-#include "sync/manifest/Service.hpp"
+#include "sync/vault_manifest/Service.hpp"
 #include "sync/manifest/Store.hpp"
 #include "vault/RecoveryEnvelopes.hpp"
 #include "sync/model/Event.hpp"
@@ -473,7 +475,7 @@ CloudEngine::getGroupedFilesFromS3(const fs::path& prefix) const {
 
 bool CloudEngine::usesManifestV2() const { return opaqueLayout(); }
 
-s3::WriteCapability CloudEngine::writeCapability() const {
+vh::sync::manifest::WriteCapability CloudEngine::writeCapability() const {
     const auto resolved = bucket_capability::resolve(vault->id, *s3Provider_);
     if (resolved.changed)
         throw SyncStalled("the bucket refused a conditional write although its probe found support "
@@ -482,13 +484,13 @@ s3::WriteCapability CloudEngine::writeCapability() const {
     return resolved.capability;
 }
 
-std::shared_ptr<vh::sync::manifest::Service> CloudEngine::manifestV2() const {
+std::shared_ptr<vh::sync::vault_manifest::Service> CloudEngine::manifestV2() const {
     const auto mode = writeCapability();
     std::scoped_lock lock(manifestV2Mutex_);
     if (!manifestV2_ || manifestV2Mode_ != mode) {
         if (!vault->uid) throw std::runtime_error("an opaque_v1 vault without a uid can't publish its manifest");
-        manifestV2_ = std::make_shared<vh::sync::manifest::Service>(
-            vault->id, *vault->uid, std::make_shared<vh::sync::manifest::S3Store>(s3Provider_, mode), encryptionManager);
+        manifestV2_ = std::make_shared<vh::sync::vault_manifest::Service>(
+            vault->id, *vault->uid, std::make_shared<vh::storage::s3::ManifestStore>(s3Provider_, mode), encryptionManager);
         manifestV2Mode_ = mode;
     }
     return manifestV2_;
@@ -507,7 +509,7 @@ void CloudEngine::publishManifestV2(const bool onlyIfChanged) const {
         throw SyncStalled(e.what());
     } catch (const vh::sync::manifest::PublishUnsupported&) {
         // Nothing was written: no segment, no root (spec 06 §7). The pass stalls with the reason; health lists the vault.
-        s3::WriteCapability mode{};
+        sync::manifest::WriteCapability mode{};
         {
             std::scoped_lock lock(manifestV2Mutex_);
             mode = manifestV2Mode_;
@@ -580,7 +582,7 @@ void CloudEngine::publishRemoteIndexManifest(const std::optional<std::string>& e
 
     // The index is a sync cache one server writes and a full LIST rebuilds: on a bucket without conditional writes
     // (spec 06 §7) it is PUT plainly; elsewhere If-Match / If-None-Match keep a concurrent publish from being lost.
-    const bool conditions = s3::sendsPreconditions(writeCapability());
+    const bool conditions = sync::manifest::sendsPreconditions(writeCapability());
     const auto ifMatch = conditions ? expectedETag : std::optional<std::string>{};
     const auto ifNoneMatch = !conditions || ifMatch
         ? std::optional<std::string>{}

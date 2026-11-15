@@ -91,10 +91,10 @@ std::string baseName(const std::string& path) {
 
 }
 
-Manifest::State Manifest::state(const uint32_t vaultId) {
+vh::sync::manifest::ChainState Manifest::state(const uint32_t vaultId) {
     using namespace manifest_query_detail;
     return Transactions::exec("Manifest::state", [&](pqxx::work& txn) {
-        State s;
+        vh::sync::manifest::ChainState s;
         const auto res = txn.exec(
             "SELECT epoch, root_sha256, etag, refused_reason, refused_epoch, refused_root_sha256, "
             "       EXTRACT(EPOCH FROM refused_at)::bigint AS refused_at, EXTRACT(EPOCH FROM gc_at)::bigint AS gc_at, "
@@ -120,14 +120,7 @@ Manifest::State Manifest::state(const uint32_t vaultId) {
     });
 }
 
-void Manifest::recordRoot(const uint32_t vaultId, const uint64_t epoch, const std::string& rootSha256,
-                          const std::optional<std::string>& etag, const std::vector<std::string>& sids) {
-    recordRoot(vaultId, RootRecord{.epoch = epoch, .root_sha256 = rootSha256, .etag = etag, .sids = sids,
-                                   .version_id = std::nullopt, .base_version_id = std::nullopt, .settle_window = {},
-                                   .own = false});
-}
-
-void Manifest::recordRoot(const uint32_t vaultId, const RootRecord& rec) {
+void Manifest::recordRoot(const uint32_t vaultId, const vh::sync::manifest::RootRecord& rec) {
     using namespace manifest_query_detail;
     const auto epoch = rec.epoch;
     const auto& rootSha256 = rec.root_sha256;

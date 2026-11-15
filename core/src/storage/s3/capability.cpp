@@ -132,31 +132,11 @@ unsigned cleanUp(const Controller& c, const std::string& key, const bool version
 
 }
 
-std::string_view to_string(const WriteCapability capability) {
-    switch (capability) {
-    case WriteCapability::Unknown: return "unknown";
-    case WriteCapability::Conditional: return "conditional";
-    case WriteCapability::VersionLog: return "version_log";
-    case WriteCapability::Insufficient: return "insufficient";
-    }
-    return "unknown";
-}
-
-std::optional<WriteCapability> publishModeFromString(const std::string_view text) {
-    if (text == "conditional") return WriteCapability::Conditional;
-    if (text == "version_log") return WriteCapability::VersionLog;
-    return std::nullopt;
-}
-
-bool sendsPreconditions(const WriteCapability capability) noexcept {
-    return capability == WriteCapability::Conditional || capability == WriteCapability::Unknown;
-}
-
 ProbeResult probeBucket(const Controller& controller) {
     namespace d = capability_detail;
     ProbeResult r;
     r.probed_at = std::time(nullptr);
-    const auto key = std::string(kProbePrefix) + crypto::id::toBase32(crypto::id::newObjectUid());
+    const auto key = std::string(kProbePrefix) + vl::keykit::toBase32(crypto::id::newObjectUid());
     const auto first = d::bodyOf("vaulthalla bucket probe: first write\n");
     const auto second = d::bodyOf("vaulthalla bucket probe: second write\n");
     const auto note = [&](const std::string_view step, const std::string_view expected, const std::string& got) {
@@ -245,18 +225,18 @@ ProbeResult probeBucket(const Controller& controller) {
     r.leftover_versions = d::cleanUp(controller, key, versioned);
 
     if (!r.get_if_match) {
-        r.capability = WriteCapability::Insufficient;
+        r.capability = sync::manifest::WriteCapability::Insufficient;
         r.reason = "the bucket does not honour If-Match on GET, which every read of a remote object relies on";
     } else if (r.conditional_put == "supported") {
-        r.capability = WriteCapability::Conditional;
+        r.capability = sync::manifest::WriteCapability::Conditional;
         r.reason = "the bucket honours conditional writes (If-None-Match, If-Match)";
     } else if (r.versioning) {
-        r.capability = WriteCapability::VersionLog;
+        r.capability = sync::manifest::WriteCapability::VersionLog;
         r.reason = r.conditional_put == "rejected"
             ? "the bucket rejects conditional writes (not implemented) and keeps object versions"
             : "the bucket does not enforce conditional writes and keeps object versions";
     } else {
-        r.capability = WriteCapability::Insufficient;
+        r.capability = sync::manifest::WriteCapability::Insufficient;
         r.reason = "the bucket neither honours conditional writes nor keeps object versions";
     }
     return r;
@@ -280,9 +260,9 @@ nlohmann::json toJson(const ProbeResult& r) {
 ProbeResult probeResultFromJson(const nlohmann::json& j) {
     ProbeResult r;
     const auto cap = j.value("capability", std::string("unknown"));
-    if (cap == "conditional") r.capability = WriteCapability::Conditional;
-    else if (cap == "version_log") r.capability = WriteCapability::VersionLog;
-    else if (cap == "insufficient") r.capability = WriteCapability::Insufficient;
+    if (cap == "conditional") r.capability = sync::manifest::WriteCapability::Conditional;
+    else if (cap == "version_log") r.capability = sync::manifest::WriteCapability::VersionLog;
+    else if (cap == "insufficient") r.capability = sync::manifest::WriteCapability::Insufficient;
     r.conditional_put = j.value("conditional_put", std::string{});
     r.versioning = j.value("versioning", false);
     r.get_if_match = j.value("get_if_match", false);

@@ -438,10 +438,17 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   `Vhf1Fuzz` in the unit tests. Keep `build-fuzz` out of rsync `--delete` mirrors.
 - Manifest v2 (#368): `ManifestVectors`, `ManifestDocument`, `ManifestPartition`, `ManifestPublish*`, `ManifestChain*`,
   `ManifestContent*`, `ManifestReplay*` (`test_manifest.cpp`, DB-free, CI) run the protocol on the versioned fake bucket
-  through the production `S3Store`; `ManifestVectors` reads every `manifest` vector (the contract above checks it, and
+  through the production `storage::s3::ManifestStore`; `ManifestVectors` reads every `manifest` vector (the contract above checks it, and
   that every chain error/warning is one `sync::manifest` knows). `ManifestDbTest.*` (`test_manifest_db.cpp`,
   db-only) compares DB → collect → publish → load → a scratch schema with an independent SQL projection of the live
   tables, and covers `remote_manifest_state`, the refused-root alert and the opaque_v1 `CloudEngine` path.
+- Format library candidates (#443): `tools/contracts/test_format_library_contract.py` (`verify.sh packaging`) fails
+  when `crypto/vhf1`, `sync/manifest`, `storage/ObjectKeys`, the fuzz target or the store test helpers include
+  anything but each other, vl-keykit, OpenSSL, nlohmann and the standard library. `tests/helpers/memory_store.hpp`
+  is an in-memory versioned bucket with the manifest `ObjectStore` over it (no HTTP, nothing of the server);
+  `ManifestVersionLogInterleavings`, `ManifestVersionLogFaults` and `ManifestVersionLogBrokenOrder`
+  (`test_manifest_interleavings.cpp`) are parameterised over the bucket and run each test as `<test>/HttpFake` (the
+  versioned fake behind `storage::s3::ManifestStore`) and `<test>/Memory`.
 - version_log publish (spec 06 §5, §8.1-8.2): `ManifestPublishVersionLog*` / `ManifestChainVersionLog*`
   (`test_manifest.cpp`, DB-free) on a Reject501 fake (plain PUTs, one LIST more than conditional, loser deletes and
   merges, repair, GC of every version, janitor, lost reply, 5xx before commit, failed delete, writers and mode,
@@ -551,10 +558,10 @@ Two hard rules, enforced by `tests/helpers/live_bucket.hpp` (the only way a test
   before any request; `RunB2Bucket` sweeps orphans, creates one `vh-test-<host>-<pid>-<start>` bucket and
   `RunB2BucketEnvironment` deletes every version and the bucket after the last test, also on failure. One
   consolidated test, `TheManifestPublishesAsVersionsOfItsRoot` (probe says version_log; four publishes through the
-  real `S3Store` with their request counts; a blind reload; a sibling landed after our PUT and repaired; GC of every
-  version of a collected segment; an envelope written and read back). `LiveB2Guard.*` runs in CI. **Run once**
-  (2026-11-12, us-west-004): every provider behaviour as expected, one wrong test assertion (GC reports keys, not sids),
-  fixed and not rerun since. Run: `(eval "$(grep -E '^export VH_B2_TEST_' .bashrc)"; VH_LIVE_TESTS=1 build/core/vh_unit_tests
+  real `storage::s3::ManifestStore` with their request counts; a blind reload; a sibling landed after our PUT and repaired; GC of every
+  version of a collected segment; an envelope written and read back). `LiveB2Guard.*` runs in CI. **Passes live**
+  (us-west-004, 2026-11-14, on the code as pushed; a first run on 2026-11-12 failed on one wrong test assertion: GC
+  reports keys, not sids). Run: `(eval "$(grep -E '^export VH_B2_TEST_' .bashrc)"; VH_LIVE_TESTS=1 build/core/vh_unit_tests
   --gtest_filter='LiveB2*')`.
 - **Guard:** `LiveBucketGuard.*` (no credentials, no DB; runs in CI) proves the name checks, the orphan selection and
   the guarded provider factory. A violation fails the test even if the code under test swallows the exception.

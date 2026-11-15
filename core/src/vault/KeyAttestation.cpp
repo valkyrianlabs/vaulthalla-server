@@ -33,7 +33,7 @@ std::vector<uint8_t> keyCheckBytes(const std::string& hex) {
 
 // This node's signing seed, unsealed once per state directory (tests switch it) and kept in locked memory that is
 // wiped when the last signer releases it (#350).
-using Seed = std::shared_ptr<const crypto::SecretBytes>;
+using Seed = std::shared_ptr<const vl::keykit::SecretBytes>;
 
 struct SigningSeed {
     std::mutex mutex;
@@ -65,7 +65,7 @@ Seed loadSeedLocked(SigningSeed& s) {
     try {
         provider.init();  // generates and seals a 32-byte seed when none exists
         if (provider.getMasterKey().size() == kSeedSize)
-            seed = std::make_shared<const crypto::SecretBytes>(provider.getMasterKey());
+            seed = std::make_shared<const vl::keykit::SecretBytes>(provider.getMasterKey());
     } catch (const platform::sealer::PolicyUnsatisfied&) {
         throw;  // PCR 7 changed (#351): the key is intact and unseals again once it matches; never replace it
     } catch (const std::exception& e) {
@@ -74,7 +74,7 @@ Seed loadSeedLocked(SigningSeed& s) {
                                       e.what());
     }
     if (!seed) {
-        auto fresh = std::make_shared<const crypto::SecretBytes>(crypto::SecretBytes::random(kSeedSize));
+        auto fresh = std::make_shared<const vl::keykit::SecretBytes>(vl::keykit::SecretBytes::random(kSeedSize));
         provider.updateMasterKey(fresh->bytes());  // re-seals over the unusable blob
         log::Registry::audit()->info("[KeyAttestation] Created a new key attestation signing key on this host");
         seed = std::move(fresh);

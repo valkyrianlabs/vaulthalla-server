@@ -12,6 +12,7 @@
 
 #include "../helpers/live_bucket.hpp"
 
+#include "crypto/id/ObjectUid.hpp"
 #include "fs/model/File.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/ObjectKeys.hpp"

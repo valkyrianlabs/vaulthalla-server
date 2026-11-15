@@ -33,7 +33,7 @@ inline constexpr std::string_view kObjectPrefix = "o/";
 // What sealing needs: the vault key version a document is sealed under and its key.
 struct SealingKey {
     uint32_t version{};
-    crypto::SecretKeyPtr key;
+    crypto::vhf1::KeyPtr key;
 };
 
 // A fresh salt per sealing (spec 02 §3.3); chunked like product writers (64 KiB).

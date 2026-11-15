@@ -28,7 +28,7 @@ struct Unavailable final : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-using Key = std::shared_ptr<const crypto::SecretBytes>;
+using Key = std::shared_ptr<const vl::keykit::SecretBytes>;
 
 // Throw Unavailable when the key can't be had. A failure is not cached: the next call tries again.
 [[nodiscard]] Key seal();
@@ -50,7 +50,7 @@ struct SealedSecret {
 [[nodiscard]] SealedSecret sealTotpSecret(std::span<const uint8_t> key, uint32_t userId, std::string_view factorUuid,
                                           std::span<const uint8_t> secret);
 // Throws std::runtime_error when the tag doesn't verify (another key, user or factor, or a tampered row).
-[[nodiscard]] crypto::SecretBytes openTotpSecret(std::span<const uint8_t> key, uint32_t userId,
+[[nodiscard]] vl::keykit::SecretBytes openTotpSecret(std::span<const uint8_t> key, uint32_t userId,
                                                  std::string_view factorUuid, const SealedSecret& sealed);
 
 }

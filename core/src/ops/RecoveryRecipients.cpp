@@ -147,7 +147,7 @@ RecipientList list(const Actor& actor, const unsigned int vaultId) {
     requireView(actor);
     const auto vault = liveVault(vaultId);
     RecipientList out{.vault_id = vault->id, .vault_name = vault->name,
-                      .vault_uid = vault->uid ? crypto::id::toBase32(*vault->uid) : std::string{}, .recipients = {},
+                      .vault_uid = vault->uid ? vl::keykit::toBase32(*vault->uid) : std::string{}, .recipients = {},
                       .recovery = vault_keys::recoveryMaterialOf(vault->id)};
     const auto versions = envelopeVersionsOf(vault->id);
     for (const auto& g : Grants::list(vault->id)) out.recipients.push_back(recipientFrom(g, versions));
@@ -172,7 +172,7 @@ AddResult add(const Actor& actor, const AddRequest& request, const vault_keys::C
 
     db::query::vault::RecoveryGrant g;
     g.vault_id = vault->id;
-    g.grant_id = crypto::id::toBase32(crypto::id::newObjectUid());
+    g.grant_id = vl::keykit::toBase32(crypto::id::newObjectUid());
     g.recipient_id = hex(vl::keykit::kev1::recipientId(publicKey));
     g.public_key = publicKey;
     g.suite = static_cast<uint16_t>(vl::keykit::kev1::Suite::X25519);

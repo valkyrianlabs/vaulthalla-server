@@ -11,18 +11,18 @@ std::string_view withoutLeadingSlash(std::string_view key) {
     return key;
 }
 
-bool isUidText(const std::string_view text) { return crypto::id::fromBase32(text).has_value(); }
+bool isUidText(const std::string_view text) { return vl::keykit::fromBase32(text).has_value(); }
 
 }
 
-std::string contentKey(const crypto::id::ObjectUid& uid) {
-    return std::string(kContentPrefix) + crypto::id::toBase32(uid);
+std::string contentKey(const vl::keykit::Uid& uid) {
+    return std::string(kContentPrefix) + vl::keykit::toBase32(uid);
 }
 
-std::optional<crypto::id::ObjectUid> uidOfContentKey(std::string_view key) {
+std::optional<vl::keykit::Uid> uidOfContentKey(std::string_view key) {
     key = object_keys_detail::withoutLeadingSlash(key);
     if (!key.starts_with(kContentPrefix)) return std::nullopt;
-    return crypto::id::fromBase32(key.substr(kContentPrefix.size()));
+    return vl::keykit::fromBase32(key.substr(kContentPrefix.size()));
 }
 
 bool isMetadataKey(std::string_view key) {

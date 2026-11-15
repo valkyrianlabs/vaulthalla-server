@@ -2,6 +2,7 @@
 
 #include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
+#include "crypto/SecretKey.hpp"
 #include "crypto/id/Generator.hpp"
 #include <vl/keykit/kev1.hpp>
 #include "db/query/sync/Manifest.hpp"
@@ -18,6 +19,7 @@
 #include "storage/Manager.hpp"
 #include "storage/BucketCapability.hpp"
 #include "storage/s3/Controller.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Store.hpp"
 #include "vault/APIKeyManager.hpp"
@@ -68,7 +70,7 @@ std::shared_ptr<mf::ObjectStore> storeFor(const unsigned int apiKeyId, const std
     controller->setOpaqueLayout(true);
     // No probe here (a dry run writes nothing): a root published on a bucket without conditional writes says so
     // (`publish: version_log`), and manifest::load then reads the canonical head by rule C1 (spec 06 §5.3).
-    return std::make_shared<mf::S3Store>(std::move(controller));
+    return std::make_shared<storage::s3::ManifestStore>(std::move(controller));
 }
 
 std::vector<std::vector<uint8_t>> selfKeys() {
@@ -164,7 +166,7 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
     options.accept_rollback = req.accept_rollback;
     options.self_keys = selfKeys();
     if (req.vault_uid) {
-        options.vault_uid = crypto::id::fromBase32(*req.vault_uid);
+        options.vault_uid = vl::keykit::fromBase32(*req.vault_uid);
         if (!options.vault_uid) throw Invalid("vault uid is not a vault uid (26 base32 symbols)");
     }
 

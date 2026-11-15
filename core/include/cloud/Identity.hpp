@@ -11,9 +11,9 @@
 namespace vh::cloud::identity {
 
 // A fresh seed, sealed over any previous one.
-[[nodiscard]] crypto::SecretBytes create();
+[[nodiscard]] vl::keykit::SecretBytes create();
 // The sealed seed, or nullopt when there is none (or it no longer unseals, e.g. after a TPM reset).
-[[nodiscard]] std::optional<crypto::SecretBytes> load();
+[[nodiscard]] std::optional<vl::keykit::SecretBytes> load();
 // Deletes the sealed seed, if any.
 void destroy();
 

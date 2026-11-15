@@ -1,12 +1,12 @@
 #include "crypto/vhf1/Format.hpp"
 
-#include "crypto/util/Gcm.hpp"
+#include "crypto/vhf1/Aead.hpp"
 
 #include <openssl/core_names.h>
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
 #include <openssl/params.h>
-#include <sodium.h>
+#include <openssl/rand.h>
 
 #include <algorithm>
 #include <cstring>
@@ -68,7 +68,7 @@ void writeBe64(uint8_t* p, const uint64_t v) {
 }
 
 [[nodiscard]] bool equalCt(const uint8_t* a, const uint8_t* b, const std::size_t n) {
-    return sodium_memcmp(a, b, n) == 0;
+    return vl::keykit::equalConstantTime({a, n}, {b, n});
 }
 
 struct KdfDeleter {
@@ -104,18 +104,16 @@ void hkdfSha256(int mode, const std::span<const uint8_t> key, const std::span<co
         throw std::runtime_error("HKDF-SHA-256 derivation failed");
 }
 
-[[nodiscard]] SecretKeyPtr expandKey(const SecretKey& prk, const std::string_view label, const HeaderHash& hh) {
+[[nodiscard]] KeyPtr expandKey(const Key& prk, const std::string_view label, const HeaderHash& hh) {
     std::array<uint8_t, 9 + kHashSize> info{};
     std::memcpy(info.data(), label.data(), label.size());
     std::ranges::copy(hh, info.begin() + static_cast<std::ptrdiff_t>(label.size()));
-    std::array<uint8_t, util::AES_KEY_SIZE> raw{};
+    std::array<uint8_t, kKeySize> raw{};
     hkdfSha256(EVP_KDF_HKDF_MODE_EXPAND_ONLY, prk.bytes(), {}, {info.data(), label.size() + kHashSize}, raw);
-    auto key = std::make_shared<const SecretKey>(raw);
-    sodium_memzero(raw.data(), raw.size());
+    auto key = std::make_shared<const Key>(raw);
+    vl::keykit::wipe(raw);
     return key;
 }
-
-[[nodiscard]] util::GcmKey gcmKeyOf(const SecretKey& key) { return key.bytes(); }
 
 }
 
@@ -147,7 +145,8 @@ Error::Error(const ErrorCode code, const std::optional<uint64_t> chunkIndex)
 
 Salt freshSalt() {
     Salt salt{};
-    randombytes_buf(salt.data(), salt.size());
+    if (RAND_bytes(salt.data(), static_cast<int>(salt.size())) != 1)
+        throw std::runtime_error("OpenSSL's CSPRNG failed; refusing to seal with a predictable salt");
     return salt;
 }
 
@@ -182,11 +181,11 @@ HeaderHash headerHash(const std::span<const uint8_t, kHeaderBodySize> body) {
     return hh;
 }
 
-KeySchedule deriveKeys(const SecretKey& vaultKey, const Salt& salt, const HeaderHash& hh) {
+KeySchedule deriveKeys(const Key& vaultKey, const Salt& salt, const HeaderHash& hh) {
     std::array<uint8_t, kHashSize> prkRaw{};
     format_detail::hkdfSha256(EVP_KDF_HKDF_MODE_EXTRACT_ONLY, vaultKey.bytes(), salt, {}, prkRaw);
-    auto prk = std::make_shared<const SecretKey>(prkRaw);
-    sodium_memzero(prkRaw.data(), prkRaw.size());
+    auto prk = std::make_shared<const Key>(prkRaw);
+    vl::keykit::wipe(prkRaw);
     KeySchedule ks;
     ks.headerKey = format_detail::expandKey(*prk, format_detail::kInfoHeader, hh);
     ks.contentKey = format_detail::expandKey(*prk, format_detail::kInfoContent, hh);
@@ -194,7 +193,7 @@ KeySchedule deriveKeys(const SecretKey& vaultKey, const Salt& salt, const Header
     return ks;
 }
 
-HeaderTag headerTag(const SecretKey& headerKey, const std::span<const uint8_t, kHeaderBodySize> body) {
+HeaderTag headerTag(const Key& headerKey, const std::span<const uint8_t, kHeaderBodySize> body) {
     HeaderTag tag{};
     std::size_t len = 0;
     const auto key = headerKey.bytes();
@@ -281,21 +280,21 @@ void SecureBytes::append(const std::span<const uint8_t> bytes) {
 void SecureBytes::resize(const std::size_t size) {
     if (size > capacity_) throw std::length_error("SecureBytes: capacity exceeded");
     if (size > size_) std::memset(data_.get() + size_, 0, size - size_);
-    else if (size < size_) sodium_memzero(data_.get() + size, size_ - size);
+    else if (size < size_) vl::keykit::wipe(std::span<uint8_t>(data_.get() + size, size_ - size));
     size_ = size;
 }
 
 void SecureBytes::clear() {
-    if (data_) sodium_memzero(data_.get(), size_);
+    if (data_) vl::keykit::wipe(std::span<uint8_t>(data_.get(), size_));
     size_ = 0;
 }
 
 void SecureBytes::wipe() noexcept {
-    if (data_) sodium_memzero(data_.get(), capacity_);
+    if (data_) vl::keykit::wipe(std::span<uint8_t>(data_.get(), capacity_));
     size_ = 0;
 }
 
-OpenedHeader::OpenedHeader(const HeaderParams& params, const HeaderHash& hash, SecretKeyPtr contentKey)
+OpenedHeader::OpenedHeader(const HeaderParams& params, const HeaderHash& hash, KeyPtr contentKey)
     : params_(params), hash_(hash), contentKey_(std::move(contentKey)) {}
 
 OpenedHeader openHeader(const std::span<const uint8_t> object, const Expectation& expect, const KeyLookup& keys) {
@@ -321,7 +320,7 @@ OpenedHeader openHeader(const std::span<const uint8_t> object, const Expectation
     if (expect.generation && !equalCt(h + kOffSalt, expect.generation->data(), kSaltSize))
         throw Error(ErrorCode::GenerationMismatch);
     const uint32_t keyVersion = readBe32(h + kOffKeyVersion);
-    const SecretKeyPtr vaultKey = keyVersion == 0 || !keys ? nullptr : keys(keyVersion);
+    const KeyPtr vaultKey = keyVersion == 0 || !keys ? nullptr : keys(keyVersion);
     if (!vaultKey) throw Error(ErrorCode::KeyUnavailable);
 
     // 3. The header tag.
@@ -341,27 +340,21 @@ OpenedHeader openHeader(const std::span<const uint8_t> object, const Expectation
     return {params, hh, std::move(ks.contentKey)};
 }
 
-void sealChunk(const SecretKey& contentKey, const HeaderHash& hh, const uint64_t index, const bool final,
+void sealChunk(const Key& contentKey, const HeaderHash& hh, const uint64_t index, const bool final,
                const std::span<const uint8_t> plaintext, const std::span<uint8_t> out) {
     if (out.size() != plaintext.size() + kTagSize) throw std::invalid_argument("VHF1: sealed chunk buffer size");
     const auto nonce = chunkNonce(index);
     const auto aad = chunkAad(hh, index, final);
-    util::GcmStreamEncryptor enc(format_detail::gcmKeyOf(contentKey), util::GcmIv(nonce.data(), kNonceSize), aad);
-    enc.update(plaintext, out.first(plaintext.size()));
-    const auto tag = enc.finish();
-    std::ranges::copy(tag, out.begin() + static_cast<std::ptrdiff_t>(plaintext.size()));
+    aeadSeal(contentKey, nonce, aad, plaintext, out);
 }
 
 bool openChunk(const OpenedHeader& header, const uint64_t index, const bool final,
                const std::span<const uint8_t> sealed, const std::span<uint8_t> out) {
     if (sealed.size() < kTagSize || out.size() != sealed.size() - kTagSize)
         throw std::invalid_argument("VHF1: chunk buffer size");
-    const auto bodySize = sealed.size() - kTagSize;
     const auto nonce = chunkNonce(index);
     const auto aad = chunkAad(header.hash(), index, final);
-    return util::gcmDecrypt(format_detail::gcmKeyOf(header.contentKey()), util::GcmIv(nonce.data(), kNonceSize),
-                            sealed.first(bodySize), std::span<const uint8_t, kTagSize>(sealed.data() + bodySize, kTagSize),
-                            out, aad);
+    return aeadOpen(header.contentKey(), nonce, aad, sealed, out);
 }
 
 }

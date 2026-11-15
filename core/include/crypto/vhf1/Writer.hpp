@@ -21,7 +21,7 @@ public:
     using Sink = std::function<void(std::span<const uint8_t> objectBytes)>;
 
     // Throws std::invalid_argument for params encodeHeaderBody rejects.
-    Writer(const HeaderParams& params, const SecretKey& vaultKey, Sink sink);
+    Writer(const HeaderParams& params, const Key& vaultKey, Sink sink);
     ~Writer();
     Writer(const Writer&) = delete;
     Writer& operator=(const Writer&) = delete;
@@ -41,7 +41,7 @@ private:
 
     Sink sink_;
     HeaderHash hash_{};
-    SecretKeyPtr contentKey_;
+    KeyPtr contentKey_;
     uint64_t chunkSize_;
     SecureBytes pending_;            // the held-back plaintext chunk
     std::vector<uint8_t> sealed_;    // one sealed chunk (ciphertext: not secret)
@@ -54,6 +54,6 @@ private:
 
 // One-shot sealing of an in-memory plaintext.
 [[nodiscard]] std::vector<uint8_t> seal(std::span<const uint8_t> plaintext, const HeaderParams& params,
-                                        const SecretKey& vaultKey);
+                                        const Key& vaultKey);
 
 }

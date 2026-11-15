@@ -1,6 +1,7 @@
 #include "sync/manifest/Document.hpp"
 
-#include <fmt/format.h>
+#include <chrono>
+#include <format>
 
 #include <algorithm>
 #include <array>
@@ -18,18 +19,18 @@ public:
         if (!j_.is_object()) fail("is not an object");
     }
 
-    [[noreturn]] void fail(std::string_view why) const { throw FormatError(code_, fmt::format("{} {}", what_, why)); }
+    [[noreturn]] void fail(std::string_view why) const { throw FormatError(code_, std::format("{} {}", what_, why)); }
 
     [[nodiscard]] bool has(const char* key) const { return j_.contains(key); }
     [[nodiscard]] bool present(const char* key) const { return j_.contains(key) && !j_.at(key).is_null(); }
     [[nodiscard]] const Json& at(const char* key) const {
-        if (!j_.contains(key)) fail(fmt::format("is missing \"{}\"", key));
+        if (!j_.contains(key)) fail(std::format("is missing \"{}\"", key));
         return j_.at(key);
     }
 
     [[nodiscard]] std::string str(const char* key) const {
         const auto& v = at(key);
-        if (!v.is_string()) fail(fmt::format("member \"{}\" is not a string", key));
+        if (!v.is_string()) fail(std::format("member \"{}\" is not a string", key));
         return v.get<std::string>();
     }
     [[nodiscard]] std::optional<std::string> optStr(const char* key) const {
@@ -40,7 +41,7 @@ public:
         const auto& v = at(key);
         if (v.is_number_unsigned()) return v.get<uint64_t>();
         if (v.is_number_integer() && v.get<int64_t>() >= 0) return static_cast<uint64_t>(v.get<int64_t>());
-        fail(fmt::format("member \"{}\" is not a non-negative integer", key));
+        fail(std::format("member \"{}\" is not a non-negative integer", key));
     }
     [[nodiscard]] std::optional<uint64_t> optU64(const char* key) const {
         if (!present(key)) return std::nullopt;
@@ -48,7 +49,7 @@ public:
     }
     [[nodiscard]] uint32_t u32(const char* key) const {
         const auto v = u64(key);
-        if (v > UINT32_MAX) fail(fmt::format("member \"{}\" is out of range", key));
+        if (v > UINT32_MAX) fail(std::format("member \"{}\" is out of range", key));
         return static_cast<uint32_t>(v);
     }
     [[nodiscard]] std::optional<uint32_t> optU32(const char* key) const {
@@ -58,17 +59,17 @@ public:
     [[nodiscard]] int64_t i64(const char* key) const {
         const auto& v = at(key);
         if (v.is_number_integer()) return v.get<int64_t>();
-        fail(fmt::format("member \"{}\" is not an integer", key));
+        fail(std::format("member \"{}\" is not an integer", key));
     }
     [[nodiscard]] bool boolean(const char* key, const bool fallback) const {
         if (!present(key)) return fallback;
         const auto& v = at(key);
-        if (!v.is_boolean()) fail(fmt::format("member \"{}\" is not a boolean", key));
+        if (!v.is_boolean()) fail(std::format("member \"{}\" is not a boolean", key));
         return v.get<bool>();
     }
     [[nodiscard]] const Json& array(const char* key) const {
         const auto& v = at(key);
-        if (!v.is_array()) fail(fmt::format("member \"{}\" is not an array", key));
+        if (!v.is_array()) fail(std::format("member \"{}\" is not an array", key));
         return v;
     }
     [[nodiscard]] const Json* optArray(const char* key) const {
@@ -98,7 +99,7 @@ void putIfNum(Json& j, const char* key, const std::optional<T>& v) {
     if (v) j[key] = *v;
 }
 
-std::string hexByte(const uint8_t b) { return fmt::format("{:02x}", b); }
+std::string hexByte(const uint8_t b) { return std::format("{:02x}", b); }
 
 uint8_t parseHexByte(const Json& v, const Fields& f) {
     if (!v.is_string()) f.fail("range bound is not a string");
@@ -128,7 +129,7 @@ bool isLowerHex(const std::string& s, const std::size_t size) {
 }
 
 void checkType(const Fields& f, const std::string_view type) {
-    if (f.str("type") != type) f.fail(fmt::format("is not a {}", type));
+    if (f.str("type") != type) f.fail(std::format("is not a {}", type));
     if (f.u64("v") != kDocumentVersion) f.fail("has an unsupported version");
 }
 
@@ -176,11 +177,11 @@ FileVersion parseVersion(const Json& j, const std::string& code) {
 FormatError::FormatError(std::string code, const std::string& detail)
     : std::runtime_error("manifest " + code + ": " + detail), code_(std::move(code)) {}
 
-std::string uidText(const Uid& uid) { return crypto::id::toBase32(uid); }
+std::string uidText(const Uid& uid) { return vl::keykit::toBase32(uid); }
 
 Uid parseUid(const std::string_view text, const std::string& code, const std::string_view what) {
-    const auto uid = crypto::id::fromBase32(text);
-    if (!uid) throw FormatError(code, fmt::format("{} is not a canonical base32 uid", what));
+    const auto uid = vl::keykit::fromBase32(text);
+    if (!uid) throw FormatError(code, std::format("{} is not a canonical base32 uid", what));
     return *uid;
 }
 
@@ -580,10 +581,14 @@ RootDocument rootFromJson(const Json& j, const Uid& expectedVaultUid) {
 std::string canonicalJson(const Json& j) { return j.dump(-1, ' ', false, Json::error_handler_t::strict); }
 
 std::string isoTime(const std::time_t t) {
-    std::tm tm{};
-    gmtime_r(&t, &tm);
-    return fmt::format("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour,
-                       tm.tm_min, tm.tm_sec);
+    // The proleptic Gregorian calendar in UTC, as gmtime_r gives it, from <chrono> alone.
+    const std::chrono::sys_seconds at{std::chrono::seconds{t}};
+    const auto day = std::chrono::floor<std::chrono::days>(at);
+    const std::chrono::year_month_day date{day};
+    const std::chrono::hh_mm_ss time{at - day};
+    return std::format("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", static_cast<int>(date.year()),
+                       static_cast<unsigned>(date.month()), static_cast<unsigned>(date.day()), time.hours().count(),
+                       time.minutes().count(), time.seconds().count());
 }
 
 }

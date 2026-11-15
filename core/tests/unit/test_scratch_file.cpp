@@ -4,6 +4,7 @@
 // never reuses a nonce, tampering fails closed, and what a crash leaves is unreadable under any other key.
 
 #include "crypto/ScratchFile.hpp"
+#include "crypto/SecretKey.hpp"
 
 #include <gtest/gtest.h>
 #include <sodium.h>

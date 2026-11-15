@@ -68,8 +68,9 @@ struct Result {
 [[nodiscard]] Result recover(const Actor& actor, const Request& request, vault_keys::Channel channel);
 [[nodiscard]] nlohmann::json toJson(const Result& result);
 
-// Test seams. The bucket a restore reads (default: an S3Store over the API key's controller, opaque_v1 rules), and a
-// hook called with the new vault's engine before anything is published or salvaged (tests install a fake bucket).
+// Test seams. The bucket a restore reads (default: a storage::s3::ManifestStore over the API key's controller,
+// opaque_v1 rules), and a hook called with the new vault's engine before anything is published or salvaged (tests
+// install a fake bucket).
 using StoreFactory = std::function<std::shared_ptr<sync::manifest::ObjectStore>(unsigned int apiKeyId,
                                                                                const std::string& bucket)>;
 void setStoreFactoryForTesting(StoreFactory factory);

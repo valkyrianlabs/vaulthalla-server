@@ -1,5 +1,6 @@
 // Local versioning's upstream backlog: replaying one retained generation (recovery/local/Backlog.cpp drives it).
 
+#include "crypto/SecretKey.hpp"
 #include "storage/CloudEngine.hpp"
 #include "vault/Content.hpp"
 

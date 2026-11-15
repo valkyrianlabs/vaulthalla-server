@@ -12,7 +12,7 @@
 
 namespace vh::test_object_uid {
 
-using crypto::id::Base32Error;
+using vl::keykit::Base32Error;
 using crypto::id::ObjectUid;
 
 ObjectUid fromHex(const std::string& hex) {
@@ -30,8 +30,8 @@ TEST(ObjectUid, Base32MatchesTheVectors) {
     };
     for (const auto& c : cases) {
         SCOPED_TRACE(c.b32);
-        EXPECT_EQ(crypto::id::toBase32(fromHex(c.hex)), c.b32);
-        const auto decoded = crypto::id::fromBase32(c.b32);
+        EXPECT_EQ(vl::keykit::toBase32(fromHex(c.hex)), c.b32);
+        const auto decoded = vl::keykit::fromBase32(c.b32);
         ASSERT_TRUE(decoded);
         EXPECT_EQ(*decoded, fromHex(c.hex));
     }
@@ -47,10 +47,10 @@ TEST(ObjectUid, Base32DecoderAcceptsOneSpellingPerId) {
     for (const auto& c : cases) {
         SCOPED_TRACE(c.text);
         Base32Error error{};
-        EXPECT_FALSE(crypto::id::fromBase32(c.text, &error));
+        EXPECT_FALSE(vl::keykit::fromBase32(c.text, &error));
         EXPECT_EQ(error, c.error);
     }
-    EXPECT_EQ(crypto::id::to_string(Base32Error::NonCanonical), "non_canonical");
+    EXPECT_EQ(vl::keykit::to_string(Base32Error::NonCanonical), "non_canonical");
 }
 
 TEST(ObjectUid, UuidFormRoundTripsAndRefusesOtherText) {
