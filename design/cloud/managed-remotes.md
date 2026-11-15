@@ -362,3 +362,8 @@ each small to change:
     stored as a cloud key owned by the restored vault's owner, probed, not acknowledged), restores with it, and only
     then adopts the vault (`adoptRestored`: its row `active` on that key, the key acknowledged, the bucket bound, the
     gate set). A restore that stops removes the key (`discardRestoreKey`); unacknowledged, the cloud revokes it.
+19. **Also from the drill (2026-11-15).** Access back after a suspension asks for a new bucket key (the cloud never
+    reinstates a revoked one; the service had waited for an active key that never came). A bucket the cloud reports
+    `emptying` or `deleted` while the plan isn't `ended` (paid again after the end began deleting it, or the account
+    holder deleted it in the portal) converts the vault in place as a confirmed end does; while the plan is `ended`,
+    item 13's confirmation still decides.
