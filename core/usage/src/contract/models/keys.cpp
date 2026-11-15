@@ -199,9 +199,11 @@ std::vector<WsModel> vaultKeyModels() {
          str("estimated_cost").nullable().desc("The price budget's estimate, when priced.")}));
 
     out.push_back(model("VaultRemoteProgress",
-        "vault::remote::toJson(Progress): rendered as is by clients.",
+        "vault::remote::toJson(Progress): rendered as is by clients, for the attach or, while one is unfinished, the "
+        "detach.",
         {str("phase").oneOf({"preparing", "uploading", "catching_up", "verifying", "cutover", "done", "failed",
-                             "aborted"}),
+                             "aborted", "hydrating"})
+             .desc("The operation's state; hydrating: a detach fetches and verifies the files locally."),
          uinteger("files_total"), uinteger("files_done"), uinteger("bytes_total"), uinteger("bytes_done"),
          uinteger("bytes_per_second").nullable().desc("Over the last minute; null while unknown."),
          uinteger("eta_seconds").nullable().desc("null while unknown."),
@@ -236,11 +238,42 @@ std::vector<WsModel> vaultKeyModels() {
              .nullable().desc("The vault's first sync pass after the cutover, once it ended."),
          str("last_error").nullable()}));
 
+    out.push_back(model("VaultRemoteDetachEstimate",
+        "vault::remote::detach::toJson(Estimate): what the detach does, computed when it starts.",
+        {uinteger("files").desc("Live files with content."), uinteger("bytes").desc("Their sealed bytes."),
+         uinteger("files_remote_only").desc("Of those, fetched from the bucket (one GET each)."),
+         uinteger("bytes_remote_only"), uinteger("envelopes").desc("Recovery envelopes of the vault."),
+         uinteger("envelopes_to_copy").desc("Of those, read from the bucket into the database."),
+         uinteger("history_in_bucket_only")
+             .desc("Local versions whose body only the bucket's history holds: not restorable from this host after "
+                   "the detach."),
+         uinteger("trash_without_local_copy").desc("Trashed files without a local copy: their objects stay in the "
+                                                   "bucket.")}));
+
+    out.push_back(model("VaultRemoteDetach",
+        "A vault's remote detach (vault_remote_detach).",
+        {str("state").oneOf({"preparing", "hydrating", "verifying", "cutover", "done", "failed", "aborted"})
+             .desc("preparing to verifying: the vault is an S3 vault and in use while every file is held and verified "
+                   "locally; cutover: the vault is local and its engine is switched; done; failed: something failed "
+                   "before the cutover, the vault is still an S3 vault (start the detach again to resume); aborted."),
+         uinteger("api_key_id").nullable().desc("The binding the vault had (null when the key was deleted)."),
+         str("bucket").desc("The bucket the vault used: left in place."), vaultKeyTime("started_at"),
+         uinteger("started_by").nullable(), uinteger("attempts"), vaultKeyTime("verified_at").nullable(),
+         vaultKeyTime("cutover_at").nullable(), vaultKeyTime("done_at").nullable(),
+         vaultKeyTime("aborted_at").nullable(), vaultKeyTime("abort_requested_at").nullable(),
+         object("estimate", "VaultRemoteDetachEstimate").nullable(),
+         object("items", "", {uinteger("files_pending"), uinteger("files_verified"), uinteger("files_failed"),
+                              uinteger("files_fetched").desc("Fetched from the bucket."), uinteger("envelopes"),
+                              uinteger("envelopes_copied").desc("Copied from the bucket into the database.")})
+             .desc("What the detach verified locally."),
+         str("last_error").nullable()}));
+
     out.push_back(model("VaultRemoteStatus",
-        "ops::vault_remote::toJson(Status): a vault's remote storage and its attach.",
+        "ops::vault_remote::toJson(Status): a vault's remote storage, its attach and its detach.",
         {vaultId(), str("vault_name"), str("type").oneOf({"local", "s3"}),
-         str("remote").desc("none, attaching:<state> or attached."),
+         str("remote").desc("none, attaching:<state>, attached or detaching:<state>."),
          object("attach", "VaultRemoteAttach").nullable().desc("null until an operator starts one."),
+         object("detach", "VaultRemoteDetach").nullable().desc("null until an operator starts one."),
          object("progress", "VaultRemoteProgress").nullable(),
          object("items", "", {uinteger("files_pending"), uinteger("files_sent"), uinteger("files_failed"),
                               uinteger("envelopes"), uinteger("metadata_objects"), uinteger("orphans")})

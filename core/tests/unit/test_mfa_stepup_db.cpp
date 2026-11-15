@@ -204,6 +204,8 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
                                  "runs after those checks, only with confirm (LayoutMigrationTest)"},
         {"vault.remote.attach", "needs a local vault with recovery material and an empty bucket; the ops gate runs "
                                 "after the preconditions (RemoteAttachTest)"},
+        {"vault.remote.detach", "needs an S3 vault that meets the detach's preconditions and the vault's name; the ops "
+                                "gate runs after those checks (RemoteDetachTest)"},
         {"vault.remote.abort", "needs an attach before its cutover and the vault's name; the gate runs after those "
                                "checks (RemoteAttachTest)"},
     };

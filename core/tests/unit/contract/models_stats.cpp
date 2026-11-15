@@ -347,6 +347,10 @@ void checkSystemStats(vh::test::contract_models::Checker& c) {
                                          .detail = "bucket_not_empty: the bucket is not empty"});
     health.remoteAttachesUnfinished = {18};
     c.check(json(health), "SystemHealth", "a failed and a running remote attach");
+    health.remoteDetachFailed.push_back({.vaultId = 19, .vaultName = "photos",
+                                         .detail = "sync_conflicts_open: the vault has 1 open sync conflict(s)"});
+    health.remoteDetachesUnfinished = {20};
+    c.check(json(health), "SystemHealth", "a failed and a running remote detach");
     health.deps.secretsWarning = "6 sealed secret(s) are bound to TPM PCR 7 and no `vh secret export all` was ever taken";
     c.check(json(health), "SystemHealth", "PCR-bound secrets with no recent export");
     c.check(json(sm::SystemHealth{}), "SystemHealth", "system before the pool exists");

@@ -180,6 +180,10 @@ struct SystemHealth {
     std::optional<LegacyContentHealth> legacyContent;   // nullopt when the database could not be asked
     std::vector<RemoteAttachFailedHealth> remoteAttachFailed;       // degraded: an operator must resume or abort
     std::vector<unsigned int> remoteAttachesUnfinished;             // informational: attaches still running
+    // An S3 vault whose remote detach (vault/RemoteDetach.hpp) failed before its cutover: still an S3 vault, syncing
+    // as before; an operator resumes or aborts it (same shape as an attach's failure).
+    std::vector<RemoteAttachFailedHealth> remoteDetachFailed;       // degraded
+    std::vector<unsigned int> remoteDetachesUnfinished;             // informational: detaches still running
     HealthSummary summary;
 
     [[nodiscard]] bool healthy() const noexcept;

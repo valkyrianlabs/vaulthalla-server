@@ -361,8 +361,13 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         {"bucket_capability_insufficient", {"storage.vault.add", "storage.vault.update", "vault.remote.attach"}},
         {"bucket_probe_failed", {"vault.storage.probe", "vault.remote.attach"}},
         // design/storage/attach-remote.md: the attach's preconditions (vault::remote::Refusal, ops Refused).
-        {"key_rotation_running", {"vault.remote.attach"}}, {"key_salvage_running", {"vault.remote.attach"}},
-        {"legacy_content", {"vault.remote.attach"}}, {"key_version_missing", {"vault.remote.attach"}},
+        {"key_rotation_running", {"vault.remote.attach", "vault.remote.detach"}},
+        {"key_salvage_running", {"vault.remote.attach", "vault.remote.detach"}},
+        {"legacy_content", {"vault.remote.attach", "vault.remote.detach"}},
+        {"key_version_missing", {"vault.remote.attach", "vault.remote.detach"}},
+        // The detach's own preconditions (vault::remote::detach::requireVaultReady).
+        {"attach_running", {"vault.remote.detach"}}, {"layout_migration_running", {"vault.remote.detach"}},
+        {"event_sync_active", {"vault.remote.detach"}}, {"sync_conflicts_open", {"vault.remote.detach"}},
         {"key_version_unattested", {"vault.remote.attach"}}, {"recovery_material_missing", {"vault.remote.attach"}},
         {"bucket_listing_failed", {"vault.remote.attach"}}, {"bucket_not_empty", {"vault.remote.attach"}},
         {"already_signed_in", {"auth.login", "auth.passkey.options", "auth.passkey.login"}},

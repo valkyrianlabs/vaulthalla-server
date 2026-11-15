@@ -1,7 +1,8 @@
 // vh-test-tier: db-only
 // Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
 // Attaching a remote through both surfaces (design/storage/attach-remote.md): `vh vault remote attach | status | abort`
-// and ws vault.remote.attach | vault.remote.status | vault.remote.abort run ops::vault_remote. For every seeded admin
+// and ws vault.remote.attach | vault.remote.status | vault.remote.abort run ops::vault_remote (and the same for
+// `vh vault remote detach` / vault.remote.detach on S3 vaults). For every seeded admin
 // role, on local vaults owned by an unprivileged account, both surfaces must give the same verdict for each of the
 // three operations and leave the same state; a super admin is allowed and an unprivileged account refused. Attach and
 // abort are recorded in the audit trail; the same refusals (a missing key or bucket, a wrong confirmation, a bucket
@@ -15,6 +16,7 @@
 #include "db/Transactions.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "db/query/vault/RemoteAttach.hpp"
+#include "db/query/vault/RemoteDetach.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
@@ -196,6 +198,67 @@ TEST_F(VaultRemoteParityTest, AttachStatusAndAbortAgreeOnBothSurfacesForEverySee
     }
     EXPECT_GE(checked, 2u) << "expected the seeded admin roles";
     EXPECT_GE(allowedRoles, 1u);
+}
+
+TEST_F(VaultRemoteParityTest, DetachAndItsAbortAgreeOnBothSurfacesForEverySeededAdminRole) {
+    using DQ = db::query::vault::RemoteDetach;
+    unsigned checked = 0, allowedRoles = 0;
+    for (const auto& role : db::query::rbac::role::Admin::list()) {
+        SCOPED_TRACE(role->name);
+        const auto caller = role->name == "super_admin" ? superUser : createUser("vd_" + role->name + tag(), role->name);
+        const auto viaCli = test_support::versioned::makeCloudVault(superUser, "vdcli", Versioning::Enabled, true);
+        const auto viaWs = test_support::versioned::makeCloudVault(superUser, "vdws", Versioning::Enabled, true);
+        const auto cliName = viaCli.engine->vault->name, wsName = viaWs.engine->vault->name;
+
+        const auto cliDetach = cli("vault remote detach " + std::to_string(viaCli.id()) + " --confirm " + cliName + " --json",
+                                   caller);
+        const auto wsDetach = wsCall([&] {
+            return WsKeys::remoteDetach(json{{"vault_id", viaWs.id()}, {"confirm", wsName}}, test::parity::ws(caller));
+        });
+        const bool started = cliDetach.first == 0;
+        EXPECT_EQ(started, wsDetach.has_value()) << cliDetach.second;
+        if (role->name == "super_admin") EXPECT_TRUE(started) << cliDetach.second;
+        if (role->name == "unprivileged") EXPECT_FALSE(started) << cliDetach.second;
+        EXPECT_EQ(DQ::get(viaCli.id()).has_value(), started);
+        EXPECT_EQ(DQ::get(viaWs.id()).has_value(), wsDetach.has_value());
+        EXPECT_EQ(auditEvents("vault.remote.detach", viaCli.id()), started ? 1u : 0u);
+        if (started && wsDetach) {
+            const auto fromCli = json::parse(cliDetach.second);
+            EXPECT_EQ(fromCli.at("remote"), "detaching:preparing");
+            EXPECT_EQ(fromCli.at("remote"), wsDetach->at("remote"));
+            EXPECT_EQ(fromCli.at("detach").at("state"), wsDetach->at("detach").at("state"));
+            ++allowedRoles;
+        }
+
+        if (!started) {
+            ASSERT_EQ(cli("vault remote detach " + std::to_string(viaCli.id()) + " --confirm " + cliName, superUser).first, 0);
+            (void)WsKeys::remoteDetach(json{{"vault_id", viaWs.id()}, {"confirm", wsName}}, test::parity::ws(superUser));
+        }
+        const auto cliAbort = cli("vault remote abort " + std::to_string(viaCli.id()) + " --confirm " + cliName + " --json",
+                                  caller);
+        const auto wsAbort = wsCall([&] {
+            return WsKeys::remoteAbort(json{{"vault_id", viaWs.id()}, {"confirm", wsName}}, test::parity::ws(caller));
+        });
+        EXPECT_EQ(cliAbort.first == 0, wsAbort.has_value()) << cliAbort.second;
+        EXPECT_EQ(DQ::get(viaCli.id())->abort_requested_at.has_value(), cliAbort.first == 0);
+        EXPECT_EQ(DQ::get(viaWs.id())->abort_requested_at.has_value(), wsAbort.has_value());
+        ++checked;
+    }
+    EXPECT_GE(checked, 2u);
+    EXPECT_GE(allowedRoles, 1u);
+
+    // A wrong confirmation, a local vault: refused alike.
+    const auto s3 = test_support::versioned::makeCloudVault(superUser, "vdref", Versioning::Enabled, true);
+    EXPECT_NE(cli("vault remote detach " + std::to_string(s3.id()) + " --confirm wrong", superUser).first, 0);
+    EXPECT_THROW((void)WsKeys::remoteDetach(json{{"vault_id", s3.id()}, {"confirm", "wrong"}}, test::parity::ws(superUser)),
+                 ops::Invalid);
+    const auto local = target();
+    EXPECT_NE(cli("vault remote detach " + std::to_string(local.vault) + " --confirm " + local.name, superUser).first, 0);
+    EXPECT_THROW((void)WsKeys::remoteDetach(json{{"vault_id", local.vault}, {"confirm", local.name}},
+                                            test::parity::ws(superUser)),
+                 ops::Conflict);
+    EXPECT_FALSE(DQ::get(s3.id()));
+    EXPECT_FALSE(DQ::get(local.vault));
 }
 
 TEST_F(VaultRemoteParityTest, TheSameRefusalsOnBothSurfaces) {

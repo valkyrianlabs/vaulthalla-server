@@ -432,6 +432,15 @@ std::vector<WsModel> statsSystemModels() {
          intArray("remote_attaches_unfinished")
              .opt()
              .desc("Vaults whose remote attach is still running. Never degrades health by itself."),
+         objectArray("remote_detach_failed", "",
+                     {uinteger("vault_id"), str("vault_name"), str("detail").desc("The detach's last error.")})
+             .opt()
+             .desc("S3 vaults whose remote detach failed before its cutover (vault.remote.status): the vault is still "
+                   "an S3 vault and syncs as before; an operator resumes or aborts the detach. Any entry makes the "
+                   "node at least degraded."),
+         intArray("remote_detaches_unfinished")
+             .opt()
+             .desc("Vaults whose remote detach is still running. Never degrades health by itself."),
          object("summary", "",
                 {statsUint("services_ready"), statsUint("services_total"), statsUint("deps_ready"),
                  statsUint("deps_total"), statsUint("protocols_ready"), statsUint("protocols_total"),

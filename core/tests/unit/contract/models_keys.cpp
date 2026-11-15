@@ -432,6 +432,49 @@ void checkVaultKeyModels(Checker& c) {
     aborted.attach->aborted_at = 1'762'000'500;
     aborted.progress->phase = "aborted";
     c.check(vr::toJson(aborted), "VaultRemoteStatus", "vault.remote.status (aborted)");
+
+    // ... and detaching it again (vault/RemoteDetach.hpp).
+    namespace rdt = vault::remote::detach;
+    rdt::Row detaching;
+    detaching.vault_id = 4;
+    detaching.api_key_id = 2;
+    detaching.bucket = "photos-vault";
+    detaching.state = rdt::State::Hydrating;
+    detaching.started_by = 1;
+    detaching.started_at = 1'763'000'000;
+    detaching.attempts = 1;
+    detaching.passes = 1;
+    detaching.abort_requested_at = 1'763'000'100;
+    detaching.estimate = rdt::toJson(rdt::Estimate{.files = 118, .bytes = 1'048'576, .files_remote_only = 3,
+                                                   .bytes_remote_only = 4096, .envelopes = 2, .envelopes_to_copy = 2,
+                                                   .history_in_bucket_only = 5, .trash_without_local_copy = 1});
+    detaching.last_error = "file 7 could not be held locally: transient";
+    detaching.updated_at = 1'763'000'200;
+    vr::Status hydrating = finished;
+    hydrating.remote = "detaching:hydrating";
+    hydrating.detach = detaching;
+    hydrating.progress = ra::Progress{.phase = "hydrating", .files_total = 118, .files_done = 60, .bytes_total = 1'048'576,
+                                      .bytes_done = 524'288, .bytes_per_second = std::nullopt, .eta_seconds = std::nullopt,
+                                      .passes = 1, .updated_at = 1'763'000'200};
+    hydrating.detach_items = {.files_pending = 57, .files_verified = 60, .files_failed = 1, .files_fetched = 2,
+                              .envelopes = 2, .envelopes_copied = 2};
+    c.check(vr::toJson(hydrating), "VaultRemoteStatus", "vault.remote.status (detaching, an abort asked for)");
+    vr::Status detached = hydrating;
+    detached.type = "local";
+    detached.remote = "none";
+    detached.attach.reset();
+    detached.detach->state = rdt::State::Done;
+    detached.detach->verified_at = 1'763'000'900;
+    detached.detach->cutover_at = 1'763'000'950;
+    detached.detach->done_at = 1'763'000'960;
+    detached.detach->aborted_at = 1'763'000'970;
+    detached.detach->abort_requested_at.reset();
+    detached.detach->api_key_id.reset();
+    detached.detach->started_by.reset();
+    detached.detach->estimate.reset();
+    detached.detach->last_error.reset();
+    detached.progress->phase = "done";
+    c.check(vr::toJson(detached), "VaultRemoteStatus", "vault.remote.status (detached)");
 }
 
 }

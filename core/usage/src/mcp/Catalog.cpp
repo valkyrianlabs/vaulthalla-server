@@ -57,6 +57,7 @@ const std::vector<Exclusion>& exclusions() {
         {{"vault", "key", "recipient", "add"}, kRecipientReason},
         {{"vault", "key", "recipient", "revoke"}, kRecipientReason},
         {{"vault", "remote", "attach"}, "where a vault's data is stored is decided by a human"},
+        {{"vault", "remote", "detach"}, "where a vault's data is stored is decided by a human"},
         {{"secrets", "export"}, kKeysReason},
         {{"secrets", "update"}, "internal secrets are changed by the operator, never by an agent"},
         {{"secrets", "master", "rotate"}, kMasterReason},
