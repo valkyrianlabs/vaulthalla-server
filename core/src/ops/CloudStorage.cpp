@@ -749,7 +749,10 @@ void stepActive(Row& r, const Ctx& ctx, const vault::model::Vault& vault) {
             audit("cloud.storage.revoked", r.vault_id, nlohmann::json::object(),
                   fmt::format("vault {}: the account's service revoked this server's bucket key", r.vault_id),
                   ::vh::audit::Outcome::Info);
-        } else if (v->key_state == "active" && r.key_state == "none" && ctx.account.storage_access != std::optional<std::string>("none")) {
+        } else if (r.key_state == "none" && (v->key_state == "active" || v->key_state == "none") &&
+                   ctx.account.storage_access && *ctx.account.storage_access != "none") {
+            // Access is back (paid again after a suspension): the cloud never reinstates a revoked key, so this server
+            // asks for a new one. A step after the revocation was seen, so one stale view can't cause it.
             rotate(r, ctx, "access restored");
         } else if (v->key_state == "issued" && r.key_state == "issued") {
             if (!finishIssued(r, ctx.link)) rotate(r, ctx, "unacknowledged");

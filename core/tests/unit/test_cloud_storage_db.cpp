@@ -835,10 +835,13 @@ TEST_F(CloudStorageTest, TheAccessGateFollowsTheAccountAndASupersededKeyIsAskedF
     cloud_.state = "active";
     cloud_.access = "full";
     cloud_.cause = "active";
-    cloud_.keys[cloud_.keys.rbegin()->first].state = "revoked";
-    cloud_.keys["Kactive0000"] = {.uid = uidOf(id), .state = "active", .access = "full", .secret = "s"};
-    (void)tick();
+    // As the cloud does: a revoked key is never reinstated, so the server asks for a new one (the drill's finding:
+    // the gate stayed closed after the account paid again).
+    const auto requestsBefore = callsTo("POST /v1/storage/vaults/");
+    for (int i = 0; i < 3 && storage::remote_access::mode(id) != storage::remote_access::Mode::Full; ++i) (void)tick();
     EXPECT_EQ(storage::remote_access::mode(id), storage::remote_access::Mode::Full);
+    EXPECT_GT(callsTo("POST /v1/storage/vaults/"), requestsBefore) << "a new bucket key was asked for";
+    EXPECT_EQ(DB::get(id)->key_state, "active");
     // An operator can't set a managed vault's access by hand.
     EXPECT_EQ(code([&] {
                   return ops::vault_remote::setAccess(superUser, {.vault_id = id, .mode = storage::remote_access::Mode::Full,
