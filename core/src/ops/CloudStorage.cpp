@@ -6,6 +6,10 @@
 #include "db/query/cloud/Link.hpp"
 #include "db/query/cloud/RecoveryVault.hpp"
 #include "db/query/cloud/Storage.hpp"
+#include "db/query/device/Device.hpp"
+#include "db/query/sync/Manifest.hpp"
+#include "db/Transactions.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/vault/RemoteAttach.hpp"
 #include "db/query/vault/RemoteDetach.hpp"
@@ -17,6 +21,7 @@
 #include "ops/Error.hpp"
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultRemote.hpp"
+#include "ops/Vaults.hpp"
 #include "rbac/permission/admin/Cloud.hpp"
 #include "rbac/resolver/admin/all.hpp"
 #include "runtime/Deps.hpp"
@@ -887,6 +892,52 @@ void sweep(const db::query::cloud::StorageAccountRow& account) {
     if (offered && !account.offer_open) DB::setOfferOpen(true);
 }
 
+// Replicated vaults (the join contract, 7): a vault the account holder removed from this server stops syncing; a
+// former replica still named by the manifest's writers is dropped from them by this server's next publish (one change
+// at a time). A former replica without a node id can't be matched to a writer: logged, nothing changes.
+void stepReplicas(const Ctx& ctx) {
+    const auto self = db::query::device::Devices::nodeId();
+    for (const auto& v : ctx.overview.vaults) {
+        if (v.replicas.empty() && v.former_replicas.empty() && !v.removed_reason) continue;
+        const auto found = db::Transactions::exec("CloudStorage::vaultByUid", [&](pqxx::work& txn) {
+            std::optional<unsigned int> id;
+            const auto uid = vl::keykit::fromBase32(v.vault_uid);
+            if (!uid) return id;
+            const auto r = txn.exec("SELECT id FROM vault WHERE uid = $1::uuid", pqxx::params{crypto::id::toUuid(*uid)});
+            if (!r.empty()) id = r[0][0].as<unsigned int>();
+            return id;
+        });
+        if (!found) continue;
+        if (v.removed_reason) {
+            if (ops::vaults::stopSyncing(*found))
+                audit("cloud.replica.removed", *found, {{"reason", *v.removed_reason}},
+                      fmt::format("the account holder removed vault {} from this server ({}); it no longer syncs here",
+                                  *found, *v.removed_reason),
+                      ::vh::audit::Outcome::Info);
+            continue;
+        }
+        const auto state = db::query::sync::Manifest::state(*found);
+        if (state.writers_change || std::ranges::find(state.writers, self) == state.writers.end()) continue;
+        for (const auto& f : v.former_replicas) {
+            if (!f.node_id) {
+                log::Registry::cloud()->warn("[CloudStorage] vault {}: former replica {} has no node id in Vaulthalla "
+                                             "Cloud's answer; it can't be dropped from the manifest's writers",
+                                             *found, f.deployment_id);
+                continue;
+            }
+            if (*f.node_id == self || std::ranges::find(state.writers, *f.node_id) == state.writers.end()) continue;
+            db::query::sync::Manifest::setWritersChange(
+                *found, sync::manifest::WritersChange{sync::manifest::WritersChange::Kind::Remove, *f.node_id});
+            audit("cloud.replica.drop", *found, {{"node", *f.node_id}, {"reason", f.reason.value_or("")}},
+                  fmt::format("vault {}: {} is no longer a replica at Vaulthalla Cloud ({}); the next publish drops it "
+                              "from the manifest's writers",
+                              *found, f.name.empty() ? f.deployment_id : f.name, f.reason.value_or("removed")),
+                  ::vh::audit::Outcome::Info);
+            break;
+        }
+    }
+}
+
 std::optional<Row> rowFor(const unsigned int vaultId) { return DB::get(vaultId); }
 
 Row requireRow(const std::shared_ptr<vault::model::Vault>& vault) {
@@ -1191,6 +1242,11 @@ TickResult tick(const bool force) {
         }
         d::sweep(*account);
         const d::Ctx ctx{.link = *link, .overview = *overview, .fetchedAt = fetchedAt, .account = *account, .pin = *pin};
+        try {
+            d::stepReplicas(ctx);
+        } catch (const std::exception& e) {
+            log::Registry::cloud()->warn("[CloudStorage] replica step failed: {}", e.what());
+        }
         for (auto& r : d::DB::list()) {
             const auto before = r.state;
             d::stepVault(r, ctx);
@@ -1201,6 +1257,92 @@ TickResult tick(const bool force) {
         log::Registry::cloud()->warn("[CloudStorage] Pass failed: {}", e.what());
     }
     return out;
+}
+
+std::optional<JoinedBucket> joinBucketKey(const Actor& actor, const std::string& vaultUid) {
+    namespace d = cloud_storage_ops_detail;
+    if (!actor) throw Denied("no caller");
+    const auto link = d::cs::linked();
+    if (!link) throw Conflict("this server isn't linked to Vaulthalla Cloud (vh cloud link)");
+    try {
+        const auto ov = d::cs::overview(*link);
+        const auto v = std::ranges::find_if(ov.vaults, [&](const auto& x) { return x.vault_uid == vaultUid; });
+        if (v == ov.vaults.end() || !v->bucket) return std::nullopt;
+        auto c = d::cs::requestCredential(*link, vaultUid);
+        const auto& keys = runtime::Deps::get().apiKeyManager;
+        if (!keys) throw Conflict("the API key manager is not available");
+        std::string secret(reinterpret_cast<const char*>(c.secret.bytes().data()), c.secret.size());
+        auto key = std::make_shared<vault::model::APIKey>(actor->id, "managed storage " + vaultUid,
+                                                          d::providerOf(ov.provider), c.key_id, std::move(secret),
+                                                          c.region.empty() ? std::string("auto") : c.region,
+                                                          c.s3_endpoint);
+        vl::keykit::wipe(secret);
+        JoinedBucket out{.api_key_id = keys->addAPIKey(key), .key_id = c.key_id, .access = c.access,
+                         .bucket = c.bucket, .bucket_id = c.bucket_id, .s3_endpoint = c.s3_endpoint, .region = c.region};
+        d::DB::markKeyCloud(out.api_key_id, c.access);
+        std::string error;
+        if (!d::probeKey(out.api_key_id, out.bucket, error))
+            throw Conflict("the bucket key Vaulthalla Cloud issued for this server didn't pass the probe: " + error);
+        d::cs::acknowledge(*link, c.key_id);
+        d::audit("cloud.storage.credential.issue", std::nullopt, {{"key_id", c.key_id}, {"access", c.access}, {"why", "join"}},
+                 fmt::format("bucket key {} ({}) for joined vault {} received sealed, stored and acknowledged", c.key_id,
+                             c.access, vaultUid));
+        return out;
+    } catch (const d::cs::CallError& e) {
+        if (e.reason() == "account_key_unconfirmed")
+            throw Refused(e.reason(), "confirm the account recovery key on this server first (vh cloud key confirm)");
+        if (e.code() == "no_such_vault" || e.reason() == "no_such_vault" || e.status() == 404)
+            throw Refused("no_such_vault", "Vaulthalla Cloud doesn't count this server as a replica yet (approve the "
+                                           "join first)");
+        if (!e.reason().empty()) throw Refused(e.reason(), std::string("Vaulthalla Cloud refused the bucket key: ") + e.what());
+        throw Conflict(std::string("Vaulthalla Cloud's bucket key exchange failed: ") + e.what());
+    }
+}
+
+void adoptJoinedVault(const unsigned int vaultId, const std::string& vaultUid, const JoinedBucket& key) {
+    namespace d = cloud_storage_ops_detail;
+    d::Row r;
+    r.vault_id = vaultId;
+    r.vault_uid = vaultUid;
+    r.switch_state = "on";
+    r.switch_by = "system:join";
+    r.state = "active";
+    r.retention_days = config::Registry::get().cloud.storage_default_retention_days;
+    (void)d::DB::insert(r);
+    auto row = d::DB::get(vaultId);
+    if (!row) return;
+    row->api_key_id = key.api_key_id;
+    row->key_id = key.key_id;
+    row->key_state = "active";
+    row->key_access = key.access;
+    row->bucket = key.bucket;
+    row->bucket_id = key.bucket_id;
+    row->s3_endpoint = key.s3_endpoint;
+    row->region = key.region;
+    row->state = "active";
+    row->active_at = d::now();
+    d::save(*row);
+    if (const auto k = db::query::vault::APIKey::getAPIKey(key.api_key_id)) {
+        const auto id = storage::upstream::identityFor(*k, key.bucket);
+        d::DB::bindManagedBucket(vaultId, id.provider, id.account_ref.value_or("managed:" + key.bucket_id), key.bucket,
+                                 key.region.empty() ? std::nullopt : std::optional<std::string>(key.region),
+                                 key.api_key_id, d::retentionFor(*row));
+    }
+    d::audit("cloud.storage.attached", vaultId, {{"bucket_id", key.bucket_id}, {"join", true}},
+             fmt::format("joined vault {} is in managed storage on this server's own key", vaultId));
+}
+
+bool reportLeft(const std::string& vaultUid, std::string& error) {
+    namespace d = cloud_storage_ops_detail;
+    const auto link = d::cs::linked();
+    if (!link) return true;
+    try {
+        (void)d::cs::leaveReplica(*link, vaultUid);
+        return true;
+    } catch (const d::cs::CallError& e) {
+        error = e.what();
+        return false;
+    }
 }
 
 void wake() { cloud_storage_ops_detail::woken = true; }

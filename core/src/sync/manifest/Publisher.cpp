@@ -7,6 +7,11 @@
 
 namespace vh::sync::manifest {
 
+bool WritersChange::satisfiedBy(const std::vector<std::string>& writers) const {
+    const bool named = std::ranges::find(writers, node) != writers.end();
+    return kind == Kind::Add ? named : !named;
+}
+
 namespace publisher_detail {
 
 bool authenticates(const std::vector<uint8_t>& bytes, const Uid& vaultUid, const crypto::vhf1::KeyLookup& keys) {
@@ -242,8 +247,20 @@ PublishReport publish(ObjectStore& store, const Uid& vaultUid, const crypto::vhf
         root.publish = std::string(modeName(store.mode()));
         if (!options.self_node.empty()) {
             root.writers = writersFor(base, options.self_node);
-            for (const auto& w : options.extra_writers)
-                if (!w.empty() && std::ranges::find(*root.writers, w) == root.writers->end()) root.writers->push_back(w);
+            if (const auto& change = options.writers_change) {
+                auto& w = *root.writers;
+                if (change->kind == WritersChange::Kind::Add) {
+                    // A join keeps the writers it joins (writersFor alone would take the vault over).
+                    if (base && base->root.writers) w = *base->root.writers;
+                    if (std::ranges::find(w, change->node) == w.end()) w.push_back(change->node);
+                    if (w.size() > kMaxWriters)
+                        throw WritersRefused(std::format("the vault already has {} writers; a replicated vault has at most {}",
+                                                         w.size() - 1, kMaxWriters));
+                } else if (change->kind == WritersChange::Kind::Remove) {
+                    std::erase(w, change->node);
+                    if (w.empty()) throw WritersRefused("the last writer of a vault can't be removed from its root");
+                }
+            }
         }
 
         Published next;

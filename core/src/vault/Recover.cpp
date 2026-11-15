@@ -632,6 +632,8 @@ Plan plan(sync::manifest::ObjectStore& inner, const Material& material, const Op
         out.root_sha256 = loaded->loaded.acceptance.root_sha256;
         out.root_etag = loaded->loaded.etag;
         out.root_version_id = loaded->loaded.version_id;
+        out.writers = root.writers;
+        out.publish_mode = root.publish;
         out.freshness = loaded->freshness;
         out.freshness_report = loaded->report;
         out.origin_node_id = root.producer.node_id;

@@ -1291,6 +1291,52 @@ TEST_F(SqlDeployerHistoryDb, FsEntryMtimeMigration149KeepsAnExplicitTimeAndStamp
     });
 }
 
+// 150 (replicated vaults: the writers change and each writer's last root) on a 149-era database: additive, existing
+// state rows read no change, the CHECKs hold, and running it again changes nothing.
+TEST_F(SqlDeployerHistoryDb, ReplicaJoinMigration150IsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("DROP TABLE IF EXISTS manifest_writer_root");
+        txn.exec("ALTER TABLE remote_manifest_state DROP COLUMN IF EXISTS writers_change");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '150_manifest_replicas_join.sql'");
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_150_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES "
+                                    "('claude_test_150', $1, 's3', 'claude_test_150', gen_random_uuid()) RETURNING id",
+                                    pqxx::params{owner}).one_field_ref().as<int>();
+        txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, etag, epoch, root_sha256) VALUES "
+                 "($1, '.vaulthalla/root', '\"e1\"', 4, repeat('b', 64))", pqxx::params{vault});
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "150_manifest_replicas_join.sql"));
+        EXPECT_EQ(recordedHash(txn, "150_manifest_replicas_join.sql"), currentHash("150_manifest_replicas_join.sql"));
+        EXPECT_TRUE(txn.exec("SELECT writers_change FROM remote_manifest_state WHERE vault_id = $1", pqxx::params{vault})
+                        .one_field_ref().is_null());
+        const auto refused = [&](const std::string& sql) {
+            pqxx::subtransaction sub(txn, "check");
+            try {
+                sub.exec(sql, pqxx::params{vault});
+            } catch (const pqxx::sql_error&) {
+                return true;
+            }
+            return false;
+        };
+        EXPECT_TRUE(refused("UPDATE remote_manifest_state SET writers_change = '{\"kind\": \"swap\", \"node\": \"n\"}' "
+                            "WHERE vault_id = $1"));
+        EXPECT_TRUE(refused("UPDATE remote_manifest_state SET writers_change = '{\"kind\": \"add\"}' WHERE vault_id = $1"));
+        EXPECT_FALSE(refused("UPDATE remote_manifest_state SET writers_change = '{\"kind\": \"remove\", \"node\": \"n\"}' "
+                             "WHERE vault_id = $1"));
+        EXPECT_TRUE(refused("INSERT INTO manifest_writer_root (vault_id, node_id, epoch, root_sha256) VALUES ($1, 'n', 1, 'x')"));
+        EXPECT_FALSE(refused("INSERT INTO manifest_writer_root (vault_id, node_id, epoch, root_sha256) VALUES "
+                             "($1, 'n', 1, repeat('a', 64))"));
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "150_manifest_replicas_join.sql")));
+    });
+}
+
 TEST_F(SqlDeployerHistoryDb, RecoveryRecipientsMigrationIsAdditiveIdempotentAndCustomerOnly) {
     inRolledBackTxn([](pqxx::work& txn) {
         txn.exec("DROP TABLE IF EXISTS vault_key_envelope");

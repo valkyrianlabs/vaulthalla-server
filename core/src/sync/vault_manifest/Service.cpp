@@ -85,19 +85,8 @@ manifest::SessionHost hostOf(const uint32_t vaultId, const std::shared_ptr<vault
     host.vaultId = vaultId;
     if (paths::testMode) {
         // The Tier B mirror drill (tools/harness/vhh/drill_mirror.py) only, never a packaged daemon: an installed service
-        // refuses test mode (runtime::test_instance). VH_TEST_MANIFEST_WRITERS names writers beside this node (the
-        // join's stand-in); a file `crash-after-root-put` in VH_TEST_FAULT_DIR ends the process between a root's PUT and
-        // its record, once.
-        host.extraWriters = [] {
-            std::vector<std::string> out;
-            if (const char* v = std::getenv("VH_TEST_MANIFEST_WRITERS"))
-                for (std::string_view rest(v); !rest.empty();) {
-                    const auto comma = rest.find(',');
-                    out.emplace_back(rest.substr(0, comma));
-                    rest = comma == std::string_view::npos ? std::string_view() : rest.substr(comma + 1);
-                }
-            return out;
-        };
+        // refuses test mode (runtime::test_instance). A file `crash-after-root-put` in VH_TEST_FAULT_DIR ends the process
+        // between a root's PUT and its record, once.
         host.afterRootPut = [] {
             const char* dir = std::getenv("VH_TEST_FAULT_DIR");
             if (!dir) return;

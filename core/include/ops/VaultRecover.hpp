@@ -50,6 +50,11 @@ struct Request {
     bool dry_run{false};
     bool salvage{false};
     std::optional<std::string> confirm_name{};
+    // vh vault join (ops::vault_replicas::join): the same restore, as one more writer of the vault instead of a
+    // takeover (design/cloud/mirrors.md, "Join (server side)"): every version canonical (no salvage), the manifest's
+    // name, at most kMaxWriters writers, a bucket with conditional writes, every recovery grant one this server can
+    // hold too; its first publish adds this node to the root's writers and keeps the others.
+    bool join{false};
 };
 
 struct Result {

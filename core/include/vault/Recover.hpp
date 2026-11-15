@@ -181,6 +181,8 @@ struct Plan {
     std::optional<std::string> root_sha256;
     std::optional<std::string> root_etag;
     std::optional<std::string> root_version_id;   // version_log buckets: the canonical head's provider version
+    std::optional<std::vector<std::string>> writers;  // the loaded root's writers (a join adds this node to them)
+    std::optional<std::string> publish_mode;       // the loaded root's `publish` (absent: conditional)
     sync::manifest::Freshness freshness{sync::manifest::Freshness::Unverified};
     std::string freshness_report;
     std::vector<std::string> issues;               // manifest fallbacks (segments from versions, older roots, blind)

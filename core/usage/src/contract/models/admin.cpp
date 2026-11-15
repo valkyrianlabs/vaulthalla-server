@@ -274,7 +274,11 @@ std::vector<WsModel> adminSettingsModels() {
          strArray("origins").desc("Exact console origins (https://host[:port], or http://localhost:<port>) under "
                                   "rp_id; required when rp_id is set, at most 16.")}));
     out.push_back(model("SyncConfig", "sync.* (Config.cpp to_json(SyncConfig)).",
-        {uinteger("event_audit_retention_days"), uinteger("event_audit_max_entries")}));
+        {uinteger("event_audit_retention_days"), uinteger("event_audit_max_entries"),
+         object("replicas", "ReplicasConfig").opt().desc("Absent from older clients' settings updates: unchanged.")}));
+    out.push_back(model("ReplicasConfig", "sync.replicas.* (design/cloud/mirrors.md).",
+        {boolean("experimental").desc("Replicated vaults (vh vault join, leave, replica remove): experimental, off by "
+                                      "default.")}));
 
     out.push_back(model("PricingConfig", "pricing.* (Config.cpp to_json(PricingConfig)).",
         {boolean("enabled"), object("storage_rates_api", "StorageRatesApiConfig")}));

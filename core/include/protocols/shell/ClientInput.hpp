@@ -48,7 +48,8 @@ inline std::string lower(std::string_view s) {
     Plan p;
     if (argv.size() < 3) return p;
     const auto a = detail::lower(argv[0]), b = detail::lower(argv[1]), c = detail::lower(argv[2]);
-    if ((a == "vault" || a == "vaults" || a == "v") && b == "recover") {
+    // `vh vault join` (replicated vaults) takes the same documents as recover.
+    if ((a == "vault" || a == "vaults" || a == "v") && (b == "recover" || b == "join")) {
         p.active = true;
         bool fromCloud = false;
         for (std::size_t i = 2; i < argv.size(); ++i) {
@@ -75,6 +76,9 @@ inline std::string lower(std::string_view s) {
         }
         if (std::ranges::count_if(p.bundle, [](const auto& d) { return d.second == "-"; }) > 1)
             p.error = "only one of --kit and --export can read standard input";
+        else if (p.bundle.empty() && b == "join")
+            p.error = "usage: vh vault join --api-key <key> --bucket <bucket> --kit <kit.json|-> [--vault-uid <uid>] "
+                      "[--dry-run]  (or --vault-uid <uid> --from-cloud)";
         else if (p.bundle.empty())
             p.error = "usage: vh vault recover --api-key <key> --bucket <bucket> --kit <kit.json|-> [--export "
                       "<keys.json|->] [--into <name>] [--dry-run]  (or --vault-uid <uid> --from-cloud)";

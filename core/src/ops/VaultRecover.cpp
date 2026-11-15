@@ -8,7 +8,9 @@
 #include "crypto/SecretKey.hpp"
 #include "crypto/id/Generator.hpp"
 #include <vl/keykit/kev1.hpp>
+#include "db/query/device/Device.hpp"
 #include "db/query/sync/Manifest.hpp"
+#include "db/Transactions.hpp"
 #include "db/query/vault/Key.hpp"
 #include "db/query/vault/Recover.hpp"
 #include "fs/cache/Registry.hpp"
@@ -126,6 +128,53 @@ std::vector<db::query::vault::RecoverGrant> grantsOf(const rec::Plan& plan, cons
     return out;
 }
 
+// A join (Request::join) refuses what would make the replicas differ or the vault unsafe (design/cloud/mirrors.md, as
+// amended for the first version): see Request::join.
+void requireJoinable(const rec::Plan& plan, const rec::Material& material, const Request& req) {
+    if (!plan.epoch || plan.blind)
+        throw Refused("join_no_manifest", "the bucket has no usable manifest root to join; a join needs the vault's "
+                                          "current root");
+    if (req.into) throw Invalid("a join keeps the vault's name (the root's); --into is for a restore");
+    if (req.salvage) throw Invalid("a join takes no salvage: every key version must be proven");
+    const auto self = db::query::device::Devices::nodeId();
+    const auto writers = plan.writers.value_or(std::vector<std::string>{});
+    if (std::ranges::find(writers, self) != writers.end())
+        throw Refused("join_already_writer", "this server is already one of the vault's writers");
+    if (writers.size() >= sync::manifest::kMaxWriters)
+        throw Refused("replica_limit", fmt::format("the vault has {} writers already; a replicated vault has at most {}",
+                                                   writers.size(), sync::manifest::kMaxWriters));
+    if (const auto blocking = plan.blocking(); !blocking.empty())
+        throw Refused("join_key_unproven",
+                      fmt::format("key version(s) {} are not proven by an attestation key your material pins; a join "
+                                  "delivers every version canonically (--dry-run shows why per version)",
+                                  versionList(blocking)));
+    // Spec 06's version_log (Backblaze) takes several writers only once A3 and A4 are confirmed live.
+    if (plan.publish_mode && *plan.publish_mode == "version_log")
+        throw Refused("join_version_log", "the vault's bucket publishes its manifest without conditional writes "
+                                          "(version_log): replicas need a bucket with conditional PUT for now");
+    if (const auto probe = storage::bucket_capability::probeBinding(req.api_key_id, req.bucket, true)) {
+        if (probe->capability != mf::WriteCapability::Conditional)
+            throw Refused("join_publish_mode",
+                          fmt::format("the bucket's probe found {} ({}); replicas need conditional PUT, the mode the "
+                                      "vault's root publishes with",
+                                      mf::to_string(probe->capability), probe->reason));
+    }
+    // Every recovery grant must be one this server holds too (re-enrolled from the root): a grant one replica has
+    // and another can't would make their roots differ.
+    const auto enrolled = grantsOf(plan, material);
+    if (plan.recovery_policy)
+        for (const auto& g : plan.recovery_policy->grants) {
+            if (g.revoked_at) continue;
+            const auto it = std::ranges::find_if(enrolled, [&](const auto& e) { return e.grant_id == g.grant_id; });
+            if (it == enrolled.end() || it->account_key_unmatched)
+                throw Refused("join_grant_local_only",
+                              fmt::format("recovery recipient {} ({}) can't be held by this server too{}; remove it "
+                                          "on the vault's server, or link this server to the same account, then join",
+                                          g.grant_id, g.label.value_or("no label"),
+                                          it != enrolled.end() ? " (an account key this server does not pin)" : ""));
+        }
+}
+
 std::string defaultName(const rec::Plan& plan) {
     if (plan.vault_name && !plan.vault_name->empty()) return *plan.vault_name;
     return "recovered-" + mf::uidText(plan.vault_uid).substr(0, 8);
@@ -193,10 +242,26 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
                        "); check the API key and bucket, then try again");
     }
 
+    // The bucket's vault is held here already (a vault uid is unique on a server): a second copy is refused.
+    if (const auto held = db::Transactions::exec("vault_recover uid", [&](pqxx::work& txn) {
+            return txn.exec("SELECT id FROM vault WHERE uid = $1::uuid", pqxx::params{crypto::id::toUuid(plan.vault_uid)});
+        });
+        !held.empty())
+        throw Refused("vault_uid_exists",
+                      fmt::format("this server already holds vault {} (vault {}); a {} would make a second copy of it",
+                                  mf::uidText(plan.vault_uid), held[0][0].as<unsigned int>(),
+                                  req.join ? "join" : "restore"));
+    if (req.join) requireJoinable(plan, material, req);
+    else if (plan.writers && plan.writers->size() > 1 && !req.dry_run)
+        log::Registry::crypto()->warn("[ops::vault_recover] the restored vault's root names {} writers: this restore "
+                                      "takes it over, and the other servers stop publishing (superseded)",
+                                      plan.writers->size());
+
     Result result;
     result.dry_run = req.dry_run;
     result.report = rec::toJson(plan);
     result.vault_name = req.into.value_or(defaultName(plan));
+    if (req.join) result.report["join"] = {{"writers", plan.writers.value_or(std::vector<std::string>{})}};
     vaults::requireCanRecoverInto(actor, ownerId, req.api_key_id, req.bucket, result.vault_name);
 
     const auto blocking = plan.blocking();
@@ -271,6 +336,11 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
     in.root_sha256 = plan.root_sha256;
     in.root_etag = plan.root_etag;
     in.root_version_id = plan.root_version_id;
+    // A join records the writers it joins; a restore takes the vault over (its first root names this node only).
+    if (req.join) {
+        in.writers = plan.writers.value_or(std::vector<std::string>{});
+        in.join_node = db::query::device::Devices::nodeId();
+    }
 
     const vault::master::Writer writer(true);
     uint32_t freshVersion = 0;
@@ -357,12 +427,13 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
                                  {"left_out", written.skipped}, {"notes", written.notes}};
     if (salvage) result.report["restored"]["fresh_version"] = freshVersion;
 
-    vh::audit::record({.action = "vault.recover", .outcome = vh::audit::Outcome::Success, .actor_id = actor->id,
+    vh::audit::record({.action = req.join ? "vault.join" : "vault.recover", .outcome = vh::audit::Outcome::Success, .actor_id = actor->id,
                        .actor = actor->name(), .vault_id = vaultId,
                        .details = {{"mode", result.mode}, {"canonical", versionList(canonical)},
                                    {"salvage", versionList(salvageable)}, {"blind", plan.blind},
                                    {"freshness", std::string(mf::to_string(plan.freshness))},
-                                   {"channel", channel == Channel::Device ? "device" : "cli"}}},
+                                   {"channel", channel == Channel::Device ? "device" : "cli"},
+                                   {"join", req.join}}},
                       fmt::format("[ops::vault_recover] {} restored vault {} from its bucket through {}: key version(s) "
                                   "{} recovered (attested by the original node, verified with the customer's pinned "
                                   "keys){}", actor->name(), vaultId, channel == Channel::Device ? "a paired device" : "the CLI",

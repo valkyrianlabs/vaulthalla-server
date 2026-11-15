@@ -1,5 +1,6 @@
 #include "ops/RecoveryRecipients.hpp"
 
+#include "sync/vault_manifest/Replicas.hpp"
 #include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "crypto/SecretKey.hpp"
@@ -161,6 +162,9 @@ AddResult add(const Actor& actor, const AddRequest& request, const vault_keys::C
     using namespace recipients_detail;
     requireEnroll(actor, channel);
     const auto vault = liveVault(request.vault_id);
+    sync::replicas::refuseIfReplicated(vault->id, "adding a recovery recipient here (it would exist on this replica only)",
+                                       "a replicated vault's recipients come from the account's signed recovery policy; "
+                                       "or remove the other replicas, add it, and join them again");
     // An S3 vault's envelopes go to its own bucket; a local vault's are kept in the database until a remote is
     // attached (vault/RecoveryEnvelopes.hpp), which copies them into the bucket.
     const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(vault);
@@ -319,6 +323,9 @@ RevokeResult revoke(const Actor& actor, const unsigned int vaultId, const std::s
     const auto existing = Grants::get(vault->id, grantId);
     if (!existing) throw NotFound("vault '" + vault->name + "' has no recovery recipient " + grantId);
     if (existing->revoked_at) throw Conflict("recovery recipient " + grantId + " is already revoked");
+    if (!existing->account_policy_sequence)
+        sync::replicas::refuseIfReplicated(vault->id, "revoking a recovery recipient here (the other replicas would keep it)",
+                                           "remove the other replicas, revoke it, and join them again");
     if (existing->account_policy_sequence)
         throw Refused("recovery_policy_account_managed",
                       "recovery recipient " + grantId + " comes from the account's signed recovery policy " +

@@ -1,4 +1,5 @@
 #include "ops/Vaults.hpp"
+#include "sync/vault_manifest/Replicas.hpp"
 #include "db/query/sync/ManifestApply.hpp"
 #include "ops/VaultRemote.hpp"
 #include "auth/stepup/StepUp.hpp"
@@ -113,6 +114,21 @@ std::optional<std::string> normalizedTier(const unsigned int keyId, const std::o
     const auto tier = storage::s3::provider::resolve(key->provider)->normalizeStorageTier(requested);
     if (!tier.ok) throw Invalid(tier.error);
     return tier.normalized_id;
+}
+
+// A replicated vault refuses the mirror strategy: it deletes remote objects its database doesn't hold, the other
+// writers' among them (design/cloud/mirrors.md).
+void refuseMirrorOnReplica(const unsigned int vaultId, const SyncPatch& patch) {
+    if (!patch.strategy) return;
+    bool mirror = false;
+    try {
+        mirror = sync::model::strategyFromString(*patch.strategy) == sync::model::RemotePolicy::Strategy::Mirror;
+    } catch (const std::exception&) {
+        return;   // applySync says why
+    }
+    if (mirror)
+        sync::replicas::refuseIfReplicated(vaultId, "the mirror sync strategy",
+                                           "use sync or cache; mirror deletes the other writers' objects");
 }
 
 void applySync(sync::model::Policy& policy, const VaultType type, const SyncPatch& patch) {
@@ -481,6 +497,7 @@ VaultPtr update(const Actor& actor, const Update& req) {
                                                         .vault_id = existing->id}))
             throw Denied("you do not have permission to change this vault's sync settings");
         newPolicy = copyPolicy(currentPolicy(existing->id), existing->type);
+        refuseMirrorOnReplica(existing->id, req.sync);
         applySync(*newPolicy, existing->type, req.sync);
     }
 
@@ -789,6 +806,16 @@ nlohmann::json toJson(const AccessibleVault& entry) {
     };
 }
 
+bool stopSyncing(const unsigned int vaultId) {
+    const auto vault = requireVault(vaultId);
+    auto policy = copyPolicy(currentPolicy(vaultId), vault->type);
+    if (!policy->enabled) return false;
+    policy->enabled = false;
+    db::query::vault::Vault::updateVaultSync(policy, vault->type);
+    pushSyncToEngine(vaultId, policy);
+    return true;
+}
+
 PolicyPtr updateSync(const Actor& actor, const unsigned int vaultId, const SyncPatch& patch) {
     requireActor(actor);
     const auto vault = requireVault(vaultId);
@@ -797,6 +824,7 @@ PolicyPtr updateSync(const Actor& actor, const unsigned int vaultId, const SyncP
     if (patch.empty()) throw Invalid("no sync settings to change");
 
     auto policy = copyPolicy(currentPolicy(vaultId), vault->type);
+    refuseMirrorOnReplica(vaultId, patch);
     applySync(*policy, vault->type, patch);
     db::query::vault::Vault::updateVaultSync(policy, vault->type);
     pushSyncToEngine(vaultId, policy);

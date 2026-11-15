@@ -18,6 +18,7 @@
 #include "cloud/AccountPin.hpp"
 #include "cloud/Identity.hpp"
 #include "cloud/Signing.hpp"
+#include "cloud/Storage.hpp"
 #include "config/Registry.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/cloud/AccountKey.hpp"
@@ -26,6 +27,7 @@
 #include "db/query/cloud/Storage.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/sync/Manifest.hpp"
+#include "db/query/sync/Policy.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/vault/RecoveryGrants.hpp"
 #include "db/query/vault/RemoteAttach.hpp"
@@ -160,6 +162,11 @@ struct FakeCloud {
         std::string bucket;
         std::optional<std::string> detachedAt, convertedAt;
         bool hidden = false;   // removed from this deployment's view (a move)
+        // Replicated vaults (the cloud's src/storage/ManagedStorage.cpp vaultView): the servers holding it, the ones
+        // removed lately, and `removed` once the account holder removed it from this server.
+        json replicas = json::array(), formerReplicas = json::array();
+        bool removedByOwner = false;
+        bool heldHere = true;   // DELETE /v1/vaults/{uid}/replica: 204 while held, then 404 no_such_vault
     };
     std::map<std::string, Vault> vaults;
     struct Key {
@@ -217,6 +224,12 @@ struct FakeCloud {
         if (const auto id = currentKeyOf(uid, &a); !id.empty())
             key = {{"key_id", id}, {"state", keys.at(id).state}, {"access", a}};
         out["credential"] = key;
+        out["replicas"] = v.replicas;
+        out["former_replicas"] = v.formerReplicas;
+        if (v.removedByOwner) {
+            out["removed"] = {{"reason", "owner"}, {"at", 1770000500}};
+            out["credential"] = {{"state", "none"}};
+        }
         return out;
     }
 
@@ -289,6 +302,12 @@ struct FakeCloud {
             if (!label || label->size() != vl::keykit::label::kSealedSize)
                 return error(400, "invalid_argument", "`label` is a sealed label: base64url of 240 bytes");
             vaults[uid].label = *label;
+            return reply(204, nullptr);
+        }
+        if (r.method == "DELETE" && path.starts_with("/v1/vaults/") && path.ends_with("/replica")) {
+            const auto uid = segment("/v1/vaults/");
+            if (!vaults.contains(uid) || !vaults[uid].heldHere) return error(404, "not_found", "no such vault", "no_such_vault");
+            vaults[uid].heldHere = false;
             return reply(204, nullptr);
         }
         if (r.method == "GET" && path == "/v1/storage") {
@@ -745,6 +764,41 @@ TEST_F(CloudStorageTest, ExistingVaultsAreOfferedAndNeverUploadedBeforeAPersonAc
     EXPECT_EQ(r.vaults, std::vector<unsigned int>{id});
     (void)tick();
     EXPECT_EQ(state(id), "registered");
+}
+
+// Replicated vaults (the join contract, 6 and 7): the replica set as the cloud lists it, a vault the account holder
+// removed from this server stops syncing, and a leave is reported once (then the cloud no longer holds it here).
+TEST_F(CloudStorageTest, TheReplicaSetIsReadARemovedVaultStopsSyncingAndALeaveIsReported) {
+    const auto parsed = vh::cloud::storage::parseOverview(json{
+        {"vaults", json::array({json{{"vault_uid", "0123456789abcdefghjkmnpqrs"},
+                                     {"replicas", json::array({{{"deployment_id", "dep-a"}, {"name", "A"}}})},
+                                     {"former_replicas", json::array({{{"deployment_id", "dep-b"}, {"name", "B"},
+                                                                       {"node_id", "node-b"}, {"reason", "server"},
+                                                                       {"removed_at", 1}}})},
+                                     {"removed", {{"reason", "owner"}, {"at", 2}}}}})}});
+    ASSERT_EQ(parsed.vaults.size(), 1u);
+    EXPECT_EQ(parsed.vaults[0].replicas.size(), 1u);
+    ASSERT_EQ(parsed.vaults[0].former_replicas.size(), 1u);
+    EXPECT_EQ(parsed.vaults[0].former_replicas[0].node_id, std::optional<std::string>("node-b"));
+    EXPECT_EQ(parsed.vaults[0].removed_reason, std::optional<std::string>("owner"));
+
+    const auto e = newVault("replica");
+    const auto id = e->vault->id;
+    linkAndPin();
+    const auto uid = uidOf(id);
+    auto& v = cloud_.vaults[uid];
+    v.registered = true;
+    v.replicas = json::array({{{"deployment_id", "dep-a"}, {"name", "A"}}});
+    (void)tick();
+    EXPECT_TRUE(db::query::sync::Policy::getSync(id)->enabled) << "listed as held: syncs";
+    v.removedByOwner = true;
+    (void)tick();
+    EXPECT_FALSE(db::query::sync::Policy::getSync(id)->enabled) << "removed by the account holder: stops syncing";
+
+    std::string error;
+    EXPECT_TRUE(cs::reportLeft(uid, error)) << error;
+    EXPECT_EQ(callsTo("DELETE /v1/vaults/" + uid + "/replica"), 1u);
+    EXPECT_TRUE(cs::reportLeft(uid, error)) << "no longer held there (404): nothing to report";
 }
 
 TEST_F(CloudStorageTest, WaitingReasonsAndASwitchOffBeforeTheBucketStopsWithoutAnAttach) {

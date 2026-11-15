@@ -124,21 +124,21 @@ std::optional<PublishReport> Session::publishIfChanged() {
     std::scoped_lock lock(mutex_);
     auto produced = host_.collect();
     const auto knownState = known();
-    if (cache_.base && cache_.last_produced && knownState && cache_.base->known == *knownState &&
+    // A join, leave or replica removal the recorded root doesn't show yet is always published.
+    const auto pending = state_->state();
+    const bool changeDue = pending.writers_change && !pending.writers_change->satisfiedBy(pending.writers);
+    if (!changeDue && cache_.base && cache_.last_produced && knownState && cache_.base->known == *knownState &&
         *cache_.last_produced == produced)
         return std::nullopt;
-    if (knownState && unchanged_ && unchanged_->first == *knownState && unchanged_->second == produced)
+    if (!changeDue && knownState && unchanged_ && unchanged_->first == *knownState && unchanged_->second == produced)
         return std::nullopt;
     unchanged_.reset();
     // Another writer's root, applied, that already says what this server holds: publishing would only restamp it, and
     // the other writer would restamp that (two writers alternating roots every pass). Kept until either side changes.
     if (const auto state = state_->state(); knownState && !(cache_.base && cache_.base->known == *knownState) &&
                                             state.own_epoch != knownState->epoch && !state.applying_epoch) {
-        auto writers = host_.extraWriters ? host_.extraWriters() : std::vector<std::string>{};
-        writers.push_back(produced.producer.node_id);
-        const bool named = std::ranges::all_of(writers, [&](const std::string& w) {
-            return w.empty() || std::ranges::find(state.writers, w) != state.writers.end();
-        });
+        const bool named = std::ranges::find(state.writers, produced.producer.node_id) != state.writers.end() &&
+                           (!state.writers_change || state.writers_change->satisfiedBy(state.writers));
         if (const auto copy = named ? state_->base() : std::nullopt) {
             std::string why;
             if (const auto recorded = openBaseCopy(*copy, vaultUid_, host_.keys, *knownState, &why)) {
@@ -182,7 +182,7 @@ PublishReport Session::publishLocked(const Content& produced) {
     options.own_epoch = state.own_epoch;
     options.settled = d::settledOf(state);
     options.apply_on_lost = true;
-    if (host_.extraWriters) options.extra_writers = host_.extraWriters();
+    options.writers_change = state.writers_change;
     options.before_root_put = [this](const std::string& sha, const BaseCopy& pending) {
         state_->notePublishing(sha, pending);
     };
@@ -199,7 +199,9 @@ PublishReport Session::publishLocked(const Content& produced) {
                             .own = true,
                             .base = baseCopyOf(report.published.root, report.published.root_bytes,
                                                report.published.segments, report.published.snapshots),
-                            .writers = report.published.root.writers.value_or(std::vector<std::string>{})});
+                            .writers = report.published.root.writers.value_or(std::vector<std::string>{}),
+                            .producer = report.published.root.producer.node_id,
+                            .published_at = report.published.root.published_at});
         d::dropSealed(cache_);
         if (report.lost)
             note(Notice::Info, std::format("another writer's root won {} round(s) of this publish; merged onto it "

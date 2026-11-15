@@ -613,7 +613,19 @@ static std::string manifestStatusString(const std::shared_ptr<vh::storage::Engin
     std::ostringstream out;
     out << "\nManifest:\n  root epoch: " << num(st["epoch"]) << " (last own: " << num(st["own_epoch"]) << ")\n";
     if (!st["applying_epoch"].is_null()) out << "  applying: epoch " << num(st["applying_epoch"]) << " (incomplete)\n";
-    if (st["writers"].size() > 1) out << "  writers: " << st["writers"].size() << "\n";
+    if (st["writers"].size() > 1) {
+        // A replicated vault (experimental): each writer and its last root this server recorded.
+        out << "  writers: " << st["writers"].size() << (st["behind"].get<bool>() ? " (this server is behind)" : "")
+            << "\n";
+        for (const auto& r : st["replicas"])
+            out << "    " << r["node_id"].get<std::string>() << (r["self"].get<bool>() ? " (this server)" : "")
+                << ": last root " << (r["last_epoch"].is_null() ? std::string("none seen here")
+                                                                 : "epoch " + std::to_string(r["last_epoch"].get<uint64_t>()))
+                << (r["last_published_at"].is_null() ? "" : " at " + r["last_published_at"].get<std::string>()) << "\n";
+    }
+    if (const auto& c = st["writers_change"]; !c.is_null())
+        out << "  writers change not published yet: " << c["kind"].get<std::string>() << " "
+            << c["node"].get<std::string>() << "\n";
     if (st["deferred"].get<int64_t>() > 0) out << "  deferred until closed: " << st["deferred"].get<int64_t>() << "\n";
     if (const auto& a = st["last_apply"]; !a.is_null()) {
         out << "  last apply: epoch " << a["epoch"].get<uint64_t>() << " from node " << a["producer"].get<std::string>()

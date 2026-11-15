@@ -209,9 +209,16 @@ struct AuthConfig {
 // (auth.webauthn.rp_id), or no admin could sign in.
 void validateAuth(const AuthConfig& c);
 
+// sync.replicas: replicated vaults (design/cloud/mirrors.md). Experimental and off by default: without it
+// `vh vault join`, `vh vault leave` and `vh vault replica remove` refuse.
+struct ReplicasConfig {
+    bool experimental = false;
+};
+
 struct SyncConfig {
     uint32_t event_audit_retention_days = 30;
     uint32_t event_audit_max_entries = 10000;
+    ReplicasConfig replicas{};
 };
 
 struct StorageRatesApiConfig {

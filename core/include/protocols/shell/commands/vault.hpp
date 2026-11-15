@@ -80,6 +80,11 @@ namespace vh::protocols::shell::commands::vault {
 
     // `vh vault recover` (#371): a vault rebuilt from its bucket and the customer's recovery material.
     CommandResult handle_vault_recover(const CommandCall &call);
+    // Replicated vaults (experimental): `vh vault join` (recover.cpp), `vh vault leave` and `vh vault replica remove`
+    // (replicas.cpp).
+    CommandResult handle_vault_join(const CommandCall &call);
+    CommandResult handle_vault_leave(const CommandCall &call);
+    CommandResult handle_vault_replica(const CommandCall &call);
 
     // helpers.cpp
     std::optional<unsigned int> parsePositiveUint(const std::string &s, const char *errLabel, std::string &errOut);

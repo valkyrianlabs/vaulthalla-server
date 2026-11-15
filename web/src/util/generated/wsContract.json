@@ -5360,6 +5360,78 @@
       "name": "ManifestApplyReport"
     },
     {
+      "description": "One writer of a vault's manifest (manifest_writer_root, migration 150).",
+      "fields": [
+        {
+          "name": "node_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "This server.",
+          "name": "self",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Its last root this server recorded; null: none since this server held the vault.",
+          "minimum": 0,
+          "name": "last_epoch",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "last_root_sha256",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "ISO-8601 UTC, as the root says.",
+          "name": "last_published_at",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "name": "ManifestReplica"
+    },
+    {
+      "description": "remote_manifest_state.writers_change (migration 150).",
+      "fields": [
+        {
+          "enum": [
+            "add",
+            "remove"
+          ],
+          "name": "kind",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "node",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "name": "ManifestWritersChange"
+    },
+    {
       "description": "auth.mfa.* (Config.cpp to_json(MfaConfig), #359, #360): multi-factor authentication settings. Changing policy, the admin flags or auth.webauthn.rp_id is audited (auth.mfa.policy.change); weakening them is mailed to operator_emails.recipients.security.",
       "fields": [
         {
@@ -9870,6 +9942,20 @@
       "name": "RemoteSyncPolicy"
     },
     {
+      "description": "sync.replicas.* (design/cloud/mirrors.md).",
+      "fields": [
+        {
+          "description": "Replicated vaults (vh vault join, leave, replica remove): experimental, off by default.",
+          "name": "experimental",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "name": "ReplicasConfig"
+    },
+    {
       "description": "email.resend.* (Config.cpp to_json(ResendEmailConfig)); the API key lives in the secrets manager.",
       "fields": [
         {
@@ -12987,6 +13073,15 @@
           "required": true,
           "types": [
             "integer"
+          ]
+        },
+        {
+          "description": "Absent from older clients' settings updates: unchanged.",
+          "model": "ReplicasConfig",
+          "name": "replicas",
+          "required": false,
+          "types": [
+            "object"
           ]
         }
       ],
@@ -19710,6 +19805,34 @@
             "object",
             "null"
           ]
+        },
+        {
+          "description": "Each writer the recorded root names (a replicated vault has several; experimental, design/cloud/mirrors.md).",
+          "items": "object",
+          "model": "ManifestReplica",
+          "name": "replicas",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "A join, leave or replica removal this server's publishes carry until a recorded root shows it.",
+          "model": "ManifestWritersChange",
+          "name": "writers_change",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "This server has not taken in everything the bucket's head says: an apply in progress, skipped or stopped, entries waiting for an open file, or a writers change not published yet.",
+          "name": "behind",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
         }
       ],
       "name": "VaultManifestStatus"
@@ -23527,7 +23650,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "be236626b1116b06aebc16b233e2dcde7296ea2d76dc95e528fc55120cd2df64",
+  "models_hash": "b8a6130418ea365bea5ca0e8aa1a182b3a72f3af58afe85e12c94ed70bf70a03",
   "protocol": {
     "min": 1,
     "version": 1

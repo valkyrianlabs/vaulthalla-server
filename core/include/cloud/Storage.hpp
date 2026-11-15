@@ -78,6 +78,18 @@ struct VaultStorage {
     std::optional<std::string> key_access;   // full | read_delete
     // A vault the account moved to another deployment (a restore elsewhere): where it went, when the cloud says so.
     std::optional<std::string> moved_to;
+    // Replicated vaults (the cloud's managed-storage.md, "The join contract for the server", 7): the servers holding
+    // it (oldest first) and the ones removed lately (newest first, at most 10: dropped from the manifest's writers).
+    // node_id is the deployment's node id (its manifest writer name) when the cloud sends it.
+    struct Replica {
+        std::string deployment_id;
+        std::string name;
+        std::optional<std::string> node_id;
+        std::optional<std::string> reason;   // former: server | owner | moved | deployment_removed
+    };
+    std::vector<Replica> replicas, former_replicas;
+    // The account holder removed the vault from this server (`removed: {reason: "owner"}`): stop syncing it.
+    std::optional<std::string> removed_reason;
 };
 
 struct Overview {
@@ -122,6 +134,10 @@ struct Credential {
 
 // POST /v1/storage/credentials/{key_id}/ack (204): the key is stored and probed; the cloud revokes the older ones.
 void acknowledge(const Linked& link, const std::string& keyId);
+// DELETE /v1/vaults/{uid}/replica (204): this server stops holding a replicated vault (vh vault leave). False when the
+// cloud says it doesn't hold it (404 no_such_vault); throws CallError otherwise.
+bool leaveReplica(const Linked& link, const std::string& vaultUid);
+
 // POST /v1/storage/vaults/{uid}/detached and /ejected (204).
 void reportDetached(const Linked& link, const std::string& vaultUid);
 void reportEjected(const Linked& link, const std::string& vaultUid);

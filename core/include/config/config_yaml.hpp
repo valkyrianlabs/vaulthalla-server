@@ -537,6 +537,7 @@ struct convert<SyncConfig> {
         Node node;
         node["event_audit_retention_days"] = rhs.event_audit_retention_days;
         node["event_audit_max_entries"] = rhs.event_audit_max_entries;
+        node["replicas"]["experimental"] = rhs.replicas.experimental;
         return node;
     }
 
@@ -544,6 +545,8 @@ struct convert<SyncConfig> {
         if (!node.IsMap()) return false;
         rhs.event_audit_retention_days = std::max(static_cast<uint32_t>(7), node["event_audit_retention_days"].as<uint32_t>(30));
         rhs.event_audit_max_entries = std::max(static_cast<uint32_t>(1000), node["event_audit_max_entries"].as<uint32_t>(10000));
+        if (const auto replicas = node["replicas"]; replicas && replicas.IsMap())
+            rhs.replicas.experimental = replicas["experimental"].as<bool>(false);
         return true;
     }
 };

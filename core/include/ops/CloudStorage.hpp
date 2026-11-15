@@ -155,6 +155,22 @@ struct TickResult {
 };
 TickResult tick(bool force = false);
 
+// ---- replicated vaults (experimental; the cloud's managed-storage.md, "The join contract for the server") ----------
+// A managed vault this server joins (`vh vault join --from-cloud`, after the join's approval): this server's own
+// bucket key from the sealed exchange (5), stored like the service's keys (owner: the joining super admin), probed
+// and acknowledged. The other replicas' keys are untouched. nullopt: the vault has no managed bucket (BYOS: the
+// operator's own --api-key). Refused with the cloud's reason otherwise.
+struct JoinedBucket {
+    unsigned int api_key_id{};
+    std::string key_id, access, bucket, bucket_id, s3_endpoint, region;
+};
+[[nodiscard]] std::optional<JoinedBucket> joinBucketKey(const Actor& actor, const std::string& vaultUid);
+// After the join wrote the vault: its managed-storage row, active on that key, the bucket bound as a managed one.
+void adoptJoinedVault(unsigned int vaultId, const std::string& vaultUid, const JoinedBucket& key);
+// `vh vault leave`: DELETE /v1/vaults/{uid}/replica when this server is linked (6). True: the cloud was told (or this
+// server isn't linked, or the cloud didn't hold it); false with `error` when the call failed.
+[[nodiscard]] bool reportLeft(const std::string& vaultUid, std::string& error);
+
 // Asks the service for a pass now (non-blocking: a vault was created or restored, a switch flipped, a refresh asked).
 void wake();
 // Whether a pass was asked for since the last one (the service clears it); takeWakePeek leaves it set.

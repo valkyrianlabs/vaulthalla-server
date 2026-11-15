@@ -9,7 +9,7 @@ export const WS_CONTRACT_VERSION = 3
 export const WS_CONTRACT_HASH = 'f14dec94b0ad564ea133841b91b99eaf8b78e8f4dc6cb64f9157e73f6b0e67e3'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'be236626b1116b06aebc16b233e2dcde7296ea2d76dc95e528fc55120cd2df64'
+export const WS_MODELS_HASH = 'b8a6130418ea365bea5ca0e8aa1a182b3a72f3af58afe85e12c94ed70bf70a03'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -806,6 +806,20 @@ export interface WsModels {
     stopped: string | null
   }
   /**
+   * One writer of a vault's manifest (manifest_writer_root, migration 150).
+   */
+  'ManifestReplica': {
+    node_id: string
+    self: boolean
+    last_epoch: number | null
+    last_root_sha256: string | null
+    last_published_at: string | null
+  }
+  /**
+   * remote_manifest_state.writers_change (migration 150).
+   */
+  'ManifestWritersChange': { kind: 'add' | 'remove'; node: string }
+  /**
    * auth.mfa.* (Config.cpp to_json(MfaConfig), #359, #360): multi-factor authentication settings. Changing
    * policy, the admin flags or auth.webauthn.rp_id is audited (auth.mfa.policy.change); weakening them is
    * mailed to operator_emails.recipients.security.
@@ -1527,6 +1541,10 @@ export interface WsModels {
     max_remote_index_age_seconds: number | null
   }
   /**
+   * sync.replicas.* (design/cloud/mirrors.md).
+   */
+  'ReplicasConfig': { experimental: boolean }
+  /**
    * email.resend.* (Config.cpp to_json(ResendEmailConfig)); the API key lives in the secrets manager.
    */
   'ResendEmailConfig': { endpoint: string }
@@ -2021,7 +2039,11 @@ export interface WsModels {
   /**
    * sync.* (Config.cpp to_json(SyncConfig)).
    */
-  'SyncConfig': { event_audit_retention_days: number; event_audit_max_entries: number }
+  'SyncConfig': {
+    event_audit_retention_days: number
+    event_audit_max_entries: number
+    replicas?: WsModels['ReplicasConfig']
+  }
   /**
    * An open sync conflict the caller may resolve: ops::conflicts::to_json(ConflictView).
    */
@@ -2990,6 +3012,9 @@ export interface WsModels {
     writers: string[]
     deferred: number
     last_apply: WsModels['ManifestApplyReport'] | null
+    replicas: WsModels['ManifestReplica'][]
+    writers_change: WsModels['ManifestWritersChange'] | null
+    behind: boolean
   }
   /**
    * What `vh vault recover` / vault.recover read and did (#371, spec 03 §6): ops::vault_recover::toJson

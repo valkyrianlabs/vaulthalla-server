@@ -50,6 +50,10 @@
 #include "vault/KeyCheck.hpp"
 #include "vault/Recover.hpp"
 #include "vault/RecoveryEnvelopes.hpp"
+#include "config/Registry.hpp"
+#include "db/query/device/Device.hpp"
+#include "ops/VaultReplicas.hpp"
+#include "sync/vault_manifest/Replicas.hpp"
 
 #include <set>
 
@@ -701,6 +705,55 @@ TEST_F(VaultRecoverDb, OnABackblazeLikeBucketTheRestoreTakesTheCanonicalHeadAndP
     for (const auto& [path, content] : b.files) EXPECT_EQ(readFile(engine, path), content) << path;
 }
 
+// vh vault join (replicated vaults, experimental): the restore in join mode. The other server's node stays a writer and
+// this one is added by the first publish; the flag, the channel, a second copy of the uid are refused.
+TEST_F(VaultRecoverDb, AJoinIsARestoreThatAddsThisNodeToTheWritersAndKeepsTheOthers) {
+    auto o = populated();
+    const auto kit = kitOf(o);
+    const auto nodeA = db::query::device::Devices::nodeId();
+    becomeAnotherNode(o.id);
+    const auto nodeB = db::query::device::Devices::nodeId();
+    ASSERT_NE(nodeA, nodeB);
+    ops::vault_recover::Request req;
+    req.api_key_id = apiKey();
+    req.bucket = o.bucketName;
+    req.kit = &kit;
+    EXPECT_EQ(code([&] { return ops::vault_replicas::join(superUser, req, keys::Channel::Cli); }), "replicas_experimental");
+    struct Flag {
+        Flag() { set(true); }
+        ~Flag() { set(false); }
+        static void set(const bool on) {
+            auto cfg = config::Registry::get();
+            cfg.sync.replicas.experimental = on;
+            config::Registry::set(cfg);
+        }
+    } flag;
+    EXPECT_EQ(code([&] { return ops::vault_replicas::join(superUser, req, keys::Channel::Agent); }), "denied");
+    auto dry = req;
+    dry.dry_run = true;
+    EXPECT_EQ(code([&] { return ops::vault_replicas::join(superUser, dry, keys::Channel::Cli); }), "ok");
+
+    const auto r = ops::vault_replicas::join(superUser, req, keys::Channel::Cli);
+    ASSERT_TRUE(r.written) << r.report.dump(2);
+    ASSERT_TRUE(r.vault_id);
+    const auto state = db::query::sync::Manifest::state(*r.vault_id);
+    EXPECT_EQ(state.writers, (std::vector<std::string>{nodeA, nodeB})) << "the other writer kept, this one added";
+    EXPECT_FALSE(state.writers_change) << "the join's root is recorded";
+    EXPECT_EQ(r.published_epoch, state.epoch);
+    EXPECT_TRUE(sync::replicas::replicated(*r.vault_id));
+    const auto engine = runtime::Deps::get().storageManager->getEngine(*r.vault_id);
+    for (const auto& [path, content] : o.files) EXPECT_EQ(readFile(engine, path), content) << path;
+
+    EXPECT_EQ(code([&] { return ops::vault_replicas::join(superUser, req, keys::Channel::Cli); }), "conflict")
+        << "the bucket is held here with that key already";
+    EXPECT_EQ(code([&] { return recover(o, &kit, nullptr); }), "vault_uid_exists") << "no second copy of the vault";
+    // Through another key for the same bucket: the vault's uid is held here (no second copy).
+    auto other = req;
+    other.api_key_id = apiKey();
+    EXPECT_EQ(code([&] { return ops::vault_replicas::join(superUser, other, keys::Channel::Cli); }), "vault_uid_exists");
+    EXPECT_THROW(engine->encryptionManager->prepare_key_rotation(), ops::Refused) << "a replica doesn't rotate";
+}
+
 TEST_F(VaultRecoverDb, DryRunWritesNothing) {
     auto o = populated();
     const auto kit = kitOf(o);
@@ -968,8 +1021,25 @@ protected:
             const auto body = json::parse(r.body);
             temporaryKey_ = *vl::keykit::base64Decode(body.at("temporary_public_key").get<std::string>());
             EXPECT_EQ(body.at("vault_uid"), vaultUid_);
+            // As the cloud's Restores::request (src/recovery/Restore.cpp): intent restore (default) or join; a
+            // refusal is the error envelope {error: {code, message, reason, details?}}.
+            intent_ = body.value("intent", std::string("restore"));
+            if (intent_ != "restore" && intent_ != "join") {
+                res.status = 400;
+                res.body = json{{"error", {{"code", "invalid_argument"}, {"message", "`intent` is restore or join"},
+                                           {"reason", "invalid_intent"}}}}.dump();
+                return res;
+            }
+            if (!refuseWith_.empty()) {
+                res.status = refuseWith_ == "not_enrolled" ? 404 : 409;
+                json e{{"code", res.status == 404 ? "not_found" : "conflict"}, {"message", "refused"},
+                       {"reason", refuseWith_}};
+                if (refuseWith_ == "replica_limit") e["details"] = {{"limit", "3"}};
+                res.body = json{{"error", e}}.dump();
+                return res;
+            }
             res.status = 201;
-            res.body = json{{"id", "rst0123456789abcdefghjkmnp"}, {"status", "requested"},
+            res.body = json{{"id", "rst0123456789abcdefghjkmnp"}, {"status", "requested"}, {"intent", intent_},
                             {"restore_code", "abcd-ef01-2345-6789"}}.dump();
             return res;
         }
@@ -1020,6 +1090,8 @@ protected:
     std::string vaultUid_;
     std::vector<uint8_t> temporaryKey_;
     std::string answer_ = "delivered";
+    std::string intent_;
+    std::string refuseWith_;   // a reason POST /v1/recovery/restores refuses with
     bool forged_ = false;
     int polls_ = 0;
     std::vector<std::string> calls;
@@ -1049,6 +1121,44 @@ TEST_F(VaultRecoverFromCloud, RestoresTheVaultWithKeysADeviceRelayedThroughTheCl
     EXPECT_EQ(calls.back(), "POST /v1/recovery/restores/rst0123456789abcdefghjkmnp/complete");
     // The temporary key is gone once the restore completed.
     EXPECT_THROW((void)ops::cloud_restore::poll(superUser, "rst0123456789abcdefghjkmnp"), ops::Refused);
+}
+
+// vh vault join --from-cloud on a vault with its own bucket (BYOS): the request says intent join, the delivered keys
+// are proven as for a restore, and the join keeps the other writer. The cloud's refusals arrive with their reason.
+TEST_F(VaultRecoverFromCloud, AJoinAsksForIntentJoinAndKeepsTheOtherWriter) {
+    auto o = populated();
+    enrolled(o);
+    const auto nodeA = db::query::device::Devices::nodeId();
+    becomeAnotherNode(o.id);
+    auto cfg = config::Registry::get();
+    cfg.sync.replicas.experimental = true;
+    config::Registry::set(cfg);
+    for (const auto* reason : {"replica_limit", "unplaced", "held_by_desktop", "not_enrolled", "already_held"}) {
+        refuseWith_ = reason;
+        EXPECT_EQ(code([&] { return ops::cloud_restore::start(superUser, vaultUid_, keys::Channel::Cli,
+                                                              ops::cloud_restore::Intent::Join); }),
+                  reason);
+    }
+    refuseWith_.clear();
+    const auto started = ops::cloud_restore::start(superUser, vaultUid_, keys::Channel::Cli,
+                                                   ops::cloud_restore::Intent::Join);
+    EXPECT_EQ(intent_, "join");
+    std::optional<ops::cloud_restore::Delivered> delivered;
+    for (int i = 0; i < 5 && !delivered; ++i) delivered = ops::cloud_restore::poll(superUser, started.restore_id);
+    ASSERT_TRUE(delivered);
+    ops::vault_recover::Request req;
+    req.api_key_id = apiKey();
+    req.bucket = o.bucketName;
+    req.exported = &delivered->exported;
+    req.vault_uid = vaultUid_;
+    req.checkpoint = delivered->checkpoint;
+    const auto r = ops::vault_replicas::join(superUser, req, keys::Channel::Cli);
+    ops::cloud_restore::complete(superUser, started.restore_id);
+    ASSERT_TRUE(r.written) << r.report.dump(2);
+    const auto writers = db::query::sync::Manifest::state(*r.vault_id).writers;
+    EXPECT_EQ(writers, (std::vector<std::string>{nodeA, db::query::device::Devices::nodeId()}));
+    cfg.sync.replicas.experimental = false;
+    config::Registry::set(cfg);
 }
 
 TEST_F(VaultRecoverFromCloud, ARollbackIsRefusedAgainstTheCloudsCheckpointUnlessAccepted) {

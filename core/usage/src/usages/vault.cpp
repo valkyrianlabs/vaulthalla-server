@@ -377,6 +377,97 @@ static std::shared_ptr<CommandUsage> recover(const std::weak_ptr<CommandUsage>& 
     return cmd;
 }
 
+// ---- replicated vaults (experimental: sync.replicas.experimental; design/cloud/mirrors.md) -------------------------
+
+static std::shared_ptr<CommandUsage> join(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"join"};
+    cmd->effect = CommandEffect::Destructive;
+    cmd->description =
+        "EXPERIMENTAL (needs sync.replicas.experimental: true). Make this server one more writer of a vault another "
+        "server keeps in a bucket: both then sync the same vault through the bucket. The keys come from your recovery "
+        "kit (--kit; no cloud needed) or, with --from-cloud, relayed through your linked Vaulthalla Cloud account. "
+        "Every key version must be proven by an attestation key your material pins, as for vh vault recover; the "
+        "vault is built here from the bucket's manifest with nothing downloaded until a file is read, and this "
+        "server's first manifest root adds it to the vault's writers, keeping the others. Super admins only, from this "
+        "host's CLI or a paired device. Refused for a vault that already has 3 writers, a bucket without conditional "
+        "writes (Backblaze B2 for now), a recovery recipient this server can't hold too, and a vault this server "
+        "already holds. A replicated vault doesn't rotate its key: remove the other replicas first.";
+    cmd->optional = {Optional::ManyToOne("s3_api_key",
+                                         "Name or ID of this server's API key that reaches the bucket (with --kit, or "
+                                         "--from-cloud for a bucket that isn't managed storage; a managed bucket's key "
+                                         "comes from the cloud)",
+                                         {"api-key"}, "name")
+                         .withGen("name", contract::gen::ref("api_key", {"name"})),
+                     Optional::ManyToOne("s3_bucket", "The bucket holding the vault", {"bucket"}, "name")
+                         .withGen("name", contract::gen::pattern("vh-test-{a}{a}{a}{9}{9}")),
+                     Optional::Multi("recovery_kit",
+                                     "The recovery kit (vh-recovery kit create) enrolled in the vault: its seed unwraps "
+                                     "the key envelopes and its pinned attestation keys prove them. Read on your side; "
+                                     "- for standard input",
+                                     {"kit", "recovery-kit"}, {"path"})
+                         .withGen("path", contract::gen::constant("kit.json")),
+                     Optional::ManyToOne("vault_uid", "Which vault of the bucket (its uid; default: the kit's)",
+                                         {"vault-uid"}, "uid")};
+    cmd->optional_flags = {jsonFlag,
+                           Flag::Alias("dry_run", "Read the bucket and report what the join would do; write nothing",
+                                       "dry-run"),
+                           Flag::Alias("from_cloud",
+                                       "Instead of --kit: have the keys relayed through your linked Vaulthalla Cloud "
+                                       "account (needs --vault-uid and a terminal)",
+                                       "from-cloud")};
+    cmd->examples = {
+        {"vh vault join --api-key r2-office --bucket finance-vault --kit kit.json --dry-run",
+         "Show what joining the vault in bucket 'finance-vault' would do."},
+        {"vh vault join --api-key r2-office --bucket finance-vault --kit kit.json",
+         "Join it: this server becomes one more writer of the vault."}
+    };
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> leave(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"leave"};
+    cmd->effect = CommandEffect::Destructive;
+    cmd->description =
+        "EXPERIMENTAL (needs sync.replicas.experimental: true). Take this server out of a replicated vault: it "
+        "publishes a manifest root without itself, turns the vault's sync off, and keeps its copy here as it is "
+        "(--keep-local: files never fetched stay readable from the bucket) or deletes it from this server "
+        "(--delete-local; the bucket and the other writers are untouched). The last writer can't leave: delete or "
+        "detach the vault instead. Super admins only.";
+    cmd->positionals = {vaultPos};
+    cmd->optional_flags = {jsonFlag,
+                           Flag::Alias("keep_local", "Keep this server's copy (sync off)", "keep-local"),
+                           Flag::Alias("delete_local", "Delete this server's copy (never the bucket's objects)",
+                                       "delete-local")};
+    cmd->examples = {{"vh vault leave finance --delete-local", "Stop writing vault 'finance' here and delete it here."}};
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> replica_remove(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"remove", "rm"};
+    cmd->effect = CommandEffect::Destructive;
+    cmd->description =
+        "EXPERIMENTAL. Drop another server (a dead replica) from a replicated vault's writers: this server publishes a "
+        "manifest root without it. If that server still runs, its next publish is refused and it stops. Once this "
+        "server is the only writer, the vault is solo again and may rotate its key. Super admins only.";
+    cmd->positionals = {vaultPos, Positional::Alias("node", "The writer's node id (vh vault sync info lists them)",
+                                                    "node", contract::gen::constant("0123abcd-node"))};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh vault replica remove finance 4e67fd52-5643-4f06-9616-8260bb94c931",
+                      "Drop that server from vault 'finance''s writers."}};
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> replica(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"replica"};
+    cmd->description = "EXPERIMENTAL. The writers of a replicated vault (vh vault sync info shows them).";
+    cmd->subcommands = {replica_remove(cmd->weak_from_this())};
+    return cmd;
+}
+
 static std::shared_ptr<CommandUsage> deleted(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"deleted", "trash"};
@@ -1211,6 +1302,9 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
     const auto removeCmd = remove(cmd->weak_from_this());
     const auto restoreCmd = restore(cmd->weak_from_this());
     const auto recoverCmd = recover(cmd->weak_from_this());
+    const auto joinCmd = join(cmd->weak_from_this());
+    const auto leaveCmd = leave(cmd->weak_from_this());
+    const auto replicaCmd = replica(cmd->weak_from_this());
     const auto deletedCmd = deleted(cmd->weak_from_this());
     const auto infoCmd = info(cmd->weak_from_this());
     const auto updateCmd = update(cmd->weak_from_this());
@@ -1366,6 +1460,9 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
         removeCmd,
         restoreCmd,
         recoverCmd,
+        joinCmd,
+        leaveCmd,
+        replicaCmd,
         deletedCmd,
         infoCmd,
         updateCmd,
