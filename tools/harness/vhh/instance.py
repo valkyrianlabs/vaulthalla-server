@@ -137,7 +137,7 @@ class Instance:
 
     def __init__(self, build_dir: Path, run_id: str | None = None, artifacts: Path | None = None,
                  redactor=None, extra_env: dict[str, str] | None = None, start_timeout: float = 90,
-                 own_tpm: bool = False, config_extra: str = ""):
+                 own_tpm: bool = False, config_extra: str = "", device_server: bool = False):
         if os.geteuid() != 0:
             raise InstanceError("the engine launches the daemon as root (FUSE allow_other, TPM, actor uids): use sudo")
         self.build_dir = Path(build_dir).resolve()
@@ -158,6 +158,8 @@ class Instance:
         # so a drill's second instance shares nothing with the first but what it is given (spec 03 §7).
         self.own_tpm = own_tpm
         self.config_extra = config_extra
+        # device_server: the device listener on a private loopback port (pairing; the cloud relay needs it), else off.
+        self.device_server = device_server
         self.tpm_proc: subprocess.Popen | None = None
         self.proc: subprocess.Popen | None = None
         self.target: Target | None = None
@@ -196,11 +198,12 @@ class Instance:
         (self.run_dir / "config.yaml").write_text(
             "websocket_server: {enabled: true, host: 127.0.0.1, port: %d, max_connections: 4096}\n"
             "http_preview_server: {enabled: true, host: 127.0.0.1, port: %d, max_connections: 1024}\n"
-            "s3_gateway: {enabled: false, host: 127.0.0.1, port: %d}\n"
-            "device_server: {enabled: false}\n"
+            "s3_gateway: {enabled: false, host: 127.0.0.1, port: %d}\n" % (ws_port, http_port, _free_port())
+            + ("device_server: {enabled: true, port: %d, remote: false}\n" % _free_port() if self.device_server
+               else "device_server: {enabled: false}\n") +
             "email: {enabled: false}\n"
             "operator_emails: {enabled: false}\n"
-            "dev: {enabled: false}\n" % (ws_port, http_port, _free_port()) + self.config_extra)
+            "dev: {enabled: false}\n" + self.config_extra)
 
         db = _read_env_file(DB_ENV_FILE)
         if self.redactor is not None:
