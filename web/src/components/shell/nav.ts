@@ -28,7 +28,7 @@ export interface NavItem {
   shownWhen?: NavSignal
 }
 
-export type NavSignal = 'syncConflicts'
+export type NavSignal = 'syncConflicts' | 'cloudStorage'
 
 export interface NavSection {
   label?: string
@@ -78,6 +78,8 @@ export const NAV: NavSection[] = [
       },
       { label: 'Cost control', href: '/cost', icon: SackDollarIcon, requires: { superAdmin: true }, keywords: 'budget pricing spend' },
       { label: 'S3 gateway', href: '/s3-gateway', icon: CloudIcon, requires: { permission: 'admin.s3_gateway.view' } },
+      // Shown with the server's managed-storage capability, the view permission and storage available.
+      { label: 'Managed storage', href: '/managed-storage', icon: CloudIcon, shownWhen: 'cloudStorage', keywords: 'bucket backup plan' },
     ],
   },
   {
