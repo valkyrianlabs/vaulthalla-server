@@ -161,6 +161,10 @@ void Handler::registerVaultKeyHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("vault.layout.cleanup", &handler::VaultKeys::layoutCleanup);
     // Spec 06 §7: what the vault's bucket supports for writes that must never overwrite (probed now, recorded).
     r->registerPayload("vault.storage.probe", &handler::VaultKeys::storageProbe);
+    // design/storage/attach-remote.md: a local vault becomes an S3/R2 vault in place (attach, status, abort).
+    r->registerPayload("vault.remote.attach", &handler::VaultKeys::remoteAttach);
+    r->registerPayload("vault.remote.status", &handler::VaultKeys::remoteStatus);
+    r->registerPayload("vault.remote.abort", &handler::VaultKeys::remoteAbort);
 }
 
 void Handler::registerMetaHandlers(const std::shared_ptr<Router>& r) {

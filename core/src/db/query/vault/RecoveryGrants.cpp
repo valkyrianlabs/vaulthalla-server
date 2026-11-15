@@ -96,7 +96,7 @@ std::vector<KeyEnvelope> RecoveryGrants::envelopes(const uint32_t vaultId) {
         for (const auto row : txn.exec("SELECT grant_id, key_version, kid FROM vault_key_envelope WHERE vault_id = $1 "
                                        "ORDER BY key_version, kid",
                                        pqxx::params{vaultId}))
-            out.push_back({row[0].as<std::string>(), row[1].as<uint32_t>(), row[2].as<std::string>()});
+            out.push_back({row[0].as<std::string>(), row[1].as<uint32_t>(), row[2].as<std::string>(), {}});
         return out;
     });
 }
@@ -106,9 +106,11 @@ void RecoveryGrants::recordEnvelopes(const uint32_t vaultId, const uint32_t keyV
     if (written.empty()) return;
     Transactions::exec("RecoveryGrants::recordEnvelopes", [&](pqxx::work& txn) {
         for (const auto& e : written)
-            txn.exec("INSERT INTO vault_key_envelope (vault_id, grant_id, key_version, kid) VALUES ($1, $2, $3, $4) "
-                     "ON CONFLICT (vault_id, grant_id, key_version) DO NOTHING",
-                     pqxx::params{vaultId, e.grant_id, keyVersion, e.kid});
+            txn.exec("INSERT INTO vault_key_envelope (vault_id, grant_id, key_version, kid, envelope) "
+                     "VALUES ($1, $2, $3, $4, $5) ON CONFLICT (vault_id, grant_id, key_version) DO NOTHING",
+                     pqxx::params{vaultId, e.grant_id, keyVersion, e.kid,
+                                  e.envelope.empty() ? std::optional<std::string>{}
+                                                     : std::make_optional(encoding::to_hex_bytea(e.envelope))});
     });
 }
 

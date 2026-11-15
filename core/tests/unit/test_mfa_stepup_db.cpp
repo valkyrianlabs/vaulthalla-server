@@ -202,6 +202,10 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
                                  "gate runs after the preconditions (LayoutMigrationTest)"},
         {"vault.layout.cleanup", "needs a cut-over vault past its waiting period with a verified manifest; the gate "
                                  "runs after those checks, only with confirm (LayoutMigrationTest)"},
+        {"vault.remote.attach", "needs a local vault with recovery material and an empty bucket; the ops gate runs "
+                                "after the preconditions (RemoteAttachTest)"},
+        {"vault.remote.abort", "needs an attach before its cutover and the vault's name; the gate runs after those "
+                               "checks (RemoteAttachTest)"},
     };
 
     std::set<std::string> annotated;

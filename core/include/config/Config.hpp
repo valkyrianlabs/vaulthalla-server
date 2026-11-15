@@ -298,6 +298,14 @@ struct VaultsLayoutMigrationConfig {
     uint32_t cleanup_wait_days = 7;   // 1..365: legacy objects stay untouched this long after the cutover
 };
 
+// vaults.remote_attach.*: attaching a remote to a local vault (vault/RemoteAttach.hpp). Read from config.yaml, not the
+// settings API.
+struct VaultsRemoteAttachConfig {
+    // 1..20: how often files that changed while they were uploaded are sent again before the cutover; what is left then
+    // uploads with the vault's first sync pass.
+    uint32_t max_passes = 3;
+};
+
 // vaults.* retention (#162). Durations are config duration strings ("30s", "5m", "12h", "90d", "2w"; util.hpp). A
 // window applies to vaults deleted after it changes: each deletion records its own purge and key-retention deadlines.
 struct VaultsConfig {
@@ -308,6 +316,7 @@ struct VaultsConfig {
     VaultsS3Config s3;
     VaultsFormatConversionConfig format_conversion;
     VaultsLayoutMigrationConfig layout_migration;
+    VaultsRemoteAttachConfig remote_attach;
 };
 
 enum class EmailProviderKind {

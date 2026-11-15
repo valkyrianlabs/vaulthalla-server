@@ -333,6 +333,13 @@ bash tools/dev/verify.sh harness                                   # unit + self
   then (cleanup_after moved in the instance's database) complete with no path-named key left. DB-backed unit suite
   `LayoutMigration*` (`test_layout_migration.cpp`: the VersionedBucket fake with `md5Etags`, `lockVersion`,
   `setLegalHold`, `refuseDeletes`, `tamper`, injected faults; crash resume via `RunDeps::afterStep`).
+- Remote attach (design/storage/attach-remote.md): DB-backed unit suite `RemoteAttach*` (`test_remote_attach.cpp`):
+  a local vault, an API key row and a `VersionedBucket` handed to the engine through
+  `vault::remote::setControllerFactoryForTesting`; `RunDeps` seams for the pass lease, the price preflight, the engine
+  swap (`reloadEngine` + `setS3ControllerForTesting`) and the first pass (`runSyncPass` inline); crash resume via
+  `RunDeps::afterStep` (prepared, item:<id>, uploaded, pass:<n>, listed, sampled, published, verified, cutover,
+  swapped). An R2 key (`S3Provider::CloudflareR2`) selects the unversioned path. Not covered: Tier B (attach while
+  FUSE and the console write), the restore drill after an attach, live buckets.
 - Lessons: the engine never touches the mount itself (a `Path.resolve()` blocked it in D state under a stopped
   daemon); `Instance.watchdog()` aborts the run's own FUSE connection past a hard deadline.
 - Never point mutating commands at vh-storage: targets are validated (a live `VH_TEST_MODE=1` daemon serving a
@@ -470,7 +477,8 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   OnABackblazeLike*` restores over a bucket with a losing sibling and a marker above the head, publishes, rotates and
   enrolls there. `ManifestStore.*` and `ManifestPublish.*Refuses*|*RejectsConditions*` (`test_manifest.cpp`) cover
   the Store seam; CLI ↔ ws:
-  `VaultStorageParityTest.*` (`test_ops_parity_vault_storage.cpp`, db-only).
+  `VaultStorageParityTest.*` (`test_ops_parity_vault_storage.cpp`, db-only); attach-remote CLI ↔ ws:
+  `VaultRemoteParityTest.*` (`test_ops_parity_vault_remote.cpp`, db-only).
 - opaque_v1 data plane (#369, `test_opaque_layout.cpp`): `OpaqueObjectKeys.*`, `OpaqueRequestPolicy.*` and
   `OpaqueMultipart.*` are DB-free (the 60 GiB object is a sparse file behind a part-counting controller: ~20 s);
   `OpaqueLayoutTest.*` (db) makes a vault opaque_v1 before it holds anything (test mode; `UPDATE s3 SET

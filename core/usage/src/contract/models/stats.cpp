@@ -423,6 +423,15 @@ std::vector<WsModel> statsSystemModels() {
              .nullable()
              .desc("Legacy-format content (#373/#376). null when the database could not be asked. Never degrades "
                    "health by itself."),
+         objectArray("remote_attach_failed", "",
+                     {uinteger("vault_id"), str("vault_name"), str("detail").desc("The attach's last error.")})
+             .opt()
+             .desc("Local vaults whose remote attach failed before its cutover (vault.remote.status): the vault is "
+                   "still local and untouched; an operator resumes or aborts the attach. Any entry makes the node at "
+                   "least degraded."),
+         intArray("remote_attaches_unfinished")
+             .opt()
+             .desc("Vaults whose remote attach is still running. Never degrades health by itself."),
          object("summary", "",
                 {statsUint("services_ready"), statsUint("services_total"), statsUint("deps_ready"),
                  statsUint("deps_total"), statsUint("protocols_ready"), statsUint("protocols_total"),

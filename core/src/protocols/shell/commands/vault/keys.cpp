@@ -10,6 +10,7 @@
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
 #include "vault/RecoveryEnvelopes.hpp"
+#include "vault/RemoteAttach.hpp"
 #include "vault/Retention.hpp"
 #include "vault/model/Deletion.hpp"
 #include "vault/model/Key.hpp"
@@ -355,6 +356,12 @@ static CommandResult handle_rotate_vault_keys(const CommandCall& call) {
     const auto rotateKey = [&syncNow](const std::shared_ptr<storage::Engine>& engine) -> std::string {
         const auto label = "'" + engine->vault->name + "' (ID: " + std::to_string(engine->vault->id) + ")";
         const bool alreadyPending = db::query::vault::Key::keyRotationInProgress(engine->vault->id);
+        // A new key version must not seal content before its recovery envelopes reach the bucket a remote attach is
+        // filling: the rotation waits for the attach (vault/RemoteAttach.hpp) and starts when it ends.
+        if (!alreadyPending && ::vh::vault::remote::queueRotation(engine->vault->id))
+            return "Key rotation for " + label + " is queued: a remote is being attached to this vault, and the "
+                   "rotation starts once the attach has finished (vh vault remote status " +
+                   std::to_string(engine->vault->id) + ").\n";
         if (!alreadyPending) engine->encryptionManager->prepare_key_rotation();
 
         std::string line = alreadyPending

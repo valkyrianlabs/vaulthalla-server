@@ -32,6 +32,11 @@ struct VaultKeys {
     // vault's bucket supports for writes that must never overwrite, probed now and recorded. Any signed-in session
     // with the vault's admin Edit permission.
     static json storageProbe(const json& payload, const std::shared_ptr<Session>& session);
+    // vault.remote.* (ops::vault_remote; design/storage/attach-remote.md): a local vault becomes an S3/R2 vault in
+    // place. attach and abort with a keys step-up; status for whoever may view the vault.
+    static json remoteAttach(const json& payload, const std::shared_ptr<Session>& session);
+    static json remoteStatus(const json& payload, const std::shared_ptr<Session>& session);
+    static json remoteAbort(const json& payload, const std::shared_ptr<Session>& session);
 };
 
 }

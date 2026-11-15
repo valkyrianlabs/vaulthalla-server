@@ -44,6 +44,8 @@ std::vector<WsModel> vaultModels() {
                    "readable names, unencrypted objects; path_v0: encrypted objects under their file paths; "
                    "opaque_v1: opaque object ids. It follows encrypt_upstream; no request sets it."),
          str("owner").opt().desc("The owner's name (\"\" when it no longer resolves): list and get."),
+         str("remote").opt().desc("storage.vault.get: none (a local vault), attaching:<state> (a remote is being "
+                                  "attached: vault.remote.status) or attached (an S3 vault)."),
          object("sync", "RemoteSyncPolicy").opt().desc("storage.vault.get of an S3 vault.")}));
 
     out.push_back(model("AccessibleVault",

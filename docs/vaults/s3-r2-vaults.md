@@ -104,6 +104,62 @@ Useful options:
 | `--interval` | Sync interval. |
 | `--owner` | Create for a specific owner where permitted. |
 
+## Attaching A Bucket To A Local Vault
+
+A vault created as a local vault can be given a bucket later. It stays the same vault: its ID, keys, permissions,
+shares and files are kept, and it becomes an S3/R2 vault with [opaque storage](#upstream-encryption) in place.
+
+```bash
+vh vault remote attach finance --api-key r2-main --bucket finance-vault
+vh vault remote status finance
+```
+
+Before anything is uploaded, Vaulthalla checks that the attach can succeed and refuses otherwise, with the vault
+unchanged:
+
+- **The bucket is empty and unused.** Every object version and delete marker counts, and no other vault may use the
+  bucket with that API key. The bucket must not have a protection lock.
+- **The bucket can hold the vault's manifest.** It is probed the way `vh vault storage probe` probes a vault's bucket
+  ([Providers Without Conditional Writes](#providers-without-conditional-writes)).
+- **The vault holds no content in the legacy format.** `vh vault format status <vault>` shows what is left; the
+  background conversion finishes first.
+- **The vault has recovery material that doesn't depend on this server:** a recovery recipient
+  (`vh vault keys recipient add`, which also works on a local vault) or an export of the current key
+  (`vh vault keys export`). See [Recovery Recipients](/vaults/secrets-and-key-export#recovery-recipients).
+- **No key rotation or key salvage is running**, and this server holds every key version the vault's content uses.
+
+The upload then runs in the background and continues after a restart. The vault stays local and in use the whole
+time: files that change while they are uploaded are sent again (up to `vaults.remote_attach.max_passes` times, see
+[Configuration](/reference/configuration#remote-attach)). Every object is verified, a sample is read back and
+decrypted, and the vault's encrypted manifest is published and read back from the bucket. Only then does the vault
+switch to its bucket, in one step. It starts in the `cache` sync strategy with every file still on disk, so nothing
+is downloaded, and anything that changed at the last moment uploads with its first sync pass.
+
+`vh vault remote status <vault>` shows the state, the progress (files and bytes sent, the current rate and the time
+left when known), the cost estimate and the last error. The cost is checked against the
+[price budget](/cost-control/price-budgets) before the upload starts; when the provider can't be priced, start the attach
+with `--accept-unpriced`.
+
+If something fails before the switch, the vault is still a local vault and nothing of it changed. Run the same
+command again, with the same API key and bucket, to resume; what was already uploaded and verified is kept. To give
+up instead:
+
+```bash
+vh vault remote abort finance --confirm finance
+```
+
+An abort deletes what the attach uploaded, each object by the version the attach recorded, and frees the bucket. It
+never deletes anything the attach didn't write. An attach can't be aborted once the vault has switched to its bucket.
+
+What to know:
+
+- A key rotation asked for during an attach waits and starts when the attach has ended.
+- Snapshots and local versions taken before the attach stay local recovery points. The bucket's own history starts
+  with the attach.
+- A vault's recovery recipients carry over: their key envelopes are copied into the bucket before the switch.
+- An S3 gateway bucket bound to the vault keeps working and serves the vault as a cached remote from then on.
+- Attaching a bucket is decided by a person: it isn't available to agents.
+
 ## Upstream Encryption
 
 New S3/R2 vaults should normally use upstream encryption. With it enabled, a new vault uses **opaque storage** (`opaque_v1`): each file is one encrypted object named by a random id, with no metadata headers, and names, folders and history live in an encrypted manifest in the same bucket (`.vaulthalla/`). Your storage provider only ever sees encrypted, opaquely named objects. It can't see your file names, folders or contents. It can see how many objects you store, their sizes and when they change ([what remains visible](/vaults/encryption#what-opaque-storage-still-reveals)).

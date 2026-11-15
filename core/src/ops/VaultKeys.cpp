@@ -37,6 +37,7 @@
 #include "vault/KeyCheck.hpp"
 #include "vault/Master.hpp"
 #include "vault/RecoveryEnvelopes.hpp"
+#include "vault/RemoteAttach.hpp"
 #include "vault/model/APIKey.hpp"
 #include "vault/model/Deletion.hpp"
 #include "vault/model/Key.hpp"
@@ -1285,6 +1286,10 @@ namespace {
 SalvageReport runSalvage(const Actor& actor, const ImportTarget& target, std::map<unsigned int, crypto::SecretKeyPtr> supplied,
                          Unsealer& unsealer, const Channel channel) {
     const SalvageGuard guard(target.vault_id);
+    // A salvage mints a new key version: it waits for a remote attach of the vault, as a rotation does.
+    if (vault::remote::attachInProgress(target.vault_id))
+        throw Conflict("a remote is being attached to vault '" + target.name + "'; run the salvage once the attach has "
+                       "finished or was aborted (vh vault remote status " + std::to_string(target.vault_id) + ")");
     std::vector<unsigned int> versions;
     for (const auto& v : supplied | std::views::keys) versions.push_back(v);
 

@@ -20,6 +20,7 @@
 #include "sync/Controller.hpp"
 #include "vault/FormatConversionService.hpp"
 #include "vault/LayoutMigrationService.hpp"
+#include "vault/RemoteAttachService.hpp"
 #include "vault/RetentionService.hpp"
 #include "sync/events/Service.hpp"
 
@@ -46,6 +47,7 @@ constexpr std::array kBaseStartOrder{
     "VaultRetentionService",
     "FormatConversionService",
     "LayoutMigrationService",
+    "RemoteAttachService",
     "LogRotationService",
     "StatsSnapshotService",
     "OperatorEmailService",
@@ -65,6 +67,7 @@ constexpr std::array kBaseStopOrder{
     "FsChangeNotifier",
     "OperatorEmailService",
     "StatsSnapshotService",
+    "RemoteAttachService",
     "LayoutMigrationService",
     "FormatConversionService",
     "VaultRetentionService",
@@ -96,6 +99,7 @@ Manager::Manager()
       vaultRetentionService(std::make_shared<vault::RetentionService>()),
       formatConversionService(std::make_shared<vault::FormatConversionService>()),
       layoutMigrationService(std::make_shared<vault::LayoutMigrationService>()),
+      remoteAttachService(std::make_shared<vault::RemoteAttachService>()),
       statsSnapshotService(std::make_shared<stats::SnapshotService>()),
       operatorEmailService(std::make_shared<notifications::OperatorEmailService>()),
       upstreamEventService(std::make_shared<sync::events::Service>()),
@@ -114,6 +118,7 @@ Manager::Manager()
     services_["VaultRetentionService"] = vaultRetentionService;
     services_["FormatConversionService"] = formatConversionService;
     services_["LayoutMigrationService"] = layoutMigrationService;
+    services_["RemoteAttachService"] = remoteAttachService;
     services_["StatsSnapshotService"] = statsSnapshotService;
     services_["OperatorEmailService"] = operatorEmailService;
     services_["UpstreamEventService"] = upstreamEventService;

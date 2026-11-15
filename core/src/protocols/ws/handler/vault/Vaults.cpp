@@ -267,6 +267,7 @@ json Vaults::detailsJson(const vh::ops::vaults::Details& details) {
         if (const auto remote = std::dynamic_pointer_cast<RemotePolicy>(details.sync)) out["sync"] = *remote;
     } else out = *details.vault;
     out["owner"] = details.owner_name;
+    out["remote"] = details.remote;
     return out;
 }
 

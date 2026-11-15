@@ -778,6 +778,23 @@ struct convert<VaultsLayoutMigrationConfig> {
 };
 
 template<>
+struct convert<VaultsRemoteAttachConfig> {
+    static Node encode(const VaultsRemoteAttachConfig& rhs) {
+        Node node;
+        node["max_passes"] = rhs.max_passes;
+        return node;
+    }
+
+    static bool decode(const Node& node, VaultsRemoteAttachConfig& rhs) {
+        if (!node.IsMap()) return false;
+        rhs.max_passes = node["max_passes"].as<uint32_t>(rhs.max_passes);
+        if (rhs.max_passes < 1 || rhs.max_passes > 20)
+            throw std::invalid_argument("vaults.remote_attach.max_passes must be 1..20");
+        return true;
+    }
+};
+
+template<>
 struct convert<VaultsConfig> {
     static Node encode(const VaultsConfig& rhs) {
         Node node;
@@ -786,6 +803,7 @@ struct convert<VaultsConfig> {
         node["s3"] = rhs.s3;
         node["format_conversion"] = rhs.format_conversion;
         node["layout_migration"] = rhs.layout_migration;
+        node["remote_attach"] = rhs.remote_attach;
         return node;
     }
 
@@ -798,6 +816,8 @@ struct convert<VaultsConfig> {
             YAML::convert<VaultsFormatConversionConfig>::decode(node["format_conversion"], rhs.format_conversion);
         if (node["layout_migration"])
             YAML::convert<VaultsLayoutMigrationConfig>::decode(node["layout_migration"], rhs.layout_migration);
+        if (node["remote_attach"])
+            YAML::convert<VaultsRemoteAttachConfig>::decode(node["remote_attach"], rhs.remote_attach);
         return true;
     }
 };

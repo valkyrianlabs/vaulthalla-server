@@ -148,7 +148,8 @@ TEST(McpCatalog, ExclusionListIsExactlyTheAgreedOne) {
     }
     const std::vector<std::string> expected{"vault key export", "vault key import", "vault recover",
                                             "vault key recipient add",
-                                            "vault key recipient revoke", "secrets export", "secrets update",
+                                            "vault key recipient revoke", "vault remote attach", "secrets export",
+                                            "secrets update",
                                             "secrets master rotate", "secrets master finalize",
                                             "secrets master rollback", "secrets jwt rotate",
                                             "secrets device-identity rotate", "secrets reseal", "setup",
@@ -163,7 +164,8 @@ TEST(McpCatalog, ExcludedCommandsAreNeitherListedNorRunnable) {
     std::set<std::string> excluded;
     for (const auto& l : catalog().leaves())
         if (l.excluded) excluded.insert(l.command);
-    for (const auto* c : {"vault key export", "vault key import", "vault recover", "secrets export", "secrets update",
+    for (const auto* c : {"vault key export", "vault key import", "vault recover", "vault remote attach",
+                          "secrets export", "secrets update",
                           "secrets master rotate", "secrets master finalize", "secrets master rollback",
                           "secrets jwt rotate", "secrets device-identity rotate", "secrets reseal", "setup db", "setup caddy",
                           "setup set-super-admin-password", "teardown db", "fs get", "fs put", "mcp", "skill install",

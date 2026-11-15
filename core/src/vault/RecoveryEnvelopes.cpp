@@ -3,6 +3,7 @@
 
 #include <vl/keykit/kev1.hpp>
 #include "db/query/vault/Key.hpp"
+#include "db/query/vault/RemoteAttach.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "log/Registry.hpp"
 #include "runtime/Deps.hpp"
@@ -12,6 +13,7 @@
 #include "vault/APIKeyManager.hpp"
 #include "vault/model/Key.hpp"
 #include "vault/model/S3Vault.hpp"
+#include "vault/model/Vault.hpp"
 
 #include <algorithm>
 #include <mutex>
@@ -30,6 +32,60 @@ std::string versionList(const std::vector<uint32_t>& versions) {
     return out;
 }
 
+// A local vault's envelopes (design/storage/attach-remote.md, open question 2): it has no bucket, so the database
+// holds their bytes (vault_key_envelope.envelope, written by record() in the transaction that records them). They are
+// ciphertext to the customer's own recipient key. An attach copies them into the bucket; the cutover clears them here.
+class DatabaseStore final : public sync::manifest::ObjectStore {
+public:
+    explicit DatabaseStore(const uint32_t vaultId) : vaultId_(vaultId) {}
+
+    [[nodiscard]] std::optional<sync::manifest::StoredObject> get(const std::string& key,
+                                                                  const std::optional<std::string>&) override {
+        const auto kid = kidOf(key);
+        if (!kid) return std::nullopt;
+        auto bytes = db::query::vault::RemoteAttach::envelopeBytes(vaultId_, *kid);
+        if (!bytes) return std::nullopt;
+        return sync::manifest::StoredObject{.bytes = std::move(*bytes), .etag = std::nullopt, .version_id = std::nullopt};
+    }
+    [[nodiscard]] std::optional<std::vector<uint8_t>> getRange(const std::string& key, const uint64_t offset,
+                                                               const uint64_t length) override {
+        const auto object = get(key, std::nullopt);
+        if (!object) return std::nullopt;
+        const auto from = std::min<uint64_t>(offset, object->bytes.size());
+        const auto to = std::min<uint64_t>(from + length, object->bytes.size());
+        return std::vector<uint8_t>(object->bytes.begin() + static_cast<std::ptrdiff_t>(from),
+                                    object->bytes.begin() + static_cast<std::ptrdiff_t>(to));
+    }
+    // The bytes are stored with the envelope's record (record()): nothing is written before the version is recorded,
+    // so a version that never came to be leaves nothing behind.
+    std::string putIfAbsent(const std::string&, const std::vector<uint8_t>&) override { return {}; }
+    std::string putIfMatch(const std::string& key, const std::vector<uint8_t>&, const std::string&) override {
+        throw std::logic_error("a database-held envelope is written once: " + key);
+    }
+    [[nodiscard]] std::vector<sync::manifest::ListedObject> list(const std::string& prefix) override {
+        std::vector<sync::manifest::ListedObject> out;
+        for (const auto& e : db::query::vault::RemoteAttach::envelopes(vaultId_)) {
+            auto key = vl::keykit::kev1::objectKey(e.kid);
+            if (e.bytes.empty() || !key.starts_with(prefix)) continue;
+            out.push_back({.key = std::move(key), .size = e.bytes.size(), .last_modified = std::nullopt,
+                           .etag = std::nullopt});
+        }
+        return out;
+    }
+    [[nodiscard]] std::vector<sync::manifest::StoredVersion> versions(const std::string&) override { return {}; }
+    void remove(const std::string&) override {}
+    [[nodiscard]] sync::manifest::WriteCapability mode() const override { return sync::manifest::WriteCapability::Conditional; }
+
+private:
+    static std::optional<std::string> kidOf(const std::string& key) {
+        const auto prefix = vl::keykit::kev1::kObjectPrefix;
+        if (!key.starts_with(prefix)) return std::nullopt;
+        return key.substr(prefix.size());
+    }
+
+    uint32_t vaultId_;
+};
+
 vl::keykit::kev1::VaultUid vaultUidOf(const uint32_t vaultId) {
     const auto vault = db::query::vault::Vault::getVault(vaultId);
     if (!vault || !vault->uid) throw std::runtime_error("vault " + std::to_string(vaultId) + " has no uid");
@@ -44,11 +100,13 @@ void setStoreFactoryForTesting(StoreFactory f) {
 }
 
 std::shared_ptr<sync::manifest::ObjectStore> storeFor(const uint32_t vaultId) {
+    const auto vault = db::query::vault::Vault::getVault(vaultId);
+    if (vault && vault->type == model::VaultType::Local) return std::make_shared<envelopes_detail::DatabaseStore>(vaultId);
     {
         std::scoped_lock lock(envelopes_detail::factoryMutex);
         if (envelopes_detail::factory) return envelopes_detail::factory(vaultId);
     }
-    const auto s3 = std::dynamic_pointer_cast<model::S3Vault>(db::query::vault::Vault::getVault(vaultId));
+    const auto s3 = std::dynamic_pointer_cast<model::S3Vault>(vault);
     if (!s3 || s3->bucket.empty() || s3->api_key_id == 0)
         throw std::runtime_error("vault " + std::to_string(vaultId) + " has no bucket to hold recovery envelopes");
     const auto& keys = runtime::Deps::get().apiKeyManager;
@@ -89,7 +147,9 @@ Pending put(const uint32_t vaultId, const uint32_t version, const crypto::Secret
             } catch (const sync::manifest::ConditionsUnsupported& e) {
                 throw std::runtime_error(storage::bucket_capability::noteChanged(vaultId, e.what()));
             }
-            out.envelopes.push_back({g.grant_id, version, kid});
+            // A local vault's envelope travels with its record (the database is where it lives).
+            const bool held = dynamic_cast<const envelopes_detail::DatabaseStore*>(out.store.get()) != nullptr;
+            out.envelopes.push_back({g.grant_id, version, kid, held ? env : std::vector<uint8_t>{}});
         }
     } catch (...) {
         discard(out);

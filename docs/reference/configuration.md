@@ -413,6 +413,20 @@ vaults:
 bucket for `cleanup_wait_days`; only then may `--cleanup --confirm <vault name>` delete them. A migration keeps the
 waiting period it started with. Read from `config.yaml` at startup; not changed from the web console.
 
+## Remote Attach
+
+```yaml
+vaults:
+  remote_attach:
+    max_passes: 3             # 1 to 20: how often changed files are sent again before the vault switches over
+```
+
+`vh vault remote attach` turns a local vault into an S3/R2 vault in place (see
+[S3 and R2 vaults](/vaults/s3-r2-vaults#attaching-a-bucket-to-a-local-vault)). The vault stays in use while its files
+are uploaded; files that change meanwhile are sent again, up to `max_passes` times. After that the vault switches to
+its bucket, and anything still newer on disk uploads with its first sync pass. Read from `config.yaml` at startup; not
+changed from the web console.
+
 ## Stats Snapshots
 
 Stats snapshot settings control dashboard trend collection and how long its history is kept:

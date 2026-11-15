@@ -20,6 +20,7 @@
 #include "db/query/sync/Manifest.hpp"
 #include "db/query/vault/Key.hpp"
 #include "db/query/vault/RecoveryGrants.hpp"
+#include "db/query/vault/RemoteAttach.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
@@ -461,7 +462,7 @@ TEST_F(RecoveryRecipient, EnrollmentIsForTheCliAndPairedDevicesWithTheExportPerm
     EXPECT_EQ(code([&] { return rr::add(superUser, {.vault_id = engine->vault->id, .public_key = pk}, Channel::Cli); }),
               "conflict") << "the same key enrolled twice";
 
-    // Malformed and degenerate keys, a vault without a bucket.
+    // Malformed and degenerate keys.
     EXPECT_EQ(code([&] { return rr::add(superUser, {.vault_id = engine->vault->id, .public_key = "AAAA"}, Channel::Cli); }),
               "invalid");
     EXPECT_EQ(code([&] {
@@ -469,9 +470,13 @@ TEST_F(RecoveryRecipient, EnrollmentIsForTheCliAndPairedDevicesWithTheExportPerm
                                  Channel::Cli);
               }),
               "invalid");
+    // A local vault has no bucket: its envelopes are kept in the database, for an attach to copy into its bucket.
     const auto local = localVault();
-    EXPECT_EQ(code([&] { return rr::add(superUser, {.vault_id = local->vault->id, .public_key = pk}, Channel::Cli); }),
-              "conflict");
+    const auto localAdded = rr::add(superUser, {.vault_id = local->vault->id, .public_key = pk}, Channel::Cli);
+    EXPECT_EQ(localAdded.envelopes_written, 1u);
+    const auto held = db::query::vault::RemoteAttach::envelopes(local->vault->id);
+    ASSERT_EQ(held.size(), 1u);
+    EXPECT_EQ(vl::keykit::kev1::kid(held[0].bytes), held[0].kid);
 
     // Listing is public data: any session with the View permission, the console included.
     const auto listed = WsKeys::listRecipients({{"vault_id", engine->vault->id}}, console(superUser));
@@ -608,6 +613,21 @@ TEST_F(RecoveryNoSilentCustody, NoFlowAddsANonCustomerGrantOrSendsKeyMaterialAny
     }
     for (const auto& g : db::query::vault::RecoveryGrants::list(engine->vault->id))
         EXPECT_EQ(g.recipient_class, "customer");
+
+    // A local vault has no bucket: enrolling a recipient there keeps the envelope in this server's own database and
+    // sends nothing anywhere (no bucket request at all). The same envelope: customer class, purpose 1, this vault,
+    // this recipient. An S3 vault's rows never carry envelope bytes.
+    (void)enroll(local, seed);
+    EXPECT_EQ(requestsFor(local->vault->id), 0) << "a local vault's envelope goes to no bucket";
+    const auto held = db::query::vault::RemoteAttach::envelopes(local->vault->id);
+    ASSERT_EQ(held.size(), 1u);
+    const auto localHeader = kev1::inspect(held[0].bytes);
+    EXPECT_EQ(localHeader.recipient_class, kev1::kClassCustomer);
+    EXPECT_EQ(localHeader.purpose, kev1::kPurposeVaultKey);
+    EXPECT_EQ(localHeader.vault_uid, uidOf(local));
+    EXPECT_EQ(localHeader.recipient_id, rid);
+    for (const auto& e : db::query::vault::RemoteAttach::envelopes(engine->vault->id))
+        EXPECT_TRUE(e.bytes.empty()) << "an S3 vault's envelopes live in its bucket only";
 
     // No code path can record a non-customer grant: the database refuses it outright.
     EXPECT_ANY_THROW(db::Transactions::exec("RecipientFixture::custodian", [&](pqxx::work& txn) {

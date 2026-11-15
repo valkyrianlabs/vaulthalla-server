@@ -31,6 +31,9 @@ struct KeyEnvelope {
     std::string grant_id;
     uint32_t key_version{};
     std::string kid;
+    // The envelope's bytes when the database holds them (a local vault has no bucket: vault_key_envelope.envelope,
+    // migration 138); empty for an envelope that lives in the vault's bucket.
+    std::vector<uint8_t> envelope{};
 };
 
 class RecoveryGrants {
@@ -47,6 +50,7 @@ public:
 
     // Envelopes of the vault, by key version then grant.
     [[nodiscard]] static std::vector<KeyEnvelope> envelopes(uint32_t vaultId);
+    // Records the envelopes written for keyVersion, with their bytes where `written` carries them (a local vault).
     static void recordEnvelopes(uint32_t vaultId, uint32_t keyVersion, const std::vector<KeyEnvelope>& written);
     // Usable grants without an envelope for `keyVersion`.
     [[nodiscard]] static std::vector<RecoveryGrant> missingFor(uint32_t vaultId, uint32_t keyVersion);

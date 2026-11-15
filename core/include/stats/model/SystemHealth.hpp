@@ -135,6 +135,14 @@ struct VaultManifestUnpublishableHealth {
     std::string detail;
 };
 
+// A local vault whose remote attach (vault/RemoteAttach.hpp) failed before its cutover: the vault is still local and
+// untouched, and what the attach uploaded sits in the reserved bucket until an operator resumes or aborts it.
+struct RemoteAttachFailedHealth {
+    unsigned int vaultId = 0;
+    std::string vaultName;
+    std::string detail;   // the attach's last error
+};
+
 // Whether legacy-format content remains on this host (#373/#376): encrypting S3 vaults still on path_v0, cut-over
 // layout migrations whose path-named objects are not all gone yet, and legacy (gcm0) live files, recovery blobs and
 // unfinished resumable uploads. The gcm0 readers have no other callers once `remaining` is false; the next release's
@@ -170,6 +178,8 @@ struct SystemHealth {
     std::vector<VaultRecoveryMaterialHealth> vaultsRecoveryMaterialMissing;
     std::vector<VaultManifestUnpublishableHealth> vaultsManifestUnpublishable;
     std::optional<LegacyContentHealth> legacyContent;   // nullopt when the database could not be asked
+    std::vector<RemoteAttachFailedHealth> remoteAttachFailed;       // degraded: an operator must resume or abort
+    std::vector<unsigned int> remoteAttachesUnfinished;             // informational: attaches still running
     HealthSummary summary;
 
     [[nodiscard]] bool healthy() const noexcept;
@@ -192,6 +202,7 @@ void to_json(nlohmann::json& j, const VaultUnavailableHealth& health);
 void to_json(nlohmann::json& j, const VaultRecoveryMaterialHealth& health);
 void to_json(nlohmann::json& j, const VaultManifestUnpublishableHealth& health);
 void to_json(nlohmann::json& j, const LegacyContentHealth& health);
+void to_json(nlohmann::json& j, const RemoteAttachFailedHealth& health);
 void to_json(nlohmann::json& j, const SystemHealth& health);
 
 }

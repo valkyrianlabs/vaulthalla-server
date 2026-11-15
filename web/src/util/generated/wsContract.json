@@ -13354,6 +13354,49 @@
           ]
         },
         {
+          "description": "Local vaults whose remote attach failed before its cutover (vault.remote.status): the vault is still local and untouched; an operator resumes or aborts the attach. Any entry makes the node at least degraded.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The attach's last error.",
+              "name": "detail",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "remote_attach_failed",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "Vaults whose remote attach is still running. Never degrades health by itself.",
+          "items": "integer",
+          "name": "remote_attaches_unfinished",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
           "fields": [
             {
               "minimum": 0,
@@ -15442,6 +15485,14 @@
         {
           "description": "The owner's name (\"\" when it no longer resolves): list and get.",
           "name": "owner",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "storage.vault.get: none (a local vault), attaching:<state> (a remote is being attached: vault.remote.status) or attached (an S3 vault).",
+          "name": "remote",
           "required": false,
           "types": [
             "string"
@@ -19217,6 +19268,660 @@
       "name": "VaultRecoveryStats"
     },
     {
+      "description": "A vault's remote attach (vault_remote_attach).",
+      "fields": [
+        {
+          "description": "preparing to verifying: the vault is local and in use; cutover: the vault uses its bucket and its first sync pass runs; done; failed: something failed before the cutover, the vault is local and untouched (start the attach again to resume); aborted: what the attach uploaded was deleted.",
+          "enum": [
+            "preparing",
+            "uploading",
+            "catching_up",
+            "verifying",
+            "cutover",
+            "done",
+            "failed",
+            "aborted"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Whose bucket: the operator's own.",
+          "enum": [
+            "byos"
+          ],
+          "name": "origin",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "null when the key was deleted meanwhile.",
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "bucket",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "storage_tier",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "How the bucket's manifest is published, from its probe.",
+          "enum": [
+            "conditional",
+            "version_log"
+          ],
+          "name": "manifest_publish",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Listings and deletes go by provider version id.",
+          "name": "versioned",
+          "required": true,
+          "types": [
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "started_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "started_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "attempts",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "accept_unpriced",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "verified_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "cutover_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "done_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "aborted_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "abort_requested_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "A key rotation was asked for meanwhile and starts when the attach ends.",
+          "name": "rotation_queued",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "model": "VaultRemoteEstimate",
+          "name": "estimate",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "Requests and bytes sent so far.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "list_requests",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "head_requests",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "get_requests",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "put_requests",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "delete_requests",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "downloaded_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "uploaded_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "usage",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "The vault's first sync pass after the cutover, once it ended.",
+          "fields": [
+            {
+              "description": "The sync event's status, or not_run.",
+              "name": "status",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "minimum": 0,
+              "name": "started_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "Unix seconds.",
+              "minimum": 0,
+              "name": "finished_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            }
+          ],
+          "name": "first_pass",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "name": "last_error",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "name": "VaultRemoteAttach"
+    },
+    {
+      "description": "RemoteAttachCost: what the attach sends (vault::remote::toJson(Estimate)), computed before the first content PUT.",
+      "fields": [
+        {
+          "minimum": 0,
+          "name": "list_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "head_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "get_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "One per file, or a multipart upload's requests.",
+          "minimum": 0,
+          "name": "put_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "delete_requests",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The read-back sample.",
+          "minimum": 0,
+          "name": "download_bytes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "upload_bytes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "If the provider's ETags are not MD5s every object is read back.",
+          "minimum": 0,
+          "name": "readback_worst_case_gets",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "readback_worst_case_bytes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Recovery envelopes and the encrypted manifest (approximate).",
+          "minimum": 0,
+          "name": "metadata_puts",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "files",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "envelopes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Objects always read back and authenticated.",
+          "minimum": 0,
+          "name": "sample",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "priced",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The price budget's estimate, when priced.",
+          "name": "estimated_cost",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "name": "VaultRemoteEstimate"
+    },
+    {
+      "description": "vault::remote::toJson(Progress): rendered as is by clients.",
+      "fields": [
+        {
+          "enum": [
+            "preparing",
+            "uploading",
+            "catching_up",
+            "verifying",
+            "cutover",
+            "done",
+            "failed",
+            "aborted"
+          ],
+          "name": "phase",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "files_total",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "files_done",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "bytes_total",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "bytes_done",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Over the last minute; null while unknown.",
+          "minimum": 0,
+          "name": "bytes_per_second",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "null while unknown.",
+          "minimum": 0,
+          "name": "eta_seconds",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Catch-up passes so far.",
+          "minimum": 0,
+          "name": "passes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Unix seconds.",
+          "minimum": 0,
+          "name": "updated_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "name": "VaultRemoteProgress"
+    },
+    {
+      "description": "ops::vault_remote::toJson(Status): a vault's remote storage and its attach.",
+      "fields": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "local",
+            "s3"
+          ],
+          "name": "type",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "none, attaching:<state> or attached.",
+          "name": "remote",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "null until an operator starts one.",
+          "model": "VaultRemoteAttach",
+          "name": "attach",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "model": "VaultRemoteProgress",
+          "name": "progress",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "What the attach recorded in the bucket.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "files_pending",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files_sent",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files_failed",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "envelopes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "metadata_objects",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "orphans",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "items",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "name": "VaultRemoteStatus"
+    },
+    {
       "description": "What deleting a vault would do (protocols::ws::handler::Vaults::removalPlanJson over ops::vaults::RemovalPlan).",
       "fields": [
         {
@@ -20753,7 +21458,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "1e308259e291aeb6610653468e0799d19a8539eca25796be9c51209f3d107471",
+  "models_hash": "a7ae81b14e6ab5eb062e43098e0989c89862f0bc7c00f96b2299d3fafffe1169",
   "protocol": {
     "min": 1,
     "version": 1
@@ -49019,6 +49724,487 @@
     {
       "auth": "human",
       "client_timeout_ms": 60000,
+      "command": "vault.remote.abort",
+      "confirmations": [],
+      "description": "Abort an attach before its cutover: everything it uploaded is deleted from the bucket, each object by the version the attach recorded, in the background, and the bucket is released (state aborted). Nothing the attach did not write is deleted; the vault itself was never changed. A delete the provider refuses is retried and stays listed. confirm must be the vault's name. With a keys step-up bound to the vault (#359); the same permissions as vault.remote.attach, without the API key's.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The vault's name.",
+          "generator": {
+            "attrs": [
+              "name"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "confirm",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "local",
+            "s3"
+          ],
+          "name": "type",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "none, attaching:<state> or attached.",
+          "name": "remote",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "null until an operator starts one.",
+          "model": "VaultRemoteAttach",
+          "name": "attach",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "model": "VaultRemoteProgress",
+          "name": "progress",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "What the attach recorded in the bucket.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "files_pending",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files_sent",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files_failed",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "envelopes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "metadata_objects",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "orphans",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "items",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": "VaultRemoteStatus",
+      "step_up": "keys",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 120000,
+      "command": "vault.remote.attach",
+      "confirmations": [],
+      "description": "Attach a bucket to a local vault (design/storage/attach-remote.md): the vault keeps its id, keys, permissions, shares and files and becomes an encrypting S3/R2 vault in place. Checks every precondition now (a local vault with its keys loaded, no key rotation or salvage, no content in a legacy format, every key version held and attested, recovery material independent of this host, an empty bucket no vault holds, a bucket that can publish the manifest) and probes the bucket; then the upload runs in the background and resumes after a restart (vault.remote.status follows it). Nothing of the vault changes before the cutover. A failed attach started again with the same API key and bucket resumes. With a keys step-up bound to the vault (#359). Needs the vault's admin Edit and sync config Edit permissions, the API key's Consume permission and the encryption-key Rotate permission.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The API key that reaches the bucket.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 1,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "An empty bucket no vault holds.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "vh-test-{a}{a}{a}{9}{9}"
+          },
+          "name": "bucket",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Provider-local storage tier for the uploads.",
+          "name": "storage_tier",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Start even when the cost can't be priced.",
+          "name": "accept_unpriced",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "key_rotation_running",
+        "key_salvage_running",
+        "legacy_content",
+        "key_version_missing",
+        "key_version_unattested",
+        "recovery_material_missing",
+        "bucket_listing_failed",
+        "bucket_not_empty",
+        "bucket_probe_failed",
+        "bucket_capability_insufficient",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "key_rotation_running",
+        "key_salvage_running",
+        "legacy_content",
+        "key_version_missing",
+        "key_version_unattested",
+        "recovery_material_missing",
+        "bucket_listing_failed",
+        "bucket_not_empty",
+        "bucket_probe_failed",
+        "bucket_capability_insufficient",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "local",
+            "s3"
+          ],
+          "name": "type",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "none, attaching:<state> or attached.",
+          "name": "remote",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "null until an operator starts one.",
+          "model": "VaultRemoteAttach",
+          "name": "attach",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "model": "VaultRemoteProgress",
+          "name": "progress",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "What the attach recorded in the bucket.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "files_pending",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files_sent",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files_failed",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "envelopes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "metadata_objects",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "orphans",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "items",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": "VaultRemoteStatus",
+      "step_up": "keys",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "vault.remote.status",
+      "confirmations": [],
+      "description": "Where attaching a remote stands for vault_id, or for every vault with an attach the caller may view: state, bucket, publish mode, progress (files and bytes, rate, time left), the estimate and usage, the last error, and after the cutover the first sync pass's result. The vault's admin View permission. Read-only; safe for any session.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "One vault; absent for all.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "items": "object",
+          "model": "VaultRemoteStatus",
+          "name": "vaults",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
       "command": "vault.storage.probe",
       "confirmations": [],
       "description": "Probe what the vault's bucket supports for writes that must never overwrite another writer's object (design/encryption/06-publish-without-preconditions.md §7): conditional PUT honoured, rejected or ignored, object versions, GET If-Match. About ten requests under .vaulthalla/probe/, whose versions are deleted by id afterwards. Records the verdict, which replaces a bucket_capability_changed mark. The vault's admin Edit permission; refused (denied) on a protected bucket, bucket_probe_failed when the bucket can't be reached.",
@@ -49245,5 +50431,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "cbc6a9f43a2e10137e62105214ed6f5609e8c92155157148f08540603e5a6241"
+  "ws_hash": "5f5a676024aff32a98e3035bfe595aa95b3f6337492a1a7527c9bc02b1f0f0a5"
 }

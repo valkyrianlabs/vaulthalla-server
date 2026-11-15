@@ -235,6 +235,11 @@ vaults:
   # days before `vh vault migrate-layout <vault> --cleanup` may delete them.
   layout_migration:
     cleanup_wait_days: 7                       # 1 to 365
+  # Attaching a bucket to an existing local vault (`vh vault remote attach`). It only runs when an operator starts
+  # it. Files that change while they are uploaded are sent again up to this many times before the vault switches to
+  # its bucket; whatever is newer then uploads with the vault's first sync pass.
+  remote_attach:
+    max_passes: 3                              # 1 to 20
 
 
 # === ⚡ Caching & Previews ===

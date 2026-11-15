@@ -358,8 +358,13 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         {"no_key_material", {"vault.recover"}}, {"vault_unknown", {"vault.recover"}},
         {"protocol_unsupported", {"meta.hello"}},
         // Spec 06 §7: a bucket that can't hold an encrypting (opaque_v1) vault, and a probe without a verdict.
-        {"bucket_capability_insufficient", {"storage.vault.add", "storage.vault.update"}},
-        {"bucket_probe_failed", {"vault.storage.probe"}},
+        {"bucket_capability_insufficient", {"storage.vault.add", "storage.vault.update", "vault.remote.attach"}},
+        {"bucket_probe_failed", {"vault.storage.probe", "vault.remote.attach"}},
+        // design/storage/attach-remote.md: the attach's preconditions (vault::remote::Refusal, ops Refused).
+        {"key_rotation_running", {"vault.remote.attach"}}, {"key_salvage_running", {"vault.remote.attach"}},
+        {"legacy_content", {"vault.remote.attach"}}, {"key_version_missing", {"vault.remote.attach"}},
+        {"key_version_unattested", {"vault.remote.attach"}}, {"recovery_material_missing", {"vault.remote.attach"}},
+        {"bucket_listing_failed", {"vault.remote.attach"}}, {"bucket_not_empty", {"vault.remote.attach"}},
         {"already_signed_in", {"auth.login", "auth.passkey.options", "auth.passkey.login"}},
         // #357: the pending-MFA sign-in and the enrollment commands.
         {"mfa_required", {"auth.login", "auth.mfa.verify"}},

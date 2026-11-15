@@ -213,6 +213,67 @@ std::vector<WsCommandUsage> vaultKeyCommands() {
         .client_timeout = std::chrono::milliseconds(60'000),
     });
 
+    {
+        const auto remoteRefusals = [](std::vector<std::string> extra) {
+            auto codes = opsRefusals();
+            codes.insert(codes.end(), extra.begin(), extra.end());
+            return codes;
+        };
+        out.push_back({
+            .command = "vault.remote.attach",
+            .description = "Attach a bucket to a local vault (design/storage/attach-remote.md): the vault keeps its "
+                           "id, keys, permissions, shares and files and becomes an encrypting S3/R2 vault in place. "
+                           "Checks every precondition now (a local vault with its keys loaded, no key rotation or "
+                           "salvage, no content in a legacy format, every key version held and attested, recovery "
+                           "material independent of this host, an empty bucket no vault holds, a bucket that can "
+                           "publish the manifest) and probes the bucket; then the upload runs in the background and "
+                           "resumes after a restart (vault.remote.status follows it). Nothing of the vault changes "
+                           "before the cutover. A failed attach started again with the same API key and bucket "
+                           "resumes. With a keys step-up bound to the vault (#359). Needs the vault's admin Edit "
+                           "and sync config Edit permissions, the API key's Consume permission and the "
+                           "encryption-key Rotate permission.",
+            .payload = {vaultId(),
+                        uinteger("api_key_id").min(1).gen(gen::ref("api_key", {"id"})).desc("The API key that reaches the bucket."),
+                        str("bucket").gen(gen::pattern("vh-test-{a}{a}{a}{9}{9}")).desc("An empty bucket no vault holds."),
+                        str("storage_tier").opt().nullable().desc("Provider-local storage tier for the uploads."),
+                        boolean("accept_unpriced").opt().desc("Start even when the cost can't be priced.")},
+            .response = modelFields("VaultRemoteStatus"),
+            .refusal_codes = remoteRefusals({"key_rotation_running", "key_salvage_running", "legacy_content",
+                                             "key_version_missing", "key_version_unattested",
+                                             "recovery_material_missing", "bucket_listing_failed", "bucket_not_empty",
+                                             "bucket_probe_failed", "bucket_capability_insufficient"}),
+            .response_model = "VaultRemoteStatus",
+            .client_timeout = std::chrono::milliseconds(120'000),
+        });
+
+        out.push_back({
+            .command = "vault.remote.status",
+            .description = "Where attaching a remote stands for vault_id, or for every vault with an attach the caller "
+                           "may view: state, bucket, publish mode, progress (files and bytes, rate, time left), the "
+                           "estimate and usage, the last error, and after the cutover the first sync pass's result. "
+                           "The vault's admin View permission. Read-only; safe for any session.",
+            .payload = {vaultId().opt().nullable().desc("One vault; absent for all.")},
+            .response = {objectArray("vaults", "VaultRemoteStatus")},
+            .refusal_codes = {"denied", "invalid", "not_found", "unauthorized"},
+            .client_timeout = kDefaultTimeout,
+        });
+
+        out.push_back({
+            .command = "vault.remote.abort",
+            .description = "Abort an attach before its cutover: everything it uploaded is deleted from the bucket, "
+                           "each object by the version the attach recorded, in the background, and the bucket is "
+                           "released (state aborted). Nothing the attach did not write is deleted; the vault itself "
+                           "was never changed. A delete the provider refuses is retried and stays listed. confirm "
+                           "must be the vault's name. With a keys step-up bound to the vault (#359); the same "
+                           "permissions as vault.remote.attach, without the API key's.",
+            .payload = {vaultId(), str("confirm").gen(gen::ref("vault", {"name"})).desc("The vault's name.")},
+            .response = modelFields("VaultRemoteStatus"),
+            .refusal_codes = opsRefusals(),
+            .response_model = "VaultRemoteStatus",
+            .client_timeout = std::chrono::milliseconds(60'000),
+        });
+    }
+
     out.push_back({
         .command = "vault.keys.recipients.list",
         .description = "The vault's recovery recipients (spec 03 §5; #370): customer-held X25519 public keys every key "
