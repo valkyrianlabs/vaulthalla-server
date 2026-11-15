@@ -2,9 +2,9 @@
 
 Status: design for review (managed storage plan of 2026-11-12, workstream E, step 0). Work items 2-5 (§9) are
 implemented: the capability probe (§7), and the `version_log` publish, read, repair, GC and `writers` (§5). Each
-section's "As implemented" note records where the code differs from or adds to the text. §8.3's automated suite ran
-once against Backblaze (2026-11-12, us-west-004): every provider behaviour was as expected; the one failure was a wrong
-assertion in the test, fixed since and not rerun.
+section's "As implemented" note records where the code differs from or adds to the text. §8.3's automated suite
+passes against Backblaze (us-west-004; rerun 2026-11-14 on the code as pushed, after a first run on 2026-11-12 failed
+on one wrong assertion in the test).
 Depends on [01](01-provider-blind-storage.md) and [03](03-metadata-recovery.md); used by
 [`design/cloud/mirrors.md`](../cloud/mirrors.md). Normative words: MUST, MUST NOT, SHOULD.
 
@@ -24,7 +24,7 @@ changes no VHF1, KEV1, key or segment format and does not design mirrors, which 
 
 | Write | Condition | Code | What the condition protects |
 |---|---|---|---|
-| Root `.vaulthalla/root` | `If-Match: <known ETag>`; `If-None-Match: *` at epoch 1 | `manifest::publish` (`sync/manifest/Publisher.cpp`), `S3Store::putIfMatch/putIfAbsent` (`Store.cpp:78-94`) | the lost update between writers: the loser gets 412, loads, verifies, merges, retries (spec 03 §3.4 step 3). A rebuilt root (`loadBase`, §4.2 (b)) is PUT with `If-Match` on the unreadable root's ETag, so it never overwrites an authentic root published meanwhile |
+| Root `.vaulthalla/root` | `If-Match: <known ETag>`; `If-None-Match: *` at epoch 1 | `manifest::publish` (`sync/manifest/Publisher.cpp`), `storage::s3::ManifestStore::putIfMatch/putIfAbsent` (`storage/s3/ManifestStore.cpp`) | the lost update between writers: the loser gets 412, loads, verifies, merges, retries (spec 03 §3.4 step 3). A rebuilt root (`loadBase`, §4.2 (b)) is PUT with `If-Match` on the unreadable root's ETag, so it never overwrites an authentic root published meanwhile |
 | Segments, snapshot segments `.vaulthalla/seg/<sid>` | `If-None-Match: *` | `Publisher.cpp` ("a fresh 128-bit sid: never exists"; a 412 is not caught) | overwriting an object of the same name: only a sid collision or a hostile bucket writer |
 | Layout hint `.vaulthalla/layout.json` | `If-None-Match: *`, 412 ignored | `Publisher.cpp`, first publish | keeps an existing hint (identical for every writer) |
 | Envelopes `.vaulthalla/key/<kid>` | `If-None-Match: *`, 412 ignored | `vault/RecoveryEnvelopes.cpp:77` | idempotence only: `kid` is the envelope's hash, so the same name holds the same bytes |
@@ -143,7 +143,7 @@ after 24 h (§5.4).
   modes. `writers` is the base root's set while it names this node, otherwise this node alone: past the §5.5 check
   that is a base from before the member, or a node with no own epoch (a restore), which so takes the vault over.
   Adding a node to the set is the mirror join and isn't built.
-- **Step 2.** `S3Store::put` maps every failure but a request budget or bucket protection to `PutOutcomeUnknown`.
+- **Step 2.** `storage::s3::ManifestStore::put` maps every failure but a request budget or bucket protection to `PutOutcomeUnknown`.
   The publisher then lists and looks for its version by hash among the versions after its base (a GET per version it
   hasn't opened; the ETag isn't used): found, it goes on as if the PUT had returned; not found while the base has no
   successor, the publish fails and records nothing (the next pass publishes again); not found while another version
@@ -315,7 +315,8 @@ on which `publish`, `load` and GC branch. `Known` gains `version_id`; `remote_ma
 
 **As implemented (work items 2-4; corrections to the text above):**
 
-- **Capability, four states** (`storage/s3/Capability.hpp`, `WriteCapability`): `Conditional`, `VersionLog`,
+- **Capability, four states** (`sync/manifest/WriteCapability.hpp`, `WriteCapability`; the probe is
+  `storage/s3/Capability.hpp`): `Conditional`, `VersionLog`,
   `Insufficient` and `Unknown` (never probed, or the probe could not run: behaves as `Conditional`, so nothing is
   downgraded without a probe). `Insufficient` is stored as a probe with `manifest_publish` NULL; migration 136.
 - **The probe** (`storage::s3::probeBucket`) also checks GET `If-Match` with the right ETag and records whether ETags
@@ -378,8 +379,8 @@ once, so none has a root on top of a displaced one and the repair rule's change 
 test). A head under a crashed loser past
 `expireNoncurrent` fails as `fork` (`ManifestChainVersionLog`). `vault::recover` over a bucket with a losing sibling
 and a marker: `VaultRecoverDb.OnABackblazeLike*`. The one extra LIST: `ManifestPublishVersionLog.ASoloPublish*`.
-§8.3: `LiveB2.TheManifestPublishesAsVersionsOfItsRoot` (opt-in; run once, 2026-11-12: publishes 2-4 cost 2 PUT and
-1 LIST each, the first 3 PUT and 3 LIST; one wrong test assertion, fixed, not rerun) covers the probe, publishes, a blind
+§8.3: `LiveB2.TheManifestPublishesAsVersionsOfItsRoot` (opt-in; passes live as of 2026-11-14: publishes 2-4 cost
+2 PUT and 1 LIST each, the first 3 PUT and 3 LIST) covers the probe, publishes, a blind
 reload, a repaired sibling, GC of every version and an envelope; items 3-8 are not automated.
 
 **8.3 Live on Backblaze** (one `vh-test-*` bucket per run, deleted afterwards): (1) conditional PUTs (the coordinator's

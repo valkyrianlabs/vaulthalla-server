@@ -346,7 +346,7 @@ TEST_F(RemoteAttachTest, RemoteAttachTurnsALocalVaultIntoAnS3VaultInPlace) {
     std::set<std::string> named;
     for (const auto& e : manifest.entries) named.insert(e.uid);
     for (const auto* path : {"/docs/a.txt", "/docs/b.txt", "/c.txt", "/empty.txt"})
-        EXPECT_TRUE(named.contains(crypto::id::toBase32(*row(v, path)->object_uid))) << path;
+        EXPECT_TRUE(named.contains(vl::keykit::toBase32(*row(v, path)->object_uid))) << path;
 
     EXPECT_EQ(pass(v), 0u) << "nothing left to transfer";
     EXPECT_EQ(auditEvents("vault.remote.attach", v.id()), 1u);

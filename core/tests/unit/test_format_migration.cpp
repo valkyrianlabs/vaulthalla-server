@@ -9,6 +9,8 @@
 
 #include "../helpers/temp_dir.hpp"
 #include "../helpers/bytes.hpp"
+#include "crypto/SecretKey.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "fs/model/File.hpp"
 #include "recovery/Store.hpp"

@@ -1,10 +1,13 @@
 #include "sync/manifest/Objects.hpp"
 
-#include "crypto/util/digest.hpp"
 #include "crypto/vhf1/Reader.hpp"
 #include "crypto/vhf1/Writer.hpp"
 
-#include <fmt/format.h>
+#include <openssl/evp.h>
+
+#include <array>
+#include <format>
+#include <stdexcept>
 
 namespace vh::sync::manifest {
 
@@ -13,13 +16,13 @@ std::string segmentKey(const std::string_view sid) { return std::string(kSegment
 std::optional<std::string> sidOfKey(const std::string_view key) {
     if (!key.starts_with(kSegmentPrefix)) return std::nullopt;
     const auto sid = key.substr(kSegmentPrefix.size());
-    if (!crypto::id::fromBase32(sid)) return std::nullopt;
+    if (!vl::keykit::fromBase32(sid)) return std::nullopt;
     return std::string(sid);
 }
 
 std::optional<Uid> uidOfObjectKey(const std::string_view key) {
     if (!key.starts_with(kObjectPrefix)) return std::nullopt;
-    return crypto::id::fromBase32(key.substr(kObjectPrefix.size()));
+    return vl::keykit::fromBase32(key.substr(kObjectPrefix.size()));
 }
 
 std::string layoutHint(const Uid& vaultUid) {
@@ -27,10 +30,14 @@ std::string layoutHint(const Uid& vaultUid) {
 }
 
 std::string sha256Hex(const std::span<const uint8_t> bytes) {
-    const auto digest = crypto::util::EvpDigest::of(EVP_sha256(), bytes.data(), bytes.size());
+    std::array<unsigned char, 32> digest{};
+    unsigned int size = 0;
+    if (EVP_Digest(bytes.data(), bytes.size(), digest.data(), &size, EVP_sha256(), nullptr) != 1 ||
+        size != digest.size())
+        throw std::runtime_error("SHA-256 failed");
     std::string out;
     out.reserve(digest.size() * 2);
-    for (const auto b : digest) out += fmt::format("{:02x}", b);
+    for (const auto b : digest) out += std::format("{:02x}", b);
     return out;
 }
 

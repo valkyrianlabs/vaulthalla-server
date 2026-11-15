@@ -3,6 +3,7 @@
 #include "vault/LayoutMigration.hpp"
 
 #include "audit/Trail.hpp"
+#include "crypto/SecretKey.hpp"
 #include "crypto/vhf1/Format.hpp"
 #include "db/query/recovery/Generation.hpp"
 #include "crypto/util/encrypt.hpp"
@@ -1346,7 +1347,7 @@ void requirePreconditions(const storage::CloudEngine& engine) {
                                  "); add a recovery recipient or export the key first");
     // Spec 01 §6.1 step 5: the migration publishes the encrypted manifest, which needs conditional writes (spec 03
     // §3.4) or object versions (spec 06 §5) to arbitrate its root. A bucket never probed is probed here.
-    if (const auto capability = engine.writeCapability(); capability == storage::s3::WriteCapability::Insufficient)
+    if (const auto capability = engine.writeCapability(); capability == sync::manifest::WriteCapability::Insufficient)
         throw std::runtime_error("the bucket neither honours conditional writes nor keeps object versions (or not "
                                  "If-Match on GET): the opaque_v1 manifest can't be published on it");
 }
@@ -1549,7 +1550,7 @@ void verifyManifestAgainstDatabase(const storage::CloudEngine& engine) {
     for (const auto& e : loaded.entries) byUid[e.uid] = &e;
     for (const auto& f : layout_detail::Q::liveFiles(engine.vault->id)) {
         if (!f->object_uid) continue;
-        const auto it = byUid.find(crypto::id::toBase32(*f->object_uid));
+        const auto it = byUid.find(vl::keykit::toBase32(*f->object_uid));
         if (it == byUid.end())
             throw std::runtime_error(fmt::format("the bucket's manifest does not name file {}", f->id));
         // The object the bucket holds for it (the remote index's row of o/<uid>, Vaulthalla's own upload).

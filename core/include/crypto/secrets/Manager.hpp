@@ -38,7 +38,7 @@ public:
     // `dependents` is asked first: records that a fresh key could never open make it MasterSecretLost, never a
     // regeneration. Otherwise a fresh key is generated, sealed and read back, and only counts as stored once the read
     // returns the same bytes. Every plain copy on the way is wiped.
-    [[nodiscard]] crypto::SecretBytes sealedKey(const std::string& key, std::size_t size,
+    [[nodiscard]] vl::keykit::SecretBytes sealedKey(const std::string& key, std::size_t size,
                                                 const DependentsCheck& dependents) const;
 
 private:

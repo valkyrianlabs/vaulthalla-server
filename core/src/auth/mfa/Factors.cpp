@@ -162,7 +162,7 @@ SealedTotpRow sealedTotpFrom(const pqxx::row_ref r) {
 }
 
 // The factor's seed, or nullopt when its row doesn't open under mfa_seal (logged: a tampered or moved row).
-std::optional<crypto::SecretBytes> openTotpRow(const keys::Key& key, const uint32_t userId, const SealedTotpRow& row) {
+std::optional<vl::keykit::SecretBytes> openTotpRow(const keys::Key& key, const uint32_t userId, const SealedTotpRow& row) {
     try {
         return keys::openTotpSecret(key->bytes(), userId, row.factor_uuid, row.sealed);
     } catch (const std::exception& e) {
@@ -177,7 +177,7 @@ std::size_t unusedCodes(pqxx::work& txn, const std::string& batchId) {
                     pqxx::params{batchId}).one_field().as<std::size_t>();
 }
 
-void wipeString(std::string& s) noexcept { crypto::wipeSecret(s); }
+void wipeString(std::string& s) noexcept { vl::keykit::wipe(s); }
 
 }
 
@@ -213,7 +213,7 @@ RecoveryBatch::~RecoveryBatch() {
 // ---- the account's MFA row
 
 UserMfa ensureUser(const uint32_t userId) {
-    const auto handle = crypto::SecretBytes::random(32);
+    const auto handle = vl::keykit::SecretBytes::random(32);
     const std::vector<uint8_t> handleBytes(handle.bytes().begin(), handle.bytes().end());
     db::Transactions::exec("auth::mfa::ensureUser", [&](pqxx::work& txn) {
         txn.exec("INSERT INTO user_mfa (user_id, webauthn_user_handle) VALUES ($1, $2) ON CONFLICT (user_id) DO NOTHING",

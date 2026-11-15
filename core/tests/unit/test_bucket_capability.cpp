@@ -28,6 +28,7 @@
 #include "storage/CloudEngine.hpp"
 #include "storage/ObjectKeys.hpp"
 #include "storage/s3/Capability.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Store.hpp"
 #include "sync/model/Event.hpp"
@@ -47,7 +48,7 @@
 
 namespace vh::test_bucket_capability {
 
-using storage::s3::WriteCapability;
+using sync::manifest::WriteCapability;
 using test_support::versioned::Versioning;
 using test_support::versioned::VersionedBucket;
 using Puts = VersionedBucket::ConditionalPuts;
@@ -177,12 +178,12 @@ TEST(BucketProbe, TheStoredFormRoundTrips) {
     EXPECT_EQ(back.conditional_put, r.conditional_put);
     EXPECT_EQ(back.steps.size(), r.steps.size());
     EXPECT_EQ(back.probed_at, r.probed_at);
-    EXPECT_EQ(storage::s3::publishModeFromString("version_log"), WriteCapability::VersionLog);
-    EXPECT_FALSE(storage::s3::publishModeFromString("insufficient")) << "not a stored manifest_publish value";
-    EXPECT_TRUE(storage::s3::sendsPreconditions(WriteCapability::Unknown)) << "never probed: no silent downgrade";
-    EXPECT_FALSE(storage::s3::sendsPreconditions(WriteCapability::VersionLog));
+    EXPECT_EQ(sync::manifest::publishModeFromString("version_log"), WriteCapability::VersionLog);
+    EXPECT_FALSE(sync::manifest::publishModeFromString("insufficient")) << "not a stored manifest_publish value";
+    EXPECT_TRUE(sync::manifest::sendsPreconditions(WriteCapability::Unknown)) << "never probed: no silent downgrade";
+    EXPECT_FALSE(sync::manifest::sendsPreconditions(WriteCapability::VersionLog));
     EXPECT_EQ(storage::object_keys::classify(std::string(storage::s3::kProbePrefix) +
-                                             crypto::id::toBase32(crypto::id::newObjectUid())),
+                                             vl::keykit::toBase32(crypto::id::newObjectUid())),
               storage::object_keys::KeyClass::Metadata);
 }
 
@@ -457,9 +458,9 @@ TEST_F(BucketCapabilityDbTest, EnvelopesAreWrittenPlainlyWhereConditionsAreRejec
     const auto v = s3Vault(vault::model::StorageLayout::OpaqueV1);
     const auto bucket = bucket_capability_test::bucketWith(Versioning::Enabled, Puts::Reject501);
     record(v->id, *bucket);
-    const auto store = std::make_shared<sync::manifest::S3Store>(
+    const auto store = std::make_shared<storage::s3::ManifestStore>(
         bucket, db::query::vault::BucketCapability::get(v->id).capability);
-    const auto key = std::string(".vaulthalla/key/") + crypto::id::toBase32(crypto::id::newObjectUid());
+    const auto key = std::string(".vaulthalla/key/") + vl::keykit::toBase32(crypto::id::newObjectUid());
     const std::vector<uint8_t> envelope{0x89, 'V', 'H', 'K'};
     (void)store->putOnce(key, envelope);
     (void)store->putOnce(key, envelope);

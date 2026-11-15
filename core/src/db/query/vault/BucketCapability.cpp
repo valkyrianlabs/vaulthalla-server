@@ -9,7 +9,7 @@ namespace vh::db::query::vault {
 
 namespace bucket_capability_query {
 
-using storage::s3::WriteCapability;
+using vh::sync::manifest::WriteCapability;
 
 BucketCapability::Stored storedFrom(const pqxx::row_ref row) {
     BucketCapability::Stored out;
@@ -23,7 +23,7 @@ BucketCapability::Stored storedFrom(const pqxx::row_ref row) {
         out.changed_detail = it->get<std::string>();
     const auto mode = row["manifest_publish"].is_null()
         ? std::nullopt
-        : storage::s3::publishModeFromString(row["manifest_publish"].as<std::string>());
+        : vh::sync::manifest::publishModeFromString(row["manifest_publish"].as<std::string>());
     if (mode) out.capability = *mode;
     else if (out.probe) out.capability = out.probe->capability == WriteCapability::Unknown
         ? WriteCapability::Unknown : WriteCapability::Insufficient;
@@ -42,10 +42,10 @@ BucketCapability::Stored BucketCapability::get(const uint32_t vaultId) {
 }
 
 void BucketCapability::record(const uint32_t vaultId, const storage::s3::ProbeResult& probe) {
-    using storage::s3::WriteCapability;
+    using vh::sync::manifest::WriteCapability;
     std::optional<std::string> mode;
     if (probe.capability == WriteCapability::Conditional || probe.capability == WriteCapability::VersionLog)
-        mode = std::string(storage::s3::to_string(probe.capability));
+        mode = std::string(vh::sync::manifest::to_string(probe.capability));
     Transactions::exec("BucketCapability::record", [&](pqxx::work& txn) {
         txn.exec("UPDATE s3 SET manifest_publish = $2, bucket_probe = $3::jsonb WHERE vault_id = $1",
                  pqxx::params{vaultId, mode, storage::s3::toJson(probe).dump()});

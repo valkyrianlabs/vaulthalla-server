@@ -397,7 +397,7 @@ KeyStatus statusOf(const Source& s, Unsealer& unsealer) {
                                                .retired_at = k.retired_at});
     if (!s.deleted) {
         if (const auto vault = db::query::vault::Vault::getVault(s.vault_id); vault && vault->uid)
-            out.vault_uid = crypto::id::toBase32(*vault->uid);
+            out.vault_uid = vl::keykit::toBase32(*vault->uid);
         if (const auto state = db::query::sync::Manifest::state(s.vault_id); state.epoch && state.root_sha256)
             out.checkpoint = ManifestCheckpoint{.epoch = *state.epoch, .root_sha256 = *state.root_sha256};
         std::vector<unsigned int> needed;
@@ -426,7 +426,7 @@ VaultExport exportFrom(const Source& s) {
     VaultExport out{.vault_id = s.vault_id, .vault_name = s.vault_name, .deleted = s.deleted};
     out.node_id = db::query::device::Devices::nodeId();
     if (const auto live = db::query::vault::Vault::getVault(s.vault_id); live && live->uid)
-        out.vault_uid = crypto::id::toBase32(*live->uid);
+        out.vault_uid = vl::keykit::toBase32(*live->uid);
     for (const auto& [version, reason] : neededVersions(s)) {
         std::string why;
         auto key = keyOf(s, version, unsealer, why);
@@ -972,7 +972,7 @@ std::vector<Candidate> candidatesFromKit(const nlohmann::json& doc, const Import
     if (!vault || !vault->uid) throw Conflict("vault '" + t.name + "' has no uid");
     const auto& uid = *vault->uid;
     if (!kit->vaults.empty() && !kit->find(uid))
-        throw Invalid("the recovery kit does not list vault '" + t.name + "' (uid " + crypto::id::toBase32(uid) +
+        throw Invalid("the recovery kit does not list vault '" + t.name + "' (uid " + vl::keykit::toBase32(uid) +
                       "): it is another vault's kit; nothing was written");
 
     std::shared_ptr<sync::manifest::ObjectStore> store;

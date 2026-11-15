@@ -235,7 +235,7 @@ Status attach(const Actor& actor, const AttachRequest& request) {
     case d::Q::StartOutcome::Busy:
         throw Conflict("vault '" + vault->name + "' already has a remote attach");
     }
-    const auto publish = check->probe.capability == storage::s3::WriteCapability::Conditional ? "conditional" : "version_log";
+    const auto publish = check->probe.capability == sync::manifest::WriteCapability::Conditional ? "conditional" : "version_log";
     d::Q::setProbe(vault->id, std::string(publish), storage::s3::toJson(check->probe), check->versioned);
 
     const bool resumed = started.outcome == d::Q::StartOutcome::Resumed;

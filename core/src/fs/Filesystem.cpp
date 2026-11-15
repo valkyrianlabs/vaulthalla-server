@@ -1,4 +1,5 @@
 #include "fs/Filesystem.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "storage/Manager.hpp"
 #include "storage/Engine.hpp"
 #include "storage/CloudEngine.hpp"

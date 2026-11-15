@@ -1,4 +1,5 @@
 #include "fs/model/file/Trashed.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include <boost/uuid/string_generator.hpp>
 
 #include "db/encoding/has.hpp"

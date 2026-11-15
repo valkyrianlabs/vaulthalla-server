@@ -821,12 +821,15 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   keystream (`crypto::util::gcmCtrDecryptAt`: plaintext offset o ↔ ciphertext offset o, counter IV‖BE32(2+o/16)).
   Keys come from `EncryptionManager::keySnapshot(version)` (immutable `crypto::SecretKey`, mlocked, wiped; rotation
   swaps pointers under a shared_mutex). `readAll()` does one authenticated pass and records the verdict.
-- **Master secrets in memory (#350).** `crypto::secrets::KeyProvider` holds its slot in `crypto::SecretBytes` (mlocked,
-  zeroed on release; `crypto/SecretBytes.hpp`) and `getMasterKey()` returns a `std::span` borrowed from it. The AES-GCM
-  helpers take key spans, so callers never copy a master into a vector; a plain copy an API insists on (decrypt output,
-  a sealer's return) goes in `crypto::WipedKeyCopy`. The share pepper and attestation seed are cached as
-  `shared_ptr<const SecretBytes>`. `crypto::setWipeObserverForTesting` and `KeyProvider::setUnsealHookForTesting` are
-  the test seams (`test_master_secret_memory.cpp`).
+- **Master secrets in memory (#350).** `crypto::secrets::KeyProvider` holds its slot in `vl::keykit::SecretBytes`
+  (vl-keykit's: mlocked, zeroed on release, random bytes from OpenSSL's `RAND_priv_bytes`; the server's own
+  `crypto::SecretBytes` is gone since #443, `crypto/SecretBytes.hpp` keeps `WipedKeyCopy` and `viewBytes`) and
+  `getMasterKey()` returns a `std::span` borrowed from it. The AES-GCM helpers take key spans, so callers never copy a
+  master into a vector; a plain copy an API insists on (decrypt output, a sealer's return) goes in
+  `crypto::WipedKeyCopy`, and `vl::keykit::wipe` zeroes a buffer. The share pepper and attestation seed are cached as
+  `shared_ptr<const vl::keykit::SecretBytes>`. `vl::keykit::setWipeObserverForTesting` (it sees `SecretBytes`,
+  `SecretKey` and `WipedKeyCopy` buffers) and `KeyProvider::setUnsealHookForTesting` are the test seams
+  (`test_master_secret_memory.cpp`).
 - **TPM PCR 7 policy (#351).** `platform::sealer::Policy {None, Pcr7}` (Linux TPM only; the Secure Enclave ignores it).
   `secrets.tpm_pcr_policy` binds newly sealed secrets only (PolicyPCR digest as the object's auth policy, no
   USERWITHAUTH); unseal reads the policy off the blob and fails with the typed `PolicyUnsatisfied` once PCR 7 changed,
@@ -884,11 +887,18 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   64 KiB AES-256-GCM chunks with AAD = header hash ‖ index ‖ final flag, a streaming `Writer` (final-chunk hold-back),
   `open()` / `ChunkWalker` (whole and streamed reads, only authenticated chunks reach the sink) and `RangeReader`
   (authenticated object size required, sticky failure). Errors are `vhf1::Error` with the spec's codes in the §3.6
-  check order. Primitives are OpenSSL (HKDF, HMAC, SHA-256, AES-GCM via `crypto::util::Gcm`) and libsodium.
+  check order. Primitives are OpenSSL only (HKDF, HMAC, SHA-256, the CSPRNG for salts, AES-GCM through the codec's
+  own one-message wrapper `vhf1/Aead.hpp`); wiping and constant-time comparison are vl-keykit's. Its key type is
+  `vhf1::Key` (`vhf1/Key.hpp`, 32 bytes in a `vl::keykit::SecretBytes`); the server's `crypto::SecretKey` derives from
+  it and only adds `random()`. `crypto::util::Gcm` (streaming GCM, the legacy v1 positioned decrypt, `gcmVerifyFd`)
+  is the server's and VHF1 no longer uses it.
   Proven byte for byte by `Vhf1Vectors` against `design/encryption/vectors/vectors.json`; fuzz target `vh_fuzz_vhf1`
   (`-Dfuzz=true`, clang; see testing.md).
 - **Encrypted manifest v2** (`sync::manifest`, `core/include/sync/manifest/`; #368, spec
-  `design/encryption/03-metadata-recovery.md` §3-§4; migration 125). Replaces `.vaulthalla/index-v1.json` for
+  `design/encryption/03-metadata-recovery.md` §3-§4; migration 125). `sync::manifest`, `crypto::vhf1` and
+  `storage/ObjectKeys` are the candidates of the shared format library (#443): they include only each other,
+  vl-keykit, OpenSSL, nlohmann and the standard library (`tools/contracts/test_format_library_contract.py`); the
+  server's side is `storage::s3::ManifestStore`, `sync::vault_manifest` and `db::query::sync::Manifest`. Replaces `.vaulthalla/index-v1.json` for
   `opaque_v1` vaults only (every new encrypting vault since #371). `Document` (root, segment, snapshot schemas; readers ignore unknown
   members; `recovery_policy` v1 of revocable grants, only class `customer` usable, other versions "not understood"),
   `Objects` (VHF1 kind 3 root with object uid = vault uid, kind 2 segments with object uid = sid), `Chain` (rollback,
@@ -897,11 +907,17 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   bounded retry; prior names carried; GC keeps the last three roots' segments and anything < 24 h), `Reader`
   (fallbacks: root provider versions; segment provider version → older root → blind range; `blindRebuild` reads
   120-byte headers of `o/` only; `loadForRestore` says "freshness unverified: no checkpoint supplied"), `Store`
-  (`S3Store` over `s3::Controller`, no `x-amz-meta-*`). `db::query::sync::Manifest` collects the DB into `Content`
+  (`storage::s3::ManifestStore` over `s3::Controller`, no `x-amz-meta-*`). `db::query::sync::Manifest` collects the DB into `Content`
   (assigns `directories.uid` / `symlinks.uid` lazily; trash via `files_trashed.object_uid`; versions and tombstones from
   `o/<uid>` rows of `upstream_object_version`) and keeps `remote_manifest_state` (manifest_key `.vaulthalla/root`:
-  epoch, root hash, ETag, refused root, gc_at) and `remote_manifest_root` (last three roots' sids). `Service` is the
-  per-vault glue `CloudEngine` uses for opaque_v1 (`publishManifestV2`, `refreshRemoteIndexFromManifestIfChanged`
+  epoch, root hash, ETag, refused root, gc_at) and `remote_manifest_root` (last three roots' sids). The per-vault
+  logic is `sync::manifest::Session` (`Session.hpp`: publish and record, `verifyRemote` in both modes, repair, refusal,
+  daily GC) over a `StateStore` interface (`ChainState`, `RootRecord`) and a `SessionHost` of callbacks (content,
+  keys, node id, clock, alert, notices); it includes nothing of the server. `sync::vault_manifest::Service`
+  (`sync/vault_manifest/`, the server's namespace, since #443) wires it: `StateStore` on PostgreSQL
+  (`db::query::sync::Manifest`), `collect`, the vault's `EncryptionManager`, `Devices::nodeId()`, notices to the
+  cloud log and `notifyRefusedRoot` to the operator bus. It is the glue `CloudEngine` uses for opaque_v1
+  (`publishManifestV2`, `refreshRemoteIndexFromManifestIfChanged`
   verifies only and returns false: one HEAD of the root while its ETag is the recorded one, `ObjectStore::headEtag`);
   a pass publishes only when the collected content moved since the service's last publish (`publishIfChanged`); a
   refused root stalls the pass (`SyncStalled`) and raises one

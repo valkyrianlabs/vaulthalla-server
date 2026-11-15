@@ -6,7 +6,7 @@
 
 namespace vh::crypto::vhf1 {
 
-Writer::Writer(const HeaderParams& params, const SecretKey& vaultKey, Sink sink)
+Writer::Writer(const HeaderParams& params, const Key& vaultKey, Sink sink)
     : sink_(std::move(sink)), chunkSize_(chunkSizeOf(params.chunkLog2)),
       pending_(static_cast<std::size_t>(chunkSize_)), sealed_(static_cast<std::size_t>(chunkSize_) + kTagSize) {
     if (!sink_) throw std::invalid_argument("VHF1 writer needs a sink");
@@ -72,7 +72,7 @@ void Writer::finish() {
 }
 
 std::vector<uint8_t> seal(const std::span<const uint8_t> plaintext, const HeaderParams& params,
-                          const SecretKey& vaultKey) {
+                          const Key& vaultKey) {
     std::vector<uint8_t> out;
     out.reserve(static_cast<std::size_t>(objectSizeFor(plaintext.size(), params.chunkLog2)));
     Writer writer(params, vaultKey, [&out](const std::span<const uint8_t> bytes) {

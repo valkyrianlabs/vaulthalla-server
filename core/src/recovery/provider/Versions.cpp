@@ -76,7 +76,7 @@ std::filesystem::path vaultPathOf(const storage::CloudEngine& engine, const std:
     const auto uid = storage::object_keys::uidOfContentKey(objectKey);
     if (!uid) return vaultPathOf(objectKey);
     if (auto path = db::query::sync::ObjectIdentity::pathOfUid(engine.vault->id, *uid)) return *path;
-    return std::filesystem::path("/Recovered") / crypto::id::toBase32(*uid);
+    return std::filesystem::path("/Recovered") / vl::keykit::toBase32(*uid);
 }
 
 bool keyUnder(const storage::CloudEngine& engine, const std::string& objectKey, const std::filesystem::path& directory) {

@@ -57,7 +57,7 @@ void appendTotpPercentEncoded(std::string& out, const std::string_view text) {
 
 }
 
-crypto::SecretBytes generateSecret() { return crypto::SecretBytes::random(kSecretBytes); }
+vl::keykit::SecretBytes generateSecret() { return vl::keykit::SecretBytes::random(kSecretBytes); }
 
 namespace {
 std::atomic<int64_t> clockOffsetSecondsForTesting{0};

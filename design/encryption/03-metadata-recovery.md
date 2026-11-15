@@ -20,6 +20,11 @@ and `kev1`.
 - **D2 (#344):** customer-held recovery recipients are mandatory for managed storage and sealed vaults before
   creation or writes; recommended but optional for self-hosted BYOS when an independently verified key export gives
   a viable recovery path (§5.5).
+- **D2 amendment (product owner, 2026-11-12; managed storage plan revision 4 §3.1 item 3):** for managed storage
+  the requirement is met by the account recovery key the server pinned, added as the default recipient
+  automatically; the creation request no longer carries a public key. Managed vaults are created local and attached
+  to their bucket later (`design/cloud/managed-remotes.md`), so the rule applies at the attach (§5.5,
+  `design/cloud/key-manager.md`).
 - **Recovery custody amendment (#344):** "Sovereignty is the default. Custody is an option. Neither should compromise
   the other." By default, Vaulthalla recovery is independently customer-controlled. Valkyrian Labs receives no
   recovery keys or decryption authority unless a customer separately enrolls in an explicitly authorized custodial
@@ -56,6 +61,9 @@ conditional PUT; segments are written once under fresh random names and collecte
 | `.vaulthalla/seg/<sid>` | VHF1 kind 2, `object_uid = sid` | the key version current when it was written | segment document (§3.3) |
 | `.vaulthalla/key/<kid>` | KEV1 | recipient's public key | one vault key version for one recovery recipient (§5); `kid` = base32(SHA-256(envelope)[0..16]) |
 | `.vaulthalla/layout.json` | cleartext | — | `{"layout":"OpaqueV1","vault_uid":"…","format":1}`: a hint for discovery, never trusted |
+
+Amended 2026-11-12 (as proposed in [06](06-publish-without-preconditions.md) §5): on a bucket whose probe chose the
+`version_log` path these objects are PUT without conditions, and the root's provider versions are the publish log.
 
 Documents are UTF-8 JSON. The AEAD authenticates bytes, so no canonical serialization is required; the vectors use
 sorted keys without whitespace to be reproducible.
@@ -95,6 +103,10 @@ sorted keys without whitespace to be reproducible.
   references, with the version's recorded key check and node attestation (migration 113). Retired versions stay
   listed while anything references them (the same rule as `recovery_guard_retired_vault_key`).
 - `segments[*].object_sha256` and `size` pin the exact segment bytes: a root can't be combined with other segments.
+- Amended 2026-11-12 (as proposed in 06 §5.2, §5.5): two more members. `publish` names the bucket's publish mode
+  (`conditional` or `version_log`); a reader refuses a root whose mode isn't the bucket's (`publish_mode_mismatch`).
+  `writers` lists the node ids allowed to publish (one for a solo vault); a daemon not in the head's `writers` stops
+  publishing the vault (`manifest_superseded`).
 
 ### 3.3 Segment documents
 
@@ -152,6 +164,11 @@ exceeds 8,192 entries or 4 MiB of plaintext and merges with a neighbor below 1,0
 5. Garbage collection (janitor, daily): delete segments referenced neither by the current root nor by the previous
    two, and older than 24 h. A reader that loaded an older root a moment ago therefore still finds its segments.
 
+Buckets that don't honor conditional PUT (B2, confirmed live 2026-11-12) publish as [06](06-publish-without-preconditions.md) says.
+Amended 2026-11-12 (as proposed in 06 §5.2): there the root is PUT unconditionally, the root's version list decides
+which root won (rule C1), and a loser deletes its version and merges as in step 3; `writers` (§3.2) applies in both
+modes.
+
 Objects are always written before the manifest that references them. A crash between an object PUT and the next
 publish leaves an object no manifest names (an orphan, §4.4), never a manifest entry without its object.
 
@@ -188,6 +205,10 @@ Vectors: `manifest.chain` states every row a single root can (`fresh_restore_acc
 `rollback_2_to_1`, `rollback_3_to_2`, `fork_same_epoch`, `gap_1_to_3` with no retained roots, so `"warning": "gap"`)
 and both segment pins (`segment_replaced`, `segment_missing`). The walk through retained versions is tested in C++
 (`ManifestChain.*`).
+
+Amended 2026-11-12 (as proposed in 06 §5.3): on a `version_log` bucket the reader first lists the root's versions
+and applies rule C1 from the known root; only a settled root becomes known, the rows above apply to the anchor, and
+C1 replaces §4.2 (a)'s fallback to older provider versions.
 
 3. Fetch every segment the root names, check `SHA-256` and size (`segment_mismatch`, `segment_missing`), open each
    (kind 2, object uid = sid).
@@ -333,18 +354,28 @@ server. One kit can serve many vaults.
 
 | Vault | Rule | Enforced at |
 |---|---|---|
-| Managed storage (VL-managed B2), any server vault | a recovery recipient must be enrolled before the vault is created (the creation request carries the recipient public key) and before any write; removing the last recipient is refused | `ops::vaults::create`, the write path (a vault without one refuses writes with `recovery_recipient_required`), recipient removal |
+| Managed storage (VL-managed B2), any server vault | **Amended 2026-11-12** (product owner, managed storage plan revision 4 §3.1 item 3). A managed vault starts as a local vault and becomes managed when the attach to its bucket reaches `done` (`design/cloud/managed-remotes.md`, `design/storage/attach-remote.md`). Nothing but envelopes and the layout hint is written to a managed bucket, and no vault becomes managed, until a customer-class recipient covers every key version the vault uses. The default recipient is the account recovery key this server pinned after a person confirmed its fingerprint (`design/cloud/key-manager.md`), added by the server at the attach, so no request carries a public key; without a confirmed pin the vault waits (`account_key_unconfirmed`) unless another customer recipient covers it. Removing the last recipient of a managed vault is refused | the attach (`attach-remote.md` precondition 6, re-checked at cutover), the sync pass of a managed vault (no upload without a covering recipient: `recovery_recipient_required`), recipient removal |
 | Sealed vault (spec 04) | the genesis entry must name a recovery recipient; the server refuses a genesis without one and writes before the genesis | sealed vault creation, chain append |
 | Self-hosted BYOS, `encrypt_upstream=true` | recommended, optional. Without a recipient, the vault must have a **verified export** covering every needed version (`vault.keys.status`: current `exported_version`, a Desktop confirmation with a matching key check, and no `missing_versions`); otherwise status and health report `recovery_material_missing` (degraded, never hidden) and the console shows the recommendation prominently. A rotation makes an export stale, which returns the vault to `recovery_material_missing` until re-exported. | status, health, console |
 | Local vaults, `transparent` vaults | the existing export guidance | — |
 
 By default, Vaulthalla recovery is independently customer-controlled: kits are generated on customer devices
 (§5.3), the server only ever receives public keys, and neither managed-storage onboarding nor account creation,
-adding a payment method or upgrading Vaulthalla generates a seed, uploads a key or enrolls a recipient. Valkyrian
-Labs receives no recovery keys or decryption authority unless a customer separately enrolls in an explicitly
-authorized custodial recovery service (tier C, spec 05 §3.1; planned, not implemented). The server can't verify
-who holds a public key, so the class in the envelope and the root is what the customer declared and authorized;
-a recipient Valkyrian Labs holds is never offered as class `0`.
+adding a payment method or upgrading Vaulthalla generates a seed or uploads a key. None of them enrolls a recipient
+on its own either: a managed vault's default recipient is the account key a person confirmed for this server
+(amended 2026-11-12, as in the table above). Valkyrian Labs receives no recovery keys or decryption authority
+unless a customer separately enrolls in an explicitly authorized custodial recovery service (tier C, spec 05 §3.1;
+planned, not implemented). The server can't verify who holds a public key, so the class in the envelope and the
+root is what the customer declared and authorized; a recipient Valkyrian Labs holds is never offered as class `0`.
+
+**Open question for the maintainer (amended 2026-11-12): local-first creation.** D2 exists so that no bucket is ever
+unreadable for lack of an off-host key; that still holds, because no content reaches a managed bucket before a
+recipient covers it. What local-first adds is a window: a vault switched on for managed storage runs as a local vault
+with host-sealed keys only while it waits (provisioning, `payment_required`, `account_key_unconfirmed`, the cloud
+down), which may last days, and a customer who chose managed storage may believe it is already backed up.
+*Recommendation: status, health and the console say "not backed up yet" and why for every waiting vault; and if
+local vaults may hold grants (`key-manager.md`, "Local vaults"), the pinned account key is added when such a vault is
+created, so a lost `vault_master` during the window is still recoverable on the host.*
 
 ### 5.6 The same host after a TPM loss
 
@@ -399,8 +430,10 @@ sent to Valkyrian Labs until such a service is designed, approved and explicitly
   (`not_required | recipient | export | recovery_material_missing`, `uncovered_versions`, `export_current`,
   `rotation_needed`) and health `vaults_recovery_material_missing` (degraded). "Verified export" is
   `vault_keys.exported_version` = the current version (the CLI's export or a device's confirmation with a matching key
-  check). The managed-storage rules (recipient required at creation and for writes, last recipient not removable) land
-  with managed storage itself (#375): there is no managed storage in the server yet.
+  check). The managed-storage rules (recipient required at creation and for writes, last recipient not removable;
+  since 2026-11-12 at the attach and for uploads, §5.5) land with managed storage itself (#375,
+  `design/cloud/managed-remotes.md`), together with the pinned account key as the default recipient
+  (`design/cloud/key-manager.md`; amended 2026-11-12): there is no managed storage in the server yet.
 - **Exports** carry `attestation.public_key`; an import on this node requires it to be its own key of that id (older
   exports without it import as before).
 - **§5.6.** `vh vault keys import <vault> --recovery-kit <file|->` (the kit is read client-side): lists
@@ -455,7 +488,9 @@ command (key material never travels through browser sessions, D4).
    vault Y, attestation verified with kit key N", then re-attested by the new node).
 6. Reconcile with a listing of `o/` (§4.4): orphans to `/Recovered/`, missing objects marked.
 7. Start the vault in cache strategy (nothing is downloaded until read), publish a new root (`epoch + 1`) so the old
-   node, if it ever comes back, sees a fork and stops (§4.1).
+   node, if it ever comes back, sees a fork and stops (§4.1). Amended 2026-11-12 (06 §5.5): it sees a fork only if
+   it published past the state the restore read; otherwise it would merge the restored root as another writer's.
+   As proposed in 06, the restored root lists only the new node in `writers` (§3.2), and the old node stops on that.
 8. Report: files, folders, versions, snapshots (restorable / not), key versions recovered, orphans, missing objects,
    checkpoint comparison.
 
@@ -554,11 +589,12 @@ nothing shared but the bucket and the customer material.
 | `RecoveryRecipient*` | enrollment requires a paired device + step-up; envelopes written for every existing and future version; removal stops new envelopes (old ones stay: they can't be unpublished from the customer's copies anyway) |
 | `VaultRecover*` | §6.2 steps incl. the provenance rule; dry run writes nothing |
 | `VaultRecoverTrustAnchor*` | every row of the §6.2 step 4 table: verified, missing, empty, wrong-node, wrong-vault, self-attested and key-check mismatch anchors |
-| `RecoveryRequirement*` | managed-storage creation and writes refused without a recipient; last-recipient removal refused; BYOS without a recipient or a verified, current export reports `recovery_material_missing`; a rotation makes an export stale |
+| `RecoveryRequirement*` | managed-storage creation and writes refused without a recipient (amended 2026-11-12: the attach to a managed bucket and its uploads, §5.5); last-recipient removal refused; BYOS without a recipient or a verified, current export reports `recovery_material_missing`; a rotation makes an export stale |
 | `Kev1ReservedFields` | envelopes of a reserved purpose or recipient class are rejected by the reader and skipped by a restore that still succeeds from the customer's envelopes |
-| `RecoveryNoSilentCustody` | creating an account-free vault, upgrading, adding managed storage or enrolling a recipient never adds a non-customer grant or sends key material anywhere but the bucket (request capture) |
+| `RecoveryNoSilentCustody` | creating an account-free vault, upgrading, adding managed storage or enrolling a recipient never adds a non-customer grant or sends key material anywhere but the bucket (request capture). **Amended 2026-11-12:** two exceptions, both envelopes only (never a vault key, seed, kit or export) and both to the linked account's cloud recovery: a vault a person enrolled (`vh cloud recovery enroll`, spec 05 §3.2), and a managed vault, whose only automatic grant is the account key a person pinned. An account-free, BYOS or local vault makes no cloud request and gets no grant it wasn't given |
 | `KeysImportFromKit*` | `MasterSecretLost` on the same host, then import from the kit's envelopes restores the vault under the existing attestation rules |
 | `ManifestReplay*` | an older complete state (root + segments + object versions) authenticates; without a checkpoint the report says "freshness unverified"; with one, older states are refused |
+| `ManifestVersionLog*`, `ManifestProbe*`; `ManifestPublish*` and `ManifestChain*` in both modes (amended 2026-11-12, as proposed in 06 §8) | the `version_log` path: every interleaving of two writers and a reader, crashes at every step, listing lag and order faults detected, the probe's every result, `writers` |
 | Drill (§7) | the north star, end to end |
 
 ## 9. Proposed implementation issues

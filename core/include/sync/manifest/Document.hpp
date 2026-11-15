@@ -1,6 +1,6 @@
 #pragma once
 
-#include "crypto/id/ObjectUid.hpp"
+#include <vl/keykit/uid.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -26,11 +26,11 @@
 // they know with the wrong type or value is FormatError. Timestamps are UTC ISO 8601 strings ("2026-11-05T12:00:00Z"),
 // kept as text: the documents compare and round-trip exactly.
 //
-// Uids are 16 raw bytes written as 26 lower-case Crockford base32 symbols (crypto::id::toBase32); sids name segments.
+// Uids are 16 raw bytes written as 26 lower-case Crockford base32 symbols (vl::keykit::toBase32); sids name segments.
 // Hex digests are lower case.
 namespace vh::sync::manifest {
 
-using Uid = crypto::id::ObjectUid;
+using Uid = vl::keykit::Uid;
 using Json = nlohmann::json;
 
 inline constexpr std::string_view kRootType = "vh.manifest.root";
@@ -66,7 +66,7 @@ struct Range {
 };
 
 [[nodiscard]] std::string uidText(const Uid& uid);
-// Strict base32 (crypto::id::fromBase32); throws FormatError(code) naming `what` otherwise.
+// Strict base32 (vl::keykit::fromBase32); throws FormatError(code) naming `what` otherwise.
 [[nodiscard]] Uid parseUid(std::string_view text, const std::string& code, std::string_view what);
 
 // ---- segment entries (§3.3) -----------------------------------------------------------------------------------------

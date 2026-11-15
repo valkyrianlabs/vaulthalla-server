@@ -12,9 +12,12 @@ namespace vh::sync::events {
 }
 
 namespace vh::sync::manifest {
-    class Service;
     class ObjectStore;
     struct Content;
+}
+
+namespace vh::sync::vault_manifest {
+    class Service;
 }
 
 namespace vh::sync::model {

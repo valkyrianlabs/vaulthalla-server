@@ -1,6 +1,6 @@
 #pragma once
 
-#include "crypto/SecretKey.hpp"
+#include "crypto/vhf1/Key.hpp"
 
 #include <array>
 #include <cstddef>
@@ -18,8 +18,9 @@
 //   object = header (120 bytes) ‖ C_0 ‖ … ‖ C_{n-1},  C_i = AES-256-GCM(K_enc, nonce_i, P_i, AAD_i) = ct_i ‖ tag_i
 //
 // The header body (bytes 0..88) is hashed (hh) into every chunk's AAD and into both HKDF infos, and tagged with
-// HMAC-SHA-256 under K_hdr. Every primitive comes from OpenSSL (HKDF, HMAC, SHA-256, AES-GCM) or libsodium (CSPRNG,
-// constant-time compare, wiping); nothing here implements a primitive.
+// HMAC-SHA-256 under K_hdr. Every primitive comes from OpenSSL (HKDF, HMAC, SHA-256, AES-GCM, the CSPRNG), wiping and
+// constant-time comparison from vl-keykit (OPENSSL_cleanse, CRYPTO_memcmp); nothing here implements a primitive, and
+// nothing here includes the server (Key.hpp is the key type, Aead.hpp the chunk AEAD).
 //
 // This header holds the format itself: constants, error codes, the header codec, the key schedule, the size math and
 // single-chunk sealing/opening. Writer.hpp streams objects out, Reader.hpp reads them back (whole, streamed, ranged).
@@ -113,12 +114,12 @@ struct HeaderParams {
 
 // §3.3: PRK = HKDF-Extract(salt, vault key); K_hdr / K_enc = HKDF-Expand(PRK, "vh.f1.hdr"/"vh.f1.enc" ‖ hh, 32).
 struct KeySchedule {
-    SecretKeyPtr prk;
-    SecretKeyPtr headerKey;
-    SecretKeyPtr contentKey;
+    KeyPtr prk;
+    KeyPtr headerKey;
+    KeyPtr contentKey;
 };
-[[nodiscard]] KeySchedule deriveKeys(const SecretKey& vaultKey, const Salt& salt, const HeaderHash& hh);
-[[nodiscard]] HeaderTag headerTag(const SecretKey& headerKey, std::span<const uint8_t, kHeaderBodySize> body);
+[[nodiscard]] KeySchedule deriveKeys(const Key& vaultKey, const Salt& salt, const HeaderHash& hh);
+[[nodiscard]] HeaderTag headerTag(const Key& headerKey, std::span<const uint8_t, kHeaderBodySize> body);
 
 [[nodiscard]] Nonce chunkNonce(uint64_t index);
 [[nodiscard]] Aad chunkAad(const HeaderHash& hh, uint64_t index, bool final);
@@ -148,7 +149,7 @@ struct ByteSpan {
 // Where chunk `index` (sealed: ciphertext ‖ tag) sits in the object. Throws std::out_of_range past the last chunk.
 [[nodiscard]] ByteSpan chunkSpan(uint64_t index, const Layout& layout, uint8_t chunkLog2);
 
-// A plaintext buffer with a fixed capacity, wiped (sodium_memzero) on destruction and on clear(). It never
+// A plaintext buffer with a fixed capacity, wiped (vl::keykit::wipe) on destruction and on clear(). It never
 // reallocates, so no copy of the plaintext is left behind in freed memory. Move-only.
 class SecureBytes {
 public:
@@ -196,7 +197,7 @@ struct Expectation {
 };
 
 // The vault key of a key version, or nullptr when it is not held (KeyUnavailable).
-using KeyLookup = std::function<SecretKeyPtr(uint32_t keyVersion)>;
+using KeyLookup = std::function<KeyPtr(uint32_t keyVersion)>;
 
 // A header that passed §3.6 steps 1-3, with its derived content key. Cheap to copy (the key is shared).
 class OpenedHeader {
@@ -204,15 +205,15 @@ public:
     [[nodiscard]] const HeaderParams& params() const { return params_; }
     [[nodiscard]] const HeaderHash& hash() const { return hash_; }
     [[nodiscard]] uint64_t chunkSize() const { return chunkSizeOf(params_.chunkLog2); }
-    [[nodiscard]] const SecretKey& contentKey() const { return *contentKey_; }
+    [[nodiscard]] const Key& contentKey() const { return *contentKey_; }
 
 private:
     friend OpenedHeader openHeader(std::span<const uint8_t>, const Expectation&, const KeyLookup&);
-    OpenedHeader(const HeaderParams& params, const HeaderHash& hash, SecretKeyPtr contentKey);
+    OpenedHeader(const HeaderParams& params, const HeaderHash& hash, KeyPtr contentKey);
 
     HeaderParams params_;
     HeaderHash hash_{};
-    SecretKeyPtr contentKey_;
+    KeyPtr contentKey_;
 };
 
 // Parses and authenticates the header at the start of `object` (only its first kHeaderSize bytes are read; fewer is
@@ -221,7 +222,7 @@ private:
                                       const KeyLookup& keys);
 
 // Seals chunk `index`: out (plaintext.size() + kTagSize bytes) = ciphertext ‖ tag.
-void sealChunk(const SecretKey& contentKey, const HeaderHash& hh, uint64_t index, bool final,
+void sealChunk(const Key& contentKey, const HeaderHash& hh, uint64_t index, bool final,
                std::span<const uint8_t> plaintext, std::span<uint8_t> out);
 
 // Opens one sealed chunk (ciphertext ‖ tag) into out (sealed.size() - kTagSize bytes). Returns false when the tag

@@ -32,7 +32,7 @@ void KeyProvider::init(const std::span<const uint8_t> initial) {
         unsealStored();
         return;
     }
-    sealAndKeep(initial.empty() ? SecretBytes{} : SecretBytes(initial));
+    sealAndKeep(initial.empty() ? vl::keykit::SecretBytes{} : vl::keykit::SecretBytes(initial));
 }
 
 void KeyProvider::initGuarded(const DependentsCheck& dependents) {
@@ -55,7 +55,7 @@ void KeyProvider::initGuarded(const DependentsCheck& dependents) {
 }
 
 void KeyProvider::updateMasterKey(const std::span<const uint8_t> newMasterKey) {
-    sealAndKeep(newMasterKey.empty() ? SecretBytes{} : SecretBytes(newMasterKey));
+    sealAndKeep(newMasterKey.empty() ? vl::keykit::SecretBytes{} : vl::keykit::SecretBytes(newMasterKey));
 }
 
 void KeyProvider::setUnsealHookForTesting(const UnsealHook hook) noexcept { unsealHook.store(hook); }
@@ -68,7 +68,7 @@ void KeyProvider::destroySealed() {
     std::error_code ec;
     std::filesystem::remove_all(sealedDir_, ec);
     if (ec) throw std::filesystem::filesystem_error("deleting the sealed secret '" + name_ + "'", sealedDir_, ec);
-    master_ = SecretBytes{};
+    master_ = vl::keykit::SecretBytes{};
 }
 
 std::string_view KeyProvider::backend() noexcept { return platform::sealer::backend(); }
@@ -120,9 +120,9 @@ void KeyProvider::requirePosture() {
                                  "(macOS), or turn the setting off.");
 }
 
-SecretBytes KeyProvider::generateMasterSecret(const std::size_t bytes) {
+vl::keykit::SecretBytes KeyProvider::generateMasterSecret(const std::size_t bytes) {
     if (bytes == 0) throw std::invalid_argument("master secret size must be > 0");
-    return SecretBytes::random(bytes);
+    return vl::keykit::SecretBytes::random(bytes);
 }
 
 void KeyProvider::unsealStored() {
@@ -130,10 +130,10 @@ void KeyProvider::unsealStored() {
     // only the locked copy is kept.
     const WipedKeyCopy unsealed(platform::sealer::unseal(sealedDir_, name_));
     if (const auto hook = unsealHook.load()) hook(unsealed.bytes);
-    master_ = SecretBytes(unsealed.bytes);
+    master_ = vl::keykit::SecretBytes(unsealed.bytes);
 }
 
-void KeyProvider::sealAndKeep(SecretBytes candidate) {
+void KeyProvider::sealAndKeep(vl::keykit::SecretBytes candidate) {
     if (candidate.empty()) candidate = generateMasterSecret();
     platform::sealer::seal(sealedDir_, name_, candidate.bytes(), configuredPolicy());
     master_ = std::move(candidate);

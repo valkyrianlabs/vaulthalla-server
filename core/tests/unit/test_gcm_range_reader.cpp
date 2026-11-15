@@ -1,6 +1,7 @@
 #include "../helpers/bytes.hpp"
 #include "../helpers/temp_dir.hpp"
 #include "crypto/IntegrityRegistry.hpp"
+#include "crypto/SecretKey.hpp"
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "fs/model/File.hpp"

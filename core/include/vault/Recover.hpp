@@ -247,7 +247,7 @@ public:
     void removeVersion(const std::string& key, const std::string& versionId) override {
         inner_->removeVersion(key, versionId);
     }
-    [[nodiscard]] storage::s3::WriteCapability mode() const override { return inner_->mode(); }
+    [[nodiscard]] sync::manifest::WriteCapability mode() const override { return inner_->mode(); }
 
 private:
     void count(const std::string& key, uint64_t bytes, bool ranged);

@@ -30,6 +30,7 @@
 #include "storage/ObjectKeys.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/Controller.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "storage/s3/pricing/PriceEstimate.hpp"
 #include "storage/s3/provider/Registry.hpp"
 #include "storage/upstream/Guard.hpp"
@@ -355,7 +356,7 @@ struct Ctx {
     std::optional<storage::s3::provider::StorageTier> tier;
     std::optional<std::string> storageClass;
     storage::s3::ProbeResult probe;
-    storage::s3::WriteCapability mode{storage::s3::WriteCapability::Unknown};
+    mf::WriteCapability mode{mf::WriteCapability::Unknown};
     bool versioned{true};
     std::filesystem::path tmpDir;
     const RunDeps* deps{};
@@ -626,7 +627,7 @@ unsigned stageEnvelopes(Ctx& ctx) {
     });
 
     auto items = Q::items(ctx.vaultId);
-    mf::S3Store store(ctx.ctl, ctx.mode);
+    storage::s3::ManifestStore store(ctx.ctl, ctx.mode);
     unsigned written = 0;
     for (const auto& e : Q::envelopes(ctx.vaultId)) {
         const auto objectKey = kev1::objectKey(e.kid);
@@ -686,7 +687,7 @@ void verifyEnvelopes(Ctx& ctx) {
     std::map<std::string, Q::StoredEnvelope> byKey;
     for (auto& e : Q::envelopes(ctx.vaultId)) byKey[kev1::objectKey(e.kid)] = std::move(e);
 
-    mf::S3Store store(ctx.ctl, ctx.mode);
+    storage::s3::ManifestStore store(ctx.ctl, ctx.mode);
     auto items = Q::items(ctx.vaultId);
     for (const auto& [objectKey, e] : byKey) {
         auto it = std::ranges::find_if(items, [&](const Item& i) {
@@ -1008,12 +1009,12 @@ nlohmann::json manifestJson(const mf::PublishReport& report) {
             {"settle_window", report.settled.window}};
 }
 
-db::query::sync::Manifest::RootRecord rootRecordOf(const nlohmann::json& j) {
+mf::RootRecord rootRecordOf(const nlohmann::json& j) {
     const auto text = [&](const char* name) -> std::optional<std::string> {
         return j.contains(name) && j.at(name).is_string() ? std::make_optional(j.at(name).get<std::string>())
                                                            : std::nullopt;
     };
-    db::query::sync::Manifest::RootRecord rec;
+    mf::RootRecord rec;
     rec.epoch = j.at("epoch").get<uint64_t>();
     rec.root_sha256 = j.at("root_sha256").get<std::string>();
     rec.etag = text("etag");
@@ -1065,7 +1066,7 @@ void publishAndVerifyManifest(Ctx& ctx) {
                                   .storage_class = f.storage_class});
     const auto produced = db::query::sync::Manifest::collect(ctx.vaultId, collect);
 
-    mf::S3Store store(ctx.ctl, ctx.mode);
+    storage::s3::ManifestStore store(ctx.ctl, ctx.mode);
     std::optional<mf::Known> known;
     mf::PublishOptions options;
     options.now = mf::isoTime(std::time(nullptr));
@@ -1114,7 +1115,7 @@ void publishAndVerifyManifest(Ctx& ctx) {
     for (const auto& e : loaded.content.entries) byUid[e.uid] = &e;
     for (const auto& f : files) {
         const auto uid = keys::uidOfContentKey(f.object_key);
-        const auto it = uid ? byUid.find(crypto::id::toBase32(*uid)) : byUid.end();
+        const auto it = uid ? byUid.find(vl::keykit::toBase32(*uid)) : byUid.end();
         if (it == byUid.end()) {
             if (!db::query::fs::File::getFileById(f.file_id)) continue;   // deleted since it was sent: an orphan
             throw RunFailed(fmt::format("the bucket's manifest does not name file {}", f.file_id));
@@ -1125,7 +1126,7 @@ void publishAndVerifyManifest(Ctx& ctx) {
             throw RunFailed(fmt::format("the bucket's manifest names another object for file {}", f.file_id));
     }
     for (const auto& f : Q::liveFiles(ctx.vaultId))
-        if (f->object_uid && !byUid.contains(crypto::id::toBase32(*f->object_uid)) &&
+        if (f->object_uid && !byUid.contains(vl::keykit::toBase32(*f->object_uid)) &&
             db::query::fs::File::getFileById(f->id))
             throw RunFailed(fmt::format("the bucket's manifest does not name file {} (created while it was published); "
                                         "start the attach again", f->id));
@@ -1213,7 +1214,7 @@ void prepare(Ctx& ctx) {
     ctx.mode = check.probe.capability;
     ctx.versioned = check.versioned;
     ctx.listPages = check.list_pages;
-    const auto publish = check.probe.capability == storage::s3::WriteCapability::Conditional ? "conditional" : "version_log";
+    const auto publish = check.probe.capability == mf::WriteCapability::Conditional ? "conditional" : "version_log";
     Q::setProbe(ctx.vaultId, std::string(publish), storage::s3::toJson(check.probe), check.versioned);
 
     (void)stageEnvelopes(ctx);
@@ -1316,8 +1317,8 @@ void finishCutover(const uint32_t vaultId, const RunDeps& deps, RunResult& resul
                 std::ranges::any_of(held, [](const Q::StoredEnvelope& e) { return !e.bytes.empty(); })) {
                 if (!row->api_key_id) throw std::runtime_error("the API key no longer exists");
                 const auto mode = row->manifest_publish == std::optional<std::string>("version_log")
-                    ? storage::s3::WriteCapability::VersionLog : storage::s3::WriteCapability::Conditional;
-                mf::S3Store store(controllerFor(vaultId, *row->api_key_id, row->bucket), mode);
+                    ? mf::WriteCapability::VersionLog : mf::WriteCapability::Conditional;
+                storage::s3::ManifestStore store(controllerFor(vaultId, *row->api_key_id, row->bucket), mode);
                 for (const auto& e : held) {
                     if (e.bytes.empty()) continue;
                     const auto objectKey = kev1::objectKey(e.kid);
@@ -1499,7 +1500,7 @@ BucketCheck requireBucketUsable(const uint32_t vaultId, const uint32_t apiKeyId,
     }
     (void)d::reconcile(vaultId, listed, out.versioned);
 
-    if (storedProbe && storedProbe->capability != storage::s3::WriteCapability::Unknown) {
+    if (storedProbe && storedProbe->capability != sync::manifest::WriteCapability::Unknown) {
         out.probe = *storedProbe;
     } else {
         try {
@@ -1508,8 +1509,8 @@ BucketCheck requireBucketUsable(const uint32_t vaultId, const uint32_t apiKeyId,
             throw Refusal("bucket_probe_failed", std::string("the bucket's write capability could not be probed: ") + e.what());
         }
     }
-    if (out.probe.capability != storage::s3::WriteCapability::Conditional &&
-        out.probe.capability != storage::s3::WriteCapability::VersionLog)
+    if (out.probe.capability != sync::manifest::WriteCapability::Conditional &&
+        out.probe.capability != sync::manifest::WriteCapability::VersionLog)
         throw Refusal("bucket_capability_insufficient",
                       "the bucket neither honours conditional writes nor keeps object versions (or not If-Match on "
                       "GET), so the vault's encrypted manifest can't be published on it: " + out.probe.reason);
@@ -1630,7 +1631,7 @@ RunResult run(const uint32_t vaultId, const RunDeps& deps) {
                            .details = {{"files", static_cast<int64_t>(outcome.indexed)},
                                        {"orphans", static_cast<int64_t>(outcome.orphans)},
                                        {"publish", ctx->row.manifest_publish.value_or(std::string(
-                                                       storage::s3::to_string(ctx->mode)))},
+                                                       sync::manifest::to_string(ctx->mode)))},
                                        {"gateway_remote_cache", outcome.gateway_flipped}}},
                           fmt::format("[RemoteAttach] Vault {} cut over to its bucket: {} file(s) indexed, {} orphan(s); "
                                       "the vault is an encrypted S3 vault from here on", vaultId, outcome.indexed,

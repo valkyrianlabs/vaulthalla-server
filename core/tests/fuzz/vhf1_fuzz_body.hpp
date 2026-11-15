@@ -12,7 +12,6 @@
 //   2: the rest seeds a genuine object (plaintext, chunk size) and a list of mutations (truncate, extend, bit flips,
 //      chunk swaps, splices). Whatever any reader returns must be the original plaintext at that offset.
 
-#include "crypto/SecretKey.hpp"
 #include "crypto/vhf1/Format.hpp"
 #include "crypto/vhf1/Reader.hpp"
 #include "crypto/vhf1/Writer.hpp"
@@ -53,20 +52,20 @@ private:
 };
 
 struct Fixture {
-    SecretKeyPtr key1, key2;
+    KeyPtr key1, key2;
     Uid vault{}, object{};
     KeyLookup keys;
 
     Fixture() {
         std::array<uint8_t, 32> raw{};
         for (std::size_t i = 0; i < raw.size(); ++i) raw[i] = static_cast<uint8_t>(i);
-        key1 = std::make_shared<const SecretKey>(raw);
+        key1 = std::make_shared<const Key>(raw);
         for (std::size_t i = 0; i < raw.size(); ++i) raw[i] = static_cast<uint8_t>(32 + i);
-        key2 = std::make_shared<const SecretKey>(raw);
+        key2 = std::make_shared<const Key>(raw);
         // The golden vectors' vault and file uids, so the vectors' objects make a useful seed corpus.
         vault = {0x56, 0x48, 0xf1, 0xa2, 0xb3, 0xc4, 0xd5, 0xe6, 0xf7, 0x08, 0x19, 0x2a, 0x3b, 0x4c, 0x5d, 0x6e};
         object = {0x9b, 0x1d, 0xeb, 0x4d, 0x3b, 0x7d, 0x4b, 0xad, 0x9b, 0xdd, 0x2b, 0x0d, 0x7b, 0x3d, 0xcb, 0x6d};
-        keys = [k1 = key1, k2 = key2](const uint32_t v) -> SecretKeyPtr { return v == 1 ? k1 : v == 2 ? k2 : nullptr; };
+        keys = [k1 = key1, k2 = key2](const uint32_t v) -> KeyPtr { return v == 1 ? k1 : v == 2 ? k2 : nullptr; };
     }
 
     [[nodiscard]] Expectation expect(const Kind kind = Kind::FileContent) const { return {kind, vault, object, {}}; }

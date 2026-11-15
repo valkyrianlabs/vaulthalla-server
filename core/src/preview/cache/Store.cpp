@@ -1,5 +1,6 @@
 #include "preview/cache/Store.hpp"
 
+#include "crypto/SecretKey.hpp"
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "db/query/fs/Cache.hpp"

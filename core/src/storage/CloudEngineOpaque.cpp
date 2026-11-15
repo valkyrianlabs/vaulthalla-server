@@ -3,6 +3,8 @@
 // classified listing (content, metadata, foreign) and the import of foreign objects. Key construction and parsing live
 // in storage/ObjectKeys.hpp; the request rules are enforced by s3::Controller::enforceRequestPolicy.
 
+#include "crypto/SecretKey.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "storage/CloudEngine.hpp"
 
 #include "crypto/vhf1/Format.hpp"

@@ -3,7 +3,7 @@
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/VersionLog.hpp"
 
-#include <fmt/format.h>
+#include <format>
 
 #include <algorithm>
 
@@ -241,9 +241,9 @@ Loaded load(ObjectStore& store, const Uid& vaultUid, const crypto::vhf1::KeyLook
     RetainedRoots retained(store, vaultUid, keys, options.use_provider_versions);
 
     Loaded out;
-    bool versionLog = store.mode() == storage::s3::WriteCapability::VersionLog;
+    bool versionLog = store.mode() == WriteCapability::VersionLog;
     std::optional<StoredObject> current;
-    if (!versionLog && store.mode() != storage::s3::WriteCapability::Insufficient) {
+    if (!versionLog && store.mode() != WriteCapability::Insufficient) {
         // A root published without conditional writes names its mode: a reader that doesn't know the bucket's
         // capability (a restore) follows it, and reads the canonical head rather than the current object.
         // When the current object is no root (a delete marker or a stray from a crashed write above the head), the
@@ -377,10 +377,10 @@ BlindReport blindRebuild(ObjectStore& store, const Uid& vaultUid, const crypto::
             r.object_size = listed.size;
             r.plaintext_size = layout.plaintextSize;
             r.key_version = header.params().keyVersion;
-            for (const auto b : header.params().salt) r.generation += fmt::format("{:02x}", b);
+            for (const auto b : header.params().salt) r.generation += std::format("{:02x}", b);
             report.recovered.push_back(std::move(r));
         } catch (const crypto::vhf1::Error& e) {
-            report.rejected.push_back(fmt::format("{}: {}", listed.key, crypto::vhf1::errorCodeName(e.code())));
+            report.rejected.push_back(std::format("{}: {}", listed.key, crypto::vhf1::errorCodeName(e.code())));
         }
     }
     return report;
@@ -393,14 +393,14 @@ RestoreLoad loadForRestore(ObjectStore& store, const Uid& vaultUid, const crypto
         LoadOptions options;
         options.known = Known{checkpoint->epoch, checkpoint->root_sha256};
         auto loaded = load(store, vaultUid, keys, options);
-        auto report = fmt::format("freshness verified against the checkpoint of epoch {}: the root is epoch {}",
+        auto report = std::format("freshness verified against the checkpoint of epoch {}: the root is epoch {}",
                                   checkpoint->epoch, loaded.root.epoch);
         return {std::move(loaded), Freshness::Verified, std::move(report)};
     } catch (const ChainRejected& e) {
         if (e.code() != ChainError::Rollback || !acceptRollback) throw;
     }
     auto loaded = load(store, vaultUid, keys, {});
-    auto report = fmt::format("rollback accepted: the root is epoch {}, older than the checkpoint of epoch {}",
+    auto report = std::format("rollback accepted: the root is epoch {}, older than the checkpoint of epoch {}",
                               loaded.root.epoch, checkpoint->epoch);
     return {std::move(loaded), Freshness::RollbackAccepted, std::move(report)};
 }

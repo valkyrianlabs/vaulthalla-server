@@ -121,7 +121,7 @@ public:
         } budget;
         std::optional<int64_t> max_remote_index_age_seconds;
         std::vector<CutoverFile> files;       // every verified content item
-        sync::Manifest::RootRecord root;      // the root the verification published
+        ::vh::sync::manifest::RootRecord root;   // the root the verification published
         std::optional<int64_t> upstream_bucket_id;   // a known, unbound bucket row to bind (control plane ownership kept)
     };
     struct CutoverOutcome {

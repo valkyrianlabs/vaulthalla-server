@@ -82,7 +82,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
   it (`resolveStorageLayout`), never a request; `opaque_v1` for every new encrypting vault since #371; an `opaque_v1`
   vault's encryption can't be turned off, and `encrypt_upstream` can't change while a layout migration copies.
   Existing path_v0 vaults move with `vh vault migrate-layout` (#373, architecture.md). `vault.uid` and
-  `files.object_uid` are 16 libsodium bytes (`crypto::id::ObjectUid`), assigned once (immutable by trigger): new rows
+  `files.object_uid` are 16 libsodium bytes (`crypto::id::ObjectUid` = `vl::keykit::Uid`; base32 text by `vl::keykit::toBase32`), assigned once (immutable by trigger): new rows
   in `upsertVault`/`File::upsertFile` (a rewritten inode keeps its uid; copies clear it first), existing rows by the
   deployer data step for 122 (`SqlDeployer` `kMigrationDataSteps`). Nothing in the data plane reads them yet (#369).
 
@@ -91,7 +91,8 @@ buckets it created. Other providers: plain storage, but protection locks still a
 - **What:** `storage::s3::probeBucket` (`storage/s3/Capability.hpp`, `capability.cpp`) answers, on one key
   `.vaulthalla/probe/<uid>` (allowlisted under opaque_v1, `ObjectKeys`): PUT If-None-Match absent/present, If-Match
   wrong/right; versions newest first and readable by id; GET If-Match wrong/right; then deletes every version it wrote
-  by id (`leftover_versions` counts refusals). Verdict (`WriteCapability`): `Conditional` (conditions honoured; versions
+  by id (`leftover_versions` counts refusals). Verdict (`sync::manifest::WriteCapability`, `sync/manifest/WriteCapability.hpp`:
+  the enum, `to_string`, `publishModeFromString` and `sendsPreconditions` live with the manifest, which the probe includes): `Conditional` (conditions honoured; versions
   not needed: R2 has none), `VersionLog` (rejected with 501/400 NotImplemented, or silently ignored, and versions
   kept), `Insufficient` (neither, or GET If-Match not honoured), `Unknown` (never probed: behaves as Conditional).
 - **Where it's stored:** `s3.manifest_publish` (`conditional|version_log`, NULL) + `s3.bucket_probe` JSONB (the
@@ -108,7 +109,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
   before 136 (`resolve`, at most one failed attempt per vault an hour). **Test mode never probes on its own**
   (`setLazyProbingForTesting`, `setControllerFactoryForTesting`): existing suites see Unknown and unchanged requests.
 - **What it changes:** `sync::manifest::ObjectStore::mode()` / `putOnce` (If-None-Match only where
-  `sendsPreconditions`), `S3Store(controller, mode)`; segments, snapshots, the layout hint and KEV1 envelopes go through
+  `sendsPreconditions`), `storage::s3::ManifestStore(controller, mode)`; segments, snapshots, the layout hint and KEV1 envelopes go through
   `putOnce`; the `path_v0` index-v1 is PUT plainly on a non-conditional bucket. On VersionLog the manifest root is
   published as provider versions (spec 06 §5; architecture.md "version_log publish"). `manifest::publish` throws
   `PublishUnsupported` **before any request** on Insufficient only, which `CloudEngine::publishManifestV2` turns into
@@ -129,7 +130,7 @@ buckets it created. Other providers: plain storage, but protection locks still a
   `x-amz-copy-source-if-match` honoured (412/200). Listings read-after-write and concurrent ordering held in the
   trials of spec 06 §4; a stalled-body PUT got 500 (the publisher treats a 5xx on the root PUT as an unknown
   outcome and looks for its version by hash), lifecycle prefix rules unverified. Live suite `LiveB2.*`
-  (testing.md): run once, 2026-11-12, provider behaviour as expected.
+  (testing.md): passes live, 2026-11-14.
 
 - AWS test identity `vaulthalla-test-admin`: S3 admin works; **no SQS permissions** and no
   `s3:GetBucketObjectLockConfiguration` → AWS event delivery untested live. Needed statement: docs/vaults/upstream-buckets.md.

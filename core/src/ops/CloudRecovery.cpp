@@ -52,7 +52,7 @@ void requireEnroll(const Actor& actor, const Channel channel) {
 struct Linked {
     vh::cloud::Endpoint endpoint;
     std::string installation;
-    crypto::SecretBytes seed;
+    vl::keykit::SecretBytes seed;
 };
 
 Linked linked() {

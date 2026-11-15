@@ -199,7 +199,7 @@ namespace vh::storage {
         // The bucket's write capability (storage/BucketCapability.hpp): the stored probe verdict, probed on first use
         // for a vault from before migration 136. Throws sync::model::SyncStalled when the bucket was probed as
         // conditional and has refused a condition since (it stays stalled until `vh vault storage probe`).
-        [[nodiscard]] s3::WriteCapability writeCapability() const;
+        [[nodiscard]] sync::manifest::WriteCapability writeCapability() const;
         [[nodiscard]] s3::provider::ProfilePtr s3ProviderProfile() const { return s3Profile_; }
         [[nodiscard]] std::optional<s3::provider::StorageTier> resolvedStorageTier() const { return storageTier_; }
 
@@ -345,10 +345,10 @@ namespace vh::storage {
         // opaque_v1 vaults: the encrypted manifest v2 (#368, spec 03) replaces index-v1.json. Created on first use, and
         // again when the bucket's write capability changes (its store's mode() is fixed at construction).
         mutable std::mutex manifestV2Mutex_;
-        mutable std::shared_ptr<sync::manifest::Service> manifestV2_;
-        mutable s3::WriteCapability manifestV2Mode_{s3::WriteCapability::Unknown};
+        mutable std::shared_ptr<sync::vault_manifest::Service> manifestV2_;
+        mutable sync::manifest::WriteCapability manifestV2Mode_{sync::manifest::WriteCapability::Unknown};
         [[nodiscard]] bool usesManifestV2() const;
-        [[nodiscard]] std::shared_ptr<sync::manifest::Service> manifestV2() const;
+        [[nodiscard]] std::shared_ptr<sync::vault_manifest::Service> manifestV2() const;
         // Publishes the vault's manifest v2 (and collects superseded segments once a day). A refused root (rollback,
         // fork) or repeated conflicts stall the pass (SyncStalled): nothing is written over a root the chain rules
         // refuse. onlyIfChanged: nothing is written when the vault's content equals what the last publish produced.

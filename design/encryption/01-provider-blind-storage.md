@@ -86,7 +86,7 @@ Vectors: `vectors.json` `object_ids`.
 |---|---|---|---|
 | `o/<file_uid>` | file content, one object per file; provider versions = content versions | VHF1 kind 1 (spec 02) | overwritten on content change |
 | `.vaulthalla/layout.json` | cleartext hint: `{"layout":"OpaqueV1","vault_uid":"<b32>","format":1}` | JSON, ≤ 256 bytes | written once; never trusted (spec 03 §6) |
-| `.vaulthalla/root` | manifest root | VHF1 kind 3 (spec 03) | overwritten with `If-Match` per publish |
+| `.vaulthalla/root` | manifest root | VHF1 kind 3 (spec 03) | overwritten per publish: with `If-Match` on buckets that honor it; amended 2026-11-12, unconditionally on others, as proposed in spec 06 (`version_log`) |
 | `.vaulthalla/seg/<sid>` | manifest segment | VHF1 kind 2 | immutable, garbage-collected |
 | `.vaulthalla/key/<kid>` | key envelope to a recovery recipient | KEV1 (spec 03 §5) | immutable |
 
@@ -178,7 +178,8 @@ New column `s3.storage_layout TEXT NOT NULL` with values:
 `CHECK ((encrypt_upstream AND storage_layout IN ('path_v0','opaque_v1')) OR (NOT encrypt_upstream AND
 storage_layout = 'transparent'))`. New `encrypt_upstream=true` vaults are created `opaque_v1`. The migration
 backfills `transparent` and `path_v0`. No API, CLI or console field exposes the layout as a choice; status shows it
-(`vh vault status`: "storage layout: opaque (v1)"), and the migration state.
+(amended 2026-11-12: there is no `vh vault status`; `vh vault migrate-layout <vault> --status` prints "layout
+opaque_v1" or "layout path_v0"), and the migration state.
 
 Changing `encrypt_upstream` on an existing vault (`ops/Vaults.cpp:389-391`, behind the sign-waiver permission) is a
 layout conversion run by the same migration engine (§6): `transparent → opaque_v1` encrypts and re-keys every object;
@@ -227,7 +228,10 @@ One engine converts layout and format together, because both rewrite every objec
    file 1 PUT (+ 1 GET and the bytes when there is no local copy), per retained provider version 1 GET + 1 PUT and its
    bytes, plus metadata. Unpriced → explicit `accept_unpriced`. Request budgets apply.
 5. Bucket capability probe: conditional PUT (`If-Match`, `If-None-Match`) works, or the migration refuses with the
-   reason (the manifest's atomic publish depends on it, spec 03 §3.4).
+   reason (the manifest's atomic publish depends on it, spec 03 §3.4). Amended 2026-11-12: not built; the
+   migration's preconditions (`requirePreconditions`, `core/src/vault/LayoutMigration.cpp`) check layout, keys,
+   rotation, salvage, protection locks and recovery material, and probe nothing. The probe is spec 06 §7's (as
+   proposed there), which also lets a bucket without conditional PUT qualify for its `version_log` path.
 
 ### 6.2 State machine
 
@@ -239,7 +243,7 @@ target_generation, plaintext_blake2b, state [pending|copied|verified|failed|skip
 | State | Work | Writes to the bucket | Rollback |
 |---|---|---|---|
 | `planned` | assign `vault_uid`, `file_uid`s (persisted before any PUT), enumerate items, preflight | none | delete the rows |
-| `copying` | per item, oldest version first, then current: read (local backing file, else GET with `If-Match`), authenticate the legacy GCM, re-seal as VHF1 under the **same key version**, PUT to `o/<uid>` with `If-None-Match: *` for the first version of a key; record the target ETag, version id and generation | new `o/` objects only; legacy keys untouched | delete the new `o/` objects (the items list them) |
+| `copying` | per item, oldest version first, then current: read (local backing file, else GET with `If-Match`), authenticate the legacy GCM, re-seal as VHF1 under the **same key version**, PUT to `o/<uid>` (amended 2026-11-12: unconditionally, as built in `CloudEngine::putMigratedObject`; idempotency comes from the item rows, as the paragraph below says, not from a precondition); record the target ETag, version id and generation | new `o/` objects only; legacy keys untouched | delete the new `o/` objects (the items list them) |
 | `catching_up` | files whose generation changed since copy are re-copied, under the pass lease and the content lock; repeats until a pass finds none | same | same |
 | `verifying` | publish the encrypted manifest (spec 03) and run the **bucket-only verification** (§6.3) | root, segments, envelopes | delete them; the legacy index stays authoritative |
 | `cutover` | one DB transaction: `storage_layout = 'opaque_v1'`, index rows rewritten to object keys, `files` format/generation updated | none | flip back (§6.4) |

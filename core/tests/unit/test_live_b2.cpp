@@ -15,6 +15,7 @@
 #include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "storage/s3/Capability.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "sync/manifest/Content.hpp"
 #include "sync/manifest/Document.hpp"
 #include "sync/manifest/Objects.hpp"
@@ -34,7 +35,7 @@ namespace vh::test_live_b2 {
 namespace live = test_support::live;
 namespace mf = sync::manifest;
 namespace http = storage::s3::curl::http;
-using storage::s3::WriteCapability;
+using sync::manifest::WriteCapability;
 
 [[maybe_unused]] const auto* const kRunB2BucketEnvironment =
     ::testing::AddGlobalTestEnvironment(new live::RunB2BucketEnvironment);
@@ -134,11 +135,11 @@ TEST_F(LiveB2, TheManifestPublishesAsVersionsOfItsRoot) {
     EXPECT_TRUE(probe.versioning);
     EXPECT_TRUE(probe.get_if_match);
     EXPECT_EQ(probe.leftover_versions, 0u);
-    std::cout << "[live] probe: " << storage::s3::to_string(probe.capability) << ", MD5 ETags " << probe.md5_etags
+    std::cout << "[live] probe: " << sync::manifest::to_string(probe.capability) << ", MD5 ETags " << probe.md5_etags
               << std::endl;
 
-    // (2) The manifest through the real S3Store.
-    const auto s3 = std::make_shared<mf::S3Store>(sharedController(), WriteCapability::VersionLog);
+    // (2) The manifest through the real storage::s3::ManifestStore.
+    const auto s3 = std::make_shared<storage::s3::ManifestStore>(sharedController(), WriteCapability::VersionLog);
     const auto store = std::make_shared<test_support::manifest_store::HookedStore>(s3);
     std::vector<uint8_t> keyBytes(32);
     randombytes_buf(keyBytes.data(), keyBytes.size());
@@ -269,7 +270,7 @@ TEST_F(LiveB2, TheManifestPublishesAsVersionsOfItsRoot) {
 
     // (6) A recovery envelope (named by its own hash) is written without a condition and read back.
     {
-        const auto envelopeKey = std::string(".vaulthalla/key/") + crypto::id::toBase32(crypto::id::newObjectUid());
+        const auto envelopeKey = std::string(".vaulthalla/key/") + vl::keykit::toBase32(crypto::id::newObjectUid());
         const std::vector<uint8_t> envelope{0x89, 'V', 'H', 'K', 0x01, 0x02, 0x03};
         (void)s3->putOnce(envelopeKey, envelope);
         const auto back = s3->get(envelopeKey, std::nullopt);

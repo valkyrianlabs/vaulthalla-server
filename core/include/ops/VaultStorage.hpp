@@ -22,7 +22,7 @@ struct ProbeAnswer {
     unsigned int vault_id{};
     std::string vault_name;
     std::string layout;                          // transparent | path_v0 | opaque_v1
-    storage::s3::WriteCapability previous{};     // what was stored before this probe
+    sync::manifest::WriteCapability previous{};     // what was stored before this probe
     bool previously_changed{false};              // the stored verdict was marked changed (bucket_capability_changed)
     storage::s3::ProbeResult probe;
     // Whether the vault's manifest (opaque_v1: the encrypted manifest; path_v0 and transparent: the index) can be
