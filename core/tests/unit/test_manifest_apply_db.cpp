@@ -22,6 +22,11 @@
 #include "db/query/sync/ManifestApply.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
+#include "crypto/vhf1/Format.hpp"
+#include "crypto/vhf1/Writer.hpp"
+#include "notifications/OperatorNotificationBus.hpp"
+#include "storage/PlaintextReader.hpp"
+#include "sync/model/RemotePolicy.hpp"
 #include "storage/s3/ManifestStore.hpp"
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Publisher.hpp"
@@ -29,6 +34,9 @@
 #include "sync/manifest/Reconcile.hpp"
 #include "sync/vault_manifest/Service.hpp"
 #include "vault/EncryptionManager.hpp"
+
+#include <vl/keykit/kev1.hpp>
+#include <vl/keykit/seed.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -147,15 +155,34 @@ protected:
     [[nodiscard]] mf::Loaded head() const { return mf::load(*store, uid(), service->keyLookup()); }
 
     // Another server publishes `c` on the recorded root (its own cache, its own node id).
-    mf::PublishReport publishAs(mf::Content c, const std::string& node = "another-node") const {
+    // `shared`: the other writer is one of the root's writers (a replicated vault, see share()): it names itself and
+    // keeps the base's writers. `on`: the root it builds on (default: the recorded one).
+    mf::PublishReport publishAs(mf::Content c, const std::string& node = "another-node", const bool shared = false,
+                                const std::optional<mf::Known>& on = std::nullopt) const {
         const auto state = db::query::sync::Manifest::state(id());
         c.producer.node_id = node;
         const auto k = v.engine->encryptionManager->currentKey();
         mf::PublisherCache cache;
         mf::PublishOptions o;
         o.now = mf::isoTime(std::time(nullptr));
+        if (shared) o.self_node = node;
         return mf::publish(*store, uid(), service->keyLookup(), {k.version, k.key}, c,
-                           mf::Known{*state.epoch, *state.root_sha256, state.root_version_id}, cache, o);
+                           on ? *on : mf::Known{*state.epoch, *state.root_sha256, state.root_version_id}, cache, o);
+    }
+
+    // A key holder names another writer beside this server (the join, done by hand): a root naming both, applied.
+    void share() {
+        const auto h = head();
+        auto named = h.root;
+        named.epoch = h.acceptance.epoch + 1;
+        named.prev = h.acceptance.root_sha256;
+        named.producer.node_id = "another-node";
+        named.writers = std::vector<std::string>{db::query::device::Devices::nodeId(), "another-node"};
+        const auto k = v.engine->encryptionManager->currentKey();
+        (void)v.bucket->seed(std::string(mf::kRootKey), mf::sealRoot(named, uid(), {k.version, k.key}));
+        const auto r = service->applyRemote();
+        ASSERT_TRUE(r && r->recorded);
+        ASSERT_EQ(db::query::sync::Manifest::state(id()).writers.size(), 2u);
     }
 
     // A vault the other writer and this one both hold: /Docs (report.pdf, notes.txt), /Photos (a.jpg, b.jpg, c.jpg),
@@ -693,31 +720,6 @@ TEST_F(ManifestApplyDb, TwoAppliesOfOneVaultRunOneAfterTheOther) {
     EXPECT_FALSE(second) << "the second found the head recorded";
 }
 
-// Replicated vaults stay refused while another writer's recovery envelope kids are dropped from this server's roots
-// (design item 6 prerequisite; Applier.hpp kCarriesForeignEnvelopes): a head naming several writers is not applied.
-// Removing the refusal without the carry-forward fails here.
-TEST_F(ManifestApplyDb, AReplicatedHeadIsRefusedWhileForeignEnvelopesAreNotCarried) {
-    static_assert(!sync::vault_manifest::kCarriesForeignEnvelopes,
-                  "with the carry-forward built, replace this test by one of the carry-forward");
-    seed();
-    const auto h = head();
-    auto named = h.root;
-    named.epoch = h.acceptance.epoch + 1;
-    named.prev = h.acceptance.root_sha256;
-    named.producer.node_id = "another-node";
-    named.writers = std::vector<std::string>{db::query::device::Devices::nodeId(), "another-node"};
-    const auto k = v.engine->encryptionManager->currentKey();
-    (void)v.bucket->seed(std::string(mf::kRootKey), mf::sealRoot(named, uid(), {k.version, k.key}));
-    try {
-        (void)service->applyRemote();
-        ADD_FAILURE() << "a replicated head was applied";
-    } catch (const sync::vault_manifest::ApplyStopped& e) {
-        EXPECT_NE(std::string(e.what()).find("envelope"), std::string::npos) << e.what();
-    }
-    EXPECT_EQ(db::query::sync::Manifest::state(id()).epoch, h.acceptance.epoch);
-}
-
-
 // ── Lost replies: every root PUT since the record is this server's own (review of 188f2377) ─────────────────────────
 
 namespace {
@@ -845,6 +847,226 @@ TEST_F(ManifestApplyDb, TwoOwnVersionsAtOneEpochOnVersionLogTheHeadIsAdoptedTheO
     EXPECT_TRUE(byName(h, "first.txt"));
     EXPECT_TRUE(byName(h, "moved.txt"));
     EXPECT_FALSE(byName(h, "top.txt"));
+}
+
+
+// ── Replica prerequisites (design: "As built: replica prerequisites and status") ──────────────────────────────────────
+
+namespace {
+
+std::string hexOf(const std::span<const uint8_t> bytes) {
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string out;
+    for (const auto b : bytes) {
+        out += kHex[b >> 4];
+        out += kHex[b & 0x0f];
+    }
+    return out;
+}
+
+// A KEV1 envelope another writer wrote (for a test, any 32 bytes stand in for the vault key: only the header is read).
+struct Envelope {
+    std::vector<uint8_t> bytes;
+    std::string kid;
+};
+Envelope envelopeFor(const mf::Uid& vault, const uint32_t version, const std::vector<uint8_t>& recipientPublicKey) {
+    const std::vector<uint8_t> key(32, 0x42);
+    Envelope e;
+    e.bytes = vl::keykit::kev1::wrap(key, vl::keykit::kev1::Suite::X25519, version, vault, recipientPublicKey);
+    const auto digest = mf::sha256Hex(e.bytes);
+    mf::Uid first{};
+    for (std::size_t i = 0; i < first.size(); ++i) first[i] = static_cast<uint8_t>(std::stoi(digest.substr(2 * i, 2), nullptr, 16));
+    e.kid = mf::uidText(first);
+    return e;
+}
+
+std::vector<uint8_t> recipientKey() {
+    return vl::keykit::RecoverySeed::parse(vl::keykit::RecoverySeed::generate().text()).x25519PublicKey();
+}
+
+std::string readAllOf(const std::shared_ptr<storage::Engine>& engine, const std::string& path) {
+    const auto f = db::query::fs::File::getFileByPath(engine->vault->id, path);
+    if (!f) throw std::runtime_error("no file " + path);
+    const auto reader = engine->openPlaintextReader(f);
+    const auto bytes = storage::readAll(*reader, 64 << 20);
+    return {bytes.begin(), bytes.end()};
+}
+
+}
+
+// A head naming two writers is applied now, and the other writer's envelope kids are carried: kept as references
+// (never grant or envelope rows), named by this server's roots for a recipient one of its grants has (revoked or not, as
+// it lists its own), at their key version. The root then names both writers' kids, sorted, and stays the same from one
+// publish to the next. Negatives: a recipient this server holds no grant for, an envelope missing from the bucket, one
+// of another vault or key version, and a kid that isn't its bytes' hash are not carried.
+TEST_F(ManifestApplyDb, AnotherWritersEnvelopeKidsAreCarriedForTheGrantsThisServerHolds) {
+    seed();
+    share();
+    const auto version = v.engine->encryptionManager->currentKey().version;
+    const auto held = recipientKey(), notHeld = recipientKey();
+    db::Transactions::exec("grant", [&](pqxx::work& txn) {
+        txn.exec("INSERT INTO vault_recovery_grant (vault_id, grant_id, recipient_id, public_key, suite, authorized_by) "
+                 "VALUES ($1, $2, $3, $4::bytea, 1, 'test')",
+                 pqxx::params{id(), mf::uidText(crypto::id::newObjectUid()), hexOf(vl::keykit::kev1::recipientId(held)),
+                              "\\x" + hexOf(held)});
+    });
+    const auto grants = count("SELECT count(*) FROM vault_recovery_grant WHERE vault_id = $1", id());
+    const auto envelopes = count("SELECT count(*) FROM vault_key_envelope WHERE vault_id = $1", id());
+
+    const auto good = envelopeFor(uid(), version, held);
+    const auto stranger = envelopeFor(uid(), version, notHeld);
+    const auto missing = envelopeFor(uid(), version, held);
+    const auto otherVault = envelopeFor(mf::parseUid(mf::uidText(crypto::id::newObjectUid()), "x", "x"), version, held);
+    const auto otherVersion = envelopeFor(uid(), version + 7, held);
+    auto mislabeled = envelopeFor(uid(), version, held);
+    for (const auto* e : {&good, &stranger, &otherVault, &otherVersion})
+        (void)v.bucket->seed(".vaulthalla/key/" + e->kid, e->bytes);
+    const auto wrongKid = mf::uidText(crypto::id::newObjectUid());
+    (void)v.bucket->seed(".vaulthalla/key/" + wrongKid, mislabeled.bytes);
+
+    auto theirs = head().content;
+    auto& key = *std::ranges::find(theirs.keys, version, &mf::KeyRecord::version);
+    key.envelopes = std::vector<std::string>{good.kid, stranger.kid, missing.kid, otherVault.kid, otherVersion.kid, wrongKid};
+    (void)publishAs(theirs, "another-node", true);
+    const auto r = service->applyRemote();
+    ASSERT_TRUE(r && r->recorded);
+    EXPECT_EQ(count("SELECT count(*) FROM vault_recovery_grant WHERE vault_id = $1", id()), grants) << "no grant rows";
+    EXPECT_EQ(count("SELECT count(*) FROM vault_key_envelope WHERE vault_id = $1", id()), envelopes) << "no envelope rows";
+    EXPECT_EQ(count("SELECT count(*) FROM manifest_foreign_envelope WHERE vault_id = $1", id()), 2) << "good and stranger";
+    EXPECT_GE(r->notes.size(), 4u) << "missing, other vault, other version, wrong kid";
+
+    const auto listed = [&](const mf::Content& c) {
+        const auto& k = *std::ranges::find(c.keys, version, &mf::KeyRecord::version);
+        return k.envelopes.value_or(std::vector<std::string>{});
+    };
+    EXPECT_EQ(listed(db::query::sync::Manifest::collect(id())), std::vector<std::string>{good.kid})
+        << "only the recipient this server holds a grant for";
+    write("/after.txt", "a change to publish");
+    const auto first = service->publish();
+    EXPECT_EQ(listed(head().content), std::vector<std::string>{good.kid});
+    write("/after-2.txt", "another");
+    (void)service->publish();
+    EXPECT_EQ(listed(head().content), listed(first.published.content)) << "stable from one publish to the next";
+}
+
+// A vault on the mirror strategy deletes remote objects its database doesn't hold: with another writer it refuses the
+// head (the pass stalls), and the operator is alerted once for that root. The last apply's stop is in the status.
+TEST_F(ManifestApplyDb, AMirrorVaultRefusesASharedHeadAndAlertsOnce) {
+    seed();
+    v.engine->remote_policy()->strategy = sync::model::RemotePolicy::Strategy::Mirror;
+    (void)notifications::OperatorNotificationBus::instance().drain(512);
+    const auto h = head();
+    auto named = h.root;
+    named.epoch = h.acceptance.epoch + 1;
+    named.prev = h.acceptance.root_sha256;
+    named.producer.node_id = "another-node";
+    named.writers = std::vector<std::string>{db::query::device::Devices::nodeId(), "another-node"};
+    const auto k = v.engine->encryptionManager->currentKey();
+    (void)v.bucket->seed(std::string(mf::kRootKey), mf::sealRoot(named, uid(), {k.version, k.key}));
+    EXPECT_THROW((void)service->applyRemote(), sync::vault_manifest::ApplyStopped);
+    EXPECT_THROW((void)service->applyRemote(), sync::vault_manifest::ApplyStopped);
+    std::size_t alerts = 0;
+    for (const auto& n : notifications::OperatorNotificationBus::instance().drain(512))
+        if (n.eventKey == "manifest_apply_stopped") ++alerts;
+    EXPECT_EQ(alerts, 1u) << "once per root";
+    const auto st = db::query::sync::ManifestApply::status(id());
+    EXPECT_EQ(st["last_apply"]["stopped"], "manifest_mirror_shared");
+    EXPECT_EQ(db::query::sync::Manifest::state(id()).epoch, h.acceptance.epoch);
+}
+
+// Another writer built on our own root that was PUT and not recorded: that root (its pending base copy, kept before
+// the PUT) is adopted first and is the apply's base, so a file created in it and deleted here since stays deleted, and
+// one created in it and renamed here since keeps its new name (with `known` as the base both read as theirs).
+TEST_F(ManifestApplyDb, AnUnrecordedOwnRootAnotherWriterBuiltOnIsTheBaseOfTheApply) {
+    seed();
+    share();
+    write("/doomed.txt", "in our unrecorded root");
+    write("/renamed-later.txt", "in our unrecorded root too");
+    failRecords(id(), true);
+    EXPECT_ANY_THROW((void)service->publish());
+    failRecords(id(), false);
+    const auto ours = head();
+    ASSERT_EQ(ours.acceptance.epoch, *db::query::sync::Manifest::state(id()).epoch + 1);
+
+    auto theirs = ours.content;   // the other writer applied our root and adds a file on top
+    mf::Entry added = *byName(theirs, "top.txt");
+    added.uid = mf::uidText(crypto::id::newObjectUid());
+    added.name = "from-the-other.txt";
+    added.versions.clear();
+    theirs.entries.push_back(added);
+    mf::normalize(theirs);
+    (void)publishAs(theirs, "another-node", true, ours.known());
+
+    fs::Filesystem::remove(v.engine->vaultPathToFusePath("/doomed.txt"), superUser->id);
+    ASSERT_EQ(fs::Filesystem::rename(v.engine->vaultPathToFusePath("/renamed-later.txt"),
+                                     v.engine->vaultPathToFusePath("/renamed-now.txt"), superUser), 0);
+    restart();
+    const auto r = service->applyRemote();
+    ASSERT_TRUE(r && r->recorded);
+    EXPECT_FALSE(r->union_base);
+    EXPECT_EQ(std::ranges::count(r->conflicts, mf::ConflictKind::Placement, &mf::Conflict::kind), 0);
+    EXPECT_FALSE(db::query::fs::File::getFileByPath(id(), "/doomed.txt")) << "not re-created";
+    EXPECT_TRUE(db::query::fs::File::getFileByPath(id(), "/renamed-now.txt"));
+    EXPECT_FALSE(db::query::fs::File::getFileByPath(id(), "/renamed-later.txt"));
+    EXPECT_TRUE(db::query::fs::File::getFileByPath(id(), "/from-the-other.txt"));
+    EXPECT_EQ(count("SELECT count(*) FROM remote_manifest_pending WHERE vault_id = $1", id()), 0) << "cleared by the record";
+}
+
+// With another writer, a trash is purged here locally only: that writer may restore the file and name the same object
+// live again, and a remote DELETE would remove it. (A vault this server writes alone keeps purging remotely.)
+TEST_F(ManifestApplyDb, WithAnotherWriterATrashIsPurgedWithoutARemoteDelete) {
+    seed();
+    share();
+    const auto reportUid = byName(head().content, "report.pdf")->uid;
+    auto theirs = head().content;
+    at(theirs, "report.pdf").trashed = mf::Trashed{"2026-11-15T00:00:00Z", "admin", "/Docs/report.pdf"};
+    (void)publishAs(theirs, "another-node", true);
+    ASSERT_TRUE(service->applyRemote());
+    ASSERT_FALSE(db::query::fs::File::getFileByPath(id(), "/Docs/report.pdf")) << "trashed here";
+    auto restored = head().content;   // the other writer restores it before our next pass
+    at(restored, "report.pdf").trashed.reset();
+    (void)publishAs(restored, "another-node", true);
+
+    v.bucket->clearRequests();
+    (void)test_support::versioned::runSyncPass(v.engine, {.purgeTrash = true, .downloads = false, .expectOk = false});
+    for (const auto& req : v.bucket->requests())
+        if (req.op == VersionedBucket::Op::Delete) { EXPECT_NE(req.key, "o/" + reportUid) << "no remote DELETE of it"; }
+    EXPECT_TRUE(v.bucket->current("o/" + reportUid)) << "the object the restored file names is there";
+    EXPECT_TRUE(db::query::fs::File::getFileByPath(id(), "/Docs/report.pdf")) << "restored here too";
+}
+
+// Remote-only files (no local bytes, as under cache) after an applied move and an applied content replacement: the
+// next read hydrates the right object at the right place.
+TEST_F(ManifestApplyDb, RemoteOnlyFilesHydrateAfterAnAppliedMoveAndReplacement) {
+    seed();
+    for (const auto* p : {"/Docs/report.pdf", "/Docs/notes.txt"}) {
+        const auto f = db::query::fs::File::getFileByPath(id(), p);
+        std::error_code ec;
+        std::filesystem::remove(f->backing_path, ec);   // evicted: the bucket holds the bytes
+    }
+    const auto k = v.engine->encryptionManager->currentKey();
+    auto theirs = head().content;
+    at(theirs, "notes.txt").parent = at(theirs, "Photos").uid;   // a move
+    auto& report = at(theirs, "report.pdf");                      // and new content, sealed as its writer seals it
+    const std::string v2 = "report v2, written by the other server";
+    crypto::vhf1::HeaderParams hp;
+    hp.kind = crypto::vhf1::Kind::FileContent;
+    hp.keyVersion = k.version;
+    hp.vaultUid = uid();
+    hp.objectUid = mf::parseUid(report.uid, "x", "x");
+    hp.salt = crypto::vhf1::freshSalt();
+    const auto sealed = crypto::vhf1::seal(std::vector<uint8_t>(v2.begin(), v2.end()), hp, *k.key);
+    (void)v.bucket->seed("o/" + report.uid, sealed);
+    report.generation = hexOf(hp.salt);
+    report.key_version = k.version;
+    report.size = v2.size();
+    report.content_hash.reset();
+    report.object = mf::ObjectRef{v.bucket->current("o/" + report.uid)->etag, sealed.size(), std::nullopt, std::nullopt};
+    (void)publishAs(theirs);
+    const auto r = service->applyRemote();
+    ASSERT_TRUE(r && r->recorded);
+    EXPECT_EQ(readAllOf(v.engine, "/Photos/notes.txt"), "notes");
+    EXPECT_EQ(readAllOf(v.engine, "/Docs/report.pdf"), v2);
 }
 
 }

@@ -40,17 +40,15 @@ public:
     explicit ApplyStopped(const std::string& message) : std::runtime_error(message) {}
 };
 
-// Replicated vaults are refused here (and nowhere else lets one run: a publish names other writers only by carrying
-// a base's set, which a refused head never becomes). A blocker of enabling them (design/sync/manifest-applier.md,
-// item 6 prerequisites): another writer's recovery envelope kids are not carried into this server's roots (AddEnvelopes
-// is not executed, and mergePending keeps this server's key records), so its first publish after an apply would drop
-// them. Flip this only with that carry-forward built; ManifestApplyDb.AReplicatedHeadIsRefusedWhileForeignEnvelopes*
-// fails while the refusal is gone and this is false.
-inline constexpr bool kCarriesForeignEnvelopes = false;
+// Other writers' recovery envelope kids are carried into this server's roots (design: "Foreign envelopes"): a head
+// naming several writers is applied. What still refuses one: a vault on the mirror strategy (it deletes remote objects
+// its database doesn't hold), and every refusal the join will add (design item 6).
+inline constexpr bool kCarriesForeignEnvelopes = true;
 
 struct ApplyOptions {
     std::function<bool(uint64_t inode)> isOpen{};                  // default: fuse::WorkingCopies
     std::function<void(const manifest::Op& op)> beforeOp{};         // tests: a local write or a crash before an op
+    manifest::ObjectStore* store{};                                // the bucket (other writers' envelopes); the service's
 };
 
 struct ApplyReport {

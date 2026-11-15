@@ -1,6 +1,8 @@
 #include "storage/CloudEngine.hpp"
 #include "crypto/SecretKey.hpp"
 #include "storage/s3/ManifestStore.hpp"
+#include "db/query/device/Device.hpp"
+#include "db/query/sync/Manifest.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "storage/s3/Controller.hpp"
 #include "storage/BucketCapability.hpp"
@@ -479,6 +481,14 @@ CloudEngine::getGroupedFilesFromS3(const fs::path& prefix) const {
 }
 
 bool CloudEngine::usesManifestV2() const { return opaqueLayout(); }
+
+bool CloudEngine::manifestNamesOtherWriters() const {
+    if (!usesManifestV2()) return false;
+    const auto self = db::query::device::Devices::nodeId();
+    for (const auto& w : db::query::sync::Manifest::state(vault->id).writers)
+        if (w != self) return true;
+    return false;
+}
 
 vh::sync::manifest::WriteCapability CloudEngine::writeCapability() const {
     const auto resolved = bucket_capability::resolve(vault->id, *s3Provider_);

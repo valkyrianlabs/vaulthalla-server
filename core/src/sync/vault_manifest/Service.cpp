@@ -27,8 +27,11 @@ public:
     void markApplying(const uint64_t epoch, const std::string& rootSha256) override {
         db::query::sync::Manifest::markApplying(vaultId_, epoch, rootSha256);
     }
-    void notePublishing(const std::string& rootSha256) override {
-        db::query::sync::Manifest::notePublishing(vaultId_, rootSha256);
+    void notePublishing(const std::string& rootSha256, const manifest::BaseCopy& pending) override {
+        db::query::sync::Manifest::notePublishing(vaultId_, rootSha256, pending);
+    }
+    std::optional<manifest::BaseCopy> pendingBase(const std::string& rootSha256) override {
+        return db::query::sync::Manifest::pendingBase(vaultId_, rootSha256);
     }
     bool recordRefused(const std::string& reason, const uint64_t epoch, const std::string& rootSha256) override {
         return db::query::sync::Manifest::recordRefused(vaultId_, reason, epoch, rootSha256);
@@ -92,8 +95,8 @@ manifest::SessionHost hostOf(const uint32_t vaultId, const std::shared_ptr<vault
 
 Service::Service(const uint32_t vaultId, const manifest::Uid& vaultUid, std::shared_ptr<manifest::ObjectStore> store,
                  std::shared_ptr<vault::EncryptionManager> keys)
-    : vaultId_(vaultId), vaultUid_(vaultUid), keys_(std::move(keys)),
-      session_(vaultUid, service_detail::required(std::move(store), keys_),
+    : vaultId_(vaultId), vaultUid_(vaultUid), keys_(std::move(keys)), store_(service_detail::required(store, keys_)),
+      session_(vaultUid, store_,
                std::make_shared<service_detail::DatabaseState>(vaultId), service_detail::hostOf(vaultId, keys_)) {}
 
 crypto::vhf1::KeyLookup Service::keyLookup() const { return service_detail::lookupOf(keys_); }
@@ -134,7 +137,9 @@ std::optional<ApplyReport> Service::applyRemote(const ApplyOptions& options) {
                                        "may be publishing under this server's identity (a cloned database)",
                                        verified->epoch));
     if (!verified || !verified->head) return std::nullopt;
-    auto report = apply(vaultId_, vaultUid_, keyLookup(), *verified->head, db::query::device::Devices::nodeId(), options);
+    auto withStore = options;
+    if (!withStore.store) withStore.store = store_.get();
+    auto report = apply(vaultId_, vaultUid_, keyLookup(), *verified->head, db::query::device::Devices::nodeId(), withStore);
     if (report.recorded) session_.applied();
     return report;
 }

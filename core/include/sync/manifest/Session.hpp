@@ -51,6 +51,8 @@ struct ChainState {
     // before each PUT, reset to the recorded root by each record; originOf). Empty only in a state that has neither
     // published nor recorded since the migration.
     std::vector<std::string> publishing_roots;
+    // The recorded root's `writers` (migration 147): more than this node means another writer exists.
+    std::vector<std::string> writers;
 };
 
 // One recorded root. version_id, base_version_id and the window on version_log buckets; own when this writer wrote it.
@@ -67,6 +69,8 @@ struct RootRecord {
     // named objects' bytes the writer has in hand (the store keeps the bytes of named sids it already holds and drops
     // the rest). nullopt: no copy (the stored one is dropped; a cold start then merges as without one).
     std::optional<BaseCopy> base{};
+    // The recorded root's `writers`.
+    std::vector<std::string> writers{};
 };
 
 // What verifyRemote found: the bucket's head as accepted, and, when it is not the recorded root, the loaded head itself
@@ -105,7 +109,10 @@ public:
     virtual void markApplying(uint64_t epoch, const std::string& rootSha256) = 0;
     // This writer is about to PUT the root of this hash (added to ChainState::publishing_roots, the oldest dropped past
     // 256). Durable before it returns; a throw stops the publish before the PUT.
-    virtual void notePublishing(const std::string& rootSha256) = 0;
+    virtual void notePublishing(const std::string& rootSha256, const BaseCopy& pending) = 0;
+    // The pending base copy of a root noted since the last record (its root bytes and every kept object), nullopt
+    // when none is kept for that hash.
+    [[nodiscard]] virtual std::optional<BaseCopy> pendingBase(const std::string& rootSha256) = 0;
     // A root the chain rules refused. True when it is not the root already recorded as refused: the session alerts
     // once per root, not once per pass.
     [[nodiscard]] virtual bool recordRefused(const std::string& reason, uint64_t epoch,
@@ -181,6 +188,9 @@ private:
     std::optional<RemoteHead> verifyRemoteVersionLog();
     // A loaded head that is not the recorded root: adopted when it is this writer's own past root, else returned.
     void settleMoved(RemoteHead& out, Loaded&& loaded, const ChainState& state, const std::optional<Known>& knownState);
+    // A foreign head built on a root of ours that is PUT and not recorded: that root is adopted first (its pending
+    // base copy), so the apply reconciles on it.
+    void adoptBuiltOn(const Loaded& head, const ChainState& state, const Known& knownState);
     PublishReport publishLocked(const Content& produced);
     [[nodiscard]] std::optional<Known> known() const;
     void note(Notice level, const std::string& message) const;

@@ -1022,7 +1022,12 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   directly on `known`, hash in `publishing_roots`: every root PUT since the last record, noted before the PUT, reset to
   the recorded root by each record) is adopted by `verifyRemote`;
   one only naming this identity is `ApplyStopped`. `Service::applyRemote` is serialized per vault (`applyMutex_`). A
-  head naming several writers is refused (`kCarriesForeignEnvelopes` false: replicated vaults' prerequisites).
+  head naming several writers is applied (`kCarriesForeignEnvelopes`; refused only on a `mirror` vault). Migration 147:
+  other writers' envelope kids kept as references (`manifest_foreign_envelope`, named for recipients this vault's
+  grants have), the pending root's base copy (`remote_manifest_pending`, `Session::adoptBuiltOn`), the recorded
+  root's `writers` (a trash is purged locally only while another writer exists), and the last apply
+  (`manifest_apply_report`, `ManifestApply::status`: `storage.vault.get` `manifest`, `vh vault sync info`; a stopped
+  apply alerts once, `manifest_apply_stopped`).
 - **`vh vault recover`** (#371, spec 03 §6.4): `vault::recover` (plan: envelopes, export, `loadForRestore` with the
   kit's checkpoint or blind, D1 `prove` against the customer's pinned attestation keys, reconciliation, `MeteredStore`
   download budget), `db::query::vault::Recover` (one transaction: vault, tree with inodes, trash, index, provider

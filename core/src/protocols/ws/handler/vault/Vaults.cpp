@@ -265,6 +265,7 @@ json Vaults::detailsJson(const vh::ops::vaults::Details& details) {
     if (details.vault->type == VaultType::S3) {
         out = *std::static_pointer_cast<S3Vault>(details.vault);
         if (const auto remote = std::dynamic_pointer_cast<RemotePolicy>(details.sync)) out["sync"] = *remote;
+        if (details.manifest) out["manifest"] = *details.manifest;
     } else out = *details.vault;
     out["owner"] = details.owner_name;
     out["remote"] = details.remote;

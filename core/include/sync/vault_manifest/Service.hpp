@@ -67,6 +67,7 @@ private:
     uint32_t vaultId_;
     manifest::Uid vaultUid_;
     std::shared_ptr<vault::EncryptionManager> keys_;
+    std::shared_ptr<manifest::ObjectStore> store_;
     manifest::Session session_;
 };
 

@@ -7,6 +7,8 @@
 #include "vault/model/Vault.hpp"
 #include "sync/Fwd.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <nlohmann/json_fwd.hpp>
 
 #include <chrono>
@@ -96,6 +98,8 @@ struct Details {
     // none | attaching:<state> | attached (ops::vault_remote::remoteSummary): whether the vault has remote storage, or
     // is being given one.
     std::string remote{"none"};
+    // opaque_v1 vaults: the encrypted manifest's status (db::query::sync::ManifestApply::status).
+    std::optional<nlohmann::json> manifest{};
 };
 
 enum class SyncStart { Started, RerunQueued };

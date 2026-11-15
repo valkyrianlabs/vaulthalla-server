@@ -49,7 +49,36 @@ std::vector<WsModel> vaultModels() {
          str("remote").opt().desc("storage.vault.get: none (a local vault), attaching:<state> (a remote is being "
                                   "attached: vault.remote.status), attached (an S3 vault) or detaching:<state> (an "
                                   "S3 vault becoming local)."),
-         object("sync", "RemoteSyncPolicy").opt().desc("storage.vault.get of an S3 vault.")}));
+         object("sync", "RemoteSyncPolicy").opt().desc("storage.vault.get of an S3 vault."),
+         object("manifest", "VaultManifestStatus").opt().desc("storage.vault.get of an opaque_v1 S3 vault: its "
+                                                              "encrypted manifest.")}));
+
+    out.push_back(model("VaultManifestStatus",
+        "The encrypted manifest of an opaque_v1 vault (db::query::sync::ManifestApply::status): the recorded root, an "
+        "apply in progress, the root's writers, entries waiting for an open file to close and the last apply of a root "
+        "this server did not publish (design/sync/manifest-applier.md).",
+        {uinteger("epoch").nullable().desc("The recorded root's epoch; null before the first."),
+         uinteger("own_epoch").nullable().desc("The last root this server published itself."),
+         uinteger("applying_epoch").nullable().desc("An apply that has not finished: nothing is published meanwhile."),
+         strArray("writers").desc("The node ids the recorded root names as its writers."),
+         uinteger("deferred").desc("Entries an apply deferred until their open file closes."),
+         object("last_apply", "ManifestApplyReport").nullable().desc("null: no root was applied here yet.")}));
+
+    out.push_back(model("ManifestApplyReport",
+        "The last apply of another writer's root (manifest_apply_report, migration 147).",
+        {uinteger("epoch"),
+         str("producer").desc("The node id that published the root."),
+         boolean("recorded").desc("The root became the recorded one; false: an operation was skipped (a local write "
+                                  "since the collect) and the next pass applies it again."),
+         boolean("union_base").desc("No usable base copy: merged without one (nothing deleted)."),
+         uinteger("applied"), uinteger("skipped"), uinteger("deferred"),
+         uinteger("kept").desc("Left to the planner, or kept for a local edit."),
+         uinteger("conflicts_decided"), uinteger("conflicts_open"),
+         strArray("notes"),
+         str("at").desc("ISO-8601 UTC."),
+         str("stopped").nullable().desc("The reason the last apply stopped at its root (the pass stalls; alerted once): "
+                                        "manifest_key_missing, manifest_key_mismatch, manifest_head_incomplete, "
+                                        "manifest_mirror_shared; null when it did not stop.")}));
 
     out.push_back(model("AccessibleVault",
         "A vault the caller reaches (ops::vaults::toJson(AccessibleVault), core/src/ops/Vaults.cpp): a summary of the "

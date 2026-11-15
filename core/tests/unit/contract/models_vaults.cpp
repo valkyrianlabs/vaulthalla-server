@@ -98,6 +98,29 @@ void checkVaultModels(Checker& c) {
     c.check(Vaults::detailsJson({.vault = s3, .sync = remotePolicy(false), .owner_name = "alice",
                                  .remote = "attaching:cutover"}), "Vault",
             "storage.vault.get of an S3 vault, unlimited");
+    c.check(Vaults::detailsJson({.vault = s3, .sync = remotePolicy(false), .owner_name = "alice", .remote = "attached",
+                                 .manifest = json{{"epoch", 7}, {"own_epoch", 6}, {"applying_epoch", nullptr},
+                                                  {"writers", json::array({"node-a", "node-b"})}, {"deferred", 1},
+                                                  {"last_apply", {{"epoch", 7}, {"producer", "node-b"},
+                                                                  {"recorded", true}, {"union_base", false},
+                                                                  {"applied", 3}, {"skipped", 0}, {"deferred", 1},
+                                                                  {"kept", 0}, {"conflicts_decided", 1},
+                                                                  {"conflicts_open", 0}, {"notes", json::array()},
+                                                                  {"at", "2026-11-15T00:00:00Z"},
+                                                                  {"stopped", nullptr}}}}}),
+            "Vault", "storage.vault.get of an opaque_v1 vault with its manifest status");
+    c.check(Vaults::detailsJson({.vault = s3, .sync = remotePolicy(false), .owner_name = "alice", .remote = "attached",
+                                 .manifest = json{{"epoch", 7}, {"own_epoch", nullptr}, {"applying_epoch", 8},
+                                                  {"writers", json::array({"node-a"})}, {"deferred", 0},
+                                                  {"last_apply", {{"epoch", 8}, {"producer", "node-b"},
+                                                                  {"recorded", false}, {"union_base", true},
+                                                                  {"applied", 0}, {"skipped", 0}, {"deferred", 0},
+                                                                  {"kept", 0}, {"conflicts_decided", 0},
+                                                                  {"conflicts_open", 0},
+                                                                  {"notes", json::array({"a note"})},
+                                                                  {"at", "2026-11-15T00:00:00Z"},
+                                                                  {"stopped", "manifest_key_missing"}}}}}),
+            "Vault", "storage.vault.get of an opaque_v1 vault whose apply stopped");
     c.check(Vaults::detailsJson({.vault = local, .sync = nullptr, .owner_name = "", .remote = "none"}), "Vault",
             "storage.vault.get of a local vault");
 

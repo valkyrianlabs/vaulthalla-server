@@ -15,6 +15,7 @@
 #include "db/query/vault/Vault.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/sync/RemoteObjectIndex.hpp"
+#include "db/query/sync/ManifestApply.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "CommandUsage.hpp"
 #include "rbac/resolver/vault/all.hpp"
@@ -602,6 +603,30 @@ static CommandResult handle_vault_sync_events(const CommandCall& call) {
     }
 }
 
+// The encrypted manifest of an opaque_v1 vault (db::query::sync::ManifestApply::status): the recorded root, the
+// writers, an apply in progress, entries waiting for a file to close, and the last apply of another writer's root.
+static std::string manifestStatusString(const std::shared_ptr<vh::storage::Engine>& engine) {
+    const auto s3 = std::dynamic_pointer_cast<vh::vault::model::S3Vault>(engine->vault);
+    if (!s3 || s3->storage_layout != vh::vault::model::StorageLayout::OpaqueV1) return {};
+    const auto st = db::query::sync::ManifestApply::status(engine->vault->id);
+    const auto num = [](const nlohmann::json& v) { return v.is_null() ? std::string("none") : std::to_string(v.get<uint64_t>()); };
+    std::ostringstream out;
+    out << "\nManifest:\n  root epoch: " << num(st["epoch"]) << " (last own: " << num(st["own_epoch"]) << ")\n";
+    if (!st["applying_epoch"].is_null()) out << "  applying: epoch " << num(st["applying_epoch"]) << " (incomplete)\n";
+    if (st["writers"].size() > 1) out << "  writers: " << st["writers"].size() << "\n";
+    if (st["deferred"].get<int64_t>() > 0) out << "  deferred until closed: " << st["deferred"].get<int64_t>() << "\n";
+    if (const auto& a = st["last_apply"]; !a.is_null()) {
+        out << "  last apply: epoch " << a["epoch"].get<uint64_t>() << " from node " << a["producer"].get<std::string>()
+            << " at " << a["at"].get<std::string>() << (a["recorded"].get<bool>() ? "" : " (not recorded)") << "\n"
+            << "    applied " << a["applied"] << ", skipped " << a["skipped"] << ", deferred " << a["deferred"]
+            << ", kept " << a["kept"] << "; conflicts decided " << a["conflicts_decided"] << ", open "
+            << a["conflicts_open"] << (a["union_base"].get<bool>() ? "; merged without a base copy" : "") << "\n";
+        if (!a["stopped"].is_null()) out << "    stopped: " << a["stopped"].get<std::string>() << "\n";
+        for (const auto& n : a["notes"]) out << "    note: " << n.get<std::string>() << "\n";
+    }
+    return out.str();
+}
+
 static CommandResult handle_vault_sync_info(const CommandCall& call) {
     constexpr const auto* ERR = "vault sync info";
 
@@ -624,7 +649,8 @@ static CommandResult handle_vault_sync_info(const CommandCall& call) {
     if (engine->vault->type == VaultType::S3) {
         const auto rsync = std::static_pointer_cast<RemotePolicy>(engine->sync);
         const auto summary = db::query::sync::RemoteObjectIndex::summaryForVault(engine->vault->id);
-        return ok(to_string(rsync) + remoteIndexSummaryString(summary, rsync->max_remote_index_age));
+        return ok(to_string(rsync) + remoteIndexSummaryString(summary, rsync->max_remote_index_age) +
+                  manifestStatusString(engine));
     }
 
     return ok(to_string(engine->sync));

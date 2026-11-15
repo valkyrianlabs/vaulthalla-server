@@ -1,4 +1,5 @@
 #include "ops/Vaults.hpp"
+#include "db/query/sync/ManifestApply.hpp"
 #include "ops/VaultRemote.hpp"
 #include "auth/stepup/StepUp.hpp"
 
@@ -677,6 +678,9 @@ Details get(const Actor& actor, const unsigned int vaultId) {
     Details out{.vault = requireVault(vaultId), .sync = nullptr, .owner_name = {}, .remote = {}};
     out.sync = currentPolicy(vaultId);
     out.remote = vault_remote::remoteSummary(vaultId, out.vault->type == VaultType::S3);
+    if (const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(out.vault);
+        s3 && s3->storage_layout == vault::model::StorageLayout::OpaqueV1)
+        out.manifest = db::query::sync::ManifestApply::status(vaultId);
     if (const auto owner = vh::identities::manager().user(out.vault->owner_id)) out.owner_name = owner->name();
     return out;
 }

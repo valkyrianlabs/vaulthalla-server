@@ -15,6 +15,9 @@
 #include "fs/model/file/Trashed.hpp"
 #include "fuse/WorkingCopies.hpp"
 #include "log/Registry.hpp"
+#include "notifications/OperatorNotificationBus.hpp"
+#include "storage/CloudEngine.hpp"
+#include "sync/model/RemotePolicy.hpp"
 #include "recovery/local/Snapshots.hpp"
 #include "recovery/local/Versions.hpp"
 #include "runtime/Deps.hpp"
@@ -24,7 +27,10 @@
 
 #include <fmt/format.h>
 
+#include <vl/keykit/kev1.hpp>
+
 #include <algorithm>
+#include <set>
 #include <filesystem>
 #include <mutex>
 
@@ -291,9 +297,10 @@ Outcome execute(const Ctx& c, const mf::Op& op, const mf::Content& ours) {
         return Outcome::Applied;
     }
     case mf::OpKind::AddEnvelopes:
-        // Envelope rows belong to this server's grants, which come from the account's signed policy, never from
-        // another replica's root (design: "Decided by the maintainer").
-        return Outcome::Kept;
+        // Never grant or envelope rows (grants come only from the account's signed policy): the other writer's kids
+        // were read into manifest_foreign_envelope before the first transaction (carryEnvelopes), and the collector
+        // names those whose recipient one of this vault's grants has.
+        return Outcome::Applied;
     case mf::OpKind::CreateDir:
     case mf::OpKind::Create:
     case mf::OpKind::Restore: return create(c, op);
@@ -310,6 +317,73 @@ Outcome execute(const Ctx& c, const mf::Op& op, const mf::Content& ours) {
     case mf::OpKind::DeleteSnapshot: return snapshot(c, op);
     }
     return Outcome::Skipped;
+}
+
+// Other writers' envelope kids (design: "Foreign envelopes"): each one this vault doesn't know is read once from the
+// bucket and kept as a reference when it is an envelope of this vault and that key version whose kid is its hash. No
+// grant row, no envelope row: what roots name is decided by the collector from this vault's grants.
+void carryEnvelopes(const Ctx& c, const mf::Uid& vaultUid, const mf::Loaded& head, mf::ObjectStore* store) {
+    if (!store) return;
+    std::set<std::string> known;
+    bool loaded = false;
+    for (const auto& k : head.root.keys) {
+        if (!k.envelopes) continue;
+        for (const auto& kid : *k.envelopes) {
+            if (!loaded) {
+                known = Q::knownKids(c.vaultId);
+                loaded = true;
+            }
+            if (known.contains(kid)) continue;
+            try {
+                const auto obj = store->get(".vaulthalla/key/" + kid);
+                if (!obj) {
+                    c.note("envelope " + kid + " is not in the bucket; not carried");
+                    continue;
+                }
+                const auto digest = mf::sha256Hex(obj->bytes);
+                mf::Uid first{};
+                for (std::size_t i = 0; i < first.size(); ++i)
+                    first[i] = static_cast<uint8_t>(std::stoi(digest.substr(2 * i, 2), nullptr, 16));
+                const auto header = vl::keykit::kev1::inspect(obj->bytes);
+                if (mf::uidText(first) != kid || header.key_version != k.version ||
+                    !std::equal(header.vault_uid.begin(), header.vault_uid.end(), vaultUid.begin()) ||
+                    header.recipient_class != 0) {
+                    c.note("envelope " + kid + " is not an envelope of this vault and key version " +
+                           std::to_string(k.version) + "; not carried");
+                    continue;
+                }
+                static constexpr char kHex[] = "0123456789abcdef";
+                std::string recipient;
+                for (const auto b : header.recipient_id) {
+                    recipient += kHex[b >> 4];
+                    recipient += kHex[b & 0x0f];
+                }
+                Q::addForeignEnvelope(c.vaultId, kid, k.version, recipient);
+            } catch (const std::exception& e) {
+                c.note("envelope " + kid + " not carried: " + e.what());
+            }
+        }
+    }
+}
+
+// The apply stops at this root (the pass stalls); the operator is alerted once per root and reason.
+[[noreturn]] void stop(const uint32_t vaultId, const mf::Loaded& head, const std::string& reason, const std::string& why) {
+    if (Q::noteStopped(vaultId, head.acceptance.epoch, head.acceptance.root_sha256, head.root.producer.node_id, reason)) {
+        notifications::OperatorNotification n;
+        n.eventKey = "manifest_apply_stopped";
+        n.eventType = "sync";
+        n.severity = "warning";
+        n.recipientGroup = "security";
+        n.fingerprint = fmt::format("manifest-apply:{}:{}:{}", vaultId, reason, head.acceptance.root_sha256);
+        n.rendered.subject = fmt::format("[Vaulthalla] Vault {} can't take in a manifest root ({})", vaultId, reason);
+        n.rendered.text = why + "\n\nThe vault's sync is stalled; nothing was changed.\n";
+        n.rendered.html = "<p>" + why + "</p><p>The vault's sync is stalled; nothing was changed.</p>";
+        n.tags = {{"event_type", "sync"}, {"severity", "warning"}, {"vault_id", std::to_string(vaultId)},
+                  {"reason", reason}};
+        if (!notifications::OperatorNotificationBus::instance().enqueue(std::move(n)))
+            log::Registry::sync()->warn("[ManifestApply] Dropped the stopped-apply alert for vault {}", vaultId);
+    }
+    throw ApplyStopped(why);
 }
 
 Ctx contextFor(const uint32_t vaultId, const ApplyOptions& options, ApplyReport& report) {
@@ -366,15 +440,22 @@ ApplyReport apply(const uint32_t vaultId, const manifest::Uid& vaultUid, const c
     report.root_sha256 = head.acceptance.root_sha256;
     report.producer = head.root.producer.node_id;
     if (!head.issues.empty() || !head.blind_ranges.empty())
-        throw ApplyStopped(fmt::format("the root of epoch {} did not load completely ({} segment issue(s)); applying it "
-                                       "would delete what it lost",
-                                       head.acceptance.epoch, head.issues.size()));
+        d::stop(vaultId, head, "manifest_head_incomplete",
+                fmt::format("the root of epoch {} did not load completely ({} segment issue(s)); applying it would delete "
+                            "what it lost",
+                            head.acceptance.epoch, head.issues.size()));
 
-    if (!kCarriesForeignEnvelopes && head.root.writers && head.root.writers->size() > 1)
-        throw ApplyStopped(fmt::format(
-            "the root of epoch {} names {} writers: replicated vaults are not supported (among their prerequisites, "
-            "another writer's recovery envelope kids are not carried into this server's roots yet)",
-            head.acceptance.epoch, head.root.writers->size()));
+    auto c = d::contextFor(vaultId, options, report);
+    const bool shared = head.root.writers && head.root.writers->size() > 1;
+    if (shared) {
+        const auto cloud = std::dynamic_pointer_cast<storage::CloudEngine>(c.engine);
+        if (cloud && cloud->remote_policy()->strategy == sync::model::RemotePolicy::Strategy::Mirror)
+            d::stop(vaultId, head, "manifest_mirror_shared",
+                    fmt::format("the root of epoch {} names {} writers, and this vault syncs with the mirror strategy, "
+                                "which deletes remote objects its database doesn't hold: another writer's would go",
+                                head.acceptance.epoch, head.root.writers->size()));
+    }
+    if (kCarriesForeignEnvelopes) d::carryEnvelopes(c, vaultUid, head, options.store);
 
     (void)finishDeferred(vaultId, options);
 
@@ -396,11 +477,20 @@ ApplyReport apply(const uint32_t vaultId, const manifest::Uid& vaultUid, const c
     if (rec.stopped()) {
         std::string codes;
         for (const auto& p : rec.key_problems) codes += fmt::format("{}{} (version {})", codes.empty() ? "" : ", ", p.code, p.version);
-        throw ApplyStopped("the root of epoch " + std::to_string(head.acceptance.epoch) + " can't be applied: " + codes);
+        d::stop(vaultId, head, rec.key_problems.front().code,
+                "the root of epoch " + std::to_string(head.acceptance.epoch) + " can't be applied: " + codes);
     }
     report.conflicts = rec.conflicts;
+    std::size_t openConflicts = 0;
+    for (const auto& k : rec.conflicts) openConflicts += k.open ? 1 : 0;
+    const auto save = [&] {
+        d::Q::saveReport(vaultId, {.epoch = report.epoch, .root_sha256 = report.root_sha256, .producer = report.producer,
+                                   .recorded = report.recorded, .union_base = report.union_base,
+                                   .applied = report.applied, .skipped = report.skipped, .deferred = report.deferred,
+                                   .kept = report.kept, .conflicts_decided = rec.conflicts.size() - openConflicts,
+                                   .conflicts_open = openConflicts, .notes = report.notes});
+    };
 
-    auto c = d::contextFor(vaultId, options, report);
     c.epoch = head.acceptance.epoch;
     c.rootSha = head.acceptance.root_sha256;
     c.result = &rec.result;
@@ -422,6 +512,7 @@ ApplyReport apply(const uint32_t vaultId, const manifest::Uid& vaultUid, const c
         log::Registry::sync()->info("[ManifestApply] Vault {}: {} change(s) of epoch {} skipped (local writes since the "
                                     "collect); the next pass applies the root again",
                                     vaultId, report.skipped, head.acceptance.epoch);
+        save();
         return report;
     }
 
@@ -441,11 +532,11 @@ ApplyReport apply(const uint32_t vaultId, const manifest::Uid& vaultUid, const c
              .base_version_id = head.base_version_id,
              .settle_window = head.settle_window,
              .own = !selfNode.empty() && head.root.producer.node_id == selfNode,
-             .base = mf::baseCopyOf(head.root, head.root_bytes, head.segments, head.snapshots)});
+             .base = mf::baseCopyOf(head.root, head.root_bytes, head.segments, head.snapshots),
+             .writers = head.root.writers.value_or(std::vector<std::string>{})});
     });
     report.recorded = true;
-    std::size_t openConflicts = 0;
-    for (const auto& k : rec.conflicts) openConflicts += k.open ? 1 : 0;
+    save();
     audit::record({.action = "manifest.applied", .outcome = audit::Outcome::Success, .actor_id = std::nullopt,
                    .actor = "ManifestApplier", .vault_id = vaultId, .entry_id = std::nullopt,
                    .details = {{"epoch", static_cast<int64_t>(report.epoch)},
