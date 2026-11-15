@@ -40,6 +40,13 @@ void putU32(std::vector<uint8_t>& out, const uint32_t v) {
     out.push_back(static_cast<uint8_t>(v));
 }
 
+void setU32(uint8_t* at, const uint32_t v) {
+    at[0] = static_cast<uint8_t>(v >> 24);
+    at[1] = static_cast<uint8_t>(v >> 16);
+    at[2] = static_cast<uint8_t>(v >> 8);
+    at[3] = static_cast<uint8_t>(v);
+}
+
 uint32_t getU32(const std::span<const uint8_t> b) {
     return static_cast<uint32_t>(b[0]) << 24 | static_cast<uint32_t>(b[1]) << 16 | static_cast<uint32_t>(b[2]) << 8 |
            static_cast<uint32_t>(b[3]);
@@ -133,32 +140,37 @@ std::optional<Frame> decode(const std::span<const uint8_t> m) {
     return f;
 }
 
+// The frame builders below size each frame once and fill it in place: GCC 14 at -O3 reported reserve() followed by
+// push_back() on these vectors as freeing a non-heap pointer (-Wfree-nonheap-object, a false positive that failed the
+// -Werror package build).
 std::vector<uint8_t> encodeForTesting(const Frame& f) {
-    std::vector<uint8_t> out;
-    out.reserve(9 + f.payload.size());
-    out.push_back(static_cast<uint8_t>(f.type));
-    if (hasStream(f.type)) putU32(out, f.stream);
-    if (f.type == FrameType::Credit) putU32(out, f.credit);
-    else out.insert(out.end(), f.payload.begin(), f.payload.end());
+    const bool stream = hasStream(f.type), credit = f.type == FrameType::Credit;
+    std::vector<uint8_t> out(1 + (stream ? 4 : 0) + (credit ? 4 : f.payload.size()));
+    out[0] = static_cast<uint8_t>(f.type);
+    std::size_t at = 1;
+    if (stream) {
+        setU32(out.data() + at, f.stream);
+        at += 4;
+    }
+    if (credit) setU32(out.data() + at, f.credit);
+    else std::ranges::copy(f.payload, out.begin() + static_cast<std::ptrdiff_t>(at));
     return out;
 }
 
 std::vector<uint8_t> control(const FrameType type, const std::span<const uint8_t> payload) {
-    std::vector<uint8_t> out;
-    out.reserve(1 + payload.size());
-    out.push_back(static_cast<uint8_t>(type));
-    out.insert(out.end(), payload.begin(), payload.end());
+    std::vector<uint8_t> out(1 + payload.size());
+    out[0] = static_cast<uint8_t>(type);
+    std::ranges::copy(payload, out.begin() + 1);
     return out;
 }
 
 std::vector<uint8_t> control(const FrameType type, const std::string_view payload) { return control(type, bytesOf(payload)); }
 
 std::vector<uint8_t> data(const uint32_t stream, const std::span<const uint8_t> bytes) {
-    std::vector<uint8_t> out;
-    out.reserve(5 + bytes.size());
-    out.push_back(static_cast<uint8_t>(FrameType::Data));
-    putU32(out, stream);
-    out.insert(out.end(), bytes.begin(), bytes.end());
+    std::vector<uint8_t> out(5 + bytes.size());
+    out[0] = static_cast<uint8_t>(FrameType::Data);
+    setU32(out.data() + 1, stream);
+    std::ranges::copy(bytes, out.begin() + 5);
     return out;
 }
 
