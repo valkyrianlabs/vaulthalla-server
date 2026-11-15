@@ -67,7 +67,7 @@ const Relay = ({ status }: { status: RelayStatus }) => {
       <div className="space-y-2 text-sm text-fg-muted">
         <p>{RELAY_COPY.what}</p>
         <p>{RELAY_COPY.sees}</p>
-        <p className="text-fg-subtle">{RELAY_COPY.notOffered}</p>
+        <p className="text-fg-subtle">{RELAY_COPY.accountSwitch}</p>
       </div>
       {superAdmin ? (
         <SwitchRow

@@ -202,10 +202,13 @@ and every relayed session at once; paired browsers stay paired.
 ## The console
 
 The switch is a panel on the cloud page (`/managed-storage`, `features/cloudRelay`), shown with the `cloud.relay`
-capability to super admins and the admin cloud View permission; only super admins switch it. The pairing dialog labels
-a `via: relay` request "Web browser via Vaulthalla Cloud" and says it will be read-only; the device lists mark
-`paired_via: relay` devices Read-only; revoking is unchanged. Proven against scripted ws answers (`web/tests/e2e/
-cloud.spec.ts`, `devices.spec.ts`), not against a linked daemon: the harness has no fake cloud that can link one.
+capability to super admins and the admin cloud View permission; only super admins switch it. Until the service opens
+the console never names it (the claims lint; the convention of `managedStorage/copy.ts`): it is "the relay your account
+provides", and the device label is "Web browser (relay)". The pairing dialog marks a `via: relay` request that way and
+says it will be read-only, and its instructions say a browser is paired from the account's web page while the relay is
+on; the device lists mark `paired_via: relay` devices Read-only; revoking is unchanged. Proven against scripted ws
+answers (`web/tests/e2e/cloud.spec.ts`, `devices.spec.ts`), not against a linked daemon: the harness has no fake cloud
+that can link one.
 
 ## Not built
 

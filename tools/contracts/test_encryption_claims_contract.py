@@ -58,9 +58,6 @@ class DisallowedPhraseTests(unittest.TestCase):
         "Custodial recovery is included with managed storage.": "cloud-recovery",
         "Sign up at vaulthalla.cloud for key escrow.": "cloud-recovery",
         "Your account includes custody of your keys.": "custody-tie",
-        "Vaulthalla Cloud's relay recovers your keys.": "cloud-recovery",
-        "Restore a vault through Vaulthalla Cloud's relay.": "cloud-recovery",
-        "A web browser via Vaulthalla Cloud is available to everyone.": "cloud-recovery",
         "Subscribing to managed B2 enrolls you in key recovery.": "custody-tie",
     }
 
@@ -101,9 +98,6 @@ class AllowedWordingTests(unittest.TestCase):
         "Restoring a vault from its encrypted files alone, after the database is lost, is not possible.",
         "A vault can't be restored from its bucket alone.",
         "Vaulthalla Cloud Assisted Recovery is planned and not implemented.",
-        # The cloud relay's two console names (web/src/features/cloudRelay/copy.ts).
-        "This server opens one outbound connection to Vaulthalla Cloud's relay.",
-        "Web browser via Vaulthalla Cloud",
         "Custodial recovery is planned; it isn't available.",
         "Do not escrow content-decryption material to Valkyrian Labs.",
         "Vaulthalla doesn't make an operator HIPAA compliant.",

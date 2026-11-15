@@ -264,9 +264,10 @@ test.describe.serial('cloud page', () => {
     await page.goto('/managed-storage')
     const panel = page.getByTestId('cloud-relay')
     await expect(panel.getByTestId('cloud-relay-state')).toHaveText('Off')
-    await expect(panel).toContainText("this server opens one outbound connection to Vaulthalla Cloud's relay")
+    await expect(panel).toContainText('this server opens one outbound connection to the relay your account provides')
     await expect(panel).toContainText("The relay passes encrypted bytes it can't read")
-    await expect(panel).toContainText("Vaulthalla Cloud isn't offered to the public yet")
+    await expect(panel).toContainText('must also have switched the relay on for this server')
+    await expect(page.locator('main')).not.toContainText(/vaulthalla cloud|vaulthalla\.cloud/i)
     await expect(panel).not.toContainText(/blind/i)
     await shoot(page, 'relay-off')
 

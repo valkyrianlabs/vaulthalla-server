@@ -181,9 +181,8 @@ waiting, stopped), "Switched on by X on DATE" (the server keeps who switched it 
 accepted / refused streams. Super admins get the switch: `confirm()`, then `cloud.relay.enable` (the device.trust
 step-up through the shell's dialog) or `.disable`, whose answer replaces the cached status; off on a `not_linked` server;
 "Try again" on `stopped` resends enable (no step-up: it is already on). Every sentence is in `copy.ts`; the device
-pages' words in `labels.ts` (small, in `/devices`' first load). The claims lint allows the names "Vaulthalla Cloud's
-relay" and "Web browser via Vaulthalla Cloud" only (`RELAY_MENTION`), and the panel says the service isn't offered to
-the public yet.
+pages' words in `labels.ts` (small, in `/devices`' first load). Until the service opens nothing names it (claims lint,
+as `managedStorage/copy.ts`): "the relay your account provides", "Web browser (relay)"; `copy.test.ts` checks it.
 
 ## Sync conflicts (#187)
 
@@ -240,8 +239,9 @@ permission bits (D3): any signed-in user, super-admin parts gated with `useCan({
   `vaulthalla://pair?node=&spki=&endpoints=` (`pairLink.ts`; node omitted while the open carries no `node_id`; list
   percent-encoded), and warns everyone when `endpoints.listening` is false. Until the contract is regenerated these
   members are read through `readPairingBootstrap`, a narrow guard.
-- **Relay-paired browsers** (design/cloud/relay.md): a pending request with `via: relay` reads "Web browser via
-  Vaulthalla Cloud", says it will be read-only and asks which code the browser shows; a device with `paired_via:
+- **Relay-paired browsers** (design/cloud/relay.md): a pending request with `via: relay` reads "Web browser (relay)",
+  says it will be read-only and asks which code the browser shows (the instructions add that a browser is paired from
+  the account's web page while the relay is on); a device with `paired_via:
   relay` gets a Read-only badge in the name cell (shown at every width), that label in the Platform column and "This
   browser" in the revoke confirmation. Decided by `via` / `paired_via`, never the platform string.
 - **Remote connections** (`RemoteConnectionsCard`, `/devices/all#remote-connections`): `device.remote.status` (30 s

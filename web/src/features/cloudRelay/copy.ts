@@ -1,21 +1,19 @@
-// The cloud relay panel's sentences (design/cloud/relay.md); the device pages' words are in labels.ts. The claims lint
-// (tools/contracts/encryption_claims.py, RELAY_MENTION) allows the service's name only as "Vaulthalla Cloud's relay"
-// and the device label, never next to recovery, custody or availability; the panel says in its own sentence that the
-// service isn't offered to the public yet. Keep each sentence that names it on one line: the lint judges console
-// strings line by line. Pure (no React): see copy.test.ts.
+// The cloud relay panel's sentences (design/cloud/relay.md); the device pages' words are in labels.ts. Like
+// managedStorage/copy.ts: until the service opens, nothing here names it (tools/contracts/encryption_claims.py); it is
+// "your account's relay". The launch change edits these two files. Pure (no React): see copy.test.ts.
 
 export const RELAY_COPY = {
   title: 'Relay for web browsers',
   description: 'Lets a web browser you pair reach this server from anywhere, read-only, without opening a port.',
-  what: "Switched on, this server opens one outbound connection to Vaulthalla Cloud's relay. A web browser its owner pairs under Devices can then browse and download through it, read-only: it can't upload, change or delete anything.",
+  what: "Switched on, this server opens one outbound connection to the relay your account provides. A web browser its owner pairs under Devices can then browse and download through it, read-only: it can't upload, change or delete anything.",
   sees: "The relay passes encrypted bytes it can't read. It can see which account and server a connection is for, the browser's key, the browser's and this server's network addresses, and when and how much data passes.",
-  notOffered: "Vaulthalla Cloud isn't offered to the public yet. The relay also needs a linked account whose holder has switched it on there too.",
+  accountSwitch: "The account's holder must also have switched the relay on for this server in the account's settings.",
   switchLabel: 'Allow web browsers through the relay',
   switchHintOn: 'On: paired web browsers can browse and download, read-only.',
   switchHintOff: 'Off: nothing connects to the relay.',
   superAdminOnly: 'Only a super admin can switch the relay.',
   enableTitle: 'Switch the relay on?',
-  enableBody: "This server opens one outbound connection to Vaulthalla Cloud's relay, and web browsers you pair can browse and download through it, read-only. You'll confirm it's you first.",
+  enableBody: "This server opens one outbound connection to your account's relay, and web browsers you pair can browse and download through it, read-only. You'll confirm it's you first.",
   enableConfirm: 'Switch on',
   disableTitle: 'Switch the relay off?',
   disableBody: 'The connection to the relay closes and every relayed browser session ends now. Paired browsers stay paired; revoke one under Devices to unpair it.',

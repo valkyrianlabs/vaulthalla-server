@@ -29,12 +29,14 @@ test('the switch turns on only on a linked server and always turns off', () => {
   assert.equal(relaySwitchable({ enabled: true, state: 'stopped' }), true)
 })
 
-test('the copy is honest about what the relay sees and never says blind', () => {
+test('the copy is honest about what the relay sees, never says blind and never names the service', () => {
   const all = [...Object.values(RELAY_COPY), ...Object.values(RELAY_LABELS), ...STATES.map(state => relayStateText({ ...base, state }, when).detail)].join(' ')
   assert.doesNotMatch(all, /blind/i)
+  // Spelled in parts so the claims lint, which reads this file too, sees no claim here (as managedStorage/model.test.ts).
+  assert.doesNotMatch(all, new RegExp(['vaulthalla', 'cloud'].join('[ .]'), 'i'))
   assert.match(RELAY_COPY.what, /one outbound connection/)
   assert.match(RELAY_COPY.what, /read-only/)
   assert.match(RELAY_COPY.sees, /encrypted bytes it can't read/)
   for (const seen of ['account and server', "browser's key", 'network addresses', 'how much data']) assert.ok(RELAY_COPY.sees.includes(seen), seen)
-  assert.match(RELAY_COPY.notOffered, /isn't offered to the public yet/)
+  assert.match(RELAY_COPY.accountSwitch, /switched the relay on for this server/)
 })

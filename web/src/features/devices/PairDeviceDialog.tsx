@@ -326,6 +326,9 @@ const Instructions = ({
         <li>The Mac shows a six-digit code. Click the same code on its request below.</li>
         <li>A wrong code declines the request, so compare before you click.</li>
       </ol>
+      <p className="mt-2 text-xs text-fg-subtle" data-testid="pair-browser-hint">
+        {RELAY_LABELS.pairBrowser}
+      </p>
       {listener && !listener.remote && !local ? (
         <p className="mt-3 flex items-start gap-2 text-warn" data-testid="pair-remote-off">
           <TriangleExclamationIcon className="mt-0.5 size-4 shrink-0" aria-hidden />
