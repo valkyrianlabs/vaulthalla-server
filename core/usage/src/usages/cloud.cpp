@@ -155,6 +155,45 @@ std::shared_ptr<CommandUsage> key(const std::weak_ptr<CommandUsage>& parent) {
     return cmd;
 }
 
+// `vh cloud relay ...`: browsers reaching this server through Vaulthalla Cloud (design/cloud/relay.md).
+std::shared_ptr<CommandUsage> relay(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->aliases = {"relay"};
+    cmd->description = "The relay: with it on, this server keeps one outbound connection to Vaulthalla Cloud, and a "
+                       "browser paired with it (like a Desktop, approved here with a code) reaches its files read-only "
+                       "through that connection, encrypted end to end. Off by default; the account holder has a switch "
+                       "too, and both must be on.";
+    const auto self = cmd->weak_from_this();
+
+    auto status = build(self);
+    status->effect = CommandEffect::Read;
+    status->aliases = {"status"};
+    status->description = "The switch, the connection's state as the service last saw it (never assumed), when it must "
+                          "renew, the last error and the relayed streams.";
+    status->optional_flags = {jsonFlag};
+    status->examples = {{"vh cloud relay status", "Show the relay."}};
+
+    auto enable = build(self);
+    enable->effect = CommandEffect::Write;
+    enable->aliases = {"enable", "on"};
+    enable->description = "Switch the relay on for this linked server: relayed pairing requests and paired browsers can "
+                          "reach it. Super admins only; a device-trust confirmation.";
+    enable->optional_flags = {jsonFlag};
+    enable->examples = {{"vh cloud relay enable", "Switch the relay on."}};
+
+    auto disable = build(self);
+    disable->effect = CommandEffect::Write;
+    disable->aliases = {"disable", "off"};
+    disable->description = "Switch the relay off: the connection and every relayed session close at once. Paired "
+                           "browsers stay paired (`vh device revoke` unpairs one). Super admins only.";
+    disable->optional_flags = {jsonFlag};
+    disable->examples = {{"vh cloud relay disable", "Switch the relay off."}};
+
+    cmd->subcommands = {status, enable, disable};
+    cmd->examples = {{"vh cloud relay status", "Show the relay."}};
+    return cmd;
+}
+
 // `vh cloud storage ...`: managed storage (design/cloud/managed-remotes.md).
 std::shared_ptr<CommandUsage> storage(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
@@ -276,7 +315,7 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
                         "vaulthalla.cloud isn't open yet.";
     root->subcommands = {link(root->weak_from_this()), status(root->weak_from_this()), unlink(root->weak_from_this()),
                          recovery(root->weak_from_this()), key(root->weak_from_this()),
-                         storage(root->weak_from_this())};
+                         storage(root->weak_from_this()), relay(root->weak_from_this())};
     root->examples = {
         {"vh cloud link", "Link this server to your vaulthalla.cloud account."},
         {"vh cloud status", "Show the link."},

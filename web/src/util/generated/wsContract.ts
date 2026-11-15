@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '64a009cd00663c9efb771f113e6b6598bfa6e51facac18f1a9e49df1d7221032'
+export const WS_CONTRACT_HASH = 'a43ab9d66b2ef337fb29c29963aa3c0b0a9e6b329f536e21699f73e01c1c57d2'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '2a7b8cbc9ae3209c308ea6fdd3dd8016c3c43fadbae82b5b6b3e6beac858a696'
+export const WS_MODELS_HASH = '549db1427b6daa3e18a250ed3436f7fe67528988fe0f30ced5972ac87e4232d5'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -19,6 +19,7 @@ export const WS_PROTOCOL_MIN = 1
 export const WS_CAPABILITIES: readonly string[] = [
   'auth.step_up',
   'cloud.account_key',
+  'cloud.relay',
   'cloud.storage.managed_remotes',
   'device.endpoints',
   'device.lanes.download',
@@ -279,6 +280,24 @@ export interface WsModels {
     account_key?: { generation: number; fingerprint: string } | null
   }
   /**
+   * The Vaulthalla Cloud relay (design/cloud/relay.md): ops::cloud_relay::toJson(RelayStatus).
+   */
+  'CloudRelayStatus': {
+    state: 'off' | 'not_linked' | 'listener_off' | 'connecting' | 'connected' | 'backoff' | 'waiting' | 'stopped'
+    enabled: boolean
+    enabled_by: string | null
+    enabled_at: number | null
+    relay_url: string | null
+    connected_since: number | null
+    renew_by: number | null
+    last_ticket_at: number | null
+    next_attempt_at: number | null
+    last_error: string | null
+    streams: number
+    streams_accepted: number
+    streams_refused: number
+  }
+  /**
    * ops::cloud_storage::toJson(EndedConfirmation).
    */
   'CloudStorageEndedConfirmation': { confirmed: boolean; since: number | null; vaults: number }
@@ -537,6 +556,7 @@ export interface WsModels {
     last_ip: string | null
     revoked_at: number | null
     revoked: boolean
+    paired_via: 'listener' | 'relay'
   }
   /**
    * device_server.advertise.* (Config.cpp to_json(DeviceAdvertiseConfig); docs/reference/transfer-protocol.md
@@ -4169,6 +4189,74 @@ export interface WsContract {
     }
   }
   /**
+   * Switch the relay off: the connection and every relayed session close at once; paired browsers stay paired
+   * (device.revoke unpairs one). Super admins.
+   */
+  'cloud.relay.disable': {
+    payload: null
+    response: {
+      state: 'off' | 'not_linked' | 'listener_off' | 'connecting' | 'connected' | 'backoff' | 'waiting' | 'stopped'
+      enabled: boolean
+      enabled_by: string | null
+      enabled_at: number | null
+      relay_url: string | null
+      connected_since: number | null
+      renew_by: number | null
+      last_ticket_at: number | null
+      next_attempt_at: number | null
+      last_error: string | null
+      streams: number
+      streams_accepted: number
+      streams_refused: number
+    }
+  }
+  /**
+   * Switch the relay on for this linked server: browsers paired through Vaulthalla Cloud reach it (read
+   * only), and relayed pairing requests can arrive while a pairing window is open. The account holder's
+   * switch at the cloud must be on too. Super admins; conflict when not linked.
+   */
+  'cloud.relay.enable': {
+    payload: null
+    response: {
+      state: 'off' | 'not_linked' | 'listener_off' | 'connecting' | 'connected' | 'backoff' | 'waiting' | 'stopped'
+      enabled: boolean
+      enabled_by: string | null
+      enabled_at: number | null
+      relay_url: string | null
+      connected_since: number | null
+      renew_by: number | null
+      last_ticket_at: number | null
+      next_attempt_at: number | null
+      last_error: string | null
+      streams: number
+      streams_accepted: number
+      streams_refused: number
+    }
+  }
+  /**
+   * The relay's local switch and the outbound connection as the service last saw it (connected only after the
+   * relay admitted it), when it must renew, the last error and the relayed streams. Reads the database and
+   * the service's memory, no cloud call. Super admins or the admin cloud View permission.
+   */
+  'cloud.relay.status': {
+    payload: null
+    response: {
+      state: 'off' | 'not_linked' | 'listener_off' | 'connecting' | 'connected' | 'backoff' | 'waiting' | 'stopped'
+      enabled: boolean
+      enabled_by: string | null
+      enabled_at: number | null
+      relay_url: string | null
+      connected_since: number | null
+      renew_by: number | null
+      last_ticket_at: number | null
+      next_attempt_at: number | null
+      last_error: string | null
+      streams: number
+      streams_accepted: number
+      streams_refused: number
+    }
+  }
+  /**
    * The address of the account's billing page (checkout: choose a plan; portal: manage it), to open in a
    * browser; short-lived and never stored. The service polls the account's state fast for a few minutes
    * afterwards. The admin cloud Billing permission.
@@ -4628,6 +4716,7 @@ export interface WsContract {
         device_id: string
         code_choices: string[]
         approval_key_present: boolean
+        via: 'listener' | 'relay'
         created_at: number
         expires_at: number
       }[]
@@ -7569,6 +7658,9 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'cloud.key.refresh',
   'cloud.key.status',
   'cloud.link.status',
+  'cloud.relay.disable',
+  'cloud.relay.enable',
+  'cloud.relay.status',
   'cloud.storage.billing.handoff',
   'cloud.storage.ended.confirm',
   'cloud.storage.new_vaults',
@@ -7876,6 +7968,7 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'auth.user.delete': 'identity.admin',
   'auth.user.update': 'identity.admin',
   'cloud.key.confirm': 'keys',
+  'cloud.relay.enable': 'device.trust',
   'device.approval.key.register': 'device.trust',
   'device.backup.grant.confirm': 'device.trust',
   'device.backup.grant.create': 'device.trust',
@@ -7976,6 +8069,9 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'cloud.key.refresh': 15000,
   'cloud.key.status': 15000,
   'cloud.link.status': 15000,
+  'cloud.relay.disable': 15000,
+  'cloud.relay.enable': 15000,
+  'cloud.relay.status': 15000,
   'cloud.storage.billing.handoff': 15000,
   'cloud.storage.ended.confirm': 15000,
   'cloud.storage.new_vaults': 15000,

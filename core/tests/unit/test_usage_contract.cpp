@@ -474,7 +474,7 @@ TEST(UsageContract, EnvelopeDescribesTheFramesTheDaemonSends) {
     }
     EXPECT_TRUE(std::ranges::is_sorted(codes));
     EXPECT_EQ(codes, (std::vector<std::string>{"conflict", "denied", "device_unknown", "invalid", "not_found",
-                                               "unknown_command"}));
+                                               "relay_read_only", "unknown_command"}));
     EXPECT_EQ(document().at("envelope").at("error_codes").size(), codes.size());
 }
 

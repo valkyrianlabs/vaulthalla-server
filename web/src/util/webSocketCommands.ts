@@ -1074,6 +1074,10 @@ export interface WebSocketCommandMap {
   'cloud.storage.ended.confirm': WsContract['cloud.storage.ended.confirm']
   'cloud.storage.new_vaults': WsContract['cloud.storage.new_vaults']
   'cloud.storage.billing.handoff': WsContract['cloud.storage.billing.handoff']
+  // The Vaulthalla Cloud relay's local switch (design/cloud/relay.md); typed from the server's contract.
+  'cloud.relay.status': WsContract['cloud.relay.status']
+  'cloud.relay.enable': WsContract['cloud.relay.enable']
+  'cloud.relay.disable': WsContract['cloud.relay.disable']
 }
 
 export type WSCommandPayload<K extends keyof WebSocketCommandMap> = WebSocketCommandMap[K]['payload']

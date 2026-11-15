@@ -28,6 +28,12 @@ std::vector<Capability> capabilities() {
                         "automatically (cloud.storage.status, .switch, .offer.accept, .offer.decline, .rotate, "
                         ".new_vaults, .billing.handoff). Whether it is available is runtime state "
                         "(cloud.storage.status `available`)."},
+        {.name = "cloud.relay",
+         .since = "1.23.0",
+         .description = "A linked server can keep an outbound connection to the Vaulthalla Cloud relay, switched by a "
+                        "super admin (cloud.relay.status, .enable, .disable). Browsers reach it through relayed streams "
+                        "on the device listener, pair like a device (device.pairing.pending `via`, device.list "
+                        "`paired_via`) and are held to the read-only set (data.code relay_read_only)."},
         {.name = "device.endpoints",
          .since = "1.20.0",
          .description = "ws device.endpoints answers a paired device with where the listener can be reached; "

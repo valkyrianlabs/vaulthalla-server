@@ -1,5 +1,6 @@
 #include "protocols/ws/Handler.hpp"
 #include "protocols/ws/Router.hpp"
+#include "protocols/ws/handler/CloudRelay.hpp"
 #include "protocols/ws/handler/Auth.hpp"
 #include "protocols/ws/handler/Mfa.hpp"
 #include "protocols/ws/handler/StepUp.hpp"
@@ -181,6 +182,10 @@ void Handler::registerVaultKeyHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("cloud.storage.ended.confirm", &handler::VaultKeys::cloudStorageEndedConfirm);
     r->registerPayload("cloud.storage.new_vaults", &handler::VaultKeys::cloudStorageNewVaults);
     r->registerPayload("cloud.storage.billing.handoff", &handler::VaultKeys::cloudStorageBillingHandoff);
+    // design/cloud/relay.md: the relay's local switch (the service talks to the cloud).
+    r->registerPayload("cloud.relay.status", &handler::CloudRelay::status);
+    r->registerPayload("cloud.relay.enable", &handler::CloudRelay::enable);
+    r->registerPayload("cloud.relay.disable", &handler::CloudRelay::disable);
 }
 
 void Handler::registerMetaHandlers(const std::shared_ptr<Router>& r) {

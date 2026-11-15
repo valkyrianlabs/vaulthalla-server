@@ -223,6 +223,9 @@ std::vector<WsCommandUsage> deviceCommands() {
                                  {str("request_id"), str("name"), str("platform"), str("app_version"),
                                   str("source_ip"), hex64("device_id"), strArray("code_choices"),
                                   boolean("approval_key_present"),
+                                  str("via").oneOf({"listener", "relay"}).desc(
+                                      "relay: a web browser asking through Vaulthalla Cloud (from the connection, never "
+                                      "the platform it names); it is paired read-only."),
                                   uinteger("created_at"), uinteger("expires_at")}),
                      uinteger("server_time").desc("The node's clock (Unix seconds), to count down by.")},
         .refusal_codes = opsRefusals(),
@@ -482,6 +485,41 @@ std::vector<WsCommandUsage> deviceCommands() {
         .input = "none",
         .response = {listenerStatus()},
         .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    // ---- the Vaulthalla Cloud relay (design/cloud/relay.md; ops::cloud_relay) ----------------------------------------
+    out.push_back({
+        .command = "cloud.relay.status",
+        .description = "The relay's local switch and the outbound connection as the service last saw it (connected only "
+                       "after the relay admitted it), when it must renew, the last error and the relayed streams. Reads "
+                       "the database and the service's memory, no cloud call. Super admins or the admin cloud View "
+                       "permission.",
+        .input = "none",
+        .response = modelFields("CloudRelayStatus"),
+        .refusal_codes = {"denied", "unauthorized"},
+        .response_model = "CloudRelayStatus",
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "cloud.relay.enable",
+        .description = "Switch the relay on for this linked server: browsers paired through Vaulthalla Cloud reach it "
+                       "(read only), and relayed pairing requests can arrive while a pairing window is open. The account "
+                       "holder's switch at the cloud must be on too. Super admins; conflict when not linked.",
+        .input = "none",
+        .response = modelFields("CloudRelayStatus"),
+        .refusal_codes = {"denied", "conflict", "unauthorized"},
+        .response_model = "CloudRelayStatus",
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "cloud.relay.disable",
+        .description = "Switch the relay off: the connection and every relayed session close at once; paired browsers "
+                       "stay paired (device.revoke unpairs one). Super admins.",
+        .input = "none",
+        .response = modelFields("CloudRelayStatus"),
+        .refusal_codes = {"denied", "unauthorized"},
+        .response_model = "CloudRelayStatus",
         .client_timeout = kDefaultTimeout,
     });
 

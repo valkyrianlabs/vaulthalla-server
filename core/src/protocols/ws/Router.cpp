@@ -252,6 +252,27 @@ bool Router::isDeviceOnlyCommand(const std::string_view command) {
     return containsCommand(commands, command);
 }
 
+bool Router::isRelayedReadCommand(const std::string_view command) {
+    constexpr std::array commands{
+        std::string_view{"meta.hello"},
+        std::string_view{"meta.contract.get"},
+        std::string_view{"storage.vault.list"},
+        std::string_view{"storage.vault.accessible.list"},
+        std::string_view{"storage.vault.get"},
+        std::string_view{"fs.list"},
+        std::string_view{"fs.dir.list"},
+        std::string_view{"fs.metadata"},
+        std::string_view{"fs.download.start"},
+        std::string_view{"fs.download.chunk"},
+        std::string_view{"fs.download.cancel"},
+        std::string_view{"fs.changes.list"},
+        std::string_view{"fs.changes.subscribe"},
+        std::string_view{"fs.changes.unsubscribe"},
+        std::string_view{"device.list"}
+    };
+    return containsCommand(commands, command);
+}
+
 model::Response Router::unknownCommand(std::string&& command, json&& msg) {
     // The text stays what clients before the code matched on.
     return {std::move(command), std::move(msg), Status::ERROR, json{{"code", "unknown_command"}}, "Unknown command"};
@@ -268,6 +289,9 @@ Router::CommandAuthDecision Router::classifyCommand(const std::string_view comma
         // The canonical user: deactivation, deletion and permission changes apply on the very next command.
         if (session.closing() || !session.user || session.user->systemOnly() || !session.user->authorizing())
             return CommandAuthDecision::Deny;
+        // design/cloud/relay.md: a relayed browser has at most its user's rights, narrowed to reading.
+        if (const auto& peer = session.devicePeer(); peer && peer->readOnly() && !isRelayedReadCommand(command))
+            return CommandAuthDecision::DenyReadOnly;
         // No password sign-in, refresh tokens or account creation through a device; a device signs out by being
         // unpaired (device.revoke).
         if (isSessionLifecycleCommand(command) && command != "auth.isAuthenticated") return CommandAuthDecision::Deny;
@@ -340,6 +364,15 @@ void Router::routeMessage(json&& msg, const SessionPtr& session) {
                        "", fmt::format(" (command: {})", printableCommand(command)));
             Response(std::move(command), std::move(msg), Status::ERROR, json{{"code", "device_unknown"}},
                      "This device is not paired with this node.")(session);
+            return;
+        }
+
+        if (decision == CommandAuthDecision::DenyReadOnly) {
+            logRefusal(fmt::format("Relayed device asked for {} from client {}", commandForLog(command),
+                                   refusalClient(*session)),
+                       "", fmt::format(" (command: {})", printableCommand(command)));
+            Response(std::move(command), std::move(msg), Status::ERROR, json{{"code", "relay_read_only"}},
+                     "A session through Vaulthalla Cloud can only browse and download.")(session);
             return;
         }
 
