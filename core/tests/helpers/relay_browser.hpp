@@ -12,6 +12,7 @@
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/read.hpp>
+#include <boost/asio/read_until.hpp>
 #include <boost/asio/ssl.hpp>
 #include <boost/asio/write.hpp>
 #include <boost/beast/core.hpp>
@@ -152,6 +153,26 @@ public:
     }
 
     bool connect(const Proof& p = {}) { return handshake() && prove(p) && upgrade(); }
+
+    // The upgrade exactly as the portal writes it (vaulthalla-cloud-portal src/relay/ws.ts): raw bytes on the inner
+    // TLS stream; the answer's head as text (empty when none came).
+    std::string rawUpgrade(const std::string& key, const bool withProof = false) {
+        std::string req;
+        if (withProof) {  // the proof and the upgrade in one write, as a browser may send them
+            const auto record = proofRecord();
+            req.assign(record.begin(), record.end());
+        }
+        req += "GET /ws HTTP/1.1\r\nHost: vaulthalla\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                                "Sec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        bool ok = false;
+        asio::async_write(stream(), asio::buffer(req), [&](const beast::error_code& e, std::size_t) { ok = !e; });
+        if (!run() || !ok) return {};
+        std::string head;
+        asio::async_read_until(stream(), asio::dynamic_buffer(head), "\r\n\r\n",
+                               [&](const beast::error_code&, std::size_t) {});
+        (void)run();
+        return head;
+    }
 
     std::optional<json> call(const std::string& command, const json& payload = json::object()) {
         const auto id = "r" + std::to_string(++counter_);

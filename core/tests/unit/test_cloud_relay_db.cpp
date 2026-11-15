@@ -515,6 +515,23 @@ TEST_F(CloudRelayTest, AProofFromAnotherTlsSessionOrReplayedIntoANewStreamIsRefu
     EXPECT_TRUE(ok(a.browser->call("meta.hello", {{"client", {{"name", "portal"}, {"version", "1.0.0"}}}})));
 }
 
+// The portal's upgrade, written by its own small WebSocket client (which checks Sec-WebSocket-Accept): the answer
+// carries RFC 6455's accept for the key, also when the proof and the request arrive together.
+TEST_F(CloudRelayTest, AnUpgradeAsThePortalWritesItGetsTheAcceptOfItsOwnKey) {
+    const BrowserKey key;
+    auto d = direct(key);
+    ASSERT_TRUE(d.browser->handshake() && d.browser->prove());
+    const std::string wsKey = "dGhlIHNhbXBsZSBub25jZQ==";  // RFC 6455's own example: accept s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+    const auto head = d.browser->rawUpgrade(wsKey);
+    EXPECT_TRUE(head.starts_with("HTTP/1.1 101")) << head;
+    EXPECT_NE(head.find("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"), std::string::npos) << head;
+    // The proof and the upgrade arriving together.
+    auto e = direct(key);
+    ASSERT_TRUE(e.browser->handshake());
+    const auto together = e.browser->rawUpgrade(wsKey, true);
+    EXPECT_NE(together.find("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"), std::string::npos) << together;
+}
+
 TEST_F(CloudRelayTest, ABrowserPairsThroughTheRelayAndIsHeldToTheReadOnlySet) {
     const BrowserKey key;
     const auto device = pair(key, owner);
