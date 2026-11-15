@@ -95,6 +95,13 @@ CommandResult handleStatus(const CommandCall& call) {
                "keys export <vault>\n";
     }
 
+    if (!health.vaultsManifestUnpublishable.empty()) {
+        out << "vaults whose encrypted manifest can't be published on their bucket (their sync stalls):\n";
+        for (const auto& v : health.vaultsManifestUnpublishable)
+            out << "  - " << v.vaultName << " (ID " << v.vaultId << "): " << v.reason << " — " << v.detail << "\n";
+        out << "  check: vh vault storage probe <vault>\n";
+    }
+
     if (health.database) {
         const auto& pool = *health.database;
         out << "database pool:\n";

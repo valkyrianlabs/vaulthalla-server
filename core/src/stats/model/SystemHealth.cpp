@@ -11,6 +11,7 @@
 #include "runtime/Deps.hpp"
 #include "runtime/Manager.hpp"
 #include "storage/Manager.hpp"
+#include "db/query/vault/BucketCapability.hpp"
 #include "db/query/vault/LayoutMigration.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "log/Registry.hpp"
@@ -121,6 +122,7 @@ SystemHealthStatus computeOverallStatus(const SystemHealth& health) {
     const bool ok = health.runtime.allRunning
         && health.vaultsUnavailable.empty()
         && health.vaultsRecoveryMaterialMissing.empty()
+        && health.vaultsManifestUnpublishable.empty()
         && health.deps.secretsWarning.empty()
         && health.database->brokenIdle == 0
         && protocolsHealthy(health.protocols, health.s3Gateway)
@@ -244,6 +246,13 @@ SystemHealth SystemHealth::snapshot() {
             }
         } catch (const std::exception& e) {
             log::Registry::vaulthalla()->warn("[SystemHealth] recovery material check failed: {}", e.what());
+        }
+        try {
+            for (const auto& v : db::query::vault::BucketCapability::unpublishable())
+                out.vaultsManifestUnpublishable.push_back({.vaultId = v.vault_id, .vaultName = v.vault_name,
+                                                           .reason = v.reason, .detail = v.detail});
+        } catch (const std::exception& e) {
+            log::Registry::vaulthalla()->warn("[SystemHealth] bucket capability check failed: {}", e.what());
         }
         try {
             const auto legacy = db::query::vault::LayoutMigration::legacySummary();
@@ -415,6 +424,15 @@ void to_json(nlohmann::json& j, const VaultRecoveryMaterialHealth& health) {
     };
 }
 
+void to_json(nlohmann::json& j, const VaultManifestUnpublishableHealth& health) {
+    j = nlohmann::json{
+        {"vault_id", health.vaultId},
+        {"vault_name", health.vaultName},
+        {"reason", health.reason},
+        {"detail", health.detail},
+    };
+}
+
 void to_json(nlohmann::json& j, const LegacyContentHealth& health) {
     j = nlohmann::json{
         {"remaining", health.remaining},
@@ -437,6 +455,7 @@ void to_json(nlohmann::json& j, const SystemHealth& health) {
         {"database", health.database ? nlohmann::json(*health.database) : nlohmann::json(nullptr)},
         {"vaults_unavailable", health.vaultsUnavailable},
         {"vaults_recovery_material_missing", health.vaultsRecoveryMaterialMissing},
+        {"vaults_manifest_unpublishable", health.vaultsManifestUnpublishable},
         {"legacy_content", health.legacyContent ? nlohmann::json(*health.legacyContent) : nlohmann::json(nullptr)},
         {"summary", health.summary},
     };

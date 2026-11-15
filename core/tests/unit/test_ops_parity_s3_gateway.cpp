@@ -74,7 +74,7 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_ops_parity_s3_gateway", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_ops_parity_s3_gateway")) return;
 
         if (!runtime::Deps::get().shellUsageManager)
             runtime::Deps::get().shellUsageManager = std::make_shared<protocols::shell::UsageManager>();

@@ -180,6 +180,7 @@ struct Plan {
     std::optional<uint64_t> epoch;
     std::optional<std::string> root_sha256;
     std::optional<std::string> root_etag;
+    std::optional<std::string> root_version_id;   // version_log buckets: the canonical head's provider version
     sync::manifest::Freshness freshness{sync::manifest::Freshness::Unverified};
     std::string freshness_report;
     std::vector<std::string> issues;               // manifest fallbacks (segments from versions, older roots, blind)
@@ -237,6 +238,16 @@ public:
     [[nodiscard]] std::vector<sync::manifest::ListedObject> list(const std::string& prefix) override;
     [[nodiscard]] std::vector<sync::manifest::StoredVersion> versions(const std::string& key) override;
     void remove(const std::string& key) override { inner_->remove(key); }
+    sync::manifest::PutResult put(const std::string& key, const std::vector<uint8_t>& bytes) override {
+        return inner_->put(key, bytes);
+    }
+    [[nodiscard]] std::vector<sync::manifest::StoredVersion> versionsUnder(const std::string& prefix) override {
+        return inner_->versionsUnder(prefix);
+    }
+    void removeVersion(const std::string& key, const std::string& versionId) override {
+        inner_->removeVersion(key, versionId);
+    }
+    [[nodiscard]] storage::s3::WriteCapability mode() const override { return inner_->mode(); }
 
 private:
     void count(const std::string& key, uint64_t bytes, bool ranged);

@@ -321,6 +321,18 @@ Moves an encrypting S3/R2 vault from path-named objects (`path_v0`) to opaque st
 resumes it after a failure), shows where it stands, and after the waiting period lists and then deletes the old
 path-named object versions. See [Migrating A Vault To Opaque Storage](/vaults/encryption#migrating-a-vault-to-opaque-storage).
 
+## Vault Storage
+
+```bash
+vh vault storage probe <vault> [--json]
+```
+
+Probes what the vault's bucket supports for writes that must never overwrite another writer's object (conditional
+PUT honoured, rejected or ignored; object versions; GET with If-Match), records the result and deletes the few probe
+objects it wrote. Every bucket is probed when a vault is created on it or moved to it; run this after the endpoint or
+provider changed, or when a vault reports `bucket_capability_changed`. See
+[Providers Without Conditional Writes](/vaults/s3-r2-vaults#providers-without-conditional-writes).
+
 ## File Recovery
 
 Earlier versions of files come from three places: local snapshots you take, local versions kept automatically when

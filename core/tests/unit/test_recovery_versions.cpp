@@ -66,7 +66,7 @@ protected:
     inline static sfs::path scratch;
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_recovery_versions", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_recovery_versions")) return;
         scratch = root / "scratch";
         sfs::create_directories(scratch);
         recovery::local::invalidateAllPolicies();

@@ -80,7 +80,7 @@ protected:
     inline static UserPtr super;
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("device_listener", {.freshEngines = false})) return;
+        if (!setUpDbSuite("device_listener")) return;
         server = vh::device::ServerIdentity::generate();
         vh::device::setCurrentServerIdentity(server);
         ioc = std::make_shared<boost::asio::io_context>();

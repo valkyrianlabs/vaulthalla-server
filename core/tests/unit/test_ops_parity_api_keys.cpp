@@ -55,7 +55,7 @@ protected:
     }
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_ops_parity_api_keys", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_ops_parity_api_keys")) return;
         router = test::parity::shellRouter();
         protocols::shell::commands::registerAPIKeyCommands(router);
 

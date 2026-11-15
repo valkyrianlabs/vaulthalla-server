@@ -160,7 +160,7 @@ protected:
     AuthRuntime auth_{{.level = policy::Level::Admins, .mfaHook = true}};
 
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("mfa_signin", {.freshEngines = false})) return;
+        if (!setUpDbSuite("mfa_signin")) return;
         try {
             (void)keys::seal();
             (void)keys::pepper();

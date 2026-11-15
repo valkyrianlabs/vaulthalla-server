@@ -10,6 +10,7 @@
 #include "ops/Error.hpp"
 #include "rbac/permission/admin/Keys.hpp"
 #include "runtime/Deps.hpp"
+#include "storage/BucketCapability.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/upstream/Guard.hpp"
@@ -186,6 +187,8 @@ Status start(const Actor& actor, const StartRequest& request) {
         throw Conflict(fmt::format("vault '{}' already has a layout migration ({})", vault->name,
                                    vault::layout::to_string(existing->state)));
     try {
+        // The capability as the bucket answers now, not as a probe once recorded it (spec 01 §6.1 step 5).
+        (void)storage::bucket_capability::reprobe(vault->id, *engine->s3Controller());
         vault::layout::requirePreconditions(*engine);
     } catch (const std::exception& e) {
         throw Conflict(fmt::format("vault '{}' can't migrate now: {}", vault->name, e.what()));

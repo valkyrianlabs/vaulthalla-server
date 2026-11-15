@@ -1,0 +1,413 @@
+# 06. Publishing the manifest on buckets without conditional writes
+
+Status: design for review (managed storage plan of 2026-11-12, workstream E, step 0). Work items 2-5 (§9) are
+implemented: the capability probe (§7), and the `version_log` publish, read, repair, GC and `writers` (§5). Each
+section's "As implemented" note records where the code differs from or adds to the text. §8.3's automated suite ran
+once against Backblaze (2026-11-12, us-west-004): every provider behaviour was as expected; the one failure was a wrong
+assertion in the test, fixed since and not rerun.
+Depends on [01](01-provider-blind-storage.md) and [03](03-metadata-recovery.md); used by
+[`design/cloud/mirrors.md`](../cloud/mirrors.md). Normative words: MUST, MUST NOT, SHOULD.
+
+A second publish path for the `opaque_v1` manifest (spec 03 §3) on versioned buckets that reject `If-Match` /
+`If-None-Match` on PUT, as B2 does, for one writer and several, and how the server picks it per bucket. It
+changes no VHF1, KEV1, key or segment format and does not design mirrors, which need more (`mirrors.md`).
+
+## 1. Decisions this spec encodes
+
+- **Decided (Cooper, 2026-11-12, plan §3.1):** one bucket per vault; mirrored deployments optional, per vault, solo by
+  default, starting simple with the existing conflict resolution. **Earlier (#329, spec 01 §1):** managed storage
+  enforces `encrypt_upstream=true` and `opaque_v1`. Everything else here is a proposal; open choices are in §10.
+- **Found, not decided:** B2 answers conditional PUTs with `501 NotImplemented`. Confirmed live on 2026-11-12
+  (`s3.us-west-004`, both `If-None-Match: *` and `If-Match`, nothing written), after reports from others.
+
+## 2. Today: what depends on conditional writes
+
+| Write | Condition | Code | What the condition protects |
+|---|---|---|---|
+| Root `.vaulthalla/root` | `If-Match: <known ETag>`; `If-None-Match: *` at epoch 1 | `manifest::publish` (`sync/manifest/Publisher.cpp`), `S3Store::putIfMatch/putIfAbsent` (`Store.cpp:78-94`) | the lost update between writers: the loser gets 412, loads, verifies, merges, retries (spec 03 §3.4 step 3). A rebuilt root (`loadBase`, §4.2 (b)) is PUT with `If-Match` on the unreadable root's ETag, so it never overwrites an authentic root published meanwhile |
+| Segments, snapshot segments `.vaulthalla/seg/<sid>` | `If-None-Match: *` | `Publisher.cpp` ("a fresh 128-bit sid: never exists"; a 412 is not caught) | overwriting an object of the same name: only a sid collision or a hostile bucket writer |
+| Layout hint `.vaulthalla/layout.json` | `If-None-Match: *`, 412 ignored | `Publisher.cpp`, first publish | keeps an existing hint (identical for every writer) |
+| Envelopes `.vaulthalla/key/<kid>` | `If-None-Match: *`, 412 ignored | `vault/RecoveryEnvelopes.cpp:77` | idempotence only: `kid` is the envelope's hash, so the same name holds the same bytes |
+| `path_v0` index `.vaulthalla/index-v1.json` | `If-Match` / `If-None-Match: *` | `CloudEngine::publishRemoteIndexManifest` (`CloudEngine.cpp:547-581`), retry loops (`:583-618`, `applyRemoteIndexMutation`) | a sync cache against concurrent overwrite; every vault that is not `opaque_v1` |
+| Layout migration | spec 01 §6.1 step 5 refuses without conditional PUT; §6.2 says `If-None-Match` on `o/` | as built (#373): `requirePreconditions` (`vault/LayoutMigration.cpp:1323`) has no probe; `putMigratedObject` (`storage/CloudEngineLayoutMigration.cpp:21`) PUTs unconditionally | only the manifest its `verifying` state publishes needs it |
+| Content `o/<uid>` | none | `CloudEngine` upload paths; its one conditional call (`CloudEngine.cpp:565`) is the index row above | — |
+
+`storage/s3/buffer.cpp:99-180` maps 409/412 to `ConditionalRequestFailed`, any other failure (501 too) to
+`std::runtime_error`. Read-side preconditions, GET `If-Match` (`s3/stream.cpp:146`: hydration, ranged reads, conflicts,
+provider restore) and `x-amz-copy-source-if-match` (`s3/version.cpp:365`), are probed too (§7); the reports concern PUT.
+
+### 2.1 What this means for BYOS vaults on B2 today
+
+**They are broken.** The 501 is confirmed; what follows is read from the code, not reproduced with a server. **`opaque_v1`** (every new
+encrypting vault since #371): content uploads land, but every publish fails at its first segment PUT, each pass that
+changed anything ends in an error, and **no root is ever written**, so `vh vault recover` has only the blind rebuild
+(names and tree lost, spec 03 §4.3). Envelope PUTs fail: recipient enrollment fails, and so does rotating a vault that
+has a recipient (envelopes go first, spec 03 §5.8). **`path_v0`:** every changing pass fails at the index publish after
+its uploads, and the stale-index gate (`Cloud::initBins`) probably stalls a quiet vault after 24 h. No external
+customer exists, so the fix ships without a transition.
+
+## 3. The starting sketch, evaluated
+
+Writers are honest, uncoordinated daemons holding the vault key (no channel between them, clocks untrusted; each
+serializes its own publishes); the bucket is untrusted as in spec 03 §4.5. The sketch (random names for write-once
+objects; an unconditional root PUT, then the key's version list; among roots naming the same `prev` the earliest by
+provider order wins; the loser removes its version and republishes merged; readers ignore losing siblings) is
+**sound only with these corrections**:
+
+1. **Earliest-wins is the only stable rule** (latest-wins lets a slow writer overturn everyone), and only if listings
+   show every earlier version and never insert one below a version already seen (A3, A4).
+2. **It needs a chain from an anchor:** a root built on a loser is a loser although its `prev` is unique (§5.1).
+3. **A root is known only once settled:** today `recordRoot`/`verifyRemote` adopt a root at once, and a reader that
+   adopted a loser would later call the winner a fork.
+4. **Crashed losers need repair, and lifecycle must never expire noncurrent roots** (a winner under a crashed loser
+   would vanish); **GC must follow the canonical chain;** **A3/A4 violations must be detected and stop publishing.**
+5. **Collisions need no read-back:** 128-bit sids don't collide in practice, envelopes are content-addressed, the hint
+   is identical for every writer, and the root's SHA-256 pins catch the rest.
+
+| Alternative | Verdict |
+|---|---|
+| **Versions of `.vaulthalla/root` as the log** (the corrected sketch, §5) | Recommended: one key, so the HEAD-only no-change check, spec 03's readers, restores and the wave 4 reader keep their object; one LIST more per publish |
+| **Epoch-named roots** `.vaulthalla/roots/<epoch>/<random>` | No versioning needed, but still a tie-break: the same assumptions, or a longest-chain rule that accepts reorganizations (weaker rollback detection); every no-change pass becomes a LIST; a format change for all readers. Kept for providers with neither conditional PUT nor versioning (refused today, §7) |
+| **Arbiter at vaulthalla.cloud** (a compare-and-swap pointer per vault) | Last resort, rejected: every publish would depend on the cloud being up, BYOS without an account couldn't use it, a cloud call would sit on the sync path, and the cloud could withhold or fork a vault's history |
+
+## 4. Assumptions about the provider
+
+B2 documents always-on versioning, `ListObjectVersions`, delete-by-name hiding only the newest version, and delete by
+version id; not listing consistency or the order of near-simultaneous versions. **Checked live on 2026-11-12**
+(`s3.us-west-004`, one run, `misc/s3_version_checks.py`): A1, A2, A5, A7 and A8 held in every check. A3 held in 200
+sequential PUT-then-list trials and A4 with six concurrent writers on one key (72 versions, 72 listings, none out of
+order): evidence, not proof. **Not verified:** a writer whose body stalls while others commit (B2 answered the
+stalled PUT with `500 InternalError`), and A6 (the run stopped before the lifecycle check).
+
+| | Assumption | Needed by |
+|---|---|---|
+| A1 | every PUT creates a new version and returns `x-amz-version-id` | all |
+| A2 | `ListObjectVersions` lists one key's versions newest first with id, ETag, `IsLatest`, and pages correctly | all |
+| A3 | listings are linearizable with PUTs: a listing issued after a PUT returned shows that version and every version ordered before it | two or more writers |
+| A4 | the order is commit order and stable: no version ever appears below one a listing already showed; ties ordered alike for all clients | two or more writers |
+| A5 | GET and DELETE by version id work; deleting the newest version makes the previous one current | all |
+| A6 | no lifecycle rule expires noncurrent `.vaulthalla/root` versions (configuration; B2 rules are per name prefix) | all |
+| A7 | a single PUT's ETag is its body's MD5 (else §5.2 step 2 fetches and hashes) | optimization |
+| A8 | GET `If-Match` and `x-amz-copy-source-if-match` are honoured | read paths (§2) |
+
+## 5. The `version_log` publish path
+
+### 5.1 The canonical chain (rule C1)
+
+*L* = the authentic versions of `.vaulthalla/root` in provider order (delete markers and versions failing the VHF1
+open are skipped). For a root *X*, **succ(X)** is the earliest version in *L* with `epoch = X.epoch + 1` and
+`prev = SHA-256(X)`. From an anchor *A* the **canonical chain** is *A*, succ(*A*), succ(succ(*A*)), …, ending at the
+**head**. The anchor is the settled known root (normal operation), the customer checkpoint (restore), or with neither
+the head of the chain in *L* whose head has the **highest epoch** (ties: the longer chain, then the earliest head;
+in honest operation that is the longest chain, since siblings are chains of one at epochs no higher than the head's).
+A chain from an anchor is **incomplete** when an authentic root newer than its head has a higher epoch than the head
+(a version missing in between, an anchor behind the bucket, or a broken provider order): the reader then reads as if
+it had no anchor and judges the result against what it knows (§5.3). Any other version is a **sibling** (canonical `prev`, not
+first), a **branch** (non-canonical `prev`), a **duplicate** (a canonical root's bytes) or **stale** (none of these:
+only tampering or replay makes one; ignored and reported as `manifest_replay`, security, warning).
+
+**As implemented (work item 5):** `sync/manifest/VersionLog.hpp`. `RootLog` is one `ListObjectVersions` of the
+root key (all pages, or down to a given version: `ObjectStore::versionsSince`); a version is opened by one GET by id
+and cached by id in `RootCache`, which the caller keeps across publishes. `walk` is C1 from an anchor (one forward
+scan: each successor sits after its predecessor; it separates the versions above the head repair may delete from
+those it must keep, `Walk::ahead`), `walkBlind` the anchorless choice (chains start at versions that are no one's
+earliest successor; highest head epoch, then the longer chain, then the earliest head), `successorOf` succ(X) from a
+position. Stale versions are
+ignored as non-canonical but **not reported** (`manifest_replay` doesn't exist yet); the root janitor deletes them
+after 24 h (§5.4).
+
+### 5.2 Writer
+
+1. Segments, snapshot segments, envelopes and the layout hint are PUT without conditions under today's names, under
+   the pass lease, before the root (spec 03 §3.4 step 1). The ETag MAY be checked against the bytes' MD5 (A7).
+2. Root on base *B* (always canonical): `epoch = B.epoch + 1`, `prev = SHA-256(B)`, new members `"publish":
+   "version_log"` and `writers` (§5.5). PUT unconditionally, keep `x-amz-version-id` (none: `SyncStalled`,
+   `bucket_capability_changed`). **A 5xx answer is an unknown outcome, like a transport error** (B2 answered a PUT
+   whose body stalled with `500 InternalError`, and such a PUT may have committed): find the version by ETag (A7) or
+   by fetching and hashing before deciding.
+3. List the key's versions (newest first, paging until *B*'s). Ours missing: list again after 1, 2, 4, 8 s; still
+   missing, the publish stays unsettled (`listing_lag` warning) and the next pass retries.
+4. Decide by C1 from *B* (one GET by version id per unknown version, cached by id: versions are immutable):
+   - **Won** (succ(*B*) is ours): record epoch, hash, ETag, **version id** and the *settle window* (ids listed between
+     *B* and ours, normally none) in `remote_manifest_state`, and the root's sids, as `recordRoot` does.
+   - **Lost** (succ(*B*) is another version): DELETE ours by id. Our changes stay pending (the database, and
+     `PublisherCache::last_produced` of our last settled publish, which the retry loop already keeps). Load the head,
+     verify it (§5.3), `mergePending` onto it, back to step 2; at most `max(3, writers + 1)` attempts, jittered.
+   - **Base displaced** (*B* no longer canonical; only when A3 or A4 fails): `order_violation`. Refuse, record and
+     alert once, as `Service::refused` does for a fork, and publish nothing more for the vault.
+5. Repair (§5.4).
+
+**As implemented:**
+
+- **Root members.** `publish` (`conditional` or `version_log`, the bucket's mode) and `writers` are written in both
+  modes. `writers` is the base root's set while it names this node, otherwise this node alone: past the §5.5 check
+  that is a base from before the member, or a node with no own epoch (a restore), which so takes the vault over.
+  Adding a node to the set is the mirror join and isn't built.
+- **Step 2.** `S3Store::put` maps every failure but a request budget or bucket protection to `PutOutcomeUnknown`.
+  The publisher then lists and looks for its version by hash among the versions after its base (a GET per version it
+  hasn't opened; the ETag isn't used): found, it goes on as if the PUT had returned; not found while the base has no
+  successor, the publish fails and records nothing (the next pass publishes again); not found while another version
+  succeeds the base, it lost.
+- **Step 3.** The listing stops at the oldest version the decision needs (the settled root's base, else this
+  publish's base; the whole log when that version is gone). A publish whose version is still missing after 1, 2, 4
+  and 8 s throws `PublishUnsettled` (the pass stalls; `listing_lag` in its reason). The next publish's root is then a
+  sibling of the unsettled one, loses to it (that root already holds the same changes), merges and settles above.
+- **Step 4.** The settle window of the previous settled root is checked after every listing of the publish, and an
+  inserted id refuses with `order_violation` before anything is recorded. A base missing from the listing (deleted
+  since it was loaded) makes the publish reload the head and retry. Attempts: max(`max_attempts` = 3, writers + 1).
+  A loser retries at once, without jitter: every round has a winner (I7), so a delay buys nothing.
+- **Recording.** `remote_manifest_state` gains `root_version_id`, `base_version_id`, `settle_window` and `own_epoch`
+  (the epoch of the last root this node published itself), migration 137.
+
+### 5.3 Reader (`Service::verifyRemote`, `manifest::load`, `vault::recover`)
+
+HEAD the root: the settled ETag means unchanged (one HEAD, as today; sound by I3). Otherwise list, apply C1 from the
+anchor, fetch and check the head's segments (spec 03 §4.1 step 3). C1 replaces spec 03 §4.2 (a)'s version fallback.
+
+| Finding | Result |
+|---|---|
+| canonical successors of the anchor | advance to the head, record it as settled |
+| only non-canonical versions above the anchor | unchanged; repair |
+| an id inside a recorded settle window that wasn't there at settlement | `order_violation`: refuse, alert |
+| anchor absent from *L*, or its chain incomplete (§5.1): best candidate older / another root at its epoch / newer roots not linking to it | `rollback` / `fork` / `gap` (the highest-epoch chain's head, warning), as today |
+| the head names another `publish` mode than the bucket's | refuse, `publish_mode_mismatch` (I9) |
+
+**As implemented:** `manifest::load` takes this path when the store's mode is `VersionLog`, or when the root
+declares `publish: version_log` (the current object, or, when that is no root at all, a delete marker or a stray, the
+newest authentic version), so `vh vault recover` reads C1 without probing first. The anchor is found by version id
+(checked against its hash), else by hash among the newest 64 versions; with none, or when the chain from it is
+incomplete (§5.1), `walkBlind`, then the chain rules against what is known (`rollback`, `fork`, `gap`): an anchor
+behind a missing version reads the newest root as a gap, a displaced writer whose rival built on top reads a fork. **The mode check sits with the writers, not the reader:** a head
+another node published in the other mode is refused when a node builds on it or adopts it (`checkHeadForWriter`),
+while a node may switch its own vault's mode after a re-probe. `Service::verifyRemote` on `version_log`: one HEAD while
+the root's ETag is the settled one; otherwise a load from the settled anchor (window checked), the §5.5 check,
+recording (not as an own root), and repair. A root found only by its hash (a state from before migration 137, or one a
+restore recorded) gets its version id recorded.
+
+### 5.4 Repair, retention, garbage collection
+
+- **Repair:** after any listing, non-canonical versions and delete markers *newer than the head* are deleted by id, so
+  the head is current again (A5), **except authentic roots of a higher epoch than the head and the roots they build
+  on**: those are the newest state of an incomplete chain (§5.1), never deleted. **Root janitor** (daily): deletes by id non-canonical versions older than 24 h and
+  canonical roots superseded over 7 days, never the head or its two predecessors (gap walk, spec 03 §4.2).
+- **Lifecycle (A6):** between a crash and the next repair the head is noncurrent; expiring it leaves the loser as sole
+  candidate, which settled readers report as a fork (a head lost anyway gets that refusal, never a silent switch). The
+  cloud's managed rule (`managed-storage.md`: noncurrent content under `o/` only) never touches `.vaulthalla/`; on
+  BYOS B2 the server sets no rule (no B2 adapter); AWS and R2 stay `conditional` with `vaulthalla-manifest-versions` as is.
+- **Segments:** `collectGarbage` keeps the last three **canonical** roots' sids; "older than 24 h" becomes "unreferenced
+  for 24 h" (`first_unreferenced_at` per sid: another writer can supersede a segment minutes after it appears); on
+  `version_log` buckets every version of a collected key is deleted by id (a B2 DELETE by name only hides one).
+
+**As implemented:** repair runs after a publish's listing (versions newer than its own root) and in
+`verifyRemote` (versions newer than the head). A publish built on a cached base doesn't repair versions that landed
+before its root: they end up below the new head, non-canonical, and go to the janitor. **Root janitor**
+(`collectRootVersions`, with the daily GC): keeps the head and its two canonical predecessors, deletes older
+canonical roots after 7 days and non-canonical versions and markers below the head after 24 h. **Segments**
+(`collectGarbageVersionLog`): `remote_manifest_gc.first_unreferenced_at` per sid, collected after 24 h unreferenced by
+the last three canonical roots, every version deleted by id. Repair (both sites) and the janitor never delete an
+authentic root of a higher epoch than the head, nor a root such a root builds on (`Walk::ahead`); the publisher logs
+the ones above its new root and leaves them to the next read. Found by the §8.2 suite (finding 7a): when A4 breaks (a
+stalled PUT ordered by its start), the writer whose version displaced a settled root used to delete that root, and
+anything built on it, as strays above its head. Now a displaced root with something on top stays with it, and the
+displacing writer's next read refuses the vault as a `fork` (`ManifestChainVersionLog.AWriterWhoseStalledRoot*`); a
+displaced root with nothing on top (an epoch equal to the head's) is still deleted, and its holder sees a `fork`
+rather than `order_violation`. Both end in a refusal, but I6 holds only under A3 and A4. With a version missing below
+the newest roots (a lifecycle rule, a manual delete) nothing newer is deleted either: the reader takes the newest
+root as a gap (`ManifestChainVersionLog.AnAnchorBehindAMissingVersion*`).
+
+### 5.5 Who may write (both paths)
+
+The root gains `writers`, the node ids allowed to publish (the producer among them; one for a solo vault). **A daemon
+not in the head's `writers` stops publishing the vault** (`manifest_superseded`, alert); any key holder may change the
+set. This closes a gap: spec 03 §6.2 step 7 expects the old node to see a fork after a restore elsewhere, but it does
+only if it published past the state the restore read; otherwise it merges the restored root as another writer's, and
+after a restart (cold `PublisherCache`: `before = theirs`) `mergePending` drops every entry its database lacks.
+
+**As implemented:** `checkHeadForWriter`, both modes, wherever a node builds on or adopts a head (the publish's
+base, `verifyRemote`). A node is superseded only by a canonical root newer than its `own_epoch`; a node with no own
+epoch (a fresh restore, a state from before migration 137) is never superseded and takes over. Found by the §8.2
+crash suite: among several concurrent writers, one restarted from its database alone drops the other writers' changes
+its database lacks (the gap above; the merge base is gone with the cache). `writers` closes it for the restore. For
+real multi-writer vaults (mirrors) the database has to take in merged heads, since neither the cached base nor the
+last settled root (which holds the merged entries) is a safe merge base after a restart. One writer, or a restore that
+took the vault over, has nothing its database lacks.
+
+### 5.6 Cases
+
+| Case | What happens |
+|---|---|
+| Writer crashes after writing a losing root | it stays newest until anyone's next listing repairs it; the crashed writer never recorded it and republishes its changes on the head after restart |
+| Crash between segments and root | orphan segments, collected after 24 h unreferenced (spec 03 §3.4) |
+| Slow writer lands long after others moved on | its `prev` already has a successor: sibling; it deletes its version and merges onto the head; readers ignore it |
+| Three writers on one base | the earliest wins, the others merge and race again; *n* writers settle within *n* rounds (I7) |
+| Reader in the middle | sees a prefix of the canonical chain (A3) and GETs the head by version id, even under a newer loser |
+| Restore elsewhere while the old node lives | the restored root has `writers = [new]`; if the old node wins a race the restore merges onto it, keeps its `writers`, and the old node stops (§5.5) |
+| Bucket replays an old root as a new version | stale: ignored, reported, repaired; rollback detection as spec 03 §4.5 |
+
+**As implemented:** "restore elsewhere while the old node lives": the restore's first publish names the restored
+node alone, and the old node, whose own epoch is set, stops at its next publish or read (`manifest_superseded`).
+
+### 5.7 Costs
+
+| Operation | `conditional` | `version_log` |
+|---|---|---|
+| Publish, no other writer | changed segments + 1 root PUT | the same + 1 `ListObjectVersions` |
+| Publish that lost once | + root and segment GETs, a retry | + 1 DELETE, 1 GET per new version, segment GETs, a retry with its LIST |
+| Pass that changed nothing | 1 HEAD | 1 HEAD |
+| Another writer published | 1 root GET + changed segments | 1 HEAD + 1 LIST + 1 GET per new version (usually 1) + changed segments |
+| Repair after a crash / daily GC | — / 1 LIST of `seg/` + DELETEs | 1 DELETE per stray version / 1 `ListObjectVersions` of `.vaulthalla/` + DELETEs by id |
+
+**As implemented** (measured on the fake bucket: `BucketCapabilityDbTest`, `ManifestPublishVersionLog*`): a solo
+publish costs the changed segments, 1 root PUT and 1 `ListObjectVersions`, no GET; a pass that changes nothing, 1
+HEAD; after a restart (database only) the first pass costs 1 HEAD, and the first publish 2 listings (the load from
+the settled anchor and the settling one), the settled root by version id and its segments, then the PUTs. The listing
+is one request while the root's history fits one page (1,000 versions; the janitor keeps a handful).
+
+## 6. Correctness
+
+| Invariant | Why it holds |
+|---|---|
+| I1 every object a root names was PUT, and its PUT returned, before the root's PUT was sent | §5.2 steps 1-2; a crash leaves orphans, never dangling names |
+| I2 C1 is a function of (*L*, anchor) | definition: everyone with the same listing computes the same chain |
+| I3 a settled root stays canonical (A3, A4) | below |
+| I4 no lost update | a root is recorded only once won; a lost root is deleted and its changes stay pending (database plus last settled base) until `mergePending` carries them onto the head |
+| I5 known advances only along the canonical chain; readers never adopt a sibling | only settled roots are recorded; content, `vault.keys.status` checkpoints and Desktop's checkpoints come from them |
+| I6 Vaulthalla deletes only non-canonical versions, canonical roots ≥ 3 epochs and 7 days behind, and segments unreferenced ≥ 24 h by the last three canonical roots | §5.4; A6 covers the provider's rules |
+| I7 *n* concurrent writers settle within *n* rounds | each round the earliest PUT on the current base wins; bounded attempts, then `PublishConflict` as today |
+| I8 a break of I3 is detected | it puts an id inside a recorded settle window; that writer's next listing (every publish and changed pass lists) refuses and alerts |
+| I9 one mode per vault | the root names its mode; readers and writers refuse a mismatch |
+
+**I3.** A writer settled *R* on listing ℓ, issued after *R*'s PUT returned; a later listing orders *S* before *R*
+with the same epoch and `prev`. By A4 *S* committed before *R*; by A3 ℓ showed *S*; so C1 on ℓ chose *S*:
+contradiction. Later commits sort after *R* (A4); every base is canonical by induction from a settled anchor. **One
+writer needs less:** no root PUT is concurrent, so A1, A2, A5, A6 suffice. **Wave 1 (solo managed and BYOS vaults)
+rests on documented B2 behaviour**; two or more writers (a mirror, a restore racing its old node) also need A3, A4.
+
+**As implemented:** I1-I9 are checked after every step of the §8.2 scheduler. Under broken A4 the suite found the
+I6 exception described in §5.4 (repair deleting a displaced settled root with nothing on top).
+
+## 7. Choosing the path
+
+**Stored per bucket:** `s3.manifest_publish` (`conditional | version_log`) and `s3.bucket_probe` (JSONB), in the next
+free migration (the first of wave 1: then attach-remote, the key manager's pin tables, managed remotes). **Probed** at S3 vault creation, attach-remote,
+managed provisioning, `vh vault recover`, mirror join, before a layout migration (spec 01 §6.1 step 5) and by `vh
+vault storage probe <vault>` (new; owner or super admin; audited), on `.vaulthalla/probe/<random uid>` (spec 01 §4.3
+holds): PUT `If-None-Match: *` (200), again (412), PUT `If-Match` wrong (412) and right (200); distinct version ids
+newest first; GET by id; GET `If-Match` mismatch (412); DELETE every version by id (a protected bucket keeps them).
+
+| Result | Mode |
+|---|---|
+| conditional PUT as expected | `conditional` |
+| conditional PUT rejected (501, 400 `NotImplemented`) or **silently ignored** (200 where 412 was due); versioning works | `version_log` |
+| neither | `opaque_v1` and managed storage refused: `bucket_capability_insufficient` |
+| GET `If-Match` fails | refused: reads depend on it (§10 Q4) |
+
+**Never silently downgraded:** a later 501 or 400 on a `conditional` bucket stalls the vault
+(`bucket_capability_changed`) until the operator re-probes (a downgrade weakens multi-writer safety and can come from a
+bad endpoint or proxy); an upgrade too, with one writer only (I9). Envelopes, hint and `path_v0` index are PUT plainly
+on non-conditional buckets.
+
+**The `Store` seam** (`sync/manifest/Store.hpp`) gains `PutResult {etag, version_id}` from a new unconditional
+`put(key, bytes)` (`Controller::lastPutOutcome()`); `StoredVersion::etag`, `is_latest`, and `versions()` in documented
+provider order, able to stop at a version id; `removeVersion(key, id)` over `Controller::deleteObjectVersion`; `mode()`,
+on which `publish`, `load` and GC branch. `Known` gains `version_id`; `remote_manifest_state` gains `root_version_id` and
+`settle_window` (text[]).
+
+**As implemented (work items 2-4; corrections to the text above):**
+
+- **Capability, four states** (`storage/s3/Capability.hpp`, `WriteCapability`): `Conditional`, `VersionLog`,
+  `Insufficient` and `Unknown` (never probed, or the probe could not run: behaves as `Conditional`, so nothing is
+  downgraded without a probe). `Insufficient` is stored as a probe with `manifest_publish` NULL; migration 136.
+- **The probe** (`storage::s3::probeBucket`) also checks GET `If-Match` with the right ETag and records whether ETags
+  are MD5s; `ignored` counts as `version_log` only when versions are kept. The probe key needed an allowlist entry
+  (`object_keys::isMetadataKey`: `.vaulthalla/probe/<uid>`); every `.vaulthalla/` key is already outside indexes,
+  listings and events. Cleanup deletes by version id (the key itself on an unversioned bucket) and counts refusals.
+- **When it runs** (`storage/BucketCapability.hpp`): vault creation and a bucket or key change (`ops::vaults`), after
+  `vh vault recover` writes (never refusing: a rescue path), at a layout migration's start, `vh vault storage probe`,
+  and lazily on first use for older rows (`resolve`, at most one failed attempt an hour). Test mode never probes on its
+  own. A key whose provider or endpoint changes clears the verdict of every vault using it (`ops::api_keys::update`).
+- **Interim refusals until §5 existed (lifted by work item 5, below):** a new encrypting (`opaque_v1`) vault on a non-conditional bucket is refused
+  at creation (`ops::Refused` `conditional_writes_unsupported` / `bucket_capability_insufficient`), as is moving an
+  `opaque_v1` vault to such a bucket and a layout migration onto one. Transparent and `path_v0` vaults are allowed
+  (their index is PUT plainly). An existing `opaque_v1` vault there: `manifest::publish` throws `PublishUnsupported`
+  before any request, the pass stalls with `manifest_publish_unsupported`, content uploads continue, and health lists
+  it (`vaults_manifest_unpublishable`, degraded).
+- **Write-once objects** go through `ObjectStore::putOnce` (`If-None-Match: *` where `sendsPreconditions(mode())`,
+  else a plain PUT): segments, snapshot segments, the layout hint, KEV1 envelopes. `putIfAbsent`/`putIfMatch` keep
+  returning the ETag (only `put` returns a `PutResult`); a root publish that needs the version id comes with §5.
+- **A refused condition** is `s3::PreconditionsUnsupported` (501, or 400 `NotImplemented`; `buffer.cpp`) and
+  `manifest::ConditionsUnsupported` in the seam, never retried without the condition. Stored `Conditional`: marked
+  `changed_at` in `bucket_probe`, alerted once (`bucket_capability_changed`), every later use stalls until a re-probe.
+  Never probed: `conditional_writes_refused`, and the next use probes (an unprobed bucket is not "changed").
+- **Work item 5** added `Known::version_id`, `root_version_id`, `base_version_id`, `settle_window` and `own_epoch`
+  (migration 137), `ObjectStore::versionsSince` (stops at a version id), `versionsUnder` (GC), and lifted the interim
+  refusals above: opaque_v1 vaults are created on, moved to and layout-migrated onto `version_log` buckets; only an
+  `Insufficient` bucket refuses (`bucket_capability_insufficient`; `PublishUnsupported` before any request); health
+  lists only insufficient or changed buckets (`vaults_manifest_unpublishable`); `conditional_writes_unsupported` is
+  gone.
+
+## 8. Test obligations
+
+**8.1 Fake bucket** (`tests/helpers/versioned_bucket.hpp`): `conditionalPuts(Supported | Reject501 | Ignore)`,
+`listingLag(n)` (breaks A3), `orderBy(Commit | Start)` with `holdPut(key)` (breaks A4), `expireNoncurrent(prefix,
+days)`. `ManifestPublish*`, `ManifestChain*` run in both modes; `ManifestProbe*` covers every row of §7's table.
+
+**8.2 Interleavings and faults** (`ManifestVersionLog*`): a deterministic scheduler steps writers (segment PUT, root
+PUT, list, GET, DELETE, retry) and readers: every interleaving of two writers and a reader, every root-PUT-level
+interleaving of three writers plus seeded random schedules. After each step I1, I2, I4-I6, I9 hold; at quiescence one
+head, nothing stray above it, every writer's changes in it. Faults: a crash at every step (restart from the database
+only), lost PUT responses, 503 after commit, failed DELETEs, a head under a crashed loser past `expireNoncurrent`
+(fails loudly). Under `listingLag` or `orderBy(Start)` every run satisfies I3 or ends in `order_violation`. Also
+`vault::recover` over a bucket holding siblings, and a solo vault paying exactly one LIST more per publish.
+
+**As implemented:** §8.1: the fake's `listingLag(s)`, `orderBy(Start)` + `holdPut(key)` (per thread: the next PUT
+of that key from that thread is inserted where it started) and `expireNoncurrent(prefix, days)`;
+`ManifestPublishVersionLog*` and `ManifestChainVersionLog*` (`test_manifest.cpp`) cover both modes' rules on a Reject501
+fake. §8.2: `ManifestVersionLog*` (`test_manifest_interleavings.cpp`). Every actor runs on its own thread over a
+`HookedStore`; the scheduling points are the root's PUT, `ListObjectVersions` and DELETE. Every other request rides in
+the slot of the preceding point: segment keys are fresh and read only through a root naming them, and a root GET by
+id reads immutable bytes and races only a DELETE of a version that is non-canonical in every listing showing it (I6),
+so neither changes a C1 decision (the file header has the argument). Within that bound: every interleaving of two
+writers and a reader (800 runs, stateless depth-first search, determinism asserted), every root-PUT-level
+interleaving of three writers, 200 seeded schedules of three writers and a reader; a crash before and after each of
+eight steps of one writer with a restart from the database only (every order of the other writer's PUTs plus 30
+seeds each); a lost PUT reply (a 5xx after the commit), a 5xx before it, failed DELETEs and listings at every step
+under every interleaving of two writers; `listingLag` (I3 holds: the fake hides a suffix of the order) and
+`orderBy(Start)` (every displaced settled root is refused by its holder; in the 300 sampled runs each writer publishes
+once, so none has a root on top of a displaced one and the repair rule's change shows only in the deterministic
+test). A head under a crashed loser past
+`expireNoncurrent` fails as `fork` (`ManifestChainVersionLog`). `vault::recover` over a bucket with a losing sibling
+and a marker: `VaultRecoverDb.OnABackblazeLike*`. The one extra LIST: `ManifestPublishVersionLog.ASoloPublish*`.
+§8.3: `LiveB2.TheManifestPublishesAsVersionsOfItsRoot` (opt-in; run once, 2026-11-12: publishes 2-4 cost 2 PUT and
+1 LIST each, the first 3 PUT and 3 LIST; one wrong test assertion, fixed, not rerun) covers the probe, publishes, a blind
+reload, a repaired sibling, GC of every version and an envelope; items 3-8 are not automated.
+
+**8.3 Live on Backblaze** (one `vh-test-*` bucket per run, deleted afterwards): (1) conditional PUTs (the coordinator's
+probe script), then §7's probe; (2) A1, A2, A7: version ids, ETag form (single and multipart), paging; (3) A3: PUT
+then list at once, same and fresh connection, thousands of trials, lag recorded; (4) A4: two to eight concurrent
+writers on one key listing after each PUT (never a version below one already seen), then a PUT whose body stalls
+30-120 s while others commit; (5) A5: delete by id the newest, a noncurrent version, a delete marker, HEAD after each;
+(6) A6: per-prefix rules leaving `.vaulthalla/root` out; does superseding count as hiding; (7) A8; a bucket-limited
+key lists versions and deletes by id; (8) the recover drill on B2, then two daemons (dev, a VM) on one bucket.
+
+## 9. Work items, in order
+
+1. Live checks (§8.3 items 1-7) once a Backblaze key exists, in parallel with 2-4.
+2. Store seam and fake bucket knobs (no behaviour change). *Done, except the knobs item 5 needs.*
+3. Capability probe, columns, `vh vault storage probe`, the layout migration precondition. *Done.*
+4. Plain PUTs where conditions bought nothing (§7): this alone fixes BYOS `path_v0` vaults and envelopes on B2. *Done.*
+5. `version_log` publish, read, repair, GC and `writers` (`Publisher`, `Reader`, `Chain`, `Service`, `vault::recover`)
+   with §8.1-8.2: solo `opaque_v1` vaults then work on B2. Managed remotes (plan workstream E) build on 3-5. *Done;
+   not yet run against Backblaze (§8.3).*
+6. The drill in `version_log` mode on the fake (`vhh drill recover`), then live (§8.3 item 8).
+7. Multi-writer enablement (wave 3) once A3 and A4 are confirmed (`mirrors.md`).
+
+## 10. Open questions (recommendation first)
+
+1. **Path for B2:** versions of the root key under C1; epoch-named roots only for providers without versioning, later.
+2. **If B2 breaks A3 or A4:** solo vaults only on B2 (mirrors refuse such buckets), plus a settle delay (decide on a
+   listing Δ after the PUT) only if the measured lag is bounded. No cloud arbiter.
+3. **Root history:** three canonical roots and seven days, kept by the janitor; no lifecycle rule on the root.
+4. **A provider failing GET `If-Match`:** refuse the bucket rather than read unpinned.
+5. **`writers` in both modes,** shipped with work item 5 (a root format addition to spec 03 §3.2).
+6. **Backblaze (plan §8):** add listing consistency and the order of near-simultaneous versions to question 1.

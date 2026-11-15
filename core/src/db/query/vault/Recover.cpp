@@ -385,9 +385,10 @@ RecoverResult Recover::apply(const RecoverInput& in) {
                                       ? std::optional<int>(static_cast<int>(*in.content->vault->recovery_policy->retention_days))
                                       : std::nullopt});
         if (in.epoch && in.root_sha256) {
-            txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, etag, epoch, root_sha256, updated_at) "
-                     "VALUES ($1, '.vaulthalla/root', $2, $3, $4, CURRENT_TIMESTAMP)",
-                     pqxx::params{vid, in.root_etag, static_cast<int64_t>(*in.epoch), *in.root_sha256});
+            txn.exec("INSERT INTO remote_manifest_state (vault_id, manifest_key, etag, epoch, root_sha256, root_version_id, "
+                     "  updated_at) VALUES ($1, '.vaulthalla/root', $2, $3, $4, $5, CURRENT_TIMESTAMP)",
+                     pqxx::params{vid, in.root_etag, static_cast<int64_t>(*in.epoch), *in.root_sha256,
+                                  in.root_version_id});
             std::string sids = "{";
             for (const auto& s : in.root_sids) sids += (sids.size() > 1 ? "," : "") + s;
             sids += "}";

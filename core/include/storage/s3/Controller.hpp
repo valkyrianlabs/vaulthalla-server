@@ -78,6 +78,15 @@ namespace vh::storage::s3 {
         explicit ConditionalRequestFailed(const std::string& message) : std::runtime_error(message) {}
     };
 
+    // A conditional PUT (If-Match / If-None-Match) the provider refused to evaluate: HTTP 501, or a 400 whose error
+    // code is NotImplemented (Backblaze B2 answers both headers with 501 NotImplemented). Nothing was written. Distinct
+    // from ConditionalRequestFailed (the condition was evaluated and did not hold) and from every other failure: the
+    // bucket can't do conditional writes at all (design/encryption/06-publish-without-preconditions.md §7).
+    class PreconditionsUnsupported final : public std::runtime_error {
+    public:
+        explicit PreconditionsUnsupported(const std::string& message) : std::runtime_error(message) {}
+    };
+
     class ObjectNotFound final : public std::runtime_error {
     public:
         explicit ObjectNotFound(const std::string& message) : std::runtime_error(message) {}

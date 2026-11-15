@@ -24,6 +24,7 @@
 #include "crypto/util/encrypt.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/sync/Manifest.hpp"
+#include "db/query/vault/BucketCapability.hpp"
 #include "db/query/vault/Key.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "fs/model/File.hpp"
@@ -33,8 +34,10 @@
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
 #include "ops/VaultRecover.hpp"
+#include "storage/BucketCapability.hpp"
 #include "storage/ObjectKeys.hpp"
 #include "storage/PlaintextReader.hpp"
+#include "storage/s3/Capability.hpp"
 #include "storage/s3/curl/Http.hpp"
 #include "sync/manifest/Objects.hpp"
 #include "sync/manifest/Store.hpp"
@@ -237,7 +240,7 @@ TEST_F(VaultRecoverTrustAnchor, PinsComeFromTheKitEntryAndExportsOfThisVault) {
 class VaultRecoverDb : public vh::test::db::Suite {
 protected:
     static void SetUpTestSuite() {
-        if (!setUpDbSuite("test_vault_recover", {.freshEngines = false})) return;
+        if (!setUpDbSuite("test_vault_recover")) return;
         if (!runtime::Deps::get().fsCache) runtime::Deps::get().fsCache = std::make_shared<fs::cache::Registry>();
     }
 
@@ -254,6 +257,7 @@ protected:
         vault::envelopes::setStoreFactoryForTesting({});
         ops::vault_recover::setStoreFactoryForTesting({});
         ops::vault_recover::setEngineHookForTesting({});
+        storage::bucket_capability::setControllerFactoryForTesting({});
     }
 
     // ---- node A: an opaque_v1 vault with history ------------------------------------------------------------------
@@ -276,9 +280,10 @@ protected:
         return runtime::Deps::get().apiKeyManager->addAPIKey(key);
     }
 
-    static void useBucket(const std::shared_ptr<VersionedBucket>& bucket) {
+    static void useBucket(const std::shared_ptr<VersionedBucket>& bucket,
+                          const storage::s3::WriteCapability mode = storage::s3::WriteCapability::Unknown) {
         vault::envelopes::setStoreFactoryForTesting(
-            [bucket](uint32_t) { return std::make_shared<mf::S3Store>(bucket); });
+            [bucket, mode](uint32_t) { return std::make_shared<mf::S3Store>(bucket, mode); });
         ops::vault_recover::setStoreFactoryForTesting(
             [bucket](unsigned, const std::string&) { return std::make_shared<mf::S3Store>(bucket); });
         ops::vault_recover::setEngineHookForTesting([bucket](const std::shared_ptr<storage::Engine>& engine) {
@@ -290,7 +295,18 @@ protected:
         });
     }
 
-    static Origin origin(const Versioning versioning = Versioning::Enabled) {
+    // A bucket that answers like Backblaze B2 (spec 06): conditional PUTs refused with 501, versions kept, MD5 ETags.
+    // The vault's binding is probed (version_log), and so is the restored vault's (through the controller factory).
+    static void likeBackblaze(const Origin& o) {
+        o.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+        o.bucket->md5Etags = true;
+        db::query::vault::BucketCapability::record(o.id, storage::s3::probeBucket(*o.bucket));
+        useBucket(o.bucket, storage::s3::WriteCapability::VersionLog);
+        storage::bucket_capability::setControllerFactoryForTesting(
+            [b = o.bucket](unsigned int, const std::string&) -> std::shared_ptr<storage::s3::Controller> { return b; });
+    }
+
+    static Origin origin(const Versioning versioning = Versioning::Enabled, const bool backblaze = false) {
         const auto v = test_support::versioned::makeCloudVault(superUser, "vr", versioning, true);
         Origin o;
         o.engine = v.engine;
@@ -300,6 +316,7 @@ protected:
         o.name = v.engine->vault->name;
         o.uid = *v.engine->vault->uid;
         useBucket(o.bucket);
+        if (backblaze) likeBackblaze(o);
         return o;
     }
 
@@ -331,8 +348,8 @@ protected:
 
     // A vault with folders, a rename, a trashed file, a purged one (a tombstone) and an empty file; a recipient
     // enrolled after the first rotation; two rotations.
-    static Origin populated(const Versioning versioning = Versioning::Enabled) {
-        auto o = origin(versioning);
+    static Origin populated(const Versioning versioning = Versioning::Enabled, const bool backblaze = false) {
+        auto o = origin(versioning, backblaze);
         o.engine->mkdir("/Reports", superUser);
         o.engine->mkdir("/Reports/2026", superUser);
         write(o, "/Reports/2026/q3.pdf", randomBytes(150'000, 1));
@@ -544,6 +561,81 @@ TEST_F(VaultRecoverDb, RestoresTheVaultOnANodeThatNeverHeldItFromTheKit) {
     EXPECT_EQ(again.report.at("epoch"), *epochB);
     EXPECT_EQ(again.report.at("canonical_versions"), json({1, 2, 3}));
     EXPECT_EQ(again.report.at("salvageable_versions"), json({4})) << "node B's version needs node B's key pinned";
+}
+
+TEST_F(VaultRecoverDb, OnABackblazeLikeBucketTheRestoreTakesTheCanonicalHeadAndPublishesOnIt) {
+    // Spec 06 §5: an opaque_v1 vault on a bucket without conditional writes publishes its root as versions; a restore
+    // reads the canonical head by rule C1 although a losing sibling and a delete marker sit above it, and its first
+    // publish (in version_log mode, after the restore's probe) chains on it and takes the vault over.
+    auto o = populated(Versioning::Enabled, /*backblaze=*/true);
+    ASSERT_EQ(db::query::vault::BucketCapability::get(o.id).capability, storage::s3::WriteCapability::VersionLog);
+    const auto state = db::query::sync::Manifest::state(o.id);
+    ASSERT_TRUE(state.epoch);
+    ASSERT_TRUE(state.root_version_id) << "the origin published its roots as versions";
+    EXPECT_EQ(o.bucket->current(std::string(mf::kRootKey))->version_id, *state.root_version_id);
+    const auto kit = kitOf(o);
+    const auto expected = db::query::sync::Manifest::collect(o.id);
+
+    // A crashed writer's sibling of the head (same epoch and prev, later in the provider's order) and a marker.
+    const auto lookup = [&](const uint32_t v) { return o.engine->encryptionManager->historicalKeySnapshot(v); };
+    auto sibling = mf::openRoot(o.bucket->version(std::string(mf::kRootKey), *state.root_version_id)->body, o.uid, lookup);
+    sibling.published_at = "2031-01-01T00:00:00Z";
+    sibling.vault->name = "a sibling that lost";
+    const auto k = o.engine->encryptionManager->currentKey();
+    const auto siblingId = o.bucket->seed(std::string(mf::kRootKey), mf::sealRoot(sibling, o.uid, {k.version, k.key}));
+    (void)o.bucket->seedDeleteMarker(std::string(mf::kRootKey));
+    becomeAnotherNode(o.id);
+
+    const auto r = recover(o, &kit, nullptr);
+    ASSERT_TRUE(r.written) << r.report.dump(2);
+    ASSERT_TRUE(r.vault_id);
+    EXPECT_EQ(r.mode, "canonical");
+    EXPECT_EQ(r.report.at("epoch"), *state.epoch) << "the canonical head, not the sibling above it";
+    const auto restored = db::query::sync::Manifest::collect(*r.vault_id);
+    EXPECT_EQ(shape(restored), shape(expected));
+    EXPECT_EQ(restored.vault->name, expected.vault->name);
+    EXPECT_EQ(db::query::vault::BucketCapability::get(*r.vault_id).capability, storage::s3::WriteCapability::VersionLog);
+
+    // The first publish settles on the head, as this node alone (a restore takes the vault over).
+    ASSERT_TRUE(r.published_epoch) << r.note.value_or("");
+    EXPECT_EQ(*r.published_epoch, *state.epoch + 1);
+    const auto after = db::query::sync::Manifest::state(*r.vault_id);
+    ASSERT_TRUE(after.root_version_id);
+    EXPECT_EQ(after.own_epoch, after.epoch);
+    const auto current = o.bucket->current(std::string(mf::kRootKey));
+    ASSERT_TRUE(current);
+    EXPECT_EQ(current->version_id, *after.root_version_id) << "the new root is the current version again";
+    const auto engine = runtime::Deps::get().storageManager->getEngine(*r.vault_id);
+    const auto cloud = std::static_pointer_cast<storage::CloudEngine>(engine);
+    const auto newRoot = mf::openRoot(current->body, o.uid, [&](const uint32_t v) {
+        return cloud->encryptionManager->historicalKeySnapshot(v);
+    });
+    EXPECT_EQ(newRoot.publish, std::string(mf::kPublishVersionLog));
+    ASSERT_TRUE(newRoot.writers);
+    EXPECT_EQ(newRoot.writers->size(), 1u);
+    EXPECT_NE(newRoot.writers->front(), sibling.producer.node_id) << "the old node is no longer a writer";
+    EXPECT_FALSE(o.bucket->version(std::string(mf::kRootKey), siblingId))
+        << "repaired: deleted by id after the restored node's first listing (spec 06 §5.4)";
+    EXPECT_FALSE(o.bucket->history(std::string(mf::kRootKey)).front().delete_marker);
+
+    // Files read back; the vault rotates, enrolls another recipient and syncs on the version_log bucket.
+    for (const auto& [path, content] : o.files) EXPECT_EQ(readFile(engine, path), content) << path;
+    cloud->remote_policy()->strategy = sync::model::RemotePolicy::Strategy::Sync;
+    Origin b{.engine = cloud, .bucket = o.bucket, .bucketName = o.bucketName, .id = *r.vault_id, .name = o.name,
+             .uid = o.uid, .seed = vl::keykit::RecoverySeed::generate().text(), .files = o.files};
+    write(b, "/after-restore.txt", bytes("written on the new node"));
+    const auto versionBefore = keys::status(superUser, b.id).front().version;
+    rotate(b);
+    enroll(b);
+    pass(b.engine);
+    EXPECT_EQ(keys::status(superUser, b.id).front().version, versionBefore + 1);
+    const auto last = db::query::sync::Manifest::state(b.id);
+    EXPECT_GT(*last.epoch, *after.epoch);
+    EXPECT_EQ(o.bucket->current(std::string(mf::kRootKey))->version_id, *last.root_version_id);
+    const auto final = db::query::sync::Manifest::collect(b.id);
+    ASSERT_TRUE(final.recovery_policy);
+    EXPECT_EQ(final.recovery_policy->grants.size(), 2u) << "the restored recipient and the new one";
+    for (const auto& [path, content] : b.files) EXPECT_EQ(readFile(engine, path), content) << path;
 }
 
 TEST_F(VaultRecoverDb, DryRunWritesNothing) {

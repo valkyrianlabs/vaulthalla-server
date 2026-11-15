@@ -4,6 +4,7 @@
 #include "db/query/identities/User.hpp"
 #include "db/query/upstream/Subscription.hpp"
 #include "db/query/vault/APIKey.hpp"
+#include "db/query/vault/BucketCapability.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
@@ -156,6 +157,11 @@ APIKeyPtr update(const Actor& actor, const Ref& ref, const Update& req) {
             runtime::Deps::get().apiKeyManager->setAccountRef(key->id, std::nullopt);
         }
     }
+
+    // Another provider or endpoint is another service: what its buckets can do is probed again on first use
+    // (design/encryption/06-publish-without-preconditions.md §7).
+    if (key->provider != previousProvider || key->endpoint != previousEndpoint)
+        db::query::vault::BucketCapability::clearForKey(key->id);
 
     // Vaults bound to the key keep their binding (same id); their live engines pick up the new credentials.
     if (const auto& storage = runtime::Deps::get().storageManager) {

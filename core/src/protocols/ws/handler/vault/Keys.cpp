@@ -5,6 +5,7 @@
 #include "ops/VaultKeys.hpp"
 #include "ops/VaultLayout.hpp"
 #include "ops/VaultRecover.hpp"
+#include "ops/VaultStorage.hpp"
 #include "identities/User.hpp"
 #include "protocols/ws/Session.hpp"
 
@@ -156,6 +157,10 @@ json VaultKeys::recover(const json& payload, const std::shared_ptr<Session>& ses
     req.salvage = flag("salvage");
     req.confirm_name = str("confirm_name");
     return ops::vault_recover::toJson(ops::vault_recover::recover(actorOf(session), req, channel));
+}
+
+json VaultKeys::storageProbe(const json& payload, const std::shared_ptr<Session>& session) {
+    return ops::vault_storage::toJson(ops::vault_storage::probe(actorOf(session), requiredVaultId(payload)));
 }
 
 json VaultKeys::layoutStatus(const json& payload, const std::shared_ptr<Session>& session) {

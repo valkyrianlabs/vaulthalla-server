@@ -1048,6 +1048,8 @@ export interface WebSocketCommandMap {
   'vault.layout.status': WsContract['vault.layout.status']
   'vault.layout.migrate': WsContract['vault.layout.migrate']
   'vault.layout.cleanup': WsContract['vault.layout.cleanup']
+  // Spec 06 §7: what the vault's bucket supports for writes that must never overwrite (conditional PUT, versions).
+  'vault.storage.probe': WsContract['vault.storage.probe']
 }
 
 export type WSCommandPayload<K extends keyof WebSocketCommandMap> = WebSocketCommandMap[K]['payload']

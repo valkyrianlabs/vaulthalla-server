@@ -7,6 +7,7 @@
 #include "storage/RemoteFetch.hpp"
 #include "sync/model/Action.hpp"
 #include "storage/s3/provider/Provider.hpp"
+#include "storage/s3/Capability.hpp"
 #include "fs/Fwd.hpp"
 #include "sync/Fwd.hpp"
 #include "vault/Fwd.hpp"
@@ -195,6 +196,10 @@ namespace vh::storage {
         void resetS3RequestMetrics() const;
         [[nodiscard]] s3::S3RequestMetrics s3RequestMetrics() const;
         [[nodiscard]] std::shared_ptr<vault::model::APIKey> s3ApiKey() const { return key_; }
+        // The bucket's write capability (storage/BucketCapability.hpp): the stored probe verdict, probed on first use
+        // for a vault from before migration 136. Throws sync::model::SyncStalled when the bucket was probed as
+        // conditional and has refused a condition since (it stays stalled until `vh vault storage probe`).
+        [[nodiscard]] s3::WriteCapability writeCapability() const;
         [[nodiscard]] s3::provider::ProfilePtr s3ProviderProfile() const { return s3Profile_; }
         [[nodiscard]] std::optional<s3::provider::StorageTier> resolvedStorageTier() const { return storageTier_; }
 
@@ -337,9 +342,11 @@ namespace vh::storage {
         mutable std::unordered_map<std::string, HydrateFailure> hydrateFailures_;
         // markRemoteIndexRebuilt: the index holds a full LIST the manifest doesn't have yet.
         mutable std::atomic<bool> remoteIndexPublishPending_{false};
-        // opaque_v1 vaults: the encrypted manifest v2 (#368, spec 03) replaces index-v1.json. Created on first use.
+        // opaque_v1 vaults: the encrypted manifest v2 (#368, spec 03) replaces index-v1.json. Created on first use, and
+        // again when the bucket's write capability changes (its store's mode() is fixed at construction).
         mutable std::mutex manifestV2Mutex_;
         mutable std::shared_ptr<sync::manifest::Service> manifestV2_;
+        mutable s3::WriteCapability manifestV2Mode_{s3::WriteCapability::Unknown};
         [[nodiscard]] bool usesManifestV2() const;
         [[nodiscard]] std::shared_ptr<sync::manifest::Service> manifestV2() const;
         // Publishes the vault's manifest v2 (and collects superseded segments once a day). A refused root (rollback,
