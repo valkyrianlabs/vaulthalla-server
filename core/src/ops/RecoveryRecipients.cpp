@@ -10,6 +10,7 @@
 #include "db/query/vault/Vault.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "ops/CloudKeys.hpp"
 #include "rbac/permission/admin/Keys.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
@@ -117,7 +118,8 @@ Recipient recipientFrom(const db::query::vault::RecoveryGrant& g,
                 .public_key = crypto::util::b64_encode(g.public_key), .suite = g.suite,
                 .recipient_class = g.recipient_class, .label = g.label, .added_at = g.added_at,
                 .authorized_by = g.authorized_by, .revoked_at = g.revoked_at, .revoked_by = g.revoked_by,
-                .envelope_versions = {}};
+                .envelope_versions = {}, .account_key_generation = g.account_key_generation,
+                .account_policy_sequence = g.account_policy_sequence};
     if (const auto it = envelopeVersions.find(g.grant_id); it != envelopeVersions.end())
         r.envelope_versions = it->second;
     return r;
@@ -166,7 +168,16 @@ AddResult add(const Actor& actor, const AddRequest& request, const vault_keys::C
         throw Conflict("vault '" + vault->name + "' has no bucket to hold its recovery envelopes");
     if (!vault->uid) throw Conflict("vault '" + vault->name + "' has no uid");
     if (request.label && request.label->size() > 200) throw Invalid("the label is longer than 200 characters");
-    const auto publicKey = parsePublicKey(request.public_key);
+    std::optional<ops::cloud_keys::PinnedKey> pinned;
+    if (request.account_key) {
+        if (!request.public_key.empty()) throw Invalid("give either a public key or the account key, not both");
+        pinned = ops::cloud_keys::pinnedKey();
+        if (!pinned)
+            throw Conflict("this server has no confirmed account recovery key: link it and confirm the key's fingerprint "
+                           "first (`vh cloud key status`)");
+    }
+    const auto publicKey = pinned ? std::vector<uint8_t>(pinned->x25519_public.begin(), pinned->x25519_public.end())
+                                  : parsePublicKey(request.public_key);
     const auto engine = engineFor(vault->id);
     if (!engine || !engine->encryptionManager)
         throw Conflict("the keys of vault '" + vault->name + "' are not available on this host, so nothing could be "
@@ -181,6 +192,12 @@ AddResult add(const Actor& actor, const AddRequest& request, const vault_keys::C
     g.recipient_class = "customer";
     g.label = request.label;
     g.authorized_by = fmt::format("user:{} via {}", actor->id, channelName(channel));
+    if (pinned) {
+        g.label = request.label.value_or("Vaulthalla Cloud recovery key (generation " +
+                                         std::to_string(pinned->generation) + ")");
+        g.account_key_generation = pinned->generation;
+        g.authorized_by += fmt::format("; account_key:{} confirmed by {}", pinned->generation, pinned->confirmed_by);
+    }
     // Step-up (#359): a recipient is a decryption path for the vault. The host CLI is exempt by design; a paired
     // device needs a person's approval on its session (#361: its approval key or a console passkey approval).
     auth::stepup::require(auth::stepup::Family::Keys, "vault.keys.recipients.add:" + std::to_string(vault->id));
@@ -205,6 +222,8 @@ AddResult add(const Actor& actor, const AddRequest& request, const vault_keys::C
                                      : "); the next sync pass writes the missing ones");
         log::Registry::crypto()->warn("[ops::recovery_recipients] vault {}: {}", vault->id, *out.note);
     }
+    // The vault is now covered by the account key: the account's recovery policy applies to it too.
+    if (pinned) ops::cloud_keys::applyPolicy(vault->id);
     requestPublish(engine);
     out.recipient = recipientOf(vault->id, g.grant_id);
     out.versions = out.recipient.envelope_versions;
@@ -214,7 +233,9 @@ AddResult add(const Actor& actor, const AddRequest& request, const vault_keys::C
                        .actor_id = actor->id, .actor = actor->name(), .vault_id = vault->id,
                        .details = {{"grant_id", g.grant_id}, {"recipient_id", g.recipient_id},
                                    {"channel", channelName(channel)},
-                                   {"envelopes", static_cast<int64_t>(out.envelopes_written)}}},
+                                   {"envelopes", static_cast<int64_t>(out.envelopes_written)}, {"automatic", false},
+                                   {"account_key_generation", pinned ? nlohmann::json(pinned->generation)
+                                                                     : nlohmann::json(nullptr)}}},
                       fmt::format("[ops::recovery_recipients] {} enrolled recovery recipient {} (recipient {}) on vault "
                                   "{} through the {}; {} envelope(s) written to the vault's {}",
                                   actor->name(), g.grant_id, g.recipient_id.substr(0, 16), vault->id,
@@ -230,6 +251,11 @@ RevokeResult revoke(const Actor& actor, const unsigned int vaultId, const std::s
     const auto existing = Grants::get(vault->id, grantId);
     if (!existing) throw NotFound("vault '" + vault->name + "' has no recovery recipient " + grantId);
     if (existing->revoked_at) throw Conflict("recovery recipient " + grantId + " is already revoked");
+    if (existing->account_policy_sequence)
+        throw Refused("recovery_policy_account_managed",
+                      "recovery recipient " + grantId + " comes from the account's signed recovery policy " +
+                          std::to_string(*existing->account_policy_sequence) + "; change the policy from Vaulthalla "
+                          "Desktop or your account page instead, and every server revokes it");
     auth::stepup::require(auth::stepup::Family::Keys, "vault.keys.recipients.revoke:" + std::to_string(vault->id));
     if (!Grants::revoke(vault->id, grantId, fmt::format("user:{} via {}", actor->id, channelName(channel))))
         throw Conflict("recovery recipient " + grantId + " is already revoked");
@@ -259,7 +285,9 @@ nlohmann::json toJson(const Recipient& r) {
             {"authorized_by", r.authorized_by},
             {"revoked_at", r.revoked_at ? nlohmann::json(static_cast<int64_t>(*r.revoked_at)) : nlohmann::json(nullptr)},
             {"revoked_by", opt(r.revoked_by)},
-            {"envelope_versions", r.envelope_versions}};
+            {"envelope_versions", r.envelope_versions},
+            {"account_key_generation", opt(r.account_key_generation)},
+            {"account_policy_sequence", opt(r.account_policy_sequence)}};
 }
 
 nlohmann::json toJson(const RecipientList& l) {

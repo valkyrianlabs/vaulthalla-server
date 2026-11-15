@@ -6,8 +6,13 @@
 #include "cloud/Signing.hpp"
 #include "config/Registry.hpp"
 #include "db/query/cloud/Link.hpp"
+#include "db/query/device/Device.hpp"
 #include "identities/User.hpp"
+#include "ops/CloudKeys.hpp"
 #include "log/Registry.hpp"
+#include "rbac/permission/admin/keys/Encryption.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include <unistd.h>
 
@@ -73,6 +78,46 @@ void forget() {
     vh::cloud::identity::destroy();
 }
 
+// The node id this server reports with a link request (device_node.node_id, a UUID string): 1 to 64 printable
+// characters without spaces, as the cloud checks it (its account-model.md, "As built" 3).
+std::string nodeIdForLink() {
+    auto id = db::query::device::Devices::nodeId();
+    if (id.empty() || id.size() > 64 ||
+        std::ranges::any_of(id, [](const unsigned char c) { return c <= 0x20 || c >= 0x7f; }))
+        throw std::runtime_error("this server's node id isn't 1 to 64 printable characters");
+    return id;
+}
+
+bool isUuidText(const std::string& s) {
+    if (s.size() != 36) return false;
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        const bool dash = i == 8 || i == 13 || i == 18 || i == 23;
+        if (dash ? s[i] != '-' : !((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f'))) return false;
+    }
+    return true;
+}
+
+bool isBase32Id(const std::string& s) {
+    static constexpr std::string_view kAlphabet = "0123456789abcdefghjkmnpqrstvwxyz";
+    return s.size() == 26 && std::ranges::all_of(s, [](const char c) { return kAlphabet.find(c) != std::string_view::npos; });
+}
+
+// The account's public id and the deployment from a claim or GET /v1/installation answer. A value the cloud sends
+// must be well formed; it may be missing (an older cloud), and the key check then can't run.
+std::optional<std::string> accountPublicIdOf(const nlohmann::json& j) {
+    if (!j.is_object() || !j.contains("account_public_id") || j["account_public_id"].is_null()) return std::nullopt;
+    if (!j["account_public_id"].is_string() || !isUuidText(j["account_public_id"].get<std::string>()))
+        throw std::runtime_error("Vaulthalla Cloud's answer has a malformed `account_public_id`");
+    return j["account_public_id"].get<std::string>();
+}
+
+std::optional<std::string> deploymentIdOf(const nlohmann::json& j) {
+    if (!j.is_object() || !j.contains("deployment_id") || j["deployment_id"].is_null()) return std::nullopt;
+    if (!j["deployment_id"].is_string() || !isBase32Id(j["deployment_id"].get<std::string>()))
+        throw std::runtime_error("Vaulthalla Cloud's answer has a malformed `deployment_id`");
+    return j["deployment_id"].get<std::string>();
+}
+
 std::time_t parseExpiry(const nlohmann::json& j) {
     if (j.contains("expires_at") && j["expires_at"].is_number_integer()) return j["expires_at"].get<std::time_t>();
     return std::time(nullptr) + 600;
@@ -89,13 +134,16 @@ LinkStarted startLink(const Actor& actor, const Channel channel, const std::opti
         throw Conflict("this server is already linked (installation " + row->installation_id.value_or("?") +
                        "); `vh cloud unlink` first");
 
+    const auto nodeId = nodeIdForLink();
     const auto seed = vh::cloud::identity::create();
     const auto pk = vh::cloud::publicKeyOf(seed.bytes());
     const auto pkText = vh::cloud::base64url(pk);
-    const auto proof = vh::cloud::signDetached("vhc-link-request-v1\n" + pkText + "\n" + name + "\nserver", seed.bytes());
+    // Proof of possession v2 (the cloud's installation-linking.md): covers the key, the name, the kind and the node id.
+    const auto proof = vh::cloud::signDetached("vhc-link-request-v2\n" + pkText + "\n" + name + "\nserver\n" + nodeId,
+                                               seed.bytes());
     const auto reply = vh::cloud::call(at, "POST", "/v1/link-requests",
                                        nlohmann::json{{"public_key", pkText}, {"name", name}, {"kind", "server"},
-                                                      {"proof", proof}});
+                                                      {"node_id", nodeId}, {"proof", proof}});
     if (!reply.ok()) {
         vh::cloud::identity::destroy();
         if (reply.status == 0) unreachable(reply);
@@ -143,13 +191,26 @@ Claim claimLink(const Actor& actor, const Channel channel) {
         if (!reply.body.contains("account_id") || !reply.body["account_id"].is_number_integer())
             throw std::runtime_error("Vaulthalla Cloud's answer has no `account_id`");
         out.account_id = reply.body["account_id"].get<int64_t>();
-        if (!Link::markLinked(*row->request_id, *out.installation_id, *out.account_id))
+        out.deployment_id = deploymentIdOf(reply.body);
+        out.account_public_id = accountPublicIdOf(reply.body);
+        if (!Link::markLinked(*row->request_id, *out.installation_id, *out.account_id, out.deployment_id,
+                              out.account_public_id))
             throw Conflict("the link request changed meanwhile");
+        nlohmann::json details{{"installation_id", *out.installation_id}, {"account_id", *out.account_id}};
+        if (out.deployment_id) details["deployment_id"] = *out.deployment_id;
+        if (out.account_public_id) details["account_public_id"] = *out.account_public_id;
         ::vh::audit::record({.action = "cloud.link", .outcome = ::vh::audit::Outcome::Success, .actor_id = actor->id,
-                       .actor = actor->name(),
-                       .details = {{"installation_id", *out.installation_id}, {"account_id", *out.account_id}}},
+                       .actor = actor->name(), .details = details},
                       "[ops::cloud] this server is linked to Vaulthalla Cloud account " +
-                          std::to_string(*out.account_id) + " as installation " + *out.installation_id);
+                          out.account_public_id.value_or(std::to_string(*out.account_id)) + " as installation " +
+                          *out.installation_id);
+        // The account recovery key is fetched and verified right away (design/cloud/key-manager.md, "Fetch"); a
+        // failure changes nothing and the background check retries.
+        try {
+            (void)::vh::ops::cloud_keys::check("link");
+        } catch (const std::exception& e) {
+            log::Registry::vaulthalla()->warn("[ops::cloud] The account recovery key check after linking failed: {}", e.what());
+        }
     } else if (out.status == "denied" || out.status == "expired") {
         forget();
         ::vh::audit::record({.action = "cloud.link.request", .outcome = ::vh::audit::Outcome::Denied, .actor_id = actor->id,
@@ -176,6 +237,8 @@ Status status(const Actor& actor) {
     out.requested_by = row->requested_by;
     out.installation_id = row->installation_id;
     out.account_id = row->account_id;
+    out.deployment_id = row->deployment_id;
+    out.account_public_id = row->account_public_id;
     out.linked_at = row->linked_at;
     out.request_expires_at = row->request_expires_at;
     if (row->status != "linked") return out;
@@ -189,6 +252,20 @@ Status status(const Actor& actor) {
                                              "GET", "/v1/installation");
     if (reply.ok()) {
         out.cloud = "ok";
+        // A link made before the cloud reported them: record them now (never replacing a recorded value).
+        try {
+            const auto publicId = accountPublicIdOf(reply.body);
+            if (publicId && !row->account_public_id && Link::fillAccount(deploymentIdOf(reply.body), *publicId)) {
+                out.account_public_id = publicId;
+                out.deployment_id = deploymentIdOf(reply.body);
+            } else if (publicId && row->account_public_id && *publicId != *row->account_public_id) {
+                out.cloud = "account_mismatch";
+                out.cloud_detail = "Vaulthalla Cloud now reports another account for this installation; nothing is "
+                                   "wrapped to it. `vh cloud unlink`, then link again";
+            }
+        } catch (const std::exception& e) {
+            out.cloud_detail = e.what();
+        }
     } else if (reply.status == 401) {
         out.cloud = "revoked";
         out.cloud_detail = "Vaulthalla Cloud no longer accepts this server (unlinked on vaulthalla.cloud?); "
@@ -231,6 +308,42 @@ Unlinked unlink(const Actor& actor, const Channel channel, const bool force) {
                    .details = {{"was", out.was}, {"cloud_revoked", out.cloud_revoked}, {"forced", force}}},
                   "[ops::cloud] " + actor->name() + " unlinked this server from Vaulthalla Cloud (" + out.was +
                       (out.cloud_revoked ? ", revoked in the cloud" : ", not confirmed by the cloud") + ")");
+    return out;
+}
+
+LinkStatus linkStatus(const Actor& actor) {
+    requireActor(actor);
+    LinkStatus out;
+    const auto row = cloud_ops_detail::Link::get();
+    out.linked = row && row->status == "linked";
+    if (!actor->isSuperAdmin() && !actor->encryptionKeysPerms().canView()) return out;
+    out.detailed = true;
+    if (!out.linked) return out;
+    out.installation_id = row->installation_id;
+    out.deployment_id = row->deployment_id;
+    out.account_public_id = row->account_public_id;
+    try {
+        if (const auto pinned = ::vh::ops::cloud_keys::pinnedKey()) {
+            out.account_key_generation = pinned->generation;
+            out.account_key_fingerprint = pinned->fingerprint;
+        }
+    } catch (const Refused&) {
+        // A tampered pin shows as none here; cloud.key.status says why.
+    }
+    return out;
+}
+
+nlohmann::json toJson(const LinkStatus& s) {
+    nlohmann::json out{{"linked", s.linked}};
+    if (!s.detailed) return out;
+    const auto opt = [](const auto& v) { return v ? nlohmann::json(*v) : nlohmann::json(nullptr); };
+    out["installation_id"] = opt(s.installation_id);
+    out["deployment_id"] = opt(s.deployment_id);
+    out["account_public_id"] = opt(s.account_public_id);
+    out["account_key"] = s.account_key_generation
+                             ? nlohmann::json{{"generation", *s.account_key_generation},
+                                              {"fingerprint", s.account_key_fingerprint.value_or("")}}
+                             : nlohmann::json(nullptr);
     return out;
 }
 

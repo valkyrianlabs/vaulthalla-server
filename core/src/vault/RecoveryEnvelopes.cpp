@@ -2,6 +2,7 @@
 #include "vault/RecoveryEnvelopes.hpp"
 
 #include <vl/keykit/kev1.hpp>
+#include "cloud/AccountPin.hpp"
 #include "db/query/vault/Key.hpp"
 #include "db/query/vault/RemoteAttach.hpp"
 #include "db/query/vault/Vault.hpp"
@@ -86,6 +87,27 @@ private:
     uint32_t vaultId_;
 };
 
+// The wrap guard (design/cloud/key-manager.md, "The account key as a recovery recipient"): an account-managed grant
+// is wrapped to only while its key is what the MAC-verified pin says: the pinned account key of its generation, or a
+// recipient of the recovery policy the pinned row accepted. A database writer who planted or changed such a grant
+// gets nothing; the grant is skipped (and logged) until the pin agrees again.
+bool wrapAllowed(const db::query::vault::RecoveryGrant& g) {
+    if (g.account_key_generation) {
+        if (cloud::pin::isPinnedKey(*g.account_key_generation, g.public_key)) return true;
+        log::Registry::crypto()->warn("[vault::envelopes] Vault {}: grant {} names account key generation {}, which "
+                                      "isn't the pinned key; nothing is wrapped to it",
+                                      g.vault_id, g.grant_id, *g.account_key_generation);
+        return false;
+    }
+    if (g.account_policy_sequence) {
+        if (cloud::pin::isPolicyRecipient(g.public_key)) return true;
+        log::Registry::crypto()->warn("[vault::envelopes] Vault {}: grant {} isn't a recipient of the accepted account "
+                                      "recovery policy; nothing is wrapped to it", g.vault_id, g.grant_id);
+        return false;
+    }
+    return true;
+}
+
 vl::keykit::kev1::VaultUid vaultUidOf(const uint32_t vaultId) {
     const auto vault = db::query::vault::Vault::getVault(vaultId);
     if (!vault || !vault->uid) throw std::runtime_error("vault " + std::to_string(vaultId) + " has no uid");
@@ -131,7 +153,8 @@ Pending put(const uint32_t vaultId, const uint32_t version, const crypto::Secret
     Pending out;
     out.vault_id = vaultId;
     out.version = version;
-    const auto grants = db::query::vault::RecoveryGrants::missingFor(vaultId, version);
+    auto grants = db::query::vault::RecoveryGrants::missingFor(vaultId, version);
+    std::erase_if(grants, [](const db::query::vault::RecoveryGrant& g) { return !envelopes_detail::wrapAllowed(g); });
     if (grants.empty()) return out;
     const auto uid = envelopes_detail::vaultUidOf(vaultId);
     out.store = storeFor(vaultId);
@@ -188,7 +211,10 @@ unsigned ensure(const uint32_t vaultId, const std::vector<uint32_t>& versions,
     if (db::query::vault::RecoveryGrants::usable(vaultId).empty()) return 0;
     unsigned written = 0;
     for (const auto v : versions) {
-        if (v == 0 || db::query::vault::RecoveryGrants::missingFor(vaultId, v).empty()) continue;
+        if (v == 0) continue;
+        auto missing = db::query::vault::RecoveryGrants::missingFor(vaultId, v);
+        std::erase_if(missing, [](const db::query::vault::RecoveryGrant& g) { return !envelopes_detail::wrapAllowed(g); });
+        if (missing.empty()) continue;
         const auto key = keyOf(v);
         if (!key) continue;
         written += writeFor(vaultId, v, *key);

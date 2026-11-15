@@ -711,21 +711,26 @@ static std::shared_ptr<CommandUsage> key_recipient_add(const std::weak_ptr<Comma
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"add", "enroll"};
     cmd->effect = CommandEffect::Write;
-    cmd->description = "Enroll a recovery recipient on an S3 vault: an X25519 public key from a recovery kit made on "
-                       "your own device (vh-recovery kit create, or Vaulthalla Desktop). The daemon wraps every key "
+    cmd->description = "Enroll a recovery recipient on a vault: an X25519 public key from a recovery kit made on your "
+                       "own device (vh-recovery kit create, or Vaulthalla Desktop), or with --account-key the recovery "
+                       "key this server pinned for its linked account (vh cloud key status). The daemon wraps every key "
                        "version the vault holds, and every future one at rotation, to it as KEV1 envelopes in the "
-                       "vault's own bucket, so the vault can be recovered with the kit after this host's database or TPM "
-                       "is lost. The server only ever sees the public key; recovery stays under your control and nothing "
-                       "is sent anywhere but the bucket.";
+                       "vault's own bucket (a local vault: this server's database), so the vault can be recovered with "
+                       "the kit after this host's database or TPM is lost. The server only ever sees the public key; "
+                       "recovery stays under your control.";
     cmd->positionals = {vaultPos};
-    cmd->required = {Option::Multi("public_key", "The recipient's X25519 public key (base64 or 64 hex digits)",
-                                   {"public-key", "key"}, {"key"})
-                         .withGen("key", contract::gen::constant("9jB0b7LvRAo3+fTz//m8OhJQkp39Kcd1PjiFpjtmrTs="))};
-    cmd->optional = {owner, Optional::ManyToOne("label", "A name you recognize the kit by", {"label"}, "label")};
-    cmd->optional_flags = {jsonFlag};
+    cmd->optional = {owner,
+                     Optional::Multi("public_key", "The recipient's X25519 public key (base64 or 64 hex digits)",
+                                     {"public-key", "key"}, {"key"})
+                         .withGen("key", contract::gen::constant("9jB0b7LvRAo3+fTz//m8OhJQkp39Kcd1PjiFpjtmrTs=")),
+                     Optional::ManyToOne("label", "A name you recognize the kit by", {"label"}, "label")};
+    cmd->optional_flags = {jsonFlag, Flag::WithAliases("account_key", "Add the linked account's pinned recovery key "
+                                                                      "instead of a public key", {"account-key"})};
     cmd->examples = {{"vh vault keys recipient add 42 --public-key 9jB0b7LvRAo3+fTz//m8OhJQkp39Kcd1PjiFpjtmrTs= "
                       "--label \"Recovery kit 2026-11\"",
-                      "Enroll the kit's public key on vault 42 and wrap its keys to it."}};
+                      "Enroll the kit's public key on vault 42 and wrap its keys to it."},
+                     {"vh vault keys recipient add 42 --account-key",
+                      "Wrap vault 42's keys to the account recovery key this server pinned."}};
     return cmd;
 }
 

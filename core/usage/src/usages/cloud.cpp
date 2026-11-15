@@ -19,7 +19,8 @@ std::shared_ptr<CommandUsage> link(const std::weak_ptr<CommandUsage>& parent) {
     cmd->aliases = {"link"};
     cmd->description = "Link this server to your vaulthalla.cloud account. Prints a code to enter on vaulthalla.cloud "
                        "and this server's key fingerprint to compare there; interactively, waits until you approve "
-                       "it. Linking is never required. Super admins only.";
+                       "it, then asks you to confirm the account recovery key's fingerprint (`vh cloud key confirm` "
+                       "later otherwise). Linking is never required. Super admins only.";
     cmd->optional = {Optional::ManyToOne("name", "What vaulthalla.cloud calls this server (default: its host name)",
                                          {"name"}, "name")};
     cmd->optional_flags = {
@@ -65,13 +66,18 @@ std::shared_ptr<CommandUsage> recovery(const std::weak_ptr<CommandUsage>& parent
     auto enroll = build(self);
     enroll->effect = CommandEffect::Write;
     enroll->aliases = {"enroll"};
-    enroll->description = "Send a vault's recovery envelopes (from its bucket), key checks, attestations and checkpoint "
-                          "to your Vaulthalla Cloud account; run again after a key rotation. Never a key, seed or "
-                          "export. Needs a linked server and a recovery recipient covering every needed key version.";
+    enroll->description = "Send a vault's recovery envelopes (from its bucket, or for a local vault from this server's "
+                          "database), key checks, attestations and checkpoint to your Vaulthalla Cloud account; run "
+                          "again after a key rotation. Never a key, seed or export. Needs a linked server and a recovery "
+                          "recipient covering every needed key version.";
     enroll->positionals = {vaultPos};
     enroll->optional = {owner};
+    enroll->optional_flags = {Flag::WithAliases("account_key", "Add the account recovery key this server pinned as a "
+                                                               "recovery recipient first", {"account-key"})};
     enroll->examples = {{"vh cloud recovery enroll 12", "Enroll vault 12 in cloud recovery (or update its records)."},
-                        {"vh cloud recovery enroll photos --owner alice", "The same, by name."}};
+                        {"vh cloud recovery enroll photos --owner alice", "The same, by name."},
+                        {"vh cloud recovery enroll 12 --account-key",
+                         "Wrap vault 12's keys to the pinned account recovery key, then enroll it."}};
 
     auto status = build(self);
     status->effect = CommandEffect::Read;
@@ -93,6 +99,56 @@ std::shared_ptr<CommandUsage> recovery(const std::weak_ptr<CommandUsage>& parent
 
     cmd->subcommands = {enroll, status, unenroll};
     cmd->examples = {{"vh cloud recovery enroll 12", "Enroll vault 12."}, {"vh cloud recovery status", "Coverage."}};
+    return cmd;
+}
+
+// `vh cloud key ...`: the linked account's recovery key as this server pinned it (design/cloud/key-manager.md).
+std::shared_ptr<CommandUsage> key(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->aliases = {"key", "keys"};
+    cmd->description = "The account recovery key this server pinned: the key vault keys are wrapped to when you add "
+                       "it as a recovery recipient. Its fingerprint is confirmed once, by a super admin, against the one "
+                       "Vaulthalla Desktop or the account page shows.";
+    const auto self = cmd->weak_from_this();
+
+    auto status = build(self);
+    status->effect = CommandEffect::Read;
+    status->aliases = {"status"};
+    status->description = "The pinned key (generation, fingerprint, who confirmed it), a key waiting for confirmation, "
+                          "the accepted recovery policy and the vaults it covers, and the last check. Public values only.";
+    status->optional_flags = {jsonFlag};
+    status->examples = {{"vh cloud key status", "Show the account recovery key."},
+                        {"vh cloud key status --json", "The same as JSON."}};
+
+    auto confirm = build(self);
+    confirm->effect = CommandEffect::Write;
+    confirm->aliases = {"confirm"};
+    confirm->description = "Pin the waiting account recovery key after comparing its fingerprint with the one Vaulthalla "
+                           "Desktop or your account page shows: the first key after linking, or a replacement. A "
+                           "mismatch pins nothing. Super admins only.";
+    confirm->positionals = {Positional::Same("fingerprint", "The fingerprint you compared (eight groups of four hex "
+                                                            "digits)")};
+    confirm->optional_flags = {jsonFlag};
+    confirm->examples = {{"vh cloud key confirm 3f2a-91c0-77d4-0b1e-5c6d-8e9f-a0b1-c2d3",
+                          "Pin the account recovery key with this fingerprint."}};
+
+    auto refresh = build(self);
+    refresh->effect = CommandEffect::Write;
+    refresh->aliases = {"refresh", "check"};
+    refresh->description = "Fetch and verify the account recovery key and recovery policy now (the server also checks "
+                           "daily). Signed rotations are followed; anything else waits for a confirmation.";
+    refresh->optional_flags = {jsonFlag};
+    refresh->examples = {{"vh cloud key refresh", "Check the account recovery key now."}};
+
+    auto forget = build(self);
+    forget->effect = CommandEffect::Destructive;
+    forget->aliases = {"forget"};
+    forget->description = "Forget the pinned account recovery key on this server, so the next link asks for a "
+                          "confirmation again. Refused while a vault holds a recovery grant that rests on it.";
+    forget->examples = {{"vh cloud key forget", "Forget the pin."}};
+
+    cmd->subcommands = {status, confirm, refresh, forget};
+    cmd->examples = {{"vh cloud key status", "Show the pinned key."}};
     return cmd;
 }
 
@@ -120,7 +176,7 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
     root->description = "Link this server to a vaulthalla.cloud account (optional; Vaulthalla never needs it). "
                         "vaulthalla.cloud isn't open yet.";
     root->subcommands = {link(root->weak_from_this()), status(root->weak_from_this()), unlink(root->weak_from_this()),
-                         recovery(root->weak_from_this())};
+                         recovery(root->weak_from_this()), key(root->weak_from_this())};
     root->examples = {
         {"vh cloud link", "Link this server to your vaulthalla.cloud account."},
         {"vh cloud status", "Show the link."},

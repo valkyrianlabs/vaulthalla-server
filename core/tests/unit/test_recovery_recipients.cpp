@@ -816,7 +816,7 @@ protected:
                                       .installation_id = std::nullopt, .account_id = std::nullopt,
                                       .requested_by = "admin", .requested_at = 0, .linked_at = std::nullopt};
         ASSERT_TRUE(db::query::cloud::Link::putPending(row));
-        ASSERT_TRUE(db::query::cloud::Link::markLinked("0123456789abcdefghjkmnpqrs", installation_, 7));
+        ASSERT_TRUE(db::query::cloud::Link::markLinked("0123456789abcdefghjkmnpqrs", installation_, 7, std::nullopt, std::nullopt));
     }
 
     // Enough of the cloud: it checks the request is signed as the linked installation, keeps each vault's upload and

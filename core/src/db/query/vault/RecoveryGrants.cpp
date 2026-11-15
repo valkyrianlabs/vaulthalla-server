@@ -12,7 +12,8 @@ namespace recovery_grants_detail {
 constexpr const char* kColumns =
     "vault_id, grant_id, recipient_id, public_key, suite, class, label, "
     "EXTRACT(EPOCH FROM added_at)::bigint AS added_at, authorized_by, "
-    "EXTRACT(EPOCH FROM revoked_at)::bigint AS revoked_at, revoked_by";
+    "EXTRACT(EPOCH FROM revoked_at)::bigint AS revoked_at, revoked_by, account_key_generation, "
+    "account_policy_sequence";
 
 RecoveryGrant grantFrom(const pqxx::row_ref row) {
     RecoveryGrant g;
@@ -27,6 +28,9 @@ RecoveryGrant grantFrom(const pqxx::row_ref row) {
     g.authorized_by = row["authorized_by"].as<std::string>();
     if (!row["revoked_at"].is_null()) g.revoked_at = row["revoked_at"].as<std::time_t>();
     if (!row["revoked_by"].is_null()) g.revoked_by = row["revoked_by"].as<std::string>();
+    if (!row["account_key_generation"].is_null()) g.account_key_generation = row["account_key_generation"].as<uint32_t>();
+    if (!row["account_policy_sequence"].is_null())
+        g.account_policy_sequence = row["account_policy_sequence"].as<uint32_t>();
     return g;
 }
 
@@ -71,11 +75,12 @@ bool RecoveryGrants::add(const RecoveryGrant& g) {
     return Transactions::exec("RecoveryGrants::add", [&](pqxx::work& txn) {
         const auto res = txn.exec(
             "INSERT INTO vault_recovery_grant (vault_id, grant_id, recipient_id, public_key, suite, class, label, "
-            "  authorized_by) "
-            "VALUES ($1, $2, $3, $4::bytea, $5, $6, $7, $8) "
+            "  authorized_by, account_key_generation, account_policy_sequence) "
+            "VALUES ($1, $2, $3, $4::bytea, $5, $6, $7, $8, $9, $10) "
             "ON CONFLICT (vault_id, recipient_id) WHERE revoked_at IS NULL DO NOTHING RETURNING 1",
             pqxx::params{g.vault_id, g.grant_id, g.recipient_id, encoding::to_hex_bytea(g.public_key),
-                         static_cast<int>(g.suite), g.recipient_class, g.label, g.authorized_by});
+                         static_cast<int>(g.suite), g.recipient_class, g.label, g.authorized_by,
+                         g.account_key_generation, g.account_policy_sequence});
         return !res.empty();
     });
 }
@@ -87,6 +92,19 @@ bool RecoveryGrants::revoke(const uint32_t vaultId, const std::string& grantId, 
             "WHERE vault_id = $1 AND grant_id = $2 AND revoked_at IS NULL RETURNING 1",
             pqxx::params{vaultId, grantId, revokedBy});
         return !res.empty();
+    });
+}
+
+std::vector<RecoveryGrant> RecoveryGrants::accountManaged() {
+    using namespace recovery_grants_detail;
+    return Transactions::exec("RecoveryGrants::accountManaged", [&](pqxx::work& txn) {
+        std::vector<RecoveryGrant> out;
+        for (const auto row : txn.exec(std::string("SELECT ") + kColumns +
+                                       " FROM vault_recovery_grant WHERE revoked_at IS NULL AND "
+                                       "(account_key_generation IS NOT NULL OR account_policy_sequence IS NOT NULL) "
+                                       "ORDER BY vault_id, added_at, grant_id"))
+            out.push_back(grantFrom(row));
+        return out;
     });
 }
 
@@ -152,8 +170,8 @@ bool RecoveryGrants::revokedWithAccess(const uint32_t vaultId, const std::vector
     return Transactions::exec("RecoveryGrants::revokedWithAccess", [&](pqxx::work& txn) {
         return !txn.exec("SELECT 1 FROM vault_key_envelope e JOIN vault_recovery_grant g ON g.grant_id = e.grant_id "
                          "WHERE e.vault_id = $1 AND g.revoked_at IS NOT NULL AND e.key_version = ANY($2::int[]) "
-                         "LIMIT 1",
-                         pqxx::params{vaultId, intArray(versions)})
+                         "AND NOT (g.account_key_generation IS NOT NULL AND starts_with(g.revoked_by, $3)) LIMIT 1",
+                         pqxx::params{vaultId, intArray(versions), std::string(kRoutineRotationPrefix)})
                     .empty();
     });
 }

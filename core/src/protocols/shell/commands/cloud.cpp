@@ -2,6 +2,7 @@
 
 #include "identities/User.hpp"
 #include "ops/Cloud.hpp"
+#include "ops/CloudKeys.hpp"
 #include "ops/CloudRecovery.hpp"
 #include "protocols/shell/commands/vault.hpp"
 #include "vault/model/Vault.hpp"
@@ -47,9 +48,75 @@ std::string utc(const std::time_t t) {
 cloud::Channel channel() { return AgentCallScope::active() ? cloud::Channel::Agent : cloud::Channel::Cli; }
 
 nlohmann::json claimJson(const cloud::Claim& c) {
+    const auto opt = [](const auto& v) { return v ? nlohmann::json(*v) : nlohmann::json(nullptr); };
     return {{"status", c.status},
-            {"installation_id", c.installation_id ? nlohmann::json(*c.installation_id) : nlohmann::json(nullptr)},
-            {"account_id", c.account_id ? nlohmann::json(*c.account_id) : nlohmann::json(nullptr)}};
+            {"installation_id", opt(c.installation_id)},
+            {"account_id", opt(c.account_id)},
+            {"deployment_id", opt(c.deployment_id)},
+            {"account_public_id", opt(c.account_public_id)}};
+}
+
+namespace keys = ::vh::ops::cloud_keys;
+
+keys::Channel keyChannel() { return AgentCallScope::active() ? keys::Channel::Agent : keys::Channel::Cli; }
+
+std::string generationText(const keys::Generation& g) {
+    std::string out = fmt::format("generation {}  {}  ({}", g.generation, g.fingerprint, g.state);
+    if (g.link != "initial") out += ", " + g.link;
+    if (g.reason == "compromise") out += ", compromise";
+    if (g.confirmed_by) out += ", confirmed by " + *g.confirmed_by;
+    return out + ")";
+}
+
+std::string keyStatusText(const keys::Status& s) {
+    if (s.state == "unlinked") return "This server isn't linked to Vaulthalla Cloud; there is no account recovery key.\n";
+    std::string out = fmt::format("Account       {}\nState         {}\n", s.account_public_id.value_or("?"), s.state);
+    if (s.pinned) out += "Pinned        " + generationText(*s.pinned) + "\n";
+    if (s.waiting) out += "Waiting       " + generationText(*s.waiting) + "\n";
+    if (s.policy)
+        out += fmt::format("Policy        sequence {} (generation {}), {} recipient(s)\n", s.policy->sequence,
+                           s.policy->generation, s.policy->recipients.size());
+    out += "Offline copy  " + s.offline_copy + "\n";
+    for (const auto& v : s.vaults)
+        out += fmt::format("Vault {} {}: account key {}, {} policy recipient(s), policy applied {}\n", v.vault_id,
+                           v.vault_name,
+                           v.account_key_generation ? "generation " + std::to_string(*v.account_key_generation) : "no",
+                           v.policy_grants, v.applied_sequence ? std::to_string(*v.applied_sequence) : "never");
+    if (s.checked_at)
+        out += fmt::format("Last check    {} ({}{})\n", utc(*s.checked_at), s.check.value_or("?"),
+                           s.check_detail ? ": " + *s.check_detail : "");
+    if (s.next_step) out += "Next          " + *s.next_step + "\n";
+    return out;
+}
+
+// After `Linked`: show the account recovery key's fingerprint and ask the super admin to compare and confirm it
+// (design/cloud/key-manager.md, "Pin"). Anything else leaves it pending for `vh cloud key confirm`.
+std::string confirmAfterLink(const CommandCall& call) {
+    keys::Status s;
+    try {
+        s = keys::status(call.user);
+    } catch (const ops::Error& e) {
+        return std::string("The account recovery key couldn't be read: ") + e.what() + "\n";
+    }
+    if (!s.waiting || s.waiting->state != "pending") {
+        if (s.state == "pinned") return "The account recovery key is already pinned: " + generationText(*s.pinned) + "\n";
+        return "No account recovery key was fetched yet (" + s.check.value_or("not checked") +
+               "); `vh cloud key refresh`, then `vh cloud key confirm <fingerprint>`.\n";
+    }
+    auto& io = *call.io;
+    io.print(fmt::format("\nYour account's recovery key fingerprint:\n\n    {}\n\nCompare it with the one Vaulthalla "
+                         "Desktop (Cloud) or your account page on vaulthalla.cloud shows.\n",
+                         s.waiting->fingerprint));
+    const auto answer = io.prompt("Type the fingerprint, or yes if they match (anything else keeps it pending): ", "");
+    if (answer.empty() || answer == "no" || answer == "n")
+        return "Left pending: confirm it later with `vh cloud key confirm <fingerprint>`.\n";
+    const auto given = (answer == "yes" || answer == "y") ? s.waiting->fingerprint : answer;
+    try {
+        const auto c = keys::confirm(call.user, given, keyChannel());
+        return "Pinned: " + generationText(c.generation) + "\n";
+    } catch (const ops::Error& e) {
+        return std::string("Not pinned: ") + e.what() + "\n";
+    }
 }
 
 std::string claimText(const cloud::Claim& c) {
@@ -73,7 +140,8 @@ CommandResult waitForApproval(const CommandCall& call) {
         } catch (const ops::Error& e) {
             return invalid(std::string("cloud link: ") + e.what());
         }
-        if (c.status != "pending") return c.status == "linked" ? ok(claimText(c)) : invalid("cloud link: " + claimText(c));
+        if (c.status == "linked") return ok(claimText(c) + confirmAfterLink(call));
+        if (c.status != "pending") return invalid("cloud link: " + claimText(c));
         std::this_thread::sleep_for(std::chrono::seconds(3));
     }
 }
@@ -116,7 +184,8 @@ CommandResult handleStatus(const CommandCall& call) {
         if (json)
             return jsonText({{"state", s.state}, {"endpoint", s.endpoint}, {"name", opt(s.name)},
                              {"fingerprint", opt(s.fingerprint)}, {"installation_id", opt(s.installation_id)},
-                             {"account_id", opt(s.account_id)}, {"linked_at", opt(s.linked_at)},
+                             {"account_id", opt(s.account_id)}, {"deployment_id", opt(s.deployment_id)},
+                             {"account_public_id", opt(s.account_public_id)}, {"linked_at", opt(s.linked_at)},
                              {"request_expires_at", opt(s.request_expires_at)}, {"requested_by", opt(s.requested_by)},
                              {"cloud", opt(s.cloud)}, {"cloud_detail", opt(s.cloud_detail)}});
         if (s.state == "unlinked")
@@ -128,8 +197,10 @@ CommandResult handleStatus(const CommandCall& call) {
             return out + fmt::format("State         waiting for approval on vaulthalla.cloud (requested by {}, "
                                      "until {})\n",
                                      s.requested_by.value_or("?"), s.request_expires_at ? utc(*s.request_expires_at) : "?");
-        out += fmt::format("State         linked since {}\nInstallation  {}\nAccount       {}\n",
-                           s.linked_at ? utc(*s.linked_at) : "?", s.installation_id.value_or("?"), s.account_id.value_or(0));
+        out += fmt::format("State         linked since {}\nInstallation  {}\nDeployment    {}\nAccount       {}\n",
+                           s.linked_at ? utc(*s.linked_at) : "?", s.installation_id.value_or("?"),
+                           s.deployment_id.value_or("?"),
+                           s.account_public_id.value_or(std::to_string(s.account_id.value_or(0))));
         out += "Cloud         " + s.cloud.value_or("?") + (s.cloud_detail ? " (" + *s.cloud_detail + ")" : "") + "\n";
         return out;
     });
@@ -174,7 +245,9 @@ CommandResult handleRecoveryEnroll(const CommandCall& call) {
     std::string error;
     const auto vaultId = recoveryVault(call, call.positionals.at(0), "enroll", error);
     if (!vaultId) return invalid(error);
-    return runOp("cloud recovery enroll", [&] { return recovery::enroll(call.user, *vaultId, keysChannel()); },
+    const bool accountKey = hasFlag(call, "account-key");
+    return runOp("cloud recovery enroll",
+                 [&] { return recovery::enroll(call.user, *vaultId, keysChannel(), accountKey); },
                  [](const recovery::Enrolled& e) {
         std::string out = fmt::format("{} vault {} ({}) in Vaulthalla Cloud recovery: {} envelope(s) sent, {} new; no "
                                       "keys left this server.\n",
@@ -240,6 +313,53 @@ CommandResult handleRecovery(const CommandCall& call) {
     return invalid(call.constructFullArgs(), "Unknown cloud recovery subcommand: '" + std::string(sub) + "'");
 }
 
+CommandResult handleKeyStatus(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"cloud", "key", "status"}));
+    const bool json = hasFlag(call, "json");
+    return runOp("cloud key status", [&] { return keys::status(call.user); }, [&](const keys::Status& s) {
+        return json ? jsonText(keys::toJson(s)) : keyStatusText(s);
+    });
+}
+
+CommandResult handleKeyConfirm(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"cloud", "key", "confirm"}));
+    const bool json = hasFlag(call, "json");
+    return runOp("cloud key confirm", [&] { return keys::confirm(call.user, call.positionals.at(0), keyChannel()); },
+                 [&](const keys::Confirmed& c) {
+        if (json) return jsonText(keys::toJson(c));
+        std::string out = "Pinned: " + generationText(c.generation) + "\n";
+        if (c.replacement) out += "It replaces the earlier pin; vault grants of the old key move to it.\n";
+        return out;
+    });
+}
+
+CommandResult handleKeyRefresh(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"cloud", "key", "refresh"}));
+    const bool json = hasFlag(call, "json");
+    return runOp("cloud key refresh", [&] { return keys::refresh(call.user, keyChannel()); }, [&](const keys::Status& s) {
+        return json ? jsonText(keys::toJson(s)) : keyStatusText(s);
+    });
+}
+
+CommandResult handleKeyForget(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"cloud", "key", "forget"}));
+    return runOp("cloud key forget", [&] { return keys::forget(call.user, keyChannel()); }, [](const keys::Forgotten& f) {
+        return fmt::format("Forgot the account recovery key pin ({} generation(s)); linking again asks for a "
+                           "confirmation.\n", f.generations);
+    });
+}
+
+CommandResult handleKey(const CommandCall& call) {
+    if (call.positionals.empty()) return usage(call.constructFullArgs());
+    const auto [sub, subcall] = descend(call);
+    const auto is = [&](const char* name) { return isCommandMatch({"cloud", "key", name}, sub); };
+    if (is("status")) return handleKeyStatus(subcall);
+    if (is("confirm")) return handleKeyConfirm(subcall);
+    if (is("refresh")) return handleKeyRefresh(subcall);
+    if (is("forget")) return handleKeyForget(subcall);
+    return invalid(call.constructFullArgs(), "Unknown cloud key subcommand: '" + std::string(sub) + "'");
+}
+
 CommandResult handleCloud(const CommandCall& call) {
     if (call.positionals.empty()) return usage(call.constructFullArgs());
     const auto [sub, subcall] = descend(call);
@@ -248,6 +368,7 @@ CommandResult handleCloud(const CommandCall& call) {
     if (is("status")) return handleStatus(subcall);
     if (is("unlink")) return handleUnlink(subcall);
     if (is("recovery")) return handleRecovery(subcall);
+    if (is("key")) return handleKey(subcall);
     return invalid(call.constructFullArgs(), "Unknown cloud subcommand: '" + std::string(sub) + "'");
 }
 
