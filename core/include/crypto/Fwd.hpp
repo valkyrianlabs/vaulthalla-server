@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vl/vaultfmt/Fwd.hpp>  // the format library's types (vl::vaultfmt::vhf1, ::manifest)
+
 // Forward declarations for the crypto subsystem. Declarations only: include the defining header to use a type.
 
 namespace vh::crypto::secrets {
@@ -11,15 +13,3 @@ namespace vh::crypto {
     class SecretKey;
 }
 
-namespace vh::crypto::vhf1 {
-    struct Expectation;
-    struct HeaderParams;
-    struct Layout;
-    struct RangePlan;
-    class ChunkWalker;
-    class Error;
-    class OpenedHeader;
-    class RangeReader;
-    class SecureBytes;
-    class Writer;
-}

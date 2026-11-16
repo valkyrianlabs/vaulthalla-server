@@ -36,12 +36,12 @@
 #include "../helpers/parity.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/Manager.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "storage/PlaintextReader.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "sync/Controller.hpp"
-#include "sync/manifest/Document.hpp"
-#include "sync/manifest/Objects.hpp"
+#include <vl/vaultfmt/manifest/Document.hpp>
+#include <vl/vaultfmt/manifest/Objects.hpp>
 #include "vault/APIKeyManager.hpp"
 #include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
@@ -57,7 +57,7 @@
 
 namespace vh::test_remote_attach {
 
-namespace keys = storage::object_keys;
+namespace keys = vl::vaultfmt::keys;
 namespace ra = vault::remote;
 namespace vr = ops::vault_remote;
 using test_support::versioned::VersionedBucket;
@@ -580,7 +580,7 @@ TEST_F(RemoteAttachTest, RemoteAttachVerificationFailuresKeepTheVaultLocal) {
         (void)start(v);
         auto d = deps(v);
         d.afterStep = [&](const std::string_view at) {
-            if (at == "published") v.bucket->seed(std::string(sync::manifest::kRootKey), std::string("not a root"));
+            if (at == "published") v.bucket->seed(std::string(vl::vaultfmt::manifest::kRootKey), std::string("not a root"));
         };
         EXPECT_EQ(ra::run(v.id(), d).state, ra::State::Failed);
         EXPECT_EQ(typeOf(v), "local");

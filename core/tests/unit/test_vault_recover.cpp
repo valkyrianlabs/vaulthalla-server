@@ -37,13 +37,13 @@
 #include "ops/VaultKeys.hpp"
 #include "ops/VaultRecover.hpp"
 #include "storage/BucketCapability.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/Capability.hpp"
 #include "storage/s3/ManifestStore.hpp"
 #include "storage/s3/curl/Http.hpp"
-#include "sync/manifest/Objects.hpp"
-#include "sync/manifest/Store.hpp"
+#include <vl/vaultfmt/manifest/Objects.hpp>
+#include <vl/vaultfmt/manifest/Store.hpp>
 #include "sync/rotation/Runtime.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/KeyAttestation.hpp"
@@ -65,7 +65,7 @@ using vh::test::bin::bytes;
 using vh::test::bin::randomBytes;
 using vh::test::bin::str;
 namespace rec = vault::recover;
-namespace mf = sync::manifest;
+namespace mf = vl::vaultfmt::manifest;
 namespace keys = ops::vault_keys;
 using test_support::versioned::VersionedBucket;
 using test_support::versioned::Versioning;
@@ -288,7 +288,7 @@ protected:
     }
 
     static void useBucket(const std::shared_ptr<VersionedBucket>& bucket,
-                          const sync::manifest::WriteCapability mode = sync::manifest::WriteCapability::Unknown) {
+                          const vl::vaultfmt::manifest::WriteCapability mode = vl::vaultfmt::manifest::WriteCapability::Unknown) {
         vault::envelopes::setStoreFactoryForTesting(
             [bucket, mode](uint32_t) { return std::make_shared<storage::s3::ManifestStore>(bucket, mode); });
         ops::vault_recover::setStoreFactoryForTesting(
@@ -308,7 +308,7 @@ protected:
         o.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
         o.bucket->md5Etags = true;
         db::query::vault::BucketCapability::record(o.id, storage::s3::probeBucket(*o.bucket));
-        useBucket(o.bucket, sync::manifest::WriteCapability::VersionLog);
+        useBucket(o.bucket, vl::vaultfmt::manifest::WriteCapability::VersionLog);
         storage::bucket_capability::setControllerFactoryForTesting(
             [b = o.bucket](unsigned int, const std::string&) -> std::shared_ptr<storage::s3::Controller> { return b; });
     }
@@ -537,8 +537,8 @@ TEST_F(VaultRecoverDb, RestoresTheVaultOnANodeThatNeverHeldItFromTheKit) {
     // Nothing beyond headers, the manifest and envelopes until a file is read (spec 03 §7).
     EXPECT_EQ(r.report.at("downloads").at("content_bytes"), 0);
     for (const auto& req : o.bucket->requests())
-        if (req.op == VersionedBucket::Op::Get && storage::object_keys::classify(req.key) ==
-                                                      storage::object_keys::KeyClass::Content)
+        if (req.op == VersionedBucket::Op::Get && vl::vaultfmt::keys::classify(req.key) ==
+                                                      vl::vaultfmt::keys::KeyClass::Content)
             ADD_FAILURE() << "a content object was fetched during the restore: " << req.key;
 
     // The tree, trash, provider versions and tombstones are what node A's manifest said.
@@ -635,7 +635,7 @@ TEST_F(VaultRecoverDb, OnABackblazeLikeBucketTheRestoreTakesTheCanonicalHeadAndP
     // reads the canonical head by rule C1 although a losing sibling and a delete marker sit above it, and its first
     // publish (in version_log mode, after the restore's probe) chains on it and takes the vault over.
     auto o = populated(Versioning::Enabled, /*backblaze=*/true);
-    ASSERT_EQ(db::query::vault::BucketCapability::get(o.id).capability, sync::manifest::WriteCapability::VersionLog);
+    ASSERT_EQ(db::query::vault::BucketCapability::get(o.id).capability, vl::vaultfmt::manifest::WriteCapability::VersionLog);
     const auto state = db::query::sync::Manifest::state(o.id);
     ASSERT_TRUE(state.epoch);
     ASSERT_TRUE(state.root_version_id) << "the origin published its roots as versions";
@@ -661,7 +661,7 @@ TEST_F(VaultRecoverDb, OnABackblazeLikeBucketTheRestoreTakesTheCanonicalHeadAndP
     const auto restored = db::query::sync::Manifest::collect(*r.vault_id);
     EXPECT_EQ(shape(restored), shape(expected));
     EXPECT_EQ(restored.vault->name, expected.vault->name);
-    EXPECT_EQ(db::query::vault::BucketCapability::get(*r.vault_id).capability, sync::manifest::WriteCapability::VersionLog);
+    EXPECT_EQ(db::query::vault::BucketCapability::get(*r.vault_id).capability, vl::vaultfmt::manifest::WriteCapability::VersionLog);
 
     // The first publish settles on the head, as this node alone (a restore takes the vault over).
     ASSERT_TRUE(r.published_epoch) << r.note.value_or("");
@@ -717,7 +717,7 @@ TEST_F(VaultRecoverDb, AJoinIsARestoreThatAddsThisNodeToTheWritersAndKeepsTheOth
     pass(o.engine);
     const auto purged = db::query::fs::File::getFileByPath(o.id, "/purged.txt");
     ASSERT_TRUE(purged && purged->object_uid);
-    const auto purgedKey = storage::object_keys::contentKey(*purged->object_uid);
+    const auto purgedKey = vl::vaultfmt::keys::contentKey(*purged->object_uid);
     const auto kept = o.bucket->current(purgedKey);
     ASSERT_TRUE(kept);
     fs::Filesystem::remove(o.engine->vaultPathToFusePath("/purged.txt"), superUser->id);

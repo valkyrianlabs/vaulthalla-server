@@ -217,7 +217,7 @@ std::optional<storage::s3::ProbeResult> probeBinding(const unsigned int apiKeyId
                                      "is probed again on first use", e.what());
         return std::nullopt;
     }
-    if (!probe || !opaque || probe->capability != sync::manifest::WriteCapability::Insufficient) return probe;
+    if (!probe || !opaque || probe->capability != vl::vaultfmt::manifest::WriteCapability::Insufficient) return probe;
     throw Refused("bucket_capability_insufficient",
                   "this bucket can't hold an encrypting vault: " + probe->reason + ". A vault that encrypts upstream "
                   "keeps its names and folders in an encrypted manifest, whose root needs conditional writes or object "

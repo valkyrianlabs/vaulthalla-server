@@ -27,17 +27,17 @@ std::optional<std::time_t> parseListTime(const std::string& value) {
 
 }
 
-ManifestStore::ManifestStore(std::shared_ptr<Controller> s3, const sync::manifest::WriteCapability mode)
+ManifestStore::ManifestStore(std::shared_ptr<Controller> s3, const vl::vaultfmt::manifest::WriteCapability mode)
     : s3_(std::move(s3)), mode_(mode) {
     if (!s3_) throw std::invalid_argument("storage::s3::ManifestStore needs a controller");
 }
 
-std::optional<sync::manifest::StoredObject> ManifestStore::get(const std::string& key,
+std::optional<vl::vaultfmt::manifest::StoredObject> ManifestStore::get(const std::string& key,
                                                                const std::optional<std::string>& versionId) {
-    sync::manifest::StoredObject out;
+    vl::vaultfmt::manifest::StoredObject out;
     GetObjectOptions options;
     options.version_id = versionId;
-    options.max_body_bytes = sync::manifest::kMaxManifestObjectBytes;
+    options.max_body_bytes = vl::vaultfmt::manifest::kMaxManifestObjectBytes;
     try {
         const auto result = s3_->streamObject(key, options, [&](const std::span<const uint8_t> chunk) {
             out.bytes.insert(out.bytes.end(), chunk.begin(), chunk.end());
@@ -82,14 +82,14 @@ std::string ManifestStore::put(const std::string& key, const std::vector<uint8_t
     try {
         s3_->uploadBufferWithMetadataConditional(key, bytes, RequestOptions{}, ifMatch, ifNoneMatch);
     } catch (const ConditionalRequestFailed& e) {
-        throw sync::manifest::PreconditionFailed(e.what());
+        throw vl::vaultfmt::manifest::PreconditionFailed(e.what());
     } catch (const PreconditionsUnsupported& e) {
-        throw sync::manifest::ConditionsUnsupported(e.what());
+        throw vl::vaultfmt::manifest::ConditionsUnsupported(e.what());
     }
     return Controller::lastPutOutcome().etag;
 }
 
-sync::manifest::PutResult ManifestStore::put(const std::string& key, const std::vector<uint8_t>& bytes) {
+vl::vaultfmt::manifest::PutResult ManifestStore::put(const std::string& key, const std::vector<uint8_t>& bytes) {
     try {
         s3_->uploadBufferWithMetadataConditional(key, bytes, RequestOptions{}, std::nullopt, std::nullopt);
     } catch (const RequestBudgetExceeded&) {
@@ -98,7 +98,7 @@ sync::manifest::PutResult ManifestStore::put(const std::string& key, const std::
         throw;
     } catch (const std::runtime_error& e) {
         // A transport failure or a non-2xx answer: the provider may have applied the PUT all the same.
-        throw sync::manifest::PutOutcomeUnknown(e.what());
+        throw vl::vaultfmt::manifest::PutOutcomeUnknown(e.what());
     }
     const auto outcome = Controller::lastPutOutcome();
     return {outcome.etag, outcome.version_id};
@@ -117,15 +117,15 @@ std::string ManifestStore::putIfMatch(const std::string& key, const std::vector<
     return put(key, bytes, etag, std::nullopt);
 }
 
-std::vector<sync::manifest::ListedObject> ManifestStore::list(const std::string& prefix) {
+std::vector<vl::vaultfmt::manifest::ListedObject> ManifestStore::list(const std::string& prefix) {
     const auto xml = s3_->listObjects(prefix);
     pugi::xml_document doc;
     if (!doc.load_buffer(xml.data(), xml.size()))
         throw std::runtime_error("manifest: the bucket listing of " + prefix + " is not XML");
-    std::vector<sync::manifest::ListedObject> out;
+    std::vector<vl::vaultfmt::manifest::ListedObject> out;
     for (const auto page : doc.children("ListBucketResult")) {
         for (const auto contents : page.children("Contents")) {
-            sync::manifest::ListedObject o;
+            vl::vaultfmt::manifest::ListedObject o;
             o.key = contents.child_value("Key");
             if (!o.key.starts_with(prefix)) continue;
             o.size = std::strtoull(contents.child_value("Size"), nullptr, 10);
@@ -137,13 +137,13 @@ std::vector<sync::manifest::ListedObject> ManifestStore::list(const std::string&
     return out;
 }
 
-std::vector<sync::manifest::StoredVersion> ManifestStore::versions(const std::string& key) {
+std::vector<vl::vaultfmt::manifest::StoredVersion> ManifestStore::versions(const std::string& key) {
     return versionsSince(key, std::nullopt);
 }
 
-std::vector<sync::manifest::StoredVersion> ManifestStore::versionsSince(const std::string& key,
+std::vector<vl::vaultfmt::manifest::StoredVersion> ManifestStore::versionsSince(const std::string& key,
                                                                         const std::optional<std::string>& stopAt) {
-    std::vector<sync::manifest::StoredVersion> out;
+    std::vector<vl::vaultfmt::manifest::StoredVersion> out;
     std::string keyMarker, versionMarker;
     for (;;) {
         const auto page = s3_->listObjectVersionsPage(key, keyMarker, versionMarker);
@@ -161,8 +161,8 @@ std::vector<sync::manifest::StoredVersion> ManifestStore::versionsSince(const st
     return out;
 }
 
-std::vector<sync::manifest::StoredVersion> ManifestStore::versionsUnder(const std::string& prefix) {
-    std::vector<sync::manifest::StoredVersion> out;
+std::vector<vl::vaultfmt::manifest::StoredVersion> ManifestStore::versionsUnder(const std::string& prefix) {
+    std::vector<vl::vaultfmt::manifest::StoredVersion> out;
     std::string keyMarker, versionMarker;
     for (;;) {
         const auto page = s3_->listObjectVersionsPage(prefix, keyMarker, versionMarker);

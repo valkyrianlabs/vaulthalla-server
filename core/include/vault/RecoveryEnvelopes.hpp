@@ -35,16 +35,16 @@ namespace vh::vault::envelopes {
 
 // Where a vault's envelopes go: an S3 vault's bucket, through its API key (tests replace that), or for a local vault
 // the database. Throws std::runtime_error for an S3 vault without a bucket.
-using StoreFactory = std::function<std::shared_ptr<sync::manifest::ObjectStore>(uint32_t vaultId)>;
+using StoreFactory = std::function<std::shared_ptr<vl::vaultfmt::manifest::ObjectStore>(uint32_t vaultId)>;
 void setStoreFactoryForTesting(StoreFactory factory);
-[[nodiscard]] std::shared_ptr<sync::manifest::ObjectStore> storeFor(uint32_t vaultId);
+[[nodiscard]] std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> storeFor(uint32_t vaultId);
 
 // Envelopes PUT for one version and not yet recorded.
 struct Pending {
     uint32_t vault_id{};
     uint32_t version{};
     std::vector<db::query::vault::KeyEnvelope> envelopes;
-    std::shared_ptr<sync::manifest::ObjectStore> store;
+    std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> store;
     [[nodiscard]] bool empty() const { return envelopes.empty(); }
 };
 

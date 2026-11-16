@@ -2,7 +2,7 @@
 
 #include "crypto/id/ObjectUid.hpp"
 #include "db/query/vault/Key.hpp"
-#include "sync/manifest/Content.hpp"
+#include <vl/vaultfmt/manifest/Content.hpp>
 
 #include <cstdint>
 #include <functional>
@@ -68,7 +68,7 @@ struct RecoverInput {
     std::string mount_point;
     int64_t sync_interval_seconds{300};
     std::string conflict_policy{"keep_local"};
-    const vh::sync::manifest::Content* content{};   // the plan's (not owned)
+    const vl::vaultfmt::manifest::Content* content{};   // the plan's (not owned)
     std::string root_uid;
     std::set<std::string> skip_uids{};          // files left out (sealed under a version nothing holds)
     std::vector<RecoverKeyRow> keys{};

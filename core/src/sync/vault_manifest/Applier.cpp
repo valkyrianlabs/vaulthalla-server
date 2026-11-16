@@ -39,7 +39,7 @@ namespace vh::sync::vault_manifest {
 
 namespace applier_detail {
 
-namespace mf = vh::sync::manifest;
+namespace mf = vl::vaultfmt::manifest;
 using Q = db::query::sync::ManifestApply;
 using db::query::sync::ApplyRow;
 
@@ -438,10 +438,10 @@ std::size_t finishDeferred(const uint32_t vaultId, const ApplyOptions& options) 
     return finished;
 }
 
-ApplyReport apply(const uint32_t vaultId, const manifest::Uid& vaultUid, const crypto::vhf1::KeyLookup& keys,
-                  const manifest::Loaded& head, const std::string& selfNode, const ApplyOptions& options) {
+ApplyReport apply(const uint32_t vaultId, const vl::vaultfmt::manifest::Uid& vaultUid, const vl::vaultfmt::vhf1::KeyLookup& keys,
+                  const vl::vaultfmt::manifest::Loaded& head, const std::string& selfNode, const ApplyOptions& options) {
     namespace d = applier_detail;
-    namespace mf = vh::sync::manifest;
+    namespace mf = vl::vaultfmt::manifest;
     ApplyReport report;
     report.epoch = head.acceptance.epoch;
     report.root_sha256 = head.acceptance.root_sha256;

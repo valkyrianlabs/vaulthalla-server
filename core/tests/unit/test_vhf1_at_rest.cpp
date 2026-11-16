@@ -19,7 +19,7 @@
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/encrypt.hpp"
 #include "crypto/util/hash.hpp"
-#include "crypto/vhf1/Format.hpp"
+#include <vl/vaultfmt/vhf1/Format.hpp>
 #include "fs/PlaintextSource.hpp"
 #include "fs/model/File.hpp"
 #include "storage/Engine.hpp"
@@ -112,7 +112,7 @@ TEST_F(Vhf1AtRestTest, EveryWriteIsAVhf1GenerationBoundToVaultObjectAndKeyVersio
     EXPECT_EQ(f->encrypted_with_key_version, kKeyVersion);
     ASSERT_TRUE(f->object_uid) << "a new file draws its object uid when sealed";
     EXPECT_EQ(sealed.size(), content::newSealedSize(plaintext.size()));
-    EXPECT_TRUE(std::equal(crypto::vhf1::kMagic.begin(), crypto::vhf1::kMagic.end(), sealed.begin()));
+    EXPECT_TRUE(std::equal(vl::vaultfmt::vhf1::kMagic.begin(), vl::vaultfmt::vhf1::kMagic.end(), sealed.begin()));
 
     // The header names this vault, this object, this key version, and the generation is its salt.
     const auto header = content::openHeader(sealed, {.vaultUid = em_->vaultUid(), .generation = f->encryption_iv,
@@ -213,7 +213,7 @@ TEST_F(Vhf1AtRestTest, Vhf1StreamingWriterHandlesEmptyExactMultiplesAndOddSizes)
         const auto path = dir_.path() / ("stream-" + std::to_string(size));
         em_->encryptToFile(source, path, f);
         ASSERT_TRUE(content::isVhf1(f->encryption_iv));
-        EXPECT_EQ(stdfs::file_size(path), crypto::vhf1::objectSizeFor(size, 16));
+        EXPECT_EQ(stdfs::file_size(path), vl::vaultfmt::vhf1::objectSizeFor(size, 16));
 
         Bytes chunks;
         em_->decryptFileTo(path, [&](const std::span<const uint8_t> b) { chunks.insert(chunks.end(), b.begin(), b.end()); },
@@ -362,7 +362,7 @@ protected:
                 .key = em_->keySnapshot(kKeyVersion),
                 .plaintextSize = size};
     }
-    [[nodiscard]] static std::string freshGeneration() { return content::generationOf(crypto::vhf1::freshSalt()); }
+    [[nodiscard]] static std::string freshGeneration() { return content::generationOf(vl::vaultfmt::vhf1::freshSalt()); }
 
     crypto::id::ObjectUid objectUid_ = crypto::id::newObjectUid();
 

@@ -23,18 +23,18 @@
 #include "db/query/sync/ManifestApply.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
-#include "crypto/vhf1/Format.hpp"
-#include "crypto/vhf1/Writer.hpp"
-#include "crypto/vhf1/Reader.hpp"
+#include <vl/vaultfmt/vhf1/Format.hpp>
+#include <vl/vaultfmt/vhf1/Writer.hpp>
+#include <vl/vaultfmt/vhf1/Reader.hpp>
 #include "vault/KeyCheck.hpp"
 #include "notifications/OperatorNotificationBus.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "sync/model/RemotePolicy.hpp"
 #include "storage/s3/ManifestStore.hpp"
-#include "sync/manifest/Objects.hpp"
-#include "sync/manifest/Publisher.hpp"
-#include "sync/manifest/Reader.hpp"
-#include "sync/manifest/Reconcile.hpp"
+#include <vl/vaultfmt/manifest/Objects.hpp>
+#include <vl/vaultfmt/manifest/Publisher.hpp>
+#include <vl/vaultfmt/manifest/Reader.hpp>
+#include <vl/vaultfmt/manifest/Reconcile.hpp>
 #include "sync/vault_manifest/Service.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "ops/Error.hpp"
@@ -56,7 +56,7 @@
 
 namespace vh::test_manifest_apply_db {
 
-namespace mf = vh::sync::manifest;
+namespace mf = vl::vaultfmt::manifest;
 using test_support::versioned::Versioning;
 using test_support::versioned::VersionedBucket;
 using vh::test::bin::bytes;
@@ -1096,13 +1096,13 @@ TEST_F(ManifestApplyDb, RemoteOnlyFilesHydrateAfterAnAppliedMoveAndReplacement) 
     at(theirs, "notes.txt").parent = at(theirs, "Photos").uid;   // a move
     auto& report = at(theirs, "report.pdf");                      // and new content, sealed as its writer seals it
     const std::string v2 = "report v2, written by the other server";
-    crypto::vhf1::HeaderParams hp;
-    hp.kind = crypto::vhf1::Kind::FileContent;
+    vl::vaultfmt::vhf1::HeaderParams hp;
+    hp.kind = vl::vaultfmt::vhf1::Kind::FileContent;
     hp.keyVersion = k.version;
     hp.vaultUid = uid();
     hp.objectUid = mf::parseUid(report.uid, "x", "x");
-    hp.salt = crypto::vhf1::freshSalt();
-    const auto sealed = crypto::vhf1::seal(std::vector<uint8_t>(v2.begin(), v2.end()), hp, *k.key);
+    hp.salt = vl::vaultfmt::vhf1::freshSalt();
+    const auto sealed = vl::vaultfmt::vhf1::seal(std::vector<uint8_t>(v2.begin(), v2.end()), hp, *k.key);
     (void)v.bucket->seed("o/" + report.uid, sealed);
     report.generation = hexOf(hp.salt);
     report.key_version = k.version;
@@ -1124,13 +1124,13 @@ namespace {
 // Theirs' new content for `uid`, sealed as its writer seals it and stored in the bucket; the entry says so.
 std::vector<uint8_t> sealTheirs(test_support::versioned::CloudVault& v, mf::Entry& e, const std::string& text) {
     const auto k = v.engine->encryptionManager->currentKey();
-    crypto::vhf1::HeaderParams hp;
-    hp.kind = crypto::vhf1::Kind::FileContent;
+    vl::vaultfmt::vhf1::HeaderParams hp;
+    hp.kind = vl::vaultfmt::vhf1::Kind::FileContent;
     hp.keyVersion = k.version;
     hp.vaultUid = *v.engine->vault->uid;
     hp.objectUid = mf::parseUid(e.uid, "x", "x");
-    hp.salt = crypto::vhf1::freshSalt();
-    auto sealed = crypto::vhf1::seal(std::vector<uint8_t>(text.begin(), text.end()), hp, *k.key);
+    hp.salt = vl::vaultfmt::vhf1::freshSalt();
+    auto sealed = vl::vaultfmt::vhf1::seal(std::vector<uint8_t>(text.begin(), text.end()), hp, *k.key);
     (void)v.bucket->seed("o/" + e.uid, sealed);
     e.generation = hexOf(hp.salt);
     e.key_version = k.version;
@@ -1141,13 +1141,13 @@ std::vector<uint8_t> sealTheirs(test_support::versioned::CloudVault& v, mf::Entr
 }
 
 std::string openSealed(test_support::versioned::CloudVault& v, const std::vector<uint8_t>& object, const std::string& uid) {
-    crypto::vhf1::Expectation ex;
+    vl::vaultfmt::vhf1::Expectation ex;
     ex.vaultUid = *v.engine->vault->uid;
     ex.objectUid = mf::parseUid(uid, "x", "x");
-    const auto keys = [em = v.engine->encryptionManager](const uint32_t ver) -> crypto::vhf1::KeyPtr {
+    const auto keys = [em = v.engine->encryptionManager](const uint32_t ver) -> vl::vaultfmt::vhf1::KeyPtr {
         return em->historicalKeySnapshot(ver);
     };
-    const auto plain = crypto::vhf1::open(object, ex, keys);
+    const auto plain = vl::vaultfmt::vhf1::open(object, ex, keys);
     return {reinterpret_cast<const char*>(plain.data()), plain.size()};
 }
 

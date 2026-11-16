@@ -1,10 +1,8 @@
 // Encrypted manifest v2 (#368, WS3-a; design/encryption/03-metadata-recovery.md §3-§4, §8), DB-free.
 //
-// ManifestVectors   every manifest vector of vectors.json (objects, chain, negative): the C++ reader agrees with the
-//                   reference, and the documents re-encode to the vectors' bytes.
-// ManifestDocument  the root/segment/snapshot schema: round trips, unknown members, the extensible recovery_policy,
-//                   structural refusals.
-// ManifestPartition segment split/merge rules.
+// The format's own suites (ManifestVectors, ManifestDocument, ManifestPartition) moved with the code to vl-vaultfmt
+// (tests/test_manifest.cpp there); these run the library's publish protocol through the server's S3 adapter.
+//
 // ManifestPublish*  the publish protocol on the versioned fake bucket: CoW order, costs, If-Match conflicts merged,
 //                   GC keeping the last three roots' segments, prior names, a missing root rebuilt.
 // ManifestChain*    rollback, fork, gap (walked and not), missing/mismatched segments and every fallback, the blind
@@ -19,18 +17,18 @@
 
 #include "../helpers/bytes.hpp"
 #include "crypto/SecretKey.hpp"
-#include "crypto/vhf1/Format.hpp"
-#include "crypto/vhf1/Writer.hpp"
+#include <vl/vaultfmt/vhf1/Format.hpp>
+#include <vl/vaultfmt/vhf1/Writer.hpp>
 #include "storage/s3/ManifestStore.hpp"
-#include "sync/manifest/Chain.hpp"
-#include "sync/manifest/Content.hpp"
-#include "sync/manifest/Document.hpp"
-#include "sync/manifest/Objects.hpp"
-#include "sync/manifest/Partition.hpp"
-#include "sync/manifest/Publisher.hpp"
-#include "sync/manifest/Reader.hpp"
-#include "sync/manifest/Store.hpp"
-#include "../helpers/hooked_store.hpp"
+#include <vl/vaultfmt/manifest/Chain.hpp>
+#include <vl/vaultfmt/manifest/Content.hpp>
+#include <vl/vaultfmt/manifest/Document.hpp>
+#include <vl/vaultfmt/manifest/Objects.hpp>
+#include <vl/vaultfmt/manifest/Partition.hpp>
+#include <vl/vaultfmt/manifest/Publisher.hpp>
+#include <vl/vaultfmt/manifest/Reader.hpp>
+#include <vl/vaultfmt/manifest/Store.hpp>
+#include <vl/vaultfmt/testing/hooked_store.hpp>
 #include "../helpers/versioned_bucket.hpp"
 
 #include <functional>
@@ -38,52 +36,21 @@
 #include <set>
 #include <thread>
 
-namespace vh::sync::manifest::test_manifest_suite {
+namespace vl::vaultfmt::manifest::test_manifest_suite {
 
 namespace {
 
 using Bytes = std::vector<uint8_t>;
-using test_support::versioned::Versioning;
-using test_support::versioned::VersionedBucket;
-using crypto::SecretKey;
-using crypto::SecretKeyPtr;
+using vh::test_support::versioned::Versioning;
+using vh::test_support::versioned::VersionedBucket;
+using vh::crypto::SecretKey;
+using vh::crypto::SecretKeyPtr;
 
-// ---- vectors -------------------------------------------------------------------------------------------------------
-
-const Json& vectors() { return vh::test::bin::goldenVectors(); }
-
-using vh::test::bin::fromHex;
-
-Uid uidFromHex(const std::string& hex) {
-    const auto raw = fromHex(hex);
-    Uid out{};
-    std::copy(raw.begin(), raw.end(), out.begin());
-    return out;
-}
-
-crypto::vhf1::KeyLookup lookupOf(std::map<uint32_t, SecretKeyPtr> keys) {
+vl::vaultfmt::vhf1::KeyLookup lookupOf(std::map<uint32_t, SecretKeyPtr> keys) {
     return [keys = std::move(keys)](const uint32_t v) -> SecretKeyPtr {
         const auto it = keys.find(v);
         return it == keys.end() ? nullptr : it->second;
     };
-}
-
-std::map<uint32_t, SecretKeyPtr> vectorKeys() {
-    std::map<uint32_t, SecretKeyPtr> keys;
-    for (const auto& [version, hex] : vectors()["conventions"]["keys"].items())
-        keys[static_cast<uint32_t>(std::stoul(version))] = std::make_shared<const SecretKey>(fromHex(hex.get<std::string>()));
-    return keys;
-}
-
-const Uid& vectorVaultUid() {
-    static const Uid uid = uidFromHex(vectors()["vhf1"]["positive"][0]["params"]["vault_uid_hex"].get<std::string>());
-    return uid;
-}
-
-const Json& vectorObject(const std::string& name) {
-    for (const auto& o : vectors()["manifest"]["objects"])
-        if (o["name"] == name) return o;
-    throw std::runtime_error("no manifest object " + name);
 }
 
 // ---- fixtures ------------------------------------------------------------------------------------------------------
@@ -194,10 +161,10 @@ struct Writer {
 
     explicit Writer(std::shared_ptr<VersionedBucket> b,
                     const WriteCapability mode = WriteCapability::Unknown)
-        : bucket(std::move(b)), store(std::make_shared<storage::s3::ManifestStore>(bucket, mode)) {}
+        : bucket(std::move(b)), store(std::make_shared<vh::storage::s3::ManifestStore>(bucket, mode)) {}
     explicit Writer(const Versioning v = Versioning::Enabled) : Writer(std::make_shared<VersionedBucket>(v)) {}
 
-    [[nodiscard]] crypto::vhf1::KeyLookup lookup() const { return lookupOf(keys); }
+    [[nodiscard]] vl::vaultfmt::vhf1::KeyLookup lookup() const { return lookupOf(keys); }
 
     PublishReport publish(const Content& c, const PartitionLimits& limits = {}) {
         PublishOptions o;
@@ -207,7 +174,7 @@ struct Writer {
         o.own_epoch = ownEpoch;
         o.settled = settled;
         o.sleep = [b = bucket](const std::chrono::milliseconds d) { b->advance(std::max<std::time_t>(1, d.count() / 1000)); };
-        auto r = manifest::publish(*store, vault, lookup(), {current, keys.at(current)}, c, known, cache, o);
+        auto r = vl::vaultfmt::manifest::publish(*store, vault, lookup(), {current, keys.at(current)}, c, known, cache, o);
         known = r.published.known;
         ownEpoch = r.published.known.epoch;
         if (r.settled.version_id && r.settled.base_version_id)
@@ -255,270 +222,6 @@ Entry& nthFile(Content& c, const std::size_t n) {
     throw std::out_of_range("no such file");
 }
 
-}
-
-// ── ManifestVectors ──────────────────────────────────────────────────────────────────────────────────────────────
-
-TEST(ManifestVectors, ObjectsOpenAndReencodeToTheirPlaintext) {
-    const auto keys = lookupOf(vectorKeys());
-    for (const auto& o : vectors()["manifest"]["objects"]) {
-        SCOPED_TRACE(o["name"].get<std::string>());
-        const auto object = fromHex(o["object_hex"].get<std::string>());
-        const auto objectUid = uidFromHex(o["object_uid_hex"].get<std::string>());
-        if (o.contains("object_sha256")) { EXPECT_EQ(sha256Hex(object), o["object_sha256"].get<std::string>()); }
-        const auto plaintext = o["plaintext_utf8"].get<std::string>();
-        if (o["kind"].get<int>() == 3) {
-            EXPECT_EQ(o["object_key"].get<std::string>(), kRootKey);
-            EXPECT_EQ(objectUid, vectorVaultUid());
-            const auto root = openRoot(object, vectorVaultUid(), keys);
-            EXPECT_EQ(canonicalJson(toJson(root)), plaintext);
-            EXPECT_EQ(rootFromJson(Json::parse(plaintext), vectorVaultUid()), root);
-        } else {
-            ASSERT_EQ(o["kind"].get<int>(), 2);
-            const auto key = o["object_key"].get<std::string>();
-            const auto sid = sidOfKey(key);
-            ASSERT_TRUE(sid);
-            EXPECT_EQ(parseUid(*sid, "bad_root", "sid"), objectUid);
-            const auto seg = openSegment(object, vectorVaultUid(), objectUid, keys);
-            EXPECT_EQ(canonicalJson(toJson(seg)), plaintext);
-        }
-    }
-}
-
-TEST(ManifestVectors, ChainCasesMatchTheReference) {
-    const auto keys = lookupOf(vectorKeys());
-    const Json seg = vectorObject("segment_1");
-    const auto segSid = *sidOfKey(seg["object_key"].get<std::string>());
-    std::size_t warnings = 0;
-    for (const auto& c : vectors()["manifest"]["chain"]) {
-        SCOPED_TRACE(c["name"].get<std::string>());
-        const Bytes rootObject = c.contains("root_hex") ? fromHex(c["root_hex"].get<std::string>())
-                                                        : fromHex(vectorObject(c["root"].get<std::string>())["object_hex"].get<std::string>());
-        const auto root = openRoot(rootObject, vectorVaultUid(), keys);
-        if (c.contains("root_plaintext_utf8")) { EXPECT_EQ(canonicalJson(toJson(root)), c["root_plaintext_utf8"].get<std::string>()); }
-        std::map<std::string, Bytes> segments{{segSid, fromHex(seg["object_hex"].get<std::string>())}};
-        if (c.contains("segments_override")) {
-            segments.clear();
-            for (const auto& [sid, hex] : c["segments_override"].items()) segments[sid] = fromHex(hex.get<std::string>());
-        }
-        std::optional<Known> known;
-        if (!c["known"].is_null())
-            known = Known{c["known"]["epoch"].get<uint64_t>(), c["known"]["root_sha256"].get<std::string>()};
-
-        Json got;
-        try {
-            const auto a = acceptRoot(root, rootObject, known, segments);
-            got = {{"epoch", a.epoch}, {"root_sha256", a.root_sha256}};
-            if (a.gap) {
-                got["warning"] = "gap";
-                ++warnings;
-            }
-        } catch (const ChainRejected& e) {
-            got = {{"error", std::string(chainErrorName(e.code()))}};
-        }
-        EXPECT_EQ(got, c["expect"]);
-    }
-    EXPECT_GE(warnings, 1u) << "the vectors carry a gap case";
-}
-
-TEST(ManifestVectors, NegativesFailClosed) {
-    const auto keys = lookupOf(vectorKeys());
-    for (const auto& n : vectors()["manifest"]["negative"]) {
-        SCOPED_TRACE(n["name"].get<std::string>());
-        const auto object = fromHex(n["object_hex"].get<std::string>());
-        const auto kind = static_cast<crypto::vhf1::Kind>(n["expect_kind"].get<int>());
-        const auto uid = uidFromHex(n["expect_object_uid_hex"].get<std::string>());
-        std::optional<std::string> error;
-        try {
-            if (kind == crypto::vhf1::Kind::ManifestRoot) (void)openRoot(object, vectorVaultUid(), keys);
-            else (void)openSegment(object, vectorVaultUid(), uid, keys);
-        } catch (const crypto::vhf1::Error& e) {
-            error = std::string(crypto::vhf1::errorCodeName(e.code()));
-        }
-        ASSERT_TRUE(error) << "accepted";
-        EXPECT_EQ(*error, n["expect"]["error"].get<std::string>());
-    }
-}
-
-TEST(ManifestVectors, EveryChainErrorNameIsKnown) {
-    for (const auto& c : vectors()["manifest"]["chain"])
-        if (c["expect"].contains("error")) {
-            EXPECT_TRUE(chainErrorFromName(c["expect"]["error"].get<std::string>()))
-                << c["expect"]["error"].get<std::string>();
-        }
-}
-
-// ── ManifestDocument ─────────────────────────────────────────────────────────────────────────────────────────────
-
-TEST(ManifestDocument, IsoTimeIsTheUtcCalendarTimeToTheSecond) {
-    // The documents' timestamps (isoTime, <chrono>): what gmtime gives, leap days and times before 1970 included.
-    EXPECT_EQ(isoTime(0), "1970-01-01T00:00:00Z");
-    EXPECT_EQ(isoTime(-1), "1969-12-31T23:59:59Z");
-    EXPECT_EQ(isoTime(951782399), "2000-02-28T23:59:59Z");
-    EXPECT_EQ(isoTime(951782400), "2000-02-29T00:00:00Z");
-    EXPECT_EQ(isoTime(1709251199), "2024-02-29T23:59:59Z");
-    EXPECT_EQ(isoTime(1793880000), "2026-11-05T12:00:00Z");
-    EXPECT_EQ(isoTime(4102444799), "2099-12-31T23:59:59Z");
-}
-
-TEST(ManifestDocument, RichRootSegmentAndSnapshotRoundTrip) {
-    const auto content = richContent();
-    const Uid vault = uidOf(0x56, 0x48);
-    RootDocument root;
-    root.vault_uid = uidText(vault);
-    root.epoch = 2;
-    root.prev = std::string(64, 'a');
-    root.published_at = "2026-11-05T12:02:00Z";
-    root.producer = content.producer;
-    root.vault = content.vault;
-    root.keys = content.keys;
-    root.keys[1].envelopes = std::vector<std::string>{"abcdefghjkmnpqrstvwxyz0123"};
-    root.recovery_policy = RecoveryPolicy{1, true, {Grant{"g1", std::string(64, 'b'), "customer", 1, "Recovery kit",
-                                                           "2026-11-01T00:00:00Z", "device-3", std::nullopt, std::nullopt, 1u}}};
-    // The account's signed recovery policy travels in the root, byte for byte (design/cloud/key-manager.md).
-    root.recovery_policy->account_policy = AccountPolicyBytes{.policy = "vhc-recovery-policy-v1\n…", .signature = "c2ln"};
-    root.segments = {SegmentRef{uidT(0x10, 0x01), {0x00, 0x7f}, 3, std::string(64, 'c'), 900},
-                     SegmentRef{uidT(0x10, 0x02), {0x80, 0xff}, 4, std::string(64, 'd'), 1200}};
-    root.snapshots = {SnapshotRef{uidT(0x10, 0x03), std::string(64, 'e'), 400}};
-    root.stats = statsOf(content);
-    const auto text = canonicalJson(toJson(root));
-    EXPECT_EQ(rootFromJson(Json::parse(text), vault), root);
-    EXPECT_EQ(canonicalJson(toJson(rootFromJson(Json::parse(text), vault))), text);
-
-    SegmentDocument seg{uidText(vault), {0x00, 0xff}, content.entries};
-    const auto segText = canonicalJson(toJson(seg));
-    EXPECT_EQ(segmentFromJson(Json::parse(segText), vault), seg);
-
-    SnapshotDocument snap{uidText(vault), content.snapshots[0]};
-    EXPECT_EQ(snapshotFromJson(Json::parse(canonicalJson(toJson(snap))), vault), snap);
-
-    EXPECT_EQ(root.stats, (Stats{1, 2, 3172}));  // the trashed file and the tombstone are not live files
-}
-
-TEST(ManifestDocument, ReadersIgnoreUnknownMembersAndKeepUnknownGrantsUnusable) {
-    const Uid vault = uidOf(0x56, 0x48);
-    auto j = toJson(RootDocument{uidText(vault), std::string(kLayoutOpaqueV1), 1, std::nullopt, "t", {"n", 1, "s"},
-                                 std::nullopt, {}, RecoveryPolicy{}, {SegmentRef{uidT(1, 1), {0, 255}, 0, std::string(64, 'f'), 1}},
-                                 {}, {}});
-    j["future_member"] = {{"anything", true}};
-    j["recovery_policy"]["grants"] = Json::array(
-        {{{"grant_id", "g-cust"}, {"recipient_id", std::string(64, '1')}, {"class", "customer"}, {"suite", 1},
-          {"revoked_at", nullptr}},
-         {{"grant_id", "g-cust-revoked"}, {"recipient_id", std::string(64, '2')}, {"class", "customer"}, {"suite", 1},
-          {"revoked_at", "2026-11-04T00:00:00Z"}},
-         {{"grant_id", "g-future"}, {"recipient_id", std::string(64, '3')}, {"class", "custodian"}, {"suite", 3},
-          {"revoked_at", nullptr}, {"participant_share", 2}}});
-    const auto root = rootFromJson(j, vault);
-    ASSERT_TRUE(root.recovery_policy);
-    ASSERT_EQ(root.recovery_policy->grants.size(), 3u);
-    EXPECT_TRUE(root.recovery_policy->grants[0].usableForDecryption());
-    EXPECT_FALSE(root.recovery_policy->grants[1].usableForDecryption());  // revoked
-    EXPECT_FALSE(root.recovery_policy->grants[2].usableForDecryption());  // a class this reader doesn't know
-
-    // A later policy version, or the reserved threshold in use: not understood, nothing usable, the root still loads.
-    for (const auto& [v, threshold] : {std::pair{Json(2), Json(nullptr)}, std::pair{Json(1), Json(2)}}) {
-        auto k = j;
-        k["recovery_policy"]["v"] = v;
-        k["recovery_policy"]["threshold"] = threshold;
-        const auto r = rootFromJson(k, vault);
-        ASSERT_TRUE(r.recovery_policy);
-        EXPECT_FALSE(r.recovery_policy->understood);
-        EXPECT_TRUE(r.recovery_policy->grants.empty());
-    }
-}
-
-TEST(ManifestDocument, StructuralRefusals) {
-    const Uid vault = uidOf(0x56, 0x48);
-    RootDocument good{uidText(vault), std::string(kLayoutOpaqueV1), 2, std::string(64, 'a'), "t", {"n", 1, "s"},
-                      std::nullopt, {}, std::nullopt,
-                      {SegmentRef{uidT(1, 1), {0x00, 0x7f}, 0, std::string(64, 'f'), 1},
-                       SegmentRef{uidT(1, 2), {0x80, 0xff}, 0, std::string(64, 'f'), 1}},
-                      {}, {}};
-    ASSERT_NO_THROW((void)rootFromJson(toJson(good), vault));
-    const auto refuses = [&](const std::function<void(Json&)>& mutate, const std::string& why) {
-        auto j = toJson(good);
-        mutate(j);
-        try {
-            (void)rootFromJson(j, vault);
-            ADD_FAILURE() << "accepted: " << why;
-        } catch (const FormatError& e) {
-            EXPECT_EQ(e.code(), "bad_root") << why;
-        }
-    };
-    refuses([](Json& j) { j["type"] = "vh.manifest.segment"; }, "another document type");
-    refuses([](Json& j) { j["v"] = 2; }, "an unknown version");
-    refuses([](Json& j) { j["epoch"] = 0; }, "epoch 0");
-    refuses([](Json& j) { j["prev"] = nullptr; }, "no prev after epoch 1");
-    refuses([](Json& j) { j["epoch"] = 1; }, "a prev at epoch 1");
-    refuses([&](Json& j) { j["vault_uid"] = uidT(9, 9); }, "another vault");
-    refuses([](Json& j) { j["segments"][1]["range"] = Json::array({"7f", "ff"}); }, "overlapping ranges");
-    refuses([](Json& j) { j["segments"][1]["range"] = Json::array({"81", "ff"}); }, "a gap in the ranges");
-    refuses([](Json& j) { j["segments"].erase(1); }, "ranges that don't reach ff");
-    refuses([](Json& j) { j["segments"][1]["sid"] = j["segments"][0]["sid"]; }, "a sid named twice");
-    refuses([](Json& j) { j["segments"][0]["sid"] = "NOT-BASE32"; }, "a malformed sid");
-    refuses([](Json& j) { j["layout"] = "PathV0"; }, "another layout");
-
-    SegmentDocument seg{uidText(vault), {0x00, 0x7f}, {dirEntry(uidT(0x90, 1), std::nullopt, "")}};
-    try {
-        (void)segmentFromJson(toJson(seg), vault);
-        ADD_FAILURE() << "an entry outside the segment's range was accepted";
-    } catch (const FormatError& e) {
-        EXPECT_EQ(e.code(), "bad_segment");
-    }
-}
-
-TEST(ManifestDocument, SealedObjectsBindKindVaultAndObjectUid) {
-    const Uid vault = uidOf(0x56, 0x48);
-    const auto keys = lookupOf({{2, keyOf(40)}});
-    SegmentDocument seg{uidText(vault), {0x00, 0xff}, {}};
-    const auto sid = uidOf(0x20, 0x20);
-    const auto bytes = sealSegment(seg, vault, sid, {2, keyOf(40)});
-    EXPECT_EQ(openSegment(bytes, vault, sid, keys), seg);
-    const auto codeOf = [&](auto&& f) -> std::string {
-        try {
-            f();
-        } catch (const crypto::vhf1::Error& e) {
-            return std::string(crypto::vhf1::errorCodeName(e.code()));
-        }
-        return "accepted";
-    };
-    EXPECT_EQ(codeOf([&] { (void)openRoot(bytes, vault, keys); }), "kind_mismatch");
-    EXPECT_EQ(codeOf([&] { (void)openSegment(bytes, vault, uidOf(0x20, 0x21), keys); }), "object_mismatch");
-    EXPECT_EQ(codeOf([&] { (void)openSegment(bytes, uidOf(0x57, 0x48), sid, keys); }), "vault_mismatch");
-    EXPECT_EQ(codeOf([&] { (void)openSegment(bytes, vault, sid, lookupOf({})); }), "key_unavailable");
-}
-
-// ── ManifestPartition ────────────────────────────────────────────────────────────────────────────────────────────
-
-TEST(ManifestPartition, SplitsAboveTheLimitsAndMergesBelowWithinThem) {
-    const PartitionLimits limits{8, 1u << 20, 2};
-    const auto c = smallVault(30);
-    const auto plan = partition(c.entries, {}, "v", limits);
-    ASSERT_GT(plan.size(), 1u);
-    int next = 0;
-    std::size_t total = 0;
-    for (const auto& p : plan) {
-        EXPECT_EQ(p.doc.range.lo, next);
-        next = p.doc.range.hi + 1;
-        EXPECT_LE(p.doc.entries.size(), limits.split_entries);
-        total += p.doc.entries.size();
-        for (const auto& e : p.doc.entries) { EXPECT_TRUE(p.doc.range.contains(parseUid(e.uid, "x", "uid"))); }
-    }
-    EXPECT_EQ(next, 0x100);
-    EXPECT_EQ(total, c.entries.size());
-
-    // Shrunk to a few entries, the same ranges merge back (each merge stays within the split limits).
-    const auto shrunk = smallVault(3);
-    std::vector<Range> ranges;
-    for (const auto& p : plan) ranges.push_back(p.doc.range);
-    const auto merged = partition(shrunk.entries, ranges, "v", limits);
-    EXPECT_LT(merged.size(), plan.size());
-    for (const auto& p : merged) { EXPECT_LE(p.doc.entries.size(), limits.split_entries); }
-
-    // Bytes count too: one big entry over the byte limit splits its range.
-    const auto bytesPlan = partition(c.entries, {}, "v", PartitionLimits{100000, 2000, 1});
-    EXPECT_GT(bytesPlan.size(), 1u);
-    EXPECT_EQ(partition({}, {}, "v").size(), 1u) << "an empty vault is one empty segment";
 }
 
 // ── ManifestPublish ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -694,7 +397,7 @@ TEST(ManifestStore, PutOnceSendsAConditionOnlyWhereTheBucketHonoursIt) {
 
     // Conditional (and Unknown: never probed, no silent downgrade): If-None-Match: *, so an existing name refuses.
     for (const auto mode : {WriteCapability::Conditional, WriteCapability::Unknown}) {
-        storage::s3::ManifestStore store(bucket, mode);
+        vh::storage::s3::ManifestStore store(bucket, mode);
         const auto key = ".vaulthalla/seg/" + uidText(uidOf(static_cast<uint8_t>(mode), 1));
         (void)store.putOnce(key, body);
         EXPECT_THROW((void)store.putOnce(key, body), PreconditionFailed) << to_string(mode);
@@ -702,13 +405,13 @@ TEST(ManifestStore, PutOnceSendsAConditionOnlyWhereTheBucketHonoursIt) {
 
     // Backblaze B2: a condition is refused outright (typed, nothing written)...
     bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
-    storage::s3::ManifestStore unprobed(bucket);
+    vh::storage::s3::ManifestStore unprobed(bucket);
     const auto key = std::string(".vaulthalla/key/") + uidText(uidOf(9, 9));
     EXPECT_THROW((void)unprobed.putIfAbsent(key, body), ConditionsUnsupported);
     EXPECT_TRUE(bucket->history(key).empty()) << "a refused condition writes nothing";
 
     // ...and a store whose bucket was probed version_log writes plainly, with the version id.
-    storage::s3::ManifestStore plain(bucket, WriteCapability::VersionLog);
+    vh::storage::s3::ManifestStore plain(bucket, WriteCapability::VersionLog);
     EXPECT_EQ(plain.mode(), WriteCapability::VersionLog);
     (void)plain.putOnce(key, body);
     const auto second = plain.put(key, Bytes{4, 5});
@@ -735,7 +438,7 @@ TEST(ManifestStore, AVersionListingStopsAtTheVersionItNeeds) {
     bucket->versionPageSize = 2;
     std::vector<std::string> ids;   // oldest first
     for (int i = 0; i < 7; ++i) ids.push_back(bucket->seed("k", "v" + std::to_string(i)));
-    storage::s3::ManifestStore store(bucket, WriteCapability::VersionLog);
+    vh::storage::s3::ManifestStore store(bucket, WriteCapability::VersionLog);
     bucket->resetCounters();
     EXPECT_EQ(store.versions("k").size(), 7u);
     EXPECT_EQ(bucket->counters().list, 4u) << "pages of 2";
@@ -762,7 +465,7 @@ TEST(ManifestPublish, ABucketThatCanArbitrateNothingRefusesBeforeAnyRequest) {
     // Neither conditional writes nor versions (spec 06 §7, Insufficient): never half a publish.
     Writer w;
     w.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
-    w.store = std::make_shared<storage::s3::ManifestStore>(w.bucket, WriteCapability::Insufficient);
+    w.store = std::make_shared<vh::storage::s3::ManifestStore>(w.bucket, WriteCapability::Insufficient);
     w.bucket->resetCounters();
     EXPECT_THROW((void)w.publish(smallVault(3)), PublishUnsupported);
     const auto c = w.bucket->counters();
@@ -1010,13 +713,13 @@ TEST(ManifestChain, ASegmentLostEverywhereIsLeftToTheBlindRebuild) {
 TEST(ManifestChain, BlindRebuildRecoversAuthenticObjectsFromHeadersOnly) {
     Writer w;
     const auto seal = [&](const Uid& vault, const Uid& uid, const std::size_t size, const uint32_t keyVersion) {
-        crypto::vhf1::HeaderParams p;
-        p.kind = crypto::vhf1::Kind::FileContent;
+        vl::vaultfmt::vhf1::HeaderParams p;
+        p.kind = vl::vaultfmt::vhf1::Kind::FileContent;
         p.keyVersion = keyVersion;
         p.vaultUid = vault;
         p.objectUid = uid;
-        p.salt = crypto::vhf1::freshSalt();
-        return std::pair{crypto::vhf1::seal(Bytes(size, 0x5a), p, *w.keys.at(keyVersion)), p.salt};
+        p.salt = vl::vaultfmt::vhf1::freshSalt();
+        return std::pair{vl::vaultfmt::vhf1::seal(Bytes(size, 0x5a), p, *w.keys.at(keyVersion)), p.salt};
     };
     const auto a = uidOf(0x10, 0xa1), b = uidOf(0x90, 0xb2), foreign = uidOf(0x20, 0xc3), moved = uidOf(0x30, 0xd4);
     const auto [objA, saltA] = seal(w.vault, a, 100000, 1);
@@ -1040,8 +743,8 @@ TEST(ManifestChain, BlindRebuildRecoversAuthenticObjectsFromHeadersOnly) {
     EXPECT_EQ(ra.generation.size(), 64u);
     EXPECT_EQ(byKey.at("o/" + uidText(b)).plaintext_size, 0u);
     EXPECT_EQ(report.rejected.size(), 3u);
-    EXPECT_EQ(report.header_bytes, 4 * crypto::vhf1::kHeaderSize) << "headers only";
-    EXPECT_EQ(w.bucket->counters().bytes_served, 4 * crypto::vhf1::kHeaderSize);
+    EXPECT_EQ(report.header_bytes, 4 * vl::vaultfmt::vhf1::kHeaderSize) << "headers only";
+    EXPECT_EQ(w.bucket->counters().bytes_served, 4 * vl::vaultfmt::vhf1::kHeaderSize);
 
     const auto only = blindRebuild(*w.store, w.vault, w.lookup(), Range{0x80, 0xff});
     ASSERT_EQ(only.recovered.size(), 1u);
@@ -1085,7 +788,7 @@ TEST(ManifestContent, AnotherKeyVersionStillReadsOlderSegments) {
     const auto r = w.publish(c2);
     EXPECT_EQ(r.segments_written, 1u);
     const auto rootObj = w.bucket->current(std::string(kRootKey))->body;
-    EXPECT_EQ(crypto::vhf1::openHeader(rootObj, {crypto::vhf1::Kind::ManifestRoot, w.vault, w.vault, std::nullopt},
+    EXPECT_EQ(vl::vaultfmt::vhf1::openHeader(rootObj, {vl::vaultfmt::vhf1::Kind::ManifestRoot, w.vault, w.vault, std::nullopt},
                                        w.lookup()).params().keyVersion, 2u);
     EXPECT_EQ(w.loadKnown().content, c2);
 }
@@ -1279,7 +982,7 @@ TEST(ManifestPublishVersionLog, ALosingWriterDeletesItsVersionAndMergesOntoTheWi
 
 TEST(ManifestPublishVersionLog, AStrayVersionAboveTheHeadIsIgnoredByReadersAndRepairedByThePublishThatSeesIt) {
     namespace f = version_log_fixture;
-    namespace ms = vh::test_support::manifest_store;
+    namespace ms = vl::vaultfmt::test_support;
     auto w = f::vlWriter(f::b2Bucket(), "node-a");
     auto c = f::ofNode(smallVault(3), "node-a");
     (void)w.publish(c);
@@ -1470,7 +1173,7 @@ TEST(ManifestPublishVersionLog, AnotherWritersRootInAnotherModeIsRefusedOurOwnMo
     solo.node = "node-s";
     auto c = f::ofNode(smallVault(2), "node-s");
     (void)solo.publish(c);
-    solo.store = std::make_shared<storage::s3::ManifestStore>(solo.bucket, WriteCapability::VersionLog);
+    solo.store = std::make_shared<vh::storage::s3::ManifestStore>(solo.bucket, WriteCapability::VersionLog);
     nthFile(c, 0).size = 5;
     const auto r = solo.publish(c);
     EXPECT_EQ(r.published.known.epoch, 2u);
@@ -1541,7 +1244,7 @@ TEST(ManifestChainVersionLog, ReadersTakeTheCanonicalHeadWhateverTheyKnowOrTheBu
     EXPECT_EQ(load(*w.store, w.vault, w.lookup(), fromE1).known(), e2) << "rule C1 from the anchor";
     EXPECT_EQ(load(*w.store, w.vault, w.lookup(), {}).known(), e2) << "blind: equal chains, the earliest end";
     // A reader that doesn't know the bucket's capability (a restore) follows the root's declared mode.
-    storage::s3::ManifestStore unknown(w.bucket);
+    vh::storage::s3::ManifestStore unknown(w.bucket);
     EXPECT_EQ(load(unknown, w.vault, w.lookup(), {}).known(), e2);
     EXPECT_EQ(loadForRestore(unknown, w.vault, w.lookup(), Checkpoint{1, e1.root_sha256, std::nullopt}).loaded.known(), e2);
     // Also when the current object is no root at all (a delete marker above the sibling): the newest authentic version
@@ -1665,7 +1368,7 @@ TEST(ManifestPublishVersionLog, AHigherEpochRootLandedAboveOursIsLeftForTheNextR
     // never saw) is not repaired away: the publish leaves it, and the next read takes it as the newest state (a gap,
     // its chain doesn't reach ours).
     namespace f = version_log_fixture;
-    namespace ms = vh::test_support::manifest_store;
+    namespace ms = vl::vaultfmt::test_support;
     auto w = f::vlWriter(f::b2Bucket(), "node-a");
     auto c = f::ofNode(smallVault(3), "node-a");
     (void)w.publish(c);
@@ -1764,17 +1467,6 @@ TEST(ManifestChainVersionLog, AHeadThatALifecycleRuleExpiresUnderACrashedLoserFa
 
 // ── Snapshot uids and the local base copy (design/sync/manifest-applier.md, work items 1 and 3) ─────────────────────
 
-TEST(ManifestDocument, SnapshotRecordsAreNamedByUidAndNoLongerByAServersId) {
-    const Uid vault = uidOf(0x56, 0x48);
-    SnapshotDocument doc{uidText(vault), richContent().snapshots[0]};
-    const auto j = toJson(doc);
-    EXPECT_TRUE(j["snapshot"].contains("uid"));
-    EXPECT_FALSE(j["snapshot"].contains("id")) << "a per-server sequence is no identity across servers";
-    EXPECT_EQ(snapshotFromJson(Json::parse(canonicalJson(j)), vault), doc);
-    EXPECT_EQ(snapshotKey(doc.snapshot), doc.snapshot.uid);
-}
-
-// A snapshot segment written before uids: still read, re-encoded to the bytes it was parsed from, keyed by its id.
 TEST(ManifestDocument, ASnapshotSegmentFromBeforeUidsStillReadsAndReencodesToItsBytes) {
     const Uid vault = uidOf(0x56, 0x48);
     const std::string legacy =
@@ -1825,16 +1517,6 @@ TEST(ManifestContent, APreUidRootsSnapshotsAreReplacedByTheSameSnapshotsWithUids
 }
 
 // Two servers' snapshot 7 are two snapshots: merged by uid, both stay.
-TEST(ManifestContent, TwoServersSnapshotsWithOneLocalIdAreBothKept) {
-    auto theirs = richContent(), ours = richContent();
-    theirs.snapshots[0].uid = uidT(0x71, 0x01);
-    ours.snapshots[0].uid = uidT(0x72, 0x02);
-    Content before = theirs;   // the base of our pending changes: their snapshot not yet, ours not yet
-    before.snapshots.clear();
-    const auto both = mergePending(theirs, before, ours);
-    EXPECT_EQ(both.snapshots.size(), 2u);
-}
-
 TEST(ManifestBaseCopy, OpensToTheContentOfKnownAndRefusesAnythingElse) {
     Writer w;
     const auto c = smallVault(20);
@@ -1867,7 +1549,7 @@ TEST(ManifestBaseCopy, OpensToTheContentOfKnownAndRefusesAnythingElse) {
     missing.objects.erase(missing.objects.begin());
     EXPECT_FALSE(openBaseCopy(missing, w.vault, w.lookup(), second.published.known, &why));
     EXPECT_NE(why.find("missing"), std::string::npos);
-    const auto noKeys = [](uint32_t) -> crypto::vhf1::KeyPtr { return nullptr; };
+    const auto noKeys = [](uint32_t) -> vl::vaultfmt::vhf1::KeyPtr { return nullptr; };
     EXPECT_FALSE(openBaseCopy(*copy2, w.vault, noKeys, second.published.known));
 }
 
@@ -1897,7 +1579,7 @@ TEST(ManifestPublish, AColdStartOnTheLocalBaseCopyKeepsWhatAnotherWriterAdded) {
         PublishOptions o;
         o.now = isoTime(1793890000);
         if (withCopy) o.pending_base = openBaseCopy(*copy, a.vault, a.lookup(), *a.known);
-        const auto r = manifest::publish(*a.store, a.vault, a.lookup(), {a.current, a.keys.at(a.current)}, produced,
+        const auto r = vl::vaultfmt::manifest::publish(*a.store, a.vault, a.lookup(), {a.current, a.keys.at(a.current)}, produced,
                                          a.known, a.cache, o);
         const bool kept = std::ranges::any_of(r.published.content.entries,
                                               [](const Entry& e) { return e.name == "added-by-b"; });

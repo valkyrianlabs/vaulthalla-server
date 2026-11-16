@@ -26,8 +26,8 @@ ALLOWED = {
 }
 
 # The VHF1 read path: none of these may use the keystream.
+# (The VHF1 codec itself is vl-vaultfmt's, which has no legacy GCM code at all.)
 VHF1_PATH = [
-    "core/src/crypto/vhf1",
     "core/src/vault/Content.cpp",
     "core/src/vault/PrefixSealer.cpp",
     "core/src/storage/Vhf1FileReader.cpp",

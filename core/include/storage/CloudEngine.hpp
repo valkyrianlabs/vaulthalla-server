@@ -183,7 +183,7 @@ namespace vh::storage {
         void adoptStorageLayout(vault::model::StorageLayout layout);
         // The vault's manifest v2 as the bucket holds it now, loaded with only the key material (no fallbacks to
         // provider versions): the migration's bucket-only check before anything legacy is deleted.
-        [[nodiscard]] sync::manifest::Content loadManifestFromBucket() const;
+        [[nodiscard]] vl::vaultfmt::manifest::Content loadManifestFromBucket() const;
 
         [[nodiscard]] bool selectedDownloadRequiresRestore(const std::shared_ptr<vh::fs::model::File>& remoteFile) const;
 
@@ -205,7 +205,7 @@ namespace vh::storage {
         // The bucket's write capability (storage/BucketCapability.hpp): the stored probe verdict, probed on first use
         // for a vault from before migration 136. Throws sync::model::SyncStalled when the bucket was probed as
         // conditional and has refused a condition since (it stays stalled until `vh vault storage probe`).
-        [[nodiscard]] sync::manifest::WriteCapability writeCapability() const;
+        [[nodiscard]] vl::vaultfmt::manifest::WriteCapability writeCapability() const;
         [[nodiscard]] s3::provider::ProfilePtr s3ProviderProfile() const { return s3Profile_; }
         [[nodiscard]] std::optional<s3::provider::StorageTier> resolvedStorageTier() const { return storageTier_; }
 
@@ -352,7 +352,7 @@ namespace vh::storage {
         // again when the bucket's write capability changes (its store's mode() is fixed at construction).
         mutable std::mutex manifestV2Mutex_;
         mutable std::shared_ptr<sync::vault_manifest::Service> manifestV2_;
-        mutable sync::manifest::WriteCapability manifestV2Mode_{sync::manifest::WriteCapability::Unknown};
+        mutable vl::vaultfmt::manifest::WriteCapability manifestV2Mode_{vl::vaultfmt::manifest::WriteCapability::Unknown};
         [[nodiscard]] bool usesManifestV2() const;
         [[nodiscard]] std::shared_ptr<sync::vault_manifest::Service> manifestV2() const;
         // Publishes the vault's manifest v2 (and collects superseded segments once a day). A refused root (rollback,

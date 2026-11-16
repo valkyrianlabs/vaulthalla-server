@@ -58,7 +58,7 @@
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
-#include "sync/manifest/Store.hpp"
+#include <vl/vaultfmt/manifest/Store.hpp>
 #include "vault/APIKeyManager.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/KeyCheck.hpp"
@@ -98,20 +98,20 @@ std::string tag() { return test::uniqueTag('r'); }
 std::string b64(const std::vector<uint8_t>& bytes) { return crypto::util::b64_encode(bytes); }
 
 // A bucket in memory: what the envelope writer and the kit import see of a vault's bucket. Every request is recorded.
-class CaptureStore final : public sync::manifest::ObjectStore {
+class CaptureStore final : public vl::vaultfmt::manifest::ObjectStore {
 public:
-    std::optional<sync::manifest::StoredObject> get(const std::string& key,
+    std::optional<vl::vaultfmt::manifest::StoredObject> get(const std::string& key,
                                                     const std::optional<std::string>&) override {
         std::scoped_lock lock(mutex_);
         const auto it = objects_.find(key);
         if (it == objects_.end()) return std::nullopt;
-        return sync::manifest::StoredObject{.bytes = it->second, .etag = "\"e\"", .version_id = std::nullopt};
+        return vl::vaultfmt::manifest::StoredObject{.bytes = it->second, .etag = "\"e\"", .version_id = std::nullopt};
     }
     std::optional<std::vector<uint8_t>> getRange(const std::string&, uint64_t, uint64_t) override { return std::nullopt; }
     std::string putIfAbsent(const std::string& key, const std::vector<uint8_t>& bytes) override {
         std::scoped_lock lock(mutex_);
         if (failPuts) throw std::runtime_error("the bucket is unreachable (test)");
-        if (objects_.contains(key)) throw sync::manifest::PreconditionFailed("exists");
+        if (objects_.contains(key)) throw vl::vaultfmt::manifest::PreconditionFailed("exists");
         objects_[key] = bytes;
         puts.push_back(key);
         return "\"e\"";
@@ -122,14 +122,14 @@ public:
         puts.push_back(key);
         return "\"e\"";
     }
-    std::vector<sync::manifest::ListedObject> list(const std::string& prefix) override {
+    std::vector<vl::vaultfmt::manifest::ListedObject> list(const std::string& prefix) override {
         std::scoped_lock lock(mutex_);
-        std::vector<sync::manifest::ListedObject> out;
+        std::vector<vl::vaultfmt::manifest::ListedObject> out;
         for (const auto& [k, v] : objects_)
             if (k.starts_with(prefix)) out.push_back({.key = k, .size = v.size(), .last_modified = std::nullopt, .etag = std::nullopt});
         return out;
     }
-    std::vector<sync::manifest::StoredVersion> versions(const std::string&) override { return {}; }
+    std::vector<vl::vaultfmt::manifest::StoredVersion> versions(const std::string&) override { return {}; }
     void remove(const std::string& key) override {
         std::scoped_lock lock(mutex_);
         objects_.erase(key);
@@ -209,7 +209,7 @@ protected:
     }
 
     static void installStores() {
-        vault::envelopes::setStoreFactoryForTesting([](const uint32_t vaultId) -> std::shared_ptr<sync::manifest::ObjectStore> {
+        vault::envelopes::setStoreFactoryForTesting([](const uint32_t vaultId) -> std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> {
             std::scoped_lock lock(storesMutex);
             storeRequests.push_back(vaultId);
             auto& s = stores[vaultId];

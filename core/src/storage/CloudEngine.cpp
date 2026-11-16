@@ -31,16 +31,16 @@
 #include "sync/model/RemotePolicy.hpp"
 #include "sync/model/RemoteManifest.hpp"
 #include "sync/vault_manifest/Service.hpp"
-#include "sync/manifest/Store.hpp"
+#include <vl/vaultfmt/manifest/Store.hpp>
 #include "vault/RecoveryEnvelopes.hpp"
 #include "sync/model/Event.hpp"
 #include "storage/s3/provider/Registry.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "storage/PlaintextReader.hpp"
 #include "storage/RemoteAccess.hpp"
 #include "db/query/sync/ObjectIdentity.hpp"
 #include "vault/Content.hpp"
-#include "crypto/vhf1/Format.hpp"
+#include <vl/vaultfmt/vhf1/Format.hpp>
 #include "identities/Manager.hpp"
 #include "db/query/upstream/WriteIntent.hpp"
 #include "sync/events/Subscriptions.hpp"
@@ -207,7 +207,7 @@ void CloudEngine::upload(const std::shared_ptr<File>& f) const {
 
     if (!f->content_hash) f->content_hash = db::query::fs::File::getContentHash(vault->id, f->path);
     if (opaqueLayout()) {
-        std::vector<uint8_t> header(std::min<uint64_t>(backingSize, crypto::vhf1::kHeaderSize));
+        std::vector<uint8_t> header(std::min<uint64_t>(backingSize, vl::vaultfmt::vhf1::kHeaderSize));
         if (std::ifstream in(backingPath, std::ios::binary);
             !in.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size())))
             throw std::runtime_error("[CloudStorageEngine] Could not read the sealed header of " + s3Key.string());
@@ -261,7 +261,7 @@ void CloudEngine::putContent(const std::string& key, const std::shared_ptr<File>
                                                  : s3::provider::RequestOperation::CreateMultipartUpload, f);
     auto own = noteOwnWrite(key, false, size, f);
     if (single) s3Provider_->uploadObjectWithMetadata(key, source, options);
-    else s3Provider_->uploadLargeObject(key, source, object_keys::partSizeFor(size), options);
+    else s3Provider_->uploadLargeObject(key, source, vl::vaultfmt::keys::partSizeFor(size), options);
     own.done();
     if (opaqueLayout()) opaqueRecordStoredObject(f);
 }
@@ -273,7 +273,7 @@ void CloudEngine::putContent(const std::string& key, const std::shared_ptr<File>
                                                  : s3::provider::RequestOperation::CreateMultipartUpload, f);
     auto own = noteOwnWrite(key, false, bytes.size(), f);
     if (single) s3Provider_->uploadBufferWithMetadata(key, bytes, options);
-    else s3Provider_->uploadLargeObject(key, bytes, object_keys::partSizeFor(bytes.size()), options);
+    else s3Provider_->uploadLargeObject(key, bytes, vl::vaultfmt::keys::partSizeFor(bytes.size()), options);
     own.done();
     if (opaqueLayout()) opaqueRecordStoredObject(f);
 }
@@ -311,7 +311,7 @@ std::shared_ptr<File> CloudEngine::uploadBufferObject(
                                                  : s3::provider::RequestOperation::CreateMultipartUpload, file);
     auto own = noteOwnWrite(s3Key, false, payload.size());
     if (single) s3Provider_->uploadBufferWithMetadata(s3Key, payload, options);
-    else s3Provider_->uploadLargeObject(s3Key, payload, object_keys::partSizeFor(payload.size()), options);
+    else s3Provider_->uploadLargeObject(s3Key, payload, vl::vaultfmt::keys::partSizeFor(payload.size()), options);
     own.done();
     if (opaqueLayout()) opaqueRecordStoredObject(file);
 
@@ -377,7 +377,7 @@ std::shared_ptr<File> CloudEngine::downloadFileWithRemoteMetadata(
     const std::shared_ptr<File>& remoteFile) {
     std::vector<uint8_t> buffer;
     if (opaqueLayout() && remoteFile && remoteFile->object_uid)
-        s3Provider_->downloadToBuffer(object_keys::contentKey(*remoteFile->object_uid), buffer);
+        s3Provider_->downloadToBuffer(vl::vaultfmt::keys::contentKey(*remoteFile->object_uid), buffer);
     else buffer = downloadToBuffer(rel_path);
 
     buffer = decryptRemotePayload(
@@ -487,7 +487,7 @@ CloudEngine::getGroupedFilesFromS3(const fs::path& prefix) const {
     // path_v0: an o/<uid> object is the bucket layout migration's (#373, vault/LayoutMigration.hpp), written before the
     // vault cuts over to opaque_v1, never a vault path: it is not a file of the path-keyed tree.
     std::erase_if(files, [](const std::shared_ptr<File>& f) {
-        return object_keys::classify(stripLeadingSlash(f->path).string()) == object_keys::KeyClass::Content;
+        return vl::vaultfmt::keys::classify(stripLeadingSlash(f->path).string()) == vl::vaultfmt::keys::KeyClass::Content;
     });
     return groupEntriesByPath(std::move(files));
 }
@@ -495,7 +495,7 @@ CloudEngine::getGroupedFilesFromS3(const fs::path& prefix) const {
 bool CloudEngine::usesManifestV2() const { return opaqueLayout(); }
 
 bool CloudEngine::bucketKeepsVersions() const {
-    if (writeCapability() == sync::manifest::WriteCapability::VersionLog) return true;
+    if (writeCapability() == vl::vaultfmt::manifest::WriteCapability::VersionLog) return true;
     return db::query::recovery::Policy::get(vault->id).mode == recovery::Mode::ProviderVersioning;
 }
 
@@ -507,7 +507,7 @@ bool CloudEngine::manifestNamesOtherWriters() const {
     return false;
 }
 
-vh::sync::manifest::WriteCapability CloudEngine::writeCapability() const {
+vl::vaultfmt::manifest::WriteCapability CloudEngine::writeCapability() const {
     const auto resolved = bucket_capability::resolve(vault->id, *s3Provider_);
     if (resolved.changed)
         throw SyncStalled("the bucket refused a conditional write although its probe found support "
@@ -533,23 +533,23 @@ void CloudEngine::publishManifestV2(const bool onlyIfChanged) const {
         if (onlyIfChanged) (void)manifestV2()->publishIfChanged();
         else (void)manifestV2()->publish();
         remoteIndexPublishPending_ = false;
-    } catch (const vh::sync::manifest::ChainRejected& e) {
+    } catch (const vl::vaultfmt::manifest::ChainRejected& e) {
         throw SyncStalled(std::string("the bucket's manifest root was refused: ") + e.what());
-    } catch (const vh::sync::manifest::PublishConflict& e) {
+    } catch (const vl::vaultfmt::manifest::PublishConflict& e) {
         throw SyncStalled(e.what());
-    } catch (const vh::sync::manifest::PublishUnsettled& e) {
+    } catch (const vl::vaultfmt::manifest::PublishUnsettled& e) {
         throw SyncStalled(e.what());
-    } catch (const vh::sync::manifest::PublishUnsupported&) {
+    } catch (const vl::vaultfmt::manifest::PublishUnsupported&) {
         // Nothing was written: no segment, no root (spec 06 §7). The pass stalls with the reason; health lists the vault.
-        sync::manifest::WriteCapability mode{};
+        vl::vaultfmt::manifest::WriteCapability mode{};
         {
             std::scoped_lock lock(manifestV2Mutex_);
             mode = manifestV2Mode_;
         }
         throw SyncStalled("manifest_publish_unsupported: " + bucket_capability::unpublishableReason(mode));
-    } catch (const vh::sync::manifest::ConditionsUnsupported& e) {
+    } catch (const vl::vaultfmt::manifest::ConditionsUnsupported& e) {
         throw SyncStalled(bucket_capability::noteChanged(vault->id, e.what()));
-    } catch (const vh::sync::manifest::ApplyIncomplete& e) {
+    } catch (const vl::vaultfmt::manifest::ApplyIncomplete& e) {
         throw SyncStalled(e.what());
     } catch (const vh::sync::vault_manifest::ApplyStopped& e) {
         throw SyncStalled(std::string("manifest_apply_stopped: ") + e.what());
@@ -575,7 +575,7 @@ bool CloudEngine::refreshRemoteIndexFromManifestIfChanged() const {
         // there, so the pass reads its index as before (never the path-keyed manifest load below).
         try {
             (void)manifestV2()->applyRemote();
-        } catch (const vh::sync::manifest::ChainRejected& e) {
+        } catch (const vl::vaultfmt::manifest::ChainRejected& e) {
             throw SyncStalled(std::string("the bucket's manifest root was refused: ") + e.what());
         } catch (const vh::sync::vault_manifest::ApplyStopped& e) {
             throw SyncStalled(std::string("manifest_apply_stopped: ") + e.what());
@@ -628,7 +628,7 @@ void CloudEngine::publishRemoteIndexManifest(const std::optional<std::string>& e
 
     // The index is a sync cache one server writes and a full LIST rebuilds: on a bucket without conditional writes
     // (spec 06 §7) it is PUT plainly; elsewhere If-Match / If-None-Match keep a concurrent publish from being lost.
-    const bool conditions = sync::manifest::sendsPreconditions(writeCapability());
+    const bool conditions = vl::vaultfmt::manifest::sendsPreconditions(writeCapability());
     const auto ifMatch = conditions ? expectedETag : std::optional<std::string>{};
     const auto ifNoneMatch = !conditions || ifMatch
         ? std::optional<std::string>{}
@@ -662,7 +662,7 @@ void CloudEngine::publishRemoteIndexManifest(const std::optional<std::string>& e
 
 void CloudEngine::publishRemoteIndexManifestWithRetry() const {
     if (usesManifestV2()) {
-        publishManifestV2();  // bounded retries and merges of its own (sync::manifest::publish)
+        publishManifestV2();  // bounded retries and merges of its own (vl::vaultfmt::manifest::publish)
         return;
     }
     std::string lastConflict;
@@ -768,7 +768,7 @@ void CloudEngine::applyRemoteIndexMutation(const std::vector<Action>& plan) cons
                 if (action.remote) {
                     db::query::sync::RemoteObjectIndex::deleteKey(
                         vault->id, opaqueLayout() && action.remote->object_uid
-                                       ? std::filesystem::path(object_keys::contentKey(*action.remote->object_uid))
+                                       ? std::filesystem::path(vl::vaultfmt::keys::contentKey(*action.remote->object_uid))
                                        : action.remote->path);
                     mutated = true;
                 }
@@ -854,7 +854,7 @@ bool CloudEngine::selectedDownloadRequiresRestore(const std::shared_ptr<File>& r
         return false;
 
     const auto head = s3Provider_->getHeadObject(
-        opaqueLayout() && remoteFile->object_uid ? object_keys::contentKey(*remoteFile->object_uid)
+        opaqueLayout() && remoteFile->object_uid ? vl::vaultfmt::keys::contentKey(*remoteFile->object_uid)
                                                  : objectKeyForPath(remoteFile->path));
     if (!head) return true;
 
@@ -1040,7 +1040,7 @@ std::optional<CloudEngine::RemoteObjectHead> CloudEngine::headRemoteObject(const
     if (opaqueLayout()) {
         const auto uid = db::query::sync::ObjectIdentity::uidAtPath(vault->id, makeAbsolute(rel_path));
         if (!uid) return std::nullopt;   // no file there: no object
-        return headObjectKey(object_keys::contentKey(*uid));
+        return headObjectKey(vl::vaultfmt::keys::contentKey(*uid));
     }
     return headObjectKey(stripLeadingSlash(rel_path).string());
 }
@@ -1071,7 +1071,7 @@ std::optional<CloudEngine::RemoteObjectHead> CloudEngine::headObjectKey(const st
     // opaque_v1 no object carries metadata, and every o/<uid> object is sealed (its header names the generation).
     out.encrypted = flag ? *flag : payload.has_value();
     if (opaqueLayout()) {
-        out.encrypted = object_keys::classify(stripLeadingSlash(objectKey).string()) == object_keys::KeyClass::Content;
+        out.encrypted = vl::vaultfmt::keys::classify(stripLeadingSlash(objectKey).string()) == vl::vaultfmt::keys::KeyClass::Content;
         out.iv_b64.clear();
         out.key_version = 0;
         out.content_hash.reset();
@@ -1101,7 +1101,7 @@ std::optional<CloudEngine::RemoteObjectHead> CloudEngine::headRemoteObjectStrict
     if (opaqueLayout()) {
         const auto uid = db::query::sync::ObjectIdentity::uidAtPath(vault->id, makeAbsolute(rel_path));
         if (!uid) return std::nullopt;
-        return headObjectKeyStrict(object_keys::contentKey(*uid));
+        return headObjectKeyStrict(vl::vaultfmt::keys::contentKey(*uid));
     }
     return headObjectKeyStrict(stripLeadingSlash(rel_path).string());
 }
@@ -1127,7 +1127,7 @@ std::vector<uint8_t> CloudEngine::fetchRemotePlaintext(const std::shared_ptr<Fil
     if (remoteFile->size_bytes) payload.reserve(maxBytes ? std::min<uint64_t>(remoteFile->size_bytes, *maxBytes)
                                                          : remoteFile->size_bytes);
     s3Provider_->streamObject(
-        opaqueLayout() && remoteFile->object_uid ? object_keys::contentKey(*remoteFile->object_uid)
+        opaqueLayout() && remoteFile->object_uid ? vl::vaultfmt::keys::contentKey(*remoteFile->object_uid)
                                                  : objectKeyForPath(relPath),
         s3::GetObjectOptions{.range = std::nullopt, .if_match = ifMatch, .max_body_bytes = maxBytes},
         [&](const std::span<const uint8_t> chunk) { payload.insert(payload.end(), chunk.begin(), chunk.end()); });

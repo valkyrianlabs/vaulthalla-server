@@ -6,7 +6,7 @@
 - UserVerification::Preferred (the spec policy knob the W3C vectors need) is never selected by the daemon: it always
   requires UV. Only the test fixtures may name it.
 - libcbor, which vl-webauthn needs, is packaged everywhere the build needs it.
-- The parsers are fuzzed in vl-webauthn's CI; here the remaining libFuzzer target (VHF1) builds on every run.
+- The parsers are fuzzed in vl-webauthn's CI, as the VHF1 codec is in vl-vaultfmt's: the server builds no fuzz target.
 """
 
 import hashlib
@@ -72,11 +72,10 @@ class WebAuthnPackagingContract(unittest.TestCase):
         self.assertIn('check_pkg libcbor-dev "libcbor-dev"', read("bin/setup/install_deps.sh"))
         self.assertIn('name = "libcbor"', read("docs/stack.toml"))
 
-    def test_ci_builds_the_remaining_fuzz_target(self) -> None:
-        self.assertRegex(read("ci/Containerfile"), r"(?m)^\s+clang-18 libclang-rt-18-dev \\$")
+    def test_the_fuzz_targets_live_in_their_libraries(self) -> None:
         workflow = read(".github/workflows/build_and_test.yml")
-        self.assertIn("CXX=clang++-18 meson setup build-fuzz -Dfuzz=true", workflow)
-        self.assertIn("bash tools/dev/quiet-build.sh build-fuzz fuzz-setup.log", workflow)
+        self.assertNotIn("-Dfuzz=true", workflow)
+        self.assertFalse((REPO / "core" / "tests" / "fuzz").exists())
         self.assertFalse((REPO / ".github" / "actions" / "fuzz").exists())
 
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "sync/manifest/Content.hpp"
+#include <vl/vaultfmt/manifest/Content.hpp>
 
 #include <nlohmann/json.hpp>
 #include <pqxx/transaction>
@@ -39,7 +39,7 @@ struct ApplyRow {
 struct DeferredEntry {
     std::string uid;                               // base32
     std::string op;                                // replace_content | delete | trash
-    std::optional<vh::sync::manifest::Entry> target;
+    std::optional<vl::vaultfmt::manifest::Entry> target;
     std::optional<std::string> ours_generation;    // hex
     uint64_t root_epoch{};
     std::string root_sha256;
@@ -54,20 +54,20 @@ public:
     // Creates a live entry (fs_entry and its typed row with the uid, ancestors' totals) under parentId at `path`;
     // nullopt when the name is taken or the uid is live already (a local write since collect).
     [[nodiscard]] static std::optional<unsigned int> createEntry(pqxx::work& txn, uint32_t vaultId, unsigned int ownerId,
-                                                                const vh::sync::manifest::Entry& e,
+                                                                const vl::vaultfmt::manifest::Entry& e,
                                                                 unsigned int parentId, const std::string& path,
                                                                 std::optional<uint64_t> inode);
     // A trash row for a file this server never had live (theirs trashed it), as a restore writes it.
     static void createTrashed(pqxx::work& txn, uint32_t vaultId, unsigned int ownerId,
-                              const vh::sync::manifest::Entry& e, const std::string& path);
+                              const vl::vaultfmt::manifest::Entry& e, const std::string& path);
 
     // The o/<uid> index row (source 'manifest') as the entry's object says; deleteIndex drops it.
-    static void upsertIndex(pqxx::work& txn, uint32_t vaultId, const vh::sync::manifest::Entry& e);
+    static void upsertIndex(pqxx::work& txn, uint32_t vaultId, const vl::vaultfmt::manifest::Entry& e);
     static void deleteIndex(pqxx::work& txn, uint32_t vaultId, const std::string& uid);
 
     // The files row takes the entry's generation, key version, size, hash and mime (ancestors' totals follow), only
     // while its generation is still `expectedHex` (the local copy is the one the index named).
-    [[nodiscard]] static bool replaceContent(pqxx::work& txn, unsigned int fileId, const vh::sync::manifest::Entry& e,
+    [[nodiscard]] static bool replaceContent(pqxx::work& txn, unsigned int fileId, const vl::vaultfmt::manifest::Entry& e,
                                              const std::optional<std::string>& expectedHex);
     // A file with no local bytes (remote-only under cache) moved or renamed in the rows alone, ancestors' totals
     // shifted, while it is still at (fromParentId, fromName): Filesystem::rename moves backing bytes it doesn't have.
@@ -80,23 +80,23 @@ public:
     static void setMtime(pqxx::work& txn, unsigned int entryId, const std::string& mtime);
 
     // mode, owner (fs_entry) and a symlink's target, while they are still ours'; the entry takes target's mtime.
-    [[nodiscard]] static bool setAttributes(pqxx::work& txn, unsigned int entryId, const vh::sync::manifest::Entry& ours,
-                                            const vh::sync::manifest::Entry& target);
+    [[nodiscard]] static bool setAttributes(pqxx::work& txn, unsigned int entryId, const vl::vaultfmt::manifest::Entry& ours,
+                                            const vl::vaultfmt::manifest::Entry& target);
 
     // Provider versions of o/<uid> (upstream_object_version, insert only).
-    static void addHistory(pqxx::work& txn, uint32_t vaultId, const vh::sync::manifest::Entry& e);
+    static void addHistory(pqxx::work& txn, uint32_t vaultId, const vl::vaultfmt::manifest::Entry& e);
 
     // A snapshot record (recovery_snapshot with its uid, file_versions restorable only from the bucket), as a restore
     // writes one; the recovery_snapshot id of one by uid.
     static void createSnapshot(pqxx::work& txn, uint32_t vaultId, unsigned int ownerId,
-                               const vh::sync::manifest::SnapshotRecord& s, const vh::sync::manifest::Content& result);
+                               const vl::vaultfmt::manifest::SnapshotRecord& s, const vl::vaultfmt::manifest::Content& result);
     [[nodiscard]] static std::optional<int64_t> snapshotId(uint32_t vaultId, const std::string& uid);
 
     // Vault settings the head changed (name unless another vault holds it, quota, sync strategy cache|sync); the
     // notes say what was not applied.
     [[nodiscard]] static std::vector<std::string> setVault(pqxx::work& txn, uint32_t vaultId,
-                                                           const vh::sync::manifest::VaultInfo& ours,
-                                                           const vh::sync::manifest::VaultInfo& target);
+                                                           const vl::vaultfmt::manifest::VaultInfo& ours,
+                                                           const vl::vaultfmt::manifest::VaultInfo& target);
 
     // ---- other writers' envelopes (migration 147) ----
     // Every kid this vault knows: its own envelopes' and the other writers' it has read.

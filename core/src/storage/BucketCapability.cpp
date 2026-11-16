@@ -22,7 +22,7 @@ namespace vh::storage::bucket_capability {
 namespace bucket_capability_detail {
 
 using Q = db::query::vault::BucketCapability;
-using sync::manifest::WriteCapability;
+using vl::vaultfmt::manifest::WriteCapability;
 
 constexpr std::chrono::hours kRetryAfterFailedProbe{1};
 
@@ -55,7 +55,7 @@ void logVerdict(const uint32_t vaultId, const s3::ProbeResult& r) {
     if (r.capability == WriteCapability::Conditional)
         log->info("[bucket_capability] Vault {}: {} (conditional writes)", vaultId, r.reason);
     else
-        log->warn("[bucket_capability] Vault {}: {} (capability {})", vaultId, r.reason, sync::manifest::to_string(r.capability));
+        log->warn("[bucket_capability] Vault {}: {} (capability {})", vaultId, r.reason, vl::vaultfmt::manifest::to_string(r.capability));
 }
 
 }
@@ -123,7 +123,7 @@ std::optional<s3::ProbeResult> probeVault(const uint32_t vaultId) {
 
 std::string noteChanged(const uint32_t vaultId, const std::string& detail) {
     namespace d = bucket_capability_detail;
-    if (d::Q::get(vaultId).capability != sync::manifest::WriteCapability::Conditional) {
+    if (d::Q::get(vaultId).capability != vl::vaultfmt::manifest::WriteCapability::Conditional) {
         log::Registry::cloud()->warn("[bucket_capability] Vault {}: the bucket refused a conditional write ({}) before "
                                      "it was probed; the next use probes it", vaultId, detail);
         {
@@ -168,7 +168,7 @@ std::string noteChanged(const uint32_t vaultId, const std::string& detail) {
     return stalled;
 }
 
-std::string unpublishableReason(const sync::manifest::WriteCapability) {
+std::string unpublishableReason(const vl::vaultfmt::manifest::WriteCapability) {
     return "the bucket supports neither conditional writes nor object versions (or not If-Match on GET): nothing can "
            "arbitrate the vault's encrypted manifest on it, so it isn't published; content uploads continue";
 }

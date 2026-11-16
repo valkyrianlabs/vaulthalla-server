@@ -1678,7 +1678,7 @@ struct NewFile {
         } else {
             // The sealing's VHF1 salt (= the new generation's id), fixed for the upload unless a resumed sealing has
             // to continue under a new one.
-            nf.row.encryption_iv = vh::vault::content::generationOf(crypto::vhf1::freshSalt());
+            nf.row.encryption_iv = vh::vault::content::generationOf(vl::vaultfmt::vhf1::freshSalt());
             nf.row.key_version = current.version;
         }
     }

@@ -359,7 +359,7 @@ TEST_F(FormatMigrationTest, FormatMigrationConvertFileVerifiesTheTagAndComparesP
         EXPECT_TRUE(content::isVhf1(converted.generation));
         // Bound to this vault, this object and the same key version.
         const auto header = slurp(out);
-        const auto opened = content::openHeader({header.data(), crypto::vhf1::kHeaderSize},
+        const auto opened = content::openHeader({header.data(), vl::vaultfmt::vhf1::kHeaderSize},
                                                 {.vaultUid = em_->vaultUid(), .generation = converted.generation,
                                                  .keyVersion = kCurrent, .objectUid = f->object_uid},
                                                 em_->keySnapshot(kCurrent));
@@ -524,7 +524,7 @@ TEST_F(FormatMigrationTest, FormatMigrationWritesNoPlaintextTempFiles) {
             if (!e.is_regular_file()) continue;
             const auto bytes = slurp(e.path());
             const bool vhf1 = bytes.size() >= 8 && std::equal(bytes.begin(), bytes.begin() + 8,
-                                                              crypto::vhf1::kMagic.begin());
+                                                              vl::vaultfmt::vhf1::kMagic.begin());
             bool catalog = false;
             for (const auto& [p, l] : live_) catalog = catalog || e.path() == l.file->backing_path;
             for (const auto& [id, b] : blobs_) catalog = catalog || e.path() == storePath(b.storageName);

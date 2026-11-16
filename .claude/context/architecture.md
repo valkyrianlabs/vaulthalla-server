@@ -10,8 +10,9 @@ core-backend, and protocol-map docs, with stale claims corrected.
   It enters C++ via `subdir('core')` and also installs `deploy/lifecycle` → `/usr/lib/vaulthalla/lifecycle`.
 - `core/meson.build`: deps `libsodium libcurl boost(filesystem) libpqxx-vh pdfium yaml-cpp spdlog fmt openssl>=3
   libmagic libjpeg libturbojpeg pugixml zlib threads`, the WebAuthn verifier `vl-webauthn`
-  (the pinned subproject: libcbor >= 0.10, OpenSSL, libsodium, the vendored nlohmann; `-Dfuzz=true` builds only the
-  VHF1 libFuzzer target), plus `fuse3` when the kernel bridge is built (`-Dfuse`, auto:
+  (the pinned subproject: libcbor >= 0.10, OpenSSL, libsodium, the vendored nlohmann), the vault format `vl-vaultfmt`
+  (the pinned subproject, `subprojects/vl-vaultfmt.wrap`: OpenSSL, vl-keykit, the vendored nlohmann; #443, below; the
+  server builds no fuzz target since its codecs moved to vl-webauthn and vl-vaultfmt), plus `fuse3` when the kernel bridge is built (`-Dfuse`, auto:
   required on Linux; never on macOS, where `-Dfuse=enabled` is a setup error) and the Linux-only `uuid tss2-esys tss2-tctildr tss2-rc`.
   OS-specific code lives only in `core/src/platform/{linux,darwin}/` behind `core/include/platform/*.hpp` (see
   `macos.md`); source discovery adds the host's directory and, without FUSE, swaps the four libfuse sources for
@@ -930,7 +931,18 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   `max_mib_per_second` / `max_cpu_percent` (`conversion::pauseAfter`), blocked per item while
   `rotation_in_progress()` or a `vault_key_salvage` row is running. Config is YAML-only (not in the settings JSON).
   `vh vault format status` = `ops::vault_format::status` (encryption-key View permission).
-- **VHF1 codec** (`crypto::vhf1`, `core/include/crypto/vhf1/{Format,Writer,Reader}.hpp`; #365, spec
+- **The vault format library vl-vaultfmt** (#443, `design/core/vault-format-library.md`, "As built: items 7 and 8"):
+  VHF1, the object keys and the encrypted manifest below are `valkyrianlabs/vl-vaultfmt` (AGPL-3.0-or-later, shared with
+  the Desktop-only engine and the portal's reader; namespaces `vl::vaultfmt::{vhf1,keys,manifest,test_support}`, headers
+  `<vl/vaultfmt/...>`, the C API `vl_vaultfmt.h`), linked from the commit pinned in `subprojects/vl-vaultfmt.wrap` (a
+  `git archive` tarball under `subprojects/packagecache/` until 0.1.0 is released). Server code names them fully
+  (`vl::vaultfmt::manifest::Content`, or a file-scope `namespace mf = vl::vaultfmt::manifest;` alias as before); the
+  server's own Fwd headers include `<vl/vaultfmt/Fwd.hpp>`. Its suites, vectors copy and the VHF1 fuzz target live
+  there; here stay the protocol suites through the S3 adapter (`test_manifest.cpp`, `test_manifest_interleavings.cpp`
+  on the HTTP fake only), `test_vaultfmt_vectors.cpp` (the library's vectors identical to `design/encryption/vectors/`)
+  and `tools/contracts/test_format_library_contract.py` (pinned wrap, no in-tree copy, no old include or namespace).
+  During co-development `subprojects/vl-vaultfmt-0.1.0` may be a local symlink to a checkout, never committed.
+- **VHF1 codec** (`vl::vaultfmt::vhf1`, vl-vaultfmt `include/vl/vaultfmt/vhf1/{Format,Writer,Reader}.hpp`; #365, spec
   `design/encryption/02-authenticated-file-format.md`). The library under VHF1 at rest (above) and the manifest v2
   objects below: the 120-byte header (HMAC-SHA-256 tag), per-sealing HKDF-SHA-256 keys from vault key + salt,
   64 KiB AES-256-GCM chunks with AAD = header hash ‖ index ‖ final flag, a streaming `Writer` (final-chunk hold-back),
@@ -941,13 +953,11 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   `vhf1::Key` (`vhf1/Key.hpp`, 32 bytes in a `vl::keykit::SecretBytes`); the server's `crypto::SecretKey` derives from
   it and only adds `random()`. `crypto::util::Gcm` (streaming GCM, the legacy v1 positioned decrypt, `gcmVerifyFd`)
   is the server's and VHF1 no longer uses it.
-  Proven byte for byte by `Vhf1Vectors` against `design/encryption/vectors/vectors.json`; fuzz target `vh_fuzz_vhf1`
-  (`-Dfuzz=true`, clang; see testing.md).
-- **Encrypted manifest v2** (`sync::manifest`, `core/include/sync/manifest/`; #368, spec
-  `design/encryption/03-metadata-recovery.md` §3-§4; migration 125). `sync::manifest`, `crypto::vhf1` and
-  `storage/ObjectKeys` are the candidates of the shared format library (#443): they include only each other,
-  vl-keykit, OpenSSL, nlohmann and the standard library (`tools/contracts/test_format_library_contract.py`); the
-  server's side is `storage::s3::ManifestStore`, `sync::vault_manifest` and `db::query::sync::Manifest`. Replaces `.vaulthalla/index-v1.json` for
+  Proven byte for byte by vl-vaultfmt's `Vhf1Vectors` against its copy of `design/encryption/vectors/vectors.json`;
+  fuzz target `fuzz_vhf1` in vl-vaultfmt's CI.
+- **Encrypted manifest v2** (`vl::vaultfmt::manifest`, vl-vaultfmt `include/vl/vaultfmt/manifest/`; #368, spec
+  `design/encryption/03-metadata-recovery.md` §3-§4; migration 125). The format, its manifest and object keys are
+  vl-vaultfmt's (above); the server's side is `storage::s3::ManifestStore`, `sync::vault_manifest` and `db::query::sync::Manifest`. Replaces `.vaulthalla/index-v1.json` for
   `opaque_v1` vaults only (every new encrypting vault since #371). `Document` (root, segment, snapshot schemas; readers ignore unknown
   members; `recovery_policy` v1 of revocable grants, only class `customer` usable, other versions "not understood"),
   `Objects` (VHF1 kind 3 root with object uid = vault uid, kind 2 segments with object uid = sid), `Chain` (rollback,
@@ -960,7 +970,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   (assigns `directories.uid` / `symlinks.uid` lazily; trash via `files_trashed.object_uid`; versions and tombstones from
   `o/<uid>` rows of `upstream_object_version`) and keeps `remote_manifest_state` (manifest_key `.vaulthalla/root`:
   epoch, root hash, ETag, refused root, gc_at) and `remote_manifest_root` (last three roots' sids). The per-vault
-  logic is `sync::manifest::Session` (`Session.hpp`: publish and record, `verifyRemote` in both modes, repair, refusal,
+  logic is `vl::vaultfmt::manifest::Session` (`Session.hpp`: publish and record, `verifyRemote` in both modes, repair, refusal,
   daily GC) over a `StateStore` interface (`ChainState`, `RootRecord`) and a `SessionHost` of callbacks (content,
   keys, node id, clock, alert, notices); it includes nothing of the server. `sync::vault_manifest::Service`
   (`sync/vault_manifest/`, the server's namespace, since #443) wires it: `StateStore` on PostgreSQL
@@ -996,7 +1006,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 - **Manifest applier, items 1-3** (`design/sync/manifest-applier.md`, "As built"; migration 145): snapshot records
   are named by `uid` (`recovery_snapshot.uid`, given by the collector like `directories.uid`, kept by a restore);
   `SnapshotRecord::id` is only read from roots written before uids (key `snapshotKey`: uid, or `id:<n>`), so the first
-  publish after the upgrade replaces those records with the same snapshots by uid. `sync/manifest/Reconcile.hpp`:
+  publish after the upgrade replaces those records with the same snapshots by uid. `<vl/vaultfmt/manifest/Reconcile.hpp>`:
   the pure `reconcile(base, theirs, ours)` (result tree, ordered plan of `Op`s with `ours` for compare-and-set,
   conflicts, key problems that stop it), `applyPlan` (the model executor), `treeProblems`; no DB, no server include.
   The local base copy: `remote_manifest_state.base_root` + `remote_manifest_base` (sealed bytes by sid), written by
@@ -1071,7 +1081,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   `vaults_recovery_material_missing` (`stats::model::SystemHealth`) makes the node degraded.
 - **opaque_v1 data plane** (#369, spec `design/encryption/01-provider-blind-storage.md` §4-§5; the layout of every new
   encrypting vault since #371, `vault::model::layoutForNewVault`; path-keyed fake-bucket suites pin path_v0 with
-  `setNewEncryptingLayoutForTesting`, test mode only). Keys: `storage/ObjectKeys.hpp` (`o/<file uid>`, `.vaulthalla/{layout.json,root,seg/<sid>,key/<kid>}`,
+  `setNewEncryptingLayoutForTesting`, test mode only). Keys: `<vl/vaultfmt/ObjectKeys.hpp>` (`vl::vaultfmt::keys`: `o/<file uid>`, `.vaulthalla/{layout.json,root,seg/<sid>,key/<kid>}`,
   classify Content/Metadata/Foreign, `partSizeFor` = max(5 MiB, ceil(size/10,000)) whole MiB, used by every layout).
   `CloudEngine::objectKeyOf(File|Trashed)` / `objectKeyForPath` (opaque: the uid via
   `db::query::sync::ObjectIdentity`: live file, else the newest trashed one) replace `stripLeadingSlash(path)`; path
@@ -1127,7 +1137,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   (`bucket_not_empty`). `versioned` (ListObjectVersions and deletes by version id) is false only for Cloudflare R2
   (ListObjectsV2, deletes by key after a HEAD shows the recorded ETag). Verification: a second complete listing equal
   to the items, a read-back sample, every envelope inspected, then the manifest v2 published with
-  `sync::manifest::publish` on `db::query::sync::Manifest::collect(vaultId, CollectOptions{staged, sync_strategy})`
+  `vl::vaultfmt::manifest::publish` on `db::query::sync::Manifest::collect(vaultId, CollectOptions{staged, sync_strategy})`
   (the staged objects stand in for the remote index, which only the cutover writes) and loaded back from the bucket;
   the published root is kept on the row (`manifest` JSON) and recorded by the cutover (`Manifest::recordRoot(txn,…)`).
   Cutover (`RemoteAttach::cutover`, vault row locked): `vault.type = 's3'`, the `s3` row (encrypting, opaque_v1,

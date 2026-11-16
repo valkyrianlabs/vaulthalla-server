@@ -5,7 +5,7 @@
 #include "db/Transactions.hpp"
 #include "db/encoding/bytea.hpp"
 #include "db/query/device/Device.hpp"
-#include "sync/manifest/Objects.hpp"
+#include <vl/vaultfmt/manifest/Objects.hpp>
 #include "vault/Content.hpp"
 
 #include <fmt/format.h>
@@ -21,13 +21,13 @@ namespace vh::db::query::sync {
 
 namespace manifest_query_detail {
 
-vh::sync::manifest::WritersChange writersChangeOf(const nlohmann::json& j) {
-    return {j.at("kind").get<std::string>() == "add" ? vh::sync::manifest::WritersChange::Kind::Add
-                                                     : vh::sync::manifest::WritersChange::Kind::Remove,
+vl::vaultfmt::manifest::WritersChange writersChangeOf(const nlohmann::json& j) {
+    return {j.at("kind").get<std::string>() == "add" ? vl::vaultfmt::manifest::WritersChange::Kind::Add
+                                                     : vl::vaultfmt::manifest::WritersChange::Kind::Remove,
             j.at("node").get<std::string>()};
 }
 
-namespace mf = vh::sync::manifest;
+namespace mf = vl::vaultfmt::manifest;
 
 constexpr const char* kRootStateKey = ".vaulthalla/root";
 
@@ -98,10 +98,10 @@ std::string baseName(const std::string& path) {
 
 }
 
-vh::sync::manifest::ChainState Manifest::state(const uint32_t vaultId) {
+vl::vaultfmt::manifest::ChainState Manifest::state(const uint32_t vaultId) {
     using namespace manifest_query_detail;
     return Transactions::exec("Manifest::state", [&](pqxx::work& txn) {
-        vh::sync::manifest::ChainState s;
+        vl::vaultfmt::manifest::ChainState s;
         const auto res = txn.exec(
             "SELECT epoch, root_sha256, etag, refused_reason, refused_epoch, refused_root_sha256, "
             "       EXTRACT(EPOCH FROM refused_at)::bigint AS refused_at, EXTRACT(EPOCH FROM gc_at)::bigint AS gc_at, "
@@ -137,11 +137,11 @@ vh::sync::manifest::ChainState Manifest::state(const uint32_t vaultId) {
 }
 
 void Manifest::setWritersChange(pqxx::work& txn, const uint32_t vaultId,
-                                const std::optional<vh::sync::manifest::WritersChange>& change) {
+                                const std::optional<vl::vaultfmt::manifest::WritersChange>& change) {
     using namespace manifest_query_detail;
     std::optional<std::string> text;
     if (change)
-        text = nlohmann::json{{"kind", change->kind == vh::sync::manifest::WritersChange::Kind::Add ? "add" : "remove"},
+        text = nlohmann::json{{"kind", change->kind == vl::vaultfmt::manifest::WritersChange::Kind::Add ? "add" : "remove"},
                               {"node", change->node}}.dump();
     const auto r = txn.exec("UPDATE remote_manifest_state SET writers_change = $3::jsonb WHERE vault_id = $1 AND "
                             "manifest_key = $2 RETURNING vault_id",
@@ -149,15 +149,15 @@ void Manifest::setWritersChange(pqxx::work& txn, const uint32_t vaultId,
     if (r.empty()) throw std::runtime_error("the vault has no recorded manifest root to change the writers of");
 }
 
-void Manifest::setWritersChange(const uint32_t vaultId, const std::optional<vh::sync::manifest::WritersChange>& change) {
+void Manifest::setWritersChange(const uint32_t vaultId, const std::optional<vl::vaultfmt::manifest::WritersChange>& change) {
     Transactions::exec("Manifest::setWritersChange", [&](pqxx::work& txn) { setWritersChange(txn, vaultId, change); });
 }
 
-void Manifest::recordRoot(const uint32_t vaultId, const vh::sync::manifest::RootRecord& rec) {
+void Manifest::recordRoot(const uint32_t vaultId, const vl::vaultfmt::manifest::RootRecord& rec) {
     Transactions::exec("Manifest::recordRoot", [&](pqxx::work& txn) { recordRoot(txn, vaultId, rec); });
 }
 
-void Manifest::recordRoot(pqxx::work& txn, const uint32_t vaultId, const vh::sync::manifest::RootRecord& rec) {
+void Manifest::recordRoot(pqxx::work& txn, const uint32_t vaultId, const vl::vaultfmt::manifest::RootRecord& rec) {
     using namespace manifest_query_detail;
     const auto epoch = rec.epoch;
     const auto& rootSha256 = rec.root_sha256;
@@ -234,7 +234,7 @@ void Manifest::recordRoot(pqxx::work& txn, const uint32_t vaultId, const vh::syn
     }
 }
 
-std::optional<vh::sync::manifest::BaseCopy> Manifest::base(const uint32_t vaultId) {
+std::optional<vl::vaultfmt::manifest::BaseCopy> Manifest::base(const uint32_t vaultId) {
     using namespace manifest_query_detail;
     return Transactions::exec("Manifest::base", [&](pqxx::work& txn) -> std::optional<mf::BaseCopy> {
         const auto root = txn.exec("SELECT base_root FROM remote_manifest_state WHERE vault_id = $1 AND manifest_key = $2 "
@@ -251,7 +251,7 @@ std::optional<vh::sync::manifest::BaseCopy> Manifest::base(const uint32_t vaultI
 }
 
 void Manifest::notePublishing(const uint32_t vaultId, const std::string& rootSha256,
-                              const vh::sync::manifest::BaseCopy& pending) {
+                              const vl::vaultfmt::manifest::BaseCopy& pending) {
     using namespace manifest_query_detail;
     Transactions::exec("Manifest::notePublishing", [&](pqxx::work& txn) {
         // The pending base copy first: the new objects by sid (kept until a record names or drops them) and the root.
@@ -275,7 +275,7 @@ void Manifest::notePublishing(const uint32_t vaultId, const std::string& rootSha
     });
 }
 
-std::optional<vh::sync::manifest::BaseCopy> Manifest::pendingBase(const uint32_t vaultId, const std::string& rootSha256) {
+std::optional<vl::vaultfmt::manifest::BaseCopy> Manifest::pendingBase(const uint32_t vaultId, const std::string& rootSha256) {
     using namespace manifest_query_detail;
     return Transactions::exec("Manifest::pendingBase", [&](pqxx::work& txn) -> std::optional<mf::BaseCopy> {
         const auto root = txn.exec("SELECT bytes FROM remote_manifest_pending WHERE vault_id = $1 AND root_sha256 = $2",
@@ -351,9 +351,9 @@ void Manifest::markCollected(const uint32_t vaultId) {
     });
 }
 
-vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId) { return collect(vaultId, CollectOptions{}); }
+vl::vaultfmt::manifest::Content Manifest::collect(const uint32_t vaultId) { return collect(vaultId, CollectOptions{}); }
 
-vh::sync::manifest::Content Manifest::collect(const uint32_t vaultId, const CollectOptions& options) {
+vl::vaultfmt::manifest::Content Manifest::collect(const uint32_t vaultId, const CollectOptions& options) {
     using namespace manifest_query_detail;
     const auto nodeId = device::Devices::nodeId();
     return Transactions::exec("Manifest::collect", [&](pqxx::work& txn) {

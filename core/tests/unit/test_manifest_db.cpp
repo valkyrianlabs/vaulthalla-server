@@ -18,10 +18,10 @@
 #include "storage/Engine.hpp"
 #include "storage/s3/ManifestStore.hpp"
 #include "sync/Controller.hpp"
-#include "sync/manifest/Objects.hpp"
-#include "sync/manifest/Publisher.hpp"
-#include "sync/manifest/Reader.hpp"
-#include "sync/manifest/Store.hpp"
+#include <vl/vaultfmt/manifest/Objects.hpp>
+#include <vl/vaultfmt/manifest/Publisher.hpp>
+#include <vl/vaultfmt/manifest/Reader.hpp>
+#include <vl/vaultfmt/manifest/Store.hpp>
 #include "sync/vault_manifest/Service.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "vault/EncryptionManager.hpp"
@@ -33,7 +33,7 @@
 
 namespace vh::test_manifest_db {
 
-namespace mf = vh::sync::manifest;
+namespace mf = vl::vaultfmt::manifest;
 using test_support::versioned::Versioning;
 using test_support::versioned::VersionedBucket;
 

@@ -3,7 +3,7 @@
 #include "crypto/Fwd.hpp"
 #include "crypto/SecretKey.hpp"
 #include "crypto/id/ObjectUid.hpp"
-#include "crypto/vhf1/Format.hpp"
+#include <vl/vaultfmt/vhf1/Format.hpp>
 #include "fs/Fwd.hpp"
 
 #include <cstdint>
@@ -23,7 +23,7 @@
 //   Gcm0   the legacy format: one headerless AES-256-GCM message (body ‖ tag) under the vault key, its 12-byte IV
 //          recorded beside it. Read until the conversion (#372) and the retirement (#376); never written for new
 //          content.
-//   Vhf1   the authenticated chunked format (crypto::vhf1): every new generation.
+//   Vhf1   the authenticated chunked format (vl::vaultfmt::vhf1): every new generation.
 //
 // The format is never a separate flag that could disagree with the bytes: it follows from the generation id the
 // catalog records with the content (files.encryption_iv, recovery_blob.encryption_iv, upload_session_file, the
@@ -55,7 +55,7 @@ enum class Format : uint8_t { Plain, Gcm0, Vhf1 };
 // The sealed size of a generation, by its id (plaintext size → bytes stored).
 [[nodiscard]] uint64_t sealedSizeOf(uint64_t plaintextSize, std::string_view generationB64);
 
-[[nodiscard]] std::string generationOf(const crypto::vhf1::Salt& salt);
+[[nodiscard]] std::string generationOf(const vl::vaultfmt::vhf1::Salt& salt);
 
 // What a reader holds a sealed generation to: the vault it belongs to, the generation id and key version the catalog
 // recorded, and the object's uid when the catalog's row is known to be the one that sealed it. For Vhf1 the header
@@ -69,19 +69,19 @@ struct Binding {
 };
 
 // The expectation a Vhf1 binding checks (storage::IntegrityError when the generation is not a salt).
-[[nodiscard]] crypto::vhf1::Expectation expectationOf(const Binding& binding);
+[[nodiscard]] vl::vaultfmt::vhf1::Expectation expectationOf(const Binding& binding);
 // Opens and authenticates a Vhf1 header against binding (vault, salt, key version and object when given) with `key`
 // as the vault key of binding.keyVersion. Throws storage::IntegrityError naming the spec's error code.
-[[nodiscard]] crypto::vhf1::OpenedHeader openHeader(std::span<const uint8_t> header, const Binding& binding,
+[[nodiscard]] vl::vaultfmt::vhf1::OpenedHeader openHeader(std::span<const uint8_t> header, const Binding& binding,
                                                     const crypto::SecretKeyPtr& key);
 
-// A vhf1::Error (or any failure to read a sealed generation) as the storage::IntegrityError readers throw.
-[[noreturn]] void throwIntegrity(const crypto::vhf1::Error& error, std::string_view what);
+// A vl::vaultfmt::vhf1::Error (or any failure to read a sealed generation) as the storage::IntegrityError readers throw.
+[[noreturn]] void throwIntegrity(const vl::vaultfmt::vhf1::Error& error, std::string_view what);
 
 // ---- writing (always Vhf1) ------------------------------------------------------------------------------------------
 
 // The header of a new generation of a vault file: kind FileContent, 64 KiB chunks, a fresh salt.
-[[nodiscard]] crypto::vhf1::HeaderParams fileHeader(const crypto::id::ObjectUid& vaultUid,
+[[nodiscard]] vl::vaultfmt::vhf1::HeaderParams fileHeader(const crypto::id::ObjectUid& vaultUid,
                                                     const crypto::id::ObjectUid& objectUid, uint32_t keyVersion);
 
 // One sealing of a vault file streamed out through `sink` (the header first, then each chunk once it is complete;
@@ -103,7 +103,7 @@ public:
     [[nodiscard]] uint64_t objectSize() const;
 
 private:
-    std::unique_ptr<crypto::vhf1::Writer> writer_;
+    std::unique_ptr<vl::vaultfmt::vhf1::Writer> writer_;
     std::string generation_;
     uint32_t keyVersion_{};
 };

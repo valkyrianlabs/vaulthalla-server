@@ -311,7 +311,7 @@ Status attach(const Actor& actor, const AttachRequest& request) {
     case d::Q::StartOutcome::Busy:
         throw Conflict("vault '" + vault->name + "' already has a remote attach");
     }
-    const auto publish = check->probe.capability == sync::manifest::WriteCapability::Conditional ? "conditional" : "version_log";
+    const auto publish = check->probe.capability == vl::vaultfmt::manifest::WriteCapability::Conditional ? "conditional" : "version_log";
     d::Q::setProbe(vault->id, std::string(publish), storage::s3::toJson(check->probe), check->versioned);
 
     const bool resumed = started.outcome == d::Q::StartOutcome::Resumed;
@@ -454,7 +454,7 @@ void attachForCloud(const unsigned int vaultId, const unsigned int apiKeyId, con
     }
     if (started.outcome != d::Q::StartOutcome::Started && started.outcome != d::Q::StartOutcome::Resumed)
         throw Conflict("vault '" + vault->name + "' can't start an attach to its managed bucket now");
-    const auto publish = check.probe.capability == sync::manifest::WriteCapability::Conditional ? "conditional" : "version_log";
+    const auto publish = check.probe.capability == vl::vaultfmt::manifest::WriteCapability::Conditional ? "conditional" : "version_log";
     d::Q::setProbe(vault->id, std::string(publish), storage::s3::toJson(check.probe), check.versioned);
     vh::audit::record({.action = "vault.remote.attach", .outcome = vh::audit::Outcome::Success, .actor_id = std::nullopt,
                        .actor = "system:cloud", .vault_id = vault->id,

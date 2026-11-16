@@ -22,22 +22,22 @@ namespace service_detail {
 
 // The session's memory in PostgreSQL: one vault's rows of remote_manifest_state, remote_manifest_root and
 // remote_manifest_gc.
-class DatabaseState final : public manifest::StateStore {
+class DatabaseState final : public vl::vaultfmt::manifest::StateStore {
 public:
     explicit DatabaseState(const uint32_t vaultId) : vaultId_(vaultId) {}
 
-    manifest::ChainState state() override { return db::query::sync::Manifest::state(vaultId_); }
-    void recordRoot(const manifest::RootRecord& record) override {
+    vl::vaultfmt::manifest::ChainState state() override { return db::query::sync::Manifest::state(vaultId_); }
+    void recordRoot(const vl::vaultfmt::manifest::RootRecord& record) override {
         db::query::sync::Manifest::recordRoot(vaultId_, record);
     }
-    std::optional<manifest::BaseCopy> base() override { return db::query::sync::Manifest::base(vaultId_); }
+    std::optional<vl::vaultfmt::manifest::BaseCopy> base() override { return db::query::sync::Manifest::base(vaultId_); }
     void markApplying(const uint64_t epoch, const std::string& rootSha256) override {
         db::query::sync::Manifest::markApplying(vaultId_, epoch, rootSha256);
     }
-    void notePublishing(const std::string& rootSha256, const manifest::BaseCopy& pending) override {
+    void notePublishing(const std::string& rootSha256, const vl::vaultfmt::manifest::BaseCopy& pending) override {
         db::query::sync::Manifest::notePublishing(vaultId_, rootSha256, pending);
     }
-    std::optional<manifest::BaseCopy> pendingBase(const std::string& rootSha256) override {
+    std::optional<vl::vaultfmt::manifest::BaseCopy> pendingBase(const std::string& rootSha256) override {
         return db::query::sync::Manifest::pendingBase(vaultId_, rootSha256);
     }
     bool recordRefused(const std::string& reason, const uint64_t epoch, const std::string& rootSha256) override {
@@ -56,8 +56,8 @@ private:
     uint32_t vaultId_;
 };
 
-crypto::vhf1::KeyLookup lookupOf(std::shared_ptr<vault::EncryptionManager> keys) {
-    return [keys = std::move(keys)](const uint32_t version) -> crypto::vhf1::KeyPtr {
+vl::vaultfmt::vhf1::KeyLookup lookupOf(std::shared_ptr<vault::EncryptionManager> keys) {
+    return [keys = std::move(keys)](const uint32_t version) -> vl::vaultfmt::vhf1::KeyPtr {
         try {
             return keys->historicalKeySnapshot(version);
         } catch (const std::exception&) {
@@ -67,18 +67,18 @@ crypto::vhf1::KeyLookup lookupOf(std::shared_ptr<vault::EncryptionManager> keys)
 }
 
 // Both or nothing: the session is never built without the bucket or the vault's keys.
-std::shared_ptr<manifest::ObjectStore> required(std::shared_ptr<manifest::ObjectStore> store,
+std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> required(std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> store,
                                                 const std::shared_ptr<vault::EncryptionManager>& keys) {
     if (!store || !keys) throw std::invalid_argument("vault_manifest::Service needs a store and the vault's keys");
     return store;
 }
 
-manifest::SessionHost hostOf(const uint32_t vaultId, const std::shared_ptr<vault::EncryptionManager>& keys) {
-    manifest::SessionHost host;
+vl::vaultfmt::manifest::SessionHost hostOf(const uint32_t vaultId, const std::shared_ptr<vault::EncryptionManager>& keys) {
+    vl::vaultfmt::manifest::SessionHost host;
     host.collect = [vaultId] { return db::query::sync::Manifest::collect(vaultId); };
     host.currentKey = [keys] {
         const auto current = keys->currentKey();
-        return manifest::SealingKey{current.version, current.key};
+        return vl::vaultfmt::manifest::SealingKey{current.version, current.key};
     };
     host.keys = lookupOf(keys);
     host.nodeId = [] { return db::query::device::Devices::nodeId(); };
@@ -96,15 +96,15 @@ manifest::SessionHost hostOf(const uint32_t vaultId, const std::shared_ptr<vault
         };
     }
     host.now = [] { return std::time(nullptr); };
-    host.alert = [vaultId](const manifest::Refusal& r) {
+    host.alert = [vaultId](const vl::vaultfmt::manifest::Refusal& r) {
         notifyRefusedRoot(vaultId, r.reason, r.epoch, r.root_sha256, r.known);
     };
-    host.note = [vaultId](const manifest::Notice level, const std::string& message) {
+    host.note = [vaultId](const vl::vaultfmt::manifest::Notice level, const std::string& message) {
         const auto log = log::Registry::cloud();
         switch (level) {
-        case manifest::Notice::Info: log->info("[manifest] Vault {}: {}", vaultId, message); break;
-        case manifest::Notice::Warning: log->warn("[manifest] Vault {}: {}", vaultId, message); break;
-        case manifest::Notice::Error: log->error("[manifest] Vault {}: {}", vaultId, message); break;
+        case vl::vaultfmt::manifest::Notice::Info: log->info("[manifest] Vault {}: {}", vaultId, message); break;
+        case vl::vaultfmt::manifest::Notice::Warning: log->warn("[manifest] Vault {}: {}", vaultId, message); break;
+        case vl::vaultfmt::manifest::Notice::Error: log->error("[manifest] Vault {}: {}", vaultId, message); break;
         }
     };
     return host;
@@ -112,22 +112,22 @@ manifest::SessionHost hostOf(const uint32_t vaultId, const std::shared_ptr<vault
 
 }
 
-Service::Service(const uint32_t vaultId, const manifest::Uid& vaultUid, std::shared_ptr<manifest::ObjectStore> store,
+Service::Service(const uint32_t vaultId, const vl::vaultfmt::manifest::Uid& vaultUid, std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> store,
                  std::shared_ptr<vault::EncryptionManager> keys)
     : vaultId_(vaultId), vaultUid_(vaultUid), keys_(std::move(keys)), store_(service_detail::required(store, keys_)),
       session_(vaultUid, store_,
                std::make_shared<service_detail::DatabaseState>(vaultId), service_detail::hostOf(vaultId, keys_)) {}
 
-crypto::vhf1::KeyLookup Service::keyLookup() const { return service_detail::lookupOf(keys_); }
+vl::vaultfmt::vhf1::KeyLookup Service::keyLookup() const { return service_detail::lookupOf(keys_); }
 
 template <typename F>
 auto Service::publishRounds(F&& once) -> decltype(once()) {
     for (unsigned round = 1;; ++round) {
         try {
             return once();
-        } catch (const manifest::HeadMoved& e) {
+        } catch (const vl::vaultfmt::manifest::HeadMoved& e) {
             if (round >= kPublishRounds)
-                throw manifest::PublishConflict(
+                throw vl::vaultfmt::manifest::PublishConflict(
                     fmt::format("manifest publish conflict after {} rounds of applying another writer's root", round));
             log::Registry::cloud()->info("[manifest] Vault {}: {}; applying it before publishing", vaultId_, e.what());
             (void)applyRemote();
@@ -135,15 +135,15 @@ auto Service::publishRounds(F&& once) -> decltype(once()) {
     }
 }
 
-manifest::PublishReport Service::publish() {
+vl::vaultfmt::manifest::PublishReport Service::publish() {
     return publishRounds([&] { return session_.publish(); });
 }
 
-std::optional<manifest::PublishReport> Service::publishIfChanged() {
+std::optional<vl::vaultfmt::manifest::PublishReport> Service::publishIfChanged() {
     return publishRounds([&] { return session_.publishIfChanged(); });
 }
 
-std::optional<manifest::RemoteHead> Service::verifyRemote() { return session_.verifyRemote(); }
+std::optional<vl::vaultfmt::manifest::RemoteHead> Service::verifyRemote() { return session_.verifyRemote(); }
 
 std::optional<ApplyReport> Service::applyRemote(const ApplyOptions& options) {
     // One apply per vault at a time: a pass and a publish meeting HeadMoved on another thread both come here.
@@ -171,33 +171,33 @@ std::size_t Service::collectSharedOrphans(const std::time_t now, const std::time
     const auto state = db::query::sync::Manifest::state(vaultId_);
     if (!state.epoch || !state.root_sha256 || !state.etag || state.applying_epoch) return 0;
     const auto stillHead = [&] {
-        const auto etag = store_->headEtag(std::string(manifest::kRootKey));
+        const auto etag = store_->headEtag(std::string(vl::vaultfmt::manifest::kRootKey));
         return etag && *etag == *state.etag;
     };
     if (!stillHead()) return 0;   // a newer root: the next pass applies it first
     const auto copy = db::query::sync::Manifest::base(vaultId_);
     if (!copy) return 0;
-    const auto known = manifest::openBaseCopy(*copy, vaultUid_, keyLookup(), {*state.epoch, *state.root_sha256});
+    const auto known = vl::vaultfmt::manifest::openBaseCopy(*copy, vaultUid_, keyLookup(), {*state.epoch, *state.root_sha256});
     if (!known) return 0;   // nothing to prove the head doesn't name them with
     std::set<std::string> named;
     for (const auto& e : known->entries) named.insert(e.uid);
     for (const auto& d : db::query::sync::ManifestApply::deferred(vaultId_)) named.insert(d.uid);
     for (const auto& sha : state.publishing_roots)
         if (const auto pending = db::query::sync::Manifest::pendingBase(vaultId_, sha))
-            if (const auto root = [&]() -> std::optional<manifest::RootDocument> {
+            if (const auto root = [&]() -> std::optional<vl::vaultfmt::manifest::RootDocument> {
                     try {
-                        return manifest::openRoot(pending->root, vaultUid_, keyLookup());
+                        return vl::vaultfmt::manifest::openRoot(pending->root, vaultUid_, keyLookup());
                     } catch (const std::exception&) {
                         return std::nullopt;
                     }
                 }())
-                if (const auto c = manifest::openBaseCopy(*pending, vaultUid_, keyLookup(), {root->epoch, sha}))
+                if (const auto c = vl::vaultfmt::manifest::openBaseCopy(*pending, vaultUid_, keyLookup(), {root->epoch, sha}))
                     for (const auto& e : c->entries) named.insert(e.uid);
     std::size_t deleted = 0;
     for (const auto& key : due) {
-        const auto uid = manifest::uidOfObjectKey(key);
+        const auto uid = vl::vaultfmt::manifest::uidOfObjectKey(key);
         if (!uid) continue;
-        if (named.contains(manifest::uidText(*uid))) {
+        if (named.contains(vl::vaultfmt::manifest::uidText(*uid))) {
             db::query::sync::ManifestApply::dropPurgedLocally(vaultId_, key);   // named again: live, not ours to delete
             continue;
         }
@@ -214,36 +214,36 @@ std::size_t Service::collectSharedOrphans(const std::time_t now, const std::time
     return deleted;
 }
 
-std::optional<manifest::GcReport> Service::collectGarbageIfDue(const std::time_t now) {
+std::optional<vl::vaultfmt::manifest::GcReport> Service::collectGarbageIfDue(const std::time_t now) {
     return session_.collectGarbageIfDue(now);
 }
 
-void notifyRefusedRoot(const uint32_t vaultId, const manifest::ChainError reason, const uint64_t epoch,
-                       const std::string& rootSha256, const std::optional<manifest::Known>& known) {
-    const auto what = std::string(manifest::chainErrorName(reason));
+void notifyRefusedRoot(const uint32_t vaultId, const vl::vaultfmt::manifest::ChainError reason, const uint64_t epoch,
+                       const std::string& rootSha256, const std::optional<vl::vaultfmt::manifest::Known>& known) {
+    const auto what = std::string(vl::vaultfmt::manifest::chainErrorName(reason));
     const auto knownText = known ? fmt::format("epoch {} (root {})", known->epoch, known->root_sha256)
                                  : std::string("no recorded root");
     std::string summary;
     switch (reason) {
-    case manifest::ChainError::Rollback:
+    case vl::vaultfmt::manifest::ChainError::Rollback:
         summary = fmt::format("The bucket of vault {} presents manifest root epoch {}, older than the newest root this "
                               "server recorded ({}). Someone with write access to the bucket may have replaced it with "
                               "an older, authentic state.",
                               vaultId, epoch, knownText);
         break;
-    case manifest::ChainError::OrderViolation:
+    case vl::vaultfmt::manifest::ChainError::OrderViolation:
         summary = fmt::format("The bucket of vault {} now lists a manifest root version between a root this server had "
                               "settled ({}) and its predecessor. The provider's version order changed after the fact, "
                               "so two writers may each believe they published epoch {}.",
                               vaultId, knownText, epoch);
         break;
-    case manifest::ChainError::Superseded:
+    case vl::vaultfmt::manifest::ChainError::Superseded:
         summary = fmt::format("The manifest root epoch {} (root {}) of vault {} names other servers as its writers, "
                               "not this one, after this server's last own root ({}). The vault was restored or taken "
                               "over elsewhere.",
                               epoch, rootSha256, vaultId, knownText);
         break;
-    case manifest::ChainError::PublishModeMismatch:
+    case vl::vaultfmt::manifest::ChainError::PublishModeMismatch:
         summary = fmt::format("The manifest root epoch {} (root {}) of vault {} was published by another server in "
                               "another publish mode than this bucket's (conditional or version_log).",
                               epoch, rootSha256, vaultId);

@@ -90,9 +90,9 @@ std::optional<Remote> remoteFor(const std::shared_ptr<storage::Engine>& engine) 
         if (cloud->opaqueLayout() && file->object_uid && !bytes.empty()) {
             const auto& em = *cloud->encryptionManager;
             try {
-                (void)crypto::vhf1::openHeader(
-                    std::span<const uint8_t>(bytes).first(std::min<std::size_t>(bytes.size(), crypto::vhf1::kHeaderSize)),
-                    {crypto::vhf1::Kind::FileContent, em.vaultUid(), *file->object_uid, std::nullopt},
+                (void)vl::vaultfmt::vhf1::openHeader(
+                    std::span<const uint8_t>(bytes).first(std::min<std::size_t>(bytes.size(), vl::vaultfmt::vhf1::kHeaderSize)),
+                    {vl::vaultfmt::vhf1::Kind::FileContent, em.vaultUid(), *file->object_uid, std::nullopt},
                     [&em](const uint32_t v) -> crypto::SecretKeyPtr {
                         try {
                             return em.historicalKeySnapshot(v);
@@ -100,7 +100,7 @@ std::optional<Remote> remoteFor(const std::shared_ptr<storage::Engine>& engine) 
                             return nullptr;
                         }
                     });
-            } catch (const crypto::vhf1::Error& e) {
+            } catch (const vl::vaultfmt::vhf1::Error& e) {
                 vault::content::throwIntegrity(e, "the object of " + std::to_string(file->id));
             }
         }

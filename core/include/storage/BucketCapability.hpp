@@ -20,7 +20,7 @@ namespace vh::storage::bucket_capability {
 // unless setLazyProbingForTesting(true). `changed`: a conditional bucket refused a condition since its probe
 // (noteChanged); callers stall without sending anything until it is probed again.
 struct Resolved {
-    sync::manifest::WriteCapability capability{sync::manifest::WriteCapability::Unknown};
+    vl::vaultfmt::manifest::WriteCapability capability{vl::vaultfmt::manifest::WriteCapability::Unknown};
     bool changed{false};
 };
 [[nodiscard]] Resolved resolve(uint32_t vaultId, const s3::Controller& controller);
@@ -49,7 +49,7 @@ s3::ProbeResult probeAndRecord(uint32_t vaultId, const s3::Controller& controlle
 [[nodiscard]] std::string noteChanged(uint32_t vaultId, const std::string& detail);
 
 // The text a stalled pass carries for an opaque_v1 vault whose bucket can't take the manifest publish.
-[[nodiscard]] std::string unpublishableReason(sync::manifest::WriteCapability capability);
+[[nodiscard]] std::string unpublishableReason(vl::vaultfmt::manifest::WriteCapability capability);
 
 // ---- test seams (test mode only) -------------------------------------------------------------------------------------
 void setLazyProbingForTesting(std::optional<bool> enabled);

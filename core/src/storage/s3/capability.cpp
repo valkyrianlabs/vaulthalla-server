@@ -225,18 +225,18 @@ ProbeResult probeBucket(const Controller& controller) {
     r.leftover_versions = d::cleanUp(controller, key, versioned);
 
     if (!r.get_if_match) {
-        r.capability = sync::manifest::WriteCapability::Insufficient;
+        r.capability = vl::vaultfmt::manifest::WriteCapability::Insufficient;
         r.reason = "the bucket does not honour If-Match on GET, which every read of a remote object relies on";
     } else if (r.conditional_put == "supported") {
-        r.capability = sync::manifest::WriteCapability::Conditional;
+        r.capability = vl::vaultfmt::manifest::WriteCapability::Conditional;
         r.reason = "the bucket honours conditional writes (If-None-Match, If-Match)";
     } else if (r.versioning) {
-        r.capability = sync::manifest::WriteCapability::VersionLog;
+        r.capability = vl::vaultfmt::manifest::WriteCapability::VersionLog;
         r.reason = r.conditional_put == "rejected"
             ? "the bucket rejects conditional writes (not implemented) and keeps object versions"
             : "the bucket does not enforce conditional writes and keeps object versions";
     } else {
-        r.capability = sync::manifest::WriteCapability::Insufficient;
+        r.capability = vl::vaultfmt::manifest::WriteCapability::Insufficient;
         r.reason = "the bucket neither honours conditional writes nor keeps object versions";
     }
     return r;
@@ -260,9 +260,9 @@ nlohmann::json toJson(const ProbeResult& r) {
 ProbeResult probeResultFromJson(const nlohmann::json& j) {
     ProbeResult r;
     const auto cap = j.value("capability", std::string("unknown"));
-    if (cap == "conditional") r.capability = sync::manifest::WriteCapability::Conditional;
-    else if (cap == "version_log") r.capability = sync::manifest::WriteCapability::VersionLog;
-    else if (cap == "insufficient") r.capability = sync::manifest::WriteCapability::Insufficient;
+    if (cap == "conditional") r.capability = vl::vaultfmt::manifest::WriteCapability::Conditional;
+    else if (cap == "version_log") r.capability = vl::vaultfmt::manifest::WriteCapability::VersionLog;
+    else if (cap == "insufficient") r.capability = vl::vaultfmt::manifest::WriteCapability::Insufficient;
     r.conditional_put = j.value("conditional_put", std::string{});
     r.versioning = j.value("versioning", false);
     r.get_if_match = j.value("get_if_match", false);

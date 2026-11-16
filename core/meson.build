@@ -161,6 +161,13 @@ meson.override_dependency('nlohmann_json',
     declare_dependency(include_directories: include_directories('vendor'), version: '3.12.0'))
 vl_keykit_dep = dependency('vl-keykit', version: '>=0.2.0', fallback: ['vl-keykit', 'vl_keykit_dep'])
 
+# The vault format (VHF1, object keys, the encrypted manifest: Valkyrian Labs, AGPL-3.0-or-later; shared with the
+# Desktop-only engine and the portal's reader; design/core/vault-format-library.md), statically linked from the commit
+# pinned in subprojects/vl-vaultfmt.wrap, whose tarball is committed under subprojects/packagecache/ like vl-keykit's.
+# It builds against the vl-keykit and the vendored nlohmann/json above. Its golden vectors are the ones in
+# design/encryption/vectors/ (test_vaultfmt_vectors checks the copy). Fuzzed in its own CI.
+vl_vaultfmt_dep = dependency('vl-vaultfmt', version: '>=0.1.0', fallback: ['vl-vaultfmt', 'vl_vaultfmt_dep'])
+
 deps = [
     dependency('libsodium', required: true),
     dependency('libcurl', required: true),
@@ -182,6 +189,7 @@ deps = [
     # network. As a subproject it installs nothing and builds no tests.
     dependency('vl-sigv4', version: '>=0.2.1', fallback: ['vl-sigv4', 'vl_sigv4_dep']),
     vl_keykit_dep,
+    vl_vaultfmt_dep,
     dependency('zlib', required: true),
     fmt_dep
 ]
@@ -326,10 +334,12 @@ if get_option('build_unit_tests')
         '-DVH_TEST_CAD_HELPER="' + cad_helper_path + '"',
         '-DVH_TEST_ASSETS_DIR="' + join_paths(core_root, 'test-assets') + '"',
         '-DVH_TEST_PASSWORD_LISTS_DIR="' + join_paths(repo_root, 'deploy', 'password-lists') + '"',
-        # The #329 golden vectors (test_vhf1.cpp reads vectors.json at test time).
+        # The #329 golden vectors (the suites read vectors.json at test time).
         '-DVH_TEST_VECTORS_DIR="' + join_paths(repo_root, 'design', 'encryption', 'vectors') + '"',
-        # vl-keykit's copy of them (test_keykit_vectors.cpp requires the two to be identical).
+        # vl-keykit's and vl-vaultfmt's copies of them (test_keykit_vectors.cpp and test_vaultfmt_vectors.cpp require
+        # each to be identical to this one).
         '-DVH_TEST_KEYKIT_VECTORS_DIR="' + vl_keykit_dep.get_variable(internal: 'vectors_dir', default_value: '') + '"',
+        '-DVH_TEST_VAULTFMT_VECTORS_DIR="' + vl_vaultfmt_dep.get_variable(internal: 'vectors_dir', default_value: '') + '"',
     ]
 
     unit_test_objects = static_library(

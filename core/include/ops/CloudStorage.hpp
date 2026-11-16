@@ -3,7 +3,7 @@
 #include "ops/Actor.hpp"
 #include "ops/VaultKeys.hpp"
 
-#include <nlohmann/json_fwd.hpp>
+#include <nlohmann/json.hpp>  // VaultEntry and Status hold json members by value
 
 #include <cstdint>
 #include <ctime>

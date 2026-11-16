@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vl/vaultfmt/Fwd.hpp>  // the format library's types (vl::vaultfmt::vhf1, ::manifest)
+
 // Forward declarations for the sync subsystem. Declarations only: include the defining header to use a type.
 
 namespace vh::sync {
@@ -9,11 +11,6 @@ namespace vh::sync {
 
 namespace vh::sync::events {
     class Service;
-}
-
-namespace vh::sync::manifest {
-    class ObjectStore;
-    struct Content;
 }
 
 namespace vh::sync::vault_manifest {

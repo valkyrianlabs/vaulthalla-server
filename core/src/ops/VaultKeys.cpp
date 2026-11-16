@@ -28,8 +28,8 @@
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
-#include "sync/manifest/Objects.hpp"
-#include "sync/manifest/Store.hpp"
+#include <vl/vaultfmt/manifest/Objects.hpp>
+#include <vl/vaultfmt/manifest/Store.hpp>
 #include "sync/rotation/Rotation.hpp"
 #include "sync/rotation/Runtime.hpp"
 #include "vault/EncryptionManager.hpp"
@@ -943,13 +943,13 @@ std::vector<KeyRecord> recordedRows(const ImportTarget& t, const unsigned int ve
 // The manifest root's attestations by version (opaque_v1 vaults), opened with the unwrapped keys. Empty when there is
 // no root or it doesn't open.
 std::map<unsigned int, vault::attestation::Attestation>
-rootAttestations(sync::manifest::ObjectStore& store, const crypto::id::ObjectUid& uid,
+rootAttestations(vl::vaultfmt::manifest::ObjectStore& store, const crypto::id::ObjectUid& uid,
                  const std::map<unsigned int, crypto::SecretKeyPtr>& keys) {
     std::map<unsigned int, vault::attestation::Attestation> out;
     try {
-        const auto obj = store.get(std::string(sync::manifest::kRootKey));
+        const auto obj = store.get(std::string(vl::vaultfmt::manifest::kRootKey));
         if (!obj) return out;
-        const auto root = sync::manifest::openRoot(obj->bytes, uid, [&](const uint32_t v) -> crypto::SecretKeyPtr {
+        const auto root = vl::vaultfmt::manifest::openRoot(obj->bytes, uid, [&](const uint32_t v) -> crypto::SecretKeyPtr {
             const auto it = keys.find(v);
             return it == keys.end() ? nullptr : it->second;
         });
@@ -983,8 +983,8 @@ std::vector<Candidate> candidatesFromKit(const nlohmann::json& doc, const Import
         throw Invalid("the recovery kit does not list vault '" + t.name + "' (uid " + vl::keykit::toBase32(uid) +
                       "): it is another vault's kit; nothing was written");
 
-    std::shared_ptr<sync::manifest::ObjectStore> store;
-    std::vector<sync::manifest::ListedObject> listed;
+    std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> store;
+    std::vector<vl::vaultfmt::manifest::ListedObject> listed;
     try {
         store = vault::envelopes::storeFor(t.vault_id);
         listed = store->list(std::string(vl::keykit::kev1::kObjectPrefix));

@@ -15,7 +15,7 @@
 #include "crypto/id/ObjectUid.hpp"
 #include "fs/model/File.hpp"
 #include "storage/CloudEngine.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "vault/Content.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/LayoutMigration.hpp"
@@ -533,7 +533,7 @@ TEST_F(LiveR2, OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says) {
         for (auto& c : cases) {
             data->resetRequestMetrics();
             cloud->upload(c.file);
-            const auto key = storage::object_keys::contentKey(*c.file->object_uid);
+            const auto key = vl::vaultfmt::keys::contentKey(*c.file->object_uid);
             written.push_back(key);
             const auto m = data->requestMetrics();
             EXPECT_EQ(m.put_requests, c.puts) << key;
@@ -541,7 +541,7 @@ TEST_F(LiveR2, OpaqueObjectsCarryNoMetadataAndCostWhatSpec01Says) {
             EXPECT_TRUE(c.file->remote_etag) << "the PUT's ETag, for the index and the manifest";
         }
         for (const auto& c : cases) {
-            const auto key = storage::object_keys::contentKey(*c.file->object_uid);
+            const auto key = vl::vaultfmt::keys::contentKey(*c.file->object_uid);
             const auto head = data->getHeadObject(key);
             ASSERT_TRUE(head) << key;
             for (const auto& [name, value] : *head) {
@@ -653,7 +653,7 @@ TEST_F(LiveR2, LayoutMigrationPrimitives) {
             generation->encryption_iv = sealed.generation;
             generation->encrypted_with_key_version = 1;
             generation->size_bytes = size;
-            const auto key = storage::object_keys::contentKey(uid);
+            const auto key = vl::vaultfmt::keys::contentKey(uid);
             const auto put = cloud->putMigratedObject(key, path, sealed.bytes.size(), generation);
             written.push_back(key);
             std::string etag = put.etag;

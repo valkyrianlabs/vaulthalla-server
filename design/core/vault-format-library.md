@@ -1,6 +1,6 @@
 # The shared vault format library (wave 4, workstream J)
 
-Status: design for review (managed storage plan of 2026-11-12, §4.11 and workstream J); nothing here is built. It
+Status: design for review (managed storage plan of 2026-11-12, §4.11 and workstream J); items 1-8 are built (items 7 and 8: "As built", the last section). It
 covers how the server's file format, object naming and manifest code becomes one library that the server, the
 Desktop-only engine and the portal's browser reader link, what each of them needs from it, and in what order. It does
 not design the Desktop engine's File Provider side, the cloud's device access (workstream K) or the portal's screens.
@@ -259,3 +259,72 @@ contribution to the library needs a copyright assignment or contributor agreemen
 software they publish under the AGPL, which already lets a customer read their own bucket without Valkyrian Labs.
 It can be loosened to MIT later; MIT could not be taken back. The audit that produced this document had recommended
 MIT, for consistency with vl-keykit, vl-sigv4 and vl-webauthn. Work item 7 is no longer blocked.
+
+## As built: items 7 and 8 (2026-11-15)
+
+Items 1-6 had already landed on main, so the cut was the contract's candidate set as it stood at fc636330: VHF1
+(`crypto/vhf1`), `storage/ObjectKeys`, the manifest (`sync/manifest`: Document, Content, Partition, Objects, Chain,
+VersionLog, Reader, Publisher, Reconcile, Session, Store, WriteCapability), the fuzz target and the two store test
+doubles. It moved unchanged apart from names into `valkyrianlabs/vl-vaultfmt` 0.1.0 (a local repository, untagged, no
+remote yet); the server links it through `subprojects/vl-vaultfmt.wrap` and keeps no copy
+(`tools/contracts/test_format_library_contract.py`). Every golden vector is unchanged; both repositories' suites pass.
+
+**Public surface.** C++: `<vl/vaultfmt/vhf1/{Format,Reader,Writer,Key,Aead}.hpp>` (`vl::vaultfmt::vhf1`),
+`<vl/vaultfmt/ObjectKeys.hpp>` (`vl::vaultfmt::keys`), `<vl/vaultfmt/manifest/*.hpp>` (`vl::vaultfmt::manifest`),
+`<vl/vaultfmt/Fwd.hpp>`, the umbrella `<vl/vaultfmt/vaultfmt.hpp>` and the header-only doubles
+`<vl/vaultfmt/testing/{memory_store,hooked_store}.hpp>` (`vl::vaultfmt::test_support`). C (`vl_vaultfmt.h`): a keyring
+(vault keys only in locked, wiped memory), object keys (`content_key`, `content_key_uid`, `segment_key`,
+`classify_key`, `part_size`), a streamed sealer (kind 1, fresh salt, sink), a streamed opener (header check, chunk
+walker into a sink, finish), `range_plan`/`range_read`, `root_open` (authenticate, parse, chain rules against a known
+epoch and hash), `tree_build` (every pinned segment and snapshot present, matching its pin, authentic) and the tree
+(`entry`, `find`, `children`, `json`). Statuses 0-7, 100 + `vhf1::ErrorCode`, 200-202 (document errors), 300 +
+`manifest::ChainError`, each with a stable name.
+
+**Decisions (rule 5; none touches stored data, keys or custody):**
+
+1. *Headers keep the server's file names* (`vl/vaultfmt/manifest/Publisher.hpp`), not vl-keykit's lower case: the
+   move stays mechanical and every server include maps one to one. Undo: rename the headers before 1.0 (one sed in
+   each consumer).
+2. *The test doubles' namespace is `vl::vaultfmt::test_support`, not `testing`*: an unqualified `testing::` inside
+   `vl::vaultfmt` would then name it instead of GoogleTest's. They ship installed, header-only, because the server's
+   protocol suites and the Desktop engine's need them. Undo: move them back under `tests/` and copy them.
+3. *The tests split by what they need.* The format suites (vectors, documents, partition, reconcile, object keys, VHF1
+   with the fuzz iteration) moved; the protocol suites that run through the server's S3 adapter on its HTTP-level fake
+   (`ManifestPublish*`, `ManifestChain*`, `ManifestContent*`, `ManifestReplay*`, `ManifestStore*`, `ManifestBaseCopy`)
+   stay in `test_manifest.cpp`. The interleavings run in both: on the in-memory store in the library, on the HTTP fake
+   here, from two copies of one scheduler (a change to it is made in both). The library therefore has no conditional
+   mode publish suite of its own yet. Undo, and the next step: port those suites to the memory store in the library
+   (item 9 needs them) and keep only the adapter's own tests here.
+4. *The pin is a `git archive` of a commit, not a release* (`vl-vaultfmt-0.1.0.tar.xz`, made with
+   `git archive --format=tar --prefix=vl-vaultfmt-0.1.0/ <commit> | xz -9 -T1`), whose `source_url` names the asset
+   0.1.0 will publish; the Debian build never downloads (`--wrap-mode=nodownload`). The release tarball will differ in
+   bytes, so cutting 0.1.0 is a wrap bump. Undo: none needed; the bump replaces it.
+5. *Standing alone, the library pins vl-keykit 0.2.0 with the server's unity patch*, its tarball committed in the
+   library like the server's, and requires `>= 0.2.0`; as a subproject it uses its parent's vl-keykit. Undo: bump the
+   wrap when vl-keykit releases its unity fix.
+6. *The VHF1 fuzz target left with the codec*; the server's `-Dfuzz` option and CI step are gone (it was the last
+   one). Undo: a server fuzz build over the subproject's target.
+7. *The C API is scoped to the first consumers* (sealing, opening and ranged reads for Desktop's file I/O; a root and
+   its segments from bytes for the wasm reader): keys enter through a keyring handle rather than a lookup callback, and
+   there is no store callback table, no publish, no `load` with its fallbacks, no C1 choice over a version listing, no
+   blind rebuild and no session. `root_open` applies the chain rules without retained roots, so a gap is reported, not
+   walked. Undo: each is additive in item 9 or 13.
+8. *One source change*: `publish` (version_log) keeps the base's index in the root listing as an index and a flag, not
+   a `std::optional<std::size_t>`, which GCC 14 at `-O3` reported maybe-uninitialized once the library built as one
+   unity unit. Same behaviour. Undo: revert the hunk (the warning returns).
+9. *Library CI is one Linux job on the light pool* (`vps-ci`, as vl-keykit's): GCC 14 with ASan/UBSan and the vectors'
+   reference, a unity release build installed and consumed through pkg-config (vl-keykit installed from the pinned
+   tarball), and the fuzz target built and run for 60 s. No macOS job and no `release.toml` (vl-keykit has neither).
+   Undo: add a `CI_MACOS_RUNNER` job with the XCFramework (item 12).
+10. *The vectors' consumption checks moved with the suites* (`tests/vectors_contract.py` in the library); here
+    `test_vhf1_vectors_contract.py` keeps the reference `--check` and requires the identical-copy test
+    (`test_vaultfmt_vectors.cpp`). Undo: none needed.
+
+**What item 9 (the Desktop engine) needs next:** a C store callback table and its `ObjectStore` adapter (get, ranged
+get, head, the four PUTs, list, versions since, the two removes, "outcome unknown" as a status), `load` and
+`verifyRemote` through it, the Session over a reference file `StateStore`, the streamed content seam for `o/<uid>`,
+the working content and journal, a key-lookup callback, the protocol suites on the memory store, the writer floor
+(decision 7 above) before a second kind of writer exists, and `scripts/build-xcframework.sh` as vl-keykit has.
+**Item 13 (the wasm reader) needs:** an Emscripten build (OpenSSL's libcrypto, `-fwasm-exceptions`), a bytes-only C1
+entry (the root versions of a listing in, the canonical head out) beside `root_open`, KEV1 unwrap from vl-keykit built
+the same way, and the vectors run in Node.

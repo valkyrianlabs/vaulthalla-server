@@ -15,7 +15,7 @@
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/Manager.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "storage/ScopedS3RequestUsageCapture.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "sync/model/RemoteManifest.hpp"
@@ -204,7 +204,7 @@ Applier::Outcome Applier::applyVault(const uint32_t vaultId) {
             // path_v0: an o/<uid> object was written by the bucket layout migration (#373) before the vault cut over;
             // it is not a vault path and never becomes one.
             if (!engine->opaqueLayout() &&
-                storage::object_keys::classify(objectKey) == storage::object_keys::KeyClass::Content) {
+                vl::vaultfmt::keys::classify(objectKey) == vl::vaultfmt::keys::KeyClass::Content) {
                 db::query::upstream::Inbox::markSkipped(groupIds, "a layout migration object (path_v0 vault)",
                                                         amodel::InboxOrigin::Self);
                 out.skipped += group.size();
@@ -214,7 +214,7 @@ Applier::Outcome Applier::applyVault(const uint32_t vaultId) {
             // opaque_v1 (spec 01 §4.4): a key outside o/ and .vaulthalla/ is foreign. Never HEADed or indexed: it is
             // ignored (the default), or a scoped pass imports it once as /Imported/<key> (foreign_objects = import).
             const bool opaque = engine->opaqueLayout();
-            if (opaque && storage::object_keys::classify(objectKey) == storage::object_keys::KeyClass::Foreign) {
+            if (opaque && vl::vaultfmt::keys::classify(objectKey) == vl::vaultfmt::keys::KeyClass::Foreign) {
                 const bool import = sub && sub->foreign_objects == amodel::ForeignObjects::Import &&
                                     std::ranges::any_of(group, [](const auto* r) { return r->kind == amodel::InboxKind::Created; });
                 if (import) {
@@ -348,7 +348,7 @@ Applier::Outcome Applier::applyVault(const uint32_t vaultId) {
                     // opaque_v1: an o/<uid> object no file of this vault has is an orphan (or someone else's): never
                     // a new file. Only a restore (#371) places objects without rows.
                     if (opaque && !indexed) {
-                        const auto uid = storage::object_keys::uidOfContentKey(objectKey);
+                        const auto uid = vl::vaultfmt::keys::uidOfContentKey(objectKey);
                         if (!uid || !db::query::sync::ObjectIdentity::known(vaultId, *uid)) {
                             db::query::upstream::Inbox::markSkipped({latest->id}, "orphan: no file of this vault names "
                                                                     "the object", amodel::InboxOrigin::External);

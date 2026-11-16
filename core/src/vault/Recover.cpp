@@ -1,10 +1,10 @@
 #include "vault/Recover.hpp"
 
 #include <vl/keykit/kev1.hpp>
-#include "crypto/vhf1/Format.hpp"
+#include <vl/vaultfmt/vhf1/Format.hpp>
 #include "log/Registry.hpp"
-#include "sync/manifest/Chain.hpp"
-#include "sync/manifest/Objects.hpp"
+#include <vl/vaultfmt/manifest/Chain.hpp>
+#include <vl/vaultfmt/manifest/Objects.hpp>
 #include "vault/Content.hpp"
 #include "vault/KeyCheck.hpp"
 
@@ -23,7 +23,7 @@ namespace vh::vault::recover {
 
 namespace recover_detail {
 
-namespace mf = sync::manifest;
+namespace mf = vl::vaultfmt::manifest;
 
 constexpr std::size_t kMaxEnvelopes = 4096;
 constexpr uint64_t kMaxEnvelopeBytes = 1024;
@@ -80,7 +80,7 @@ std::optional<attestation::Attestation> attestationOf(const mf::KeyAttestation& 
 std::optional<std::string> generationB64(const std::optional<std::string>& hex) {
     if (!hex) return std::nullopt;
     const auto bytes = fromHex(*hex);
-    if (!bytes || bytes->size() != crypto::vhf1::kSaltSize) return std::nullopt;
+    if (!bytes || bytes->size() != vl::vaultfmt::vhf1::kSaltSize) return std::nullopt;
     return b64Of(*bytes);
 }
 
@@ -116,20 +116,20 @@ struct HeaderResult {
 };
 
 HeaderResult readHeader(mf::ObjectStore& store, const mf::ListedObject& listed, const Uid& vaultUid, const Uid& uid,
-                        const crypto::vhf1::KeyLookup& keys) {
+                        const vl::vaultfmt::vhf1::KeyLookup& keys) {
     HeaderResult out;
-    const auto head = store.getRange(listed.key, 0, crypto::vhf1::kHeaderSize);
+    const auto head = store.getRange(listed.key, 0, vl::vaultfmt::vhf1::kHeaderSize);
     if (!head) {
         out.reason = "gone since the listing";
         return out;
     }
     try {
-        const auto header = crypto::vhf1::openHeader(*head, {crypto::vhf1::Kind::FileContent, vaultUid, uid, std::nullopt},
+        const auto header = vl::vaultfmt::vhf1::openHeader(*head, {vl::vaultfmt::vhf1::Kind::FileContent, vaultUid, uid, std::nullopt},
                                                      [&](const uint32_t v) {
                                                          out.version = v;
                                                          return keys(v);
                                                      });
-        const auto layout = crypto::vhf1::layoutFor(listed.size, header.params().chunkLog2);
+        const auto layout = vl::vaultfmt::vhf1::layoutFor(listed.size, header.params().chunkLog2);
         mf::RecoveredObject r;
         r.uid = uid;
         r.key = listed.key;
@@ -139,9 +139,9 @@ HeaderResult readHeader(mf::ObjectStore& store, const mf::ListedObject& listed, 
         r.key_version = header.params().keyVersion;
         r.generation = hexOf(header.params().salt);
         out.object = std::move(r);
-    } catch (const crypto::vhf1::Error& e) {
-        out.reason = std::string(crypto::vhf1::errorCodeName(e.code()));
-        if (e.code() == crypto::vhf1::ErrorCode::KeyUnavailable && out.version)
+    } catch (const vl::vaultfmt::vhf1::Error& e) {
+        out.reason = std::string(vl::vaultfmt::vhf1::errorCodeName(e.code()));
+        if (e.code() == vl::vaultfmt::vhf1::ErrorCode::KeyUnavailable && out.version)
             out.reason += fmt::format(" (key version {})", *out.version);
     } catch (const std::exception& e) {
         out.reason = e.what();
@@ -414,13 +414,13 @@ void MeteredStore::count(const std::string& key, const uint64_t bytes, const boo
     else ++downloads_.gets;
     if (key.starts_with(vl::keykit::kev1::kObjectPrefix)) downloads_.envelope_bytes += bytes;
     else if (key.starts_with(".vaulthalla/")) downloads_.manifest_bytes += bytes;
-    else if (key.starts_with(sync::manifest::kObjectPrefix) && ranged && bytes <= crypto::vhf1::kHeaderSize)
+    else if (key.starts_with(vl::vaultfmt::manifest::kObjectPrefix) && ranged && bytes <= vl::vaultfmt::vhf1::kHeaderSize)
         downloads_.header_bytes += bytes;
-    else if (key.starts_with(sync::manifest::kObjectPrefix)) downloads_.content_bytes += bytes;
+    else if (key.starts_with(vl::vaultfmt::manifest::kObjectPrefix)) downloads_.content_bytes += bytes;
     else downloads_.other_bytes += bytes;
 }
 
-std::optional<sync::manifest::StoredObject> MeteredStore::get(const std::string& key,
+std::optional<vl::vaultfmt::manifest::StoredObject> MeteredStore::get(const std::string& key,
                                                              const std::optional<std::string>& versionId) {
     auto out = inner_->get(key, versionId);
     count(key, out ? out->bytes.size() : 0, false);
@@ -430,16 +430,16 @@ std::optional<sync::manifest::StoredObject> MeteredStore::get(const std::string&
 std::optional<std::vector<uint8_t>> MeteredStore::getRange(const std::string& key, const uint64_t offset,
                                                           const uint64_t length) {
     auto out = inner_->getRange(key, offset, length);
-    count(key, out ? out->size() : 0, offset == 0 && length <= crypto::vhf1::kHeaderSize);
+    count(key, out ? out->size() : 0, offset == 0 && length <= vl::vaultfmt::vhf1::kHeaderSize);
     return out;
 }
 
-std::vector<sync::manifest::ListedObject> MeteredStore::list(const std::string& prefix) {
+std::vector<vl::vaultfmt::manifest::ListedObject> MeteredStore::list(const std::string& prefix) {
     ++downloads_.lists;
     return inner_->list(prefix);
 }
 
-std::vector<sync::manifest::StoredVersion> MeteredStore::versions(const std::string& key) {
+std::vector<vl::vaultfmt::manifest::StoredVersion> MeteredStore::versions(const std::string& key) {
     ++downloads_.version_lists;
     return inner_->versions(key);
 }
@@ -473,9 +473,9 @@ std::vector<uint32_t> Plan::salvageable() const {
     return out;
 }
 
-Plan plan(sync::manifest::ObjectStore& inner, const Material& material, const Options& options) {
+Plan plan(vl::vaultfmt::manifest::ObjectStore& inner, const Material& material, const Options& options) {
     using namespace recover_detail;
-    MeteredStore store(std::shared_ptr<sync::manifest::ObjectStore>(&inner, [](auto*) {}));
+    MeteredStore store(std::shared_ptr<vl::vaultfmt::manifest::ObjectStore>(&inner, [](auto*) {}));
     Plan out;
 
     // 1. Which vault: the caller's, the kit's (one vault, or the one the bucket's hint names), the export's, the hint.
@@ -574,7 +574,7 @@ Plan plan(sync::manifest::ObjectStore& inner, const Material& material, const Op
 
     std::map<uint32_t, crypto::SecretKeyPtr> chosen;
     for (const auto& [v, list] : candidates) chosen[v] = list.front().key;
-    const crypto::vhf1::KeyLookup lookup = [&](const uint32_t v) -> crypto::SecretKeyPtr {
+    const vl::vaultfmt::vhf1::KeyLookup lookup = [&](const uint32_t v) -> crypto::SecretKeyPtr {
         const auto it = chosen.find(v);
         return it == chosen.end() ? nullptr : it->second;
     };
@@ -585,14 +585,14 @@ Plan plan(sync::manifest::ObjectStore& inner, const Material& material, const Op
             for (std::size_t i = 1;; ++i) {
                 std::optional<uint32_t> asked;
                 try {
-                    (void)crypto::vhf1::openHeader(root->bytes, {crypto::vhf1::Kind::ManifestRoot, *uid, *uid, std::nullopt},
+                    (void)vl::vaultfmt::vhf1::openHeader(root->bytes, {vl::vaultfmt::vhf1::Kind::ManifestRoot, *uid, *uid, std::nullopt},
                                                    [&](const uint32_t v) {
                                                        asked = v;
                                                        return lookup(v);
                                                    });
                     break;
-                } catch (const crypto::vhf1::Error& e) {
-                    if (e.code() != crypto::vhf1::ErrorCode::HeaderAuthFailed || !asked) break;
+                } catch (const vl::vaultfmt::vhf1::Error& e) {
+                    if (e.code() != vl::vaultfmt::vhf1::ErrorCode::HeaderAuthFailed || !asked) break;
                     const auto it = candidates.find(*asked);
                     if (it == candidates.end() || i >= it->second.size()) break;
                     chosen[*asked] = it->second[i].key;

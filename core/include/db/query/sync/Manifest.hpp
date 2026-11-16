@@ -1,6 +1,6 @@
 #pragma once
 
-#include "sync/manifest/Session.hpp"
+#include <vl/vaultfmt/manifest/Session.hpp>
 
 #include <pqxx/transaction>
 
@@ -24,32 +24,32 @@ public:
 
     // The state and root record types are the manifest's (sync/manifest/Session.hpp: ChainState, RootRecord); these
     // functions are what the server's StateStore (sync/vault_manifest/Service.cpp) calls for one vault.
-    [[nodiscard]] static vh::sync::manifest::ChainState state(uint32_t vaultId);
+    [[nodiscard]] static vl::vaultfmt::manifest::ChainState state(uint32_t vaultId);
 
     // A root this vault published (or verified as the next one): its chain position and ETag, plus its sids in the
     // root history, which keeps the newest kRetainedRoots. Clears a recorded refusal (the chain moved on), and the
     // applying marker when it names this root. In the same transaction the base copy (remote_manifest_state.base_root,
     // remote_manifest_base by sid) becomes this root's: its bytes, the named sids' bytes from the record or the ones
     // already stored, every other sid dropped; a record without one drops the copy.
-    static void recordRoot(uint32_t vaultId, const vh::sync::manifest::RootRecord& record);
+    static void recordRoot(uint32_t vaultId, const vl::vaultfmt::manifest::RootRecord& record);
     // The same inside the caller's transaction (attach-remote's cutover records the root it verified with the rest).
-    static void recordRoot(pqxx::work& txn, uint32_t vaultId, const vh::sync::manifest::RootRecord& record);
+    static void recordRoot(pqxx::work& txn, uint32_t vaultId, const vl::vaultfmt::manifest::RootRecord& record);
 
     // A join, leave or replica removal (migration 150): every publish carries it until a recorded root shows it, then
     // recordRoot clears it; nullopt clears it now. Throws std::runtime_error when the vault has no recorded root.
-    static void setWritersChange(uint32_t vaultId, const std::optional<vh::sync::manifest::WritersChange>& change);
+    static void setWritersChange(uint32_t vaultId, const std::optional<vl::vaultfmt::manifest::WritersChange>& change);
     static void setWritersChange(pqxx::work& txn, uint32_t vaultId,
-                                 const std::optional<vh::sync::manifest::WritersChange>& change);
+                                 const std::optional<vl::vaultfmt::manifest::WritersChange>& change);
 
     // The local base copy of the recorded root (migration 145): the root's sealed bytes and those of the segments it
     // names, as recordRoot stored them; nullopt when none is stored.
-    [[nodiscard]] static std::optional<vh::sync::manifest::BaseCopy> base(uint32_t vaultId);
+    [[nodiscard]] static std::optional<vl::vaultfmt::manifest::BaseCopy> base(uint32_t vaultId);
     // This server is about to PUT the root of this hash (added to remote_manifest_state.publishing_roots, migration
     // 146, the oldest dropped past 256; recordRoot resets the set to the recorded root).
     static void notePublishing(uint32_t vaultId, const std::string& rootSha256,
-                               const vh::sync::manifest::BaseCopy& pending);
+                               const vl::vaultfmt::manifest::BaseCopy& pending);
     // The pending base copy kept for a root noted since the last record (remote_manifest_pending, migration 147).
-    [[nodiscard]] static std::optional<vh::sync::manifest::BaseCopy> pendingBase(uint32_t vaultId,
+    [[nodiscard]] static std::optional<vl::vaultfmt::manifest::BaseCopy> pendingBase(uint32_t vaultId,
                                                                                  const std::string& rootSha256);
     // An apply of this root begins (remote_manifest_state.applying_*); recordRoot of the same root clears it.
     static void markApplying(uint32_t vaultId, uint64_t epoch, const std::string& rootSha256);
@@ -74,7 +74,7 @@ public:
     // their members, the key history with key checks and attestations, the vault's settings and the producer
     // (this node, software version). Directories and symlinks without a uid get one here (libsodium) in the same
     // transaction. Throws std::runtime_error for a vault without a uid or a tree without one root.
-    [[nodiscard]] static vh::sync::manifest::Content collect(uint32_t vaultId);
+    [[nodiscard]] static vl::vaultfmt::manifest::Content collect(uint32_t vaultId);
 
     // Attach-remote (vault/RemoteAttach.hpp) publishes a still-local vault's manifest before its cutover: the objects
     // the bucket already holds, which the remote index doesn't name until the cutover commits, and the sync strategy
@@ -89,7 +89,7 @@ public:
         std::vector<StagedObject> staged;
         std::optional<std::string> sync_strategy;
     };
-    [[nodiscard]] static vh::sync::manifest::Content collect(uint32_t vaultId, const CollectOptions& options);
+    [[nodiscard]] static vl::vaultfmt::manifest::Content collect(uint32_t vaultId, const CollectOptions& options);
 };
 
 }

@@ -6,11 +6,11 @@
 #include "storage/CloudEngine.hpp"
 
 #include "fs/model/File.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "storage/s3/Controller.hpp"
 #include "storage/s3/ManifestStore.hpp"
-#include "sync/manifest/Reader.hpp"
-#include "sync/manifest/Store.hpp"
+#include <vl/vaultfmt/manifest/Reader.hpp>
+#include <vl/vaultfmt/manifest/Store.hpp>
 #include "vault/EncryptionManager.hpp"
 #include "vault/model/S3Vault.hpp"
 
@@ -23,7 +23,7 @@ namespace vh::storage {
 s3::PutOutcome CloudEngine::putMigratedObject(const std::string& key, const std::filesystem::path& source,
                                               const uint64_t size,
                                               const std::shared_ptr<vh::fs::model::File>& generation) const {
-    if (object_keys::classify(key) != object_keys::KeyClass::Content)
+    if (vl::vaultfmt::keys::classify(key) != vl::vaultfmt::keys::KeyClass::Content)
         throw std::invalid_argument("a migrated object is written to o/<uid> only");
     const bool single = size < s3::Controller::MIN_PART_SIZE;
     // The provider's mutation (storage class) and nothing else: no x-amz-meta-*, whatever the vault's layout is now.
@@ -31,13 +31,13 @@ s3::PutOutcome CloudEngine::putMigratedObject(const std::string& key, const std:
                                                   : s3::provider::RequestOperation::CreateMultipartUpload);
     auto own = noteOwnWrite(key, false, size, generation);
     if (single) s3Provider_->uploadObjectWithMetadata(key, source, options);
-    else s3Provider_->uploadLargeObject(key, source, object_keys::partSizeFor(size), options);
+    else s3Provider_->uploadLargeObject(key, source, vl::vaultfmt::keys::partSizeFor(size), options);
     own.done();
     return s3::Controller::lastPutOutcome();
 }
 
 void CloudEngine::deleteMigratedObject(const std::string& key) const {
-    if (object_keys::classify(key) != object_keys::KeyClass::Content)
+    if (vl::vaultfmt::keys::classify(key) != vl::vaultfmt::keys::KeyClass::Content)
         throw std::invalid_argument("a migrated delete marker goes on o/<uid> only");
     auto own = noteOwnWrite(key, true, std::nullopt);
     s3Provider_->deleteObject(key);
@@ -53,19 +53,19 @@ void CloudEngine::adoptStorageLayout(const vault::model::StorageLayout layout) {
     manifestV2_.reset();   // created again on first use, for the layout the vault has now
 }
 
-sync::manifest::Content CloudEngine::loadManifestFromBucket() const {
+vl::vaultfmt::manifest::Content CloudEngine::loadManifestFromBucket() const {
     if (!opaqueLayout()) throw std::logic_error("only an opaque_v1 vault has a manifest v2");
     if (!encryptionManager) throw std::runtime_error("Vault has no encryption key loaded");
     storage::s3::ManifestStore store(s3Provider_);
     const auto em = encryptionManager;
-    const crypto::vhf1::KeyLookup keys = [em](const uint32_t version) -> crypto::SecretKeyPtr {
+    const vl::vaultfmt::vhf1::KeyLookup keys = [em](const uint32_t version) -> crypto::SecretKeyPtr {
         try {
             return em->historicalKeySnapshot(version);
         } catch (const std::exception&) {
             return nullptr;
         }
     };
-    return sync::manifest::load(store, em->vaultUid(), keys, {.known = std::nullopt, .use_provider_versions = false, .root_object = std::nullopt})
+    return vl::vaultfmt::manifest::load(store, em->vaultUid(), keys, {.known = std::nullopt, .use_provider_versions = false, .root_object = std::nullopt})
         .content;
 }
 

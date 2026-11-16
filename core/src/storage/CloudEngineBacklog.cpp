@@ -9,9 +9,9 @@
 #include "fs/model/File.hpp"
 #include "fs/ops/file.hpp"
 #include "storage/PlaintextReader.hpp"
-#include "storage/ObjectKeys.hpp"
+#include <vl/vaultfmt/ObjectKeys.hpp>
 #include "storage/s3/Controller.hpp"
-#include "crypto/vhf1/Format.hpp"
+#include <vl/vaultfmt/vhf1/Format.hpp>
 #include "vault/EncryptionManager.hpp"
 #include "vault/model/S3Vault.hpp"
 
@@ -60,7 +60,7 @@ std::optional<std::string> CloudEngine::uploadGeneration(const std::filesystem::
     // generation and key version).
     const bool opaque = opaqueLayout();
     if (opaque) {
-        file->object_uid = object_keys::uidOfContentKey(key.string());
+        file->object_uid = vl::vaultfmt::keys::uidOfContentKey(key.string());
         if (!file->object_uid) throw ContentUnavailable("the retained generation has no object key: " + generation.path);
     }
 
@@ -94,7 +94,7 @@ std::optional<std::string> CloudEngine::uploadGeneration(const std::filesystem::
         else {
             auto multipartOptions = requestOptionsFor(s3::provider::RequestOperation::CreateMultipartUpload);
             multipartOptions.metadata = options.metadata;
-            s3Provider_->uploadLargeObject(key, plaintext, object_keys::partSizeFor(plaintext.size()), multipartOptions);
+            s3Provider_->uploadLargeObject(key, plaintext, vl::vaultfmt::keys::partSizeFor(plaintext.size()), multipartOptions);
         }
         own.done();
         return s3::Controller::lastPutOutcome().version_id;
@@ -103,7 +103,7 @@ std::optional<std::string> CloudEngine::uploadGeneration(const std::filesystem::
     const auto size = std::filesystem::file_size(blob);
     if (opaque) {
         // What goes up as o/<uid> must open as o/<uid>.
-        std::vector<uint8_t> header(std::min<uint64_t>(size, crypto::vhf1::kHeaderSize));
+        std::vector<uint8_t> header(std::min<uint64_t>(size, vl::vaultfmt::vhf1::kHeaderSize));
         if (std::ifstream in(blob, std::ios::binary);
             !in.read(reinterpret_cast<char*>(header.data()), static_cast<std::streamsize>(header.size())))
             throw ContentUnavailable("the retained generation's blob is unreadable: " + blob.string());
@@ -119,7 +119,7 @@ std::optional<std::string> CloudEngine::uploadGeneration(const std::filesystem::
     else {
         auto multipartOptions = requestOptionsFor(s3::provider::RequestOperation::CreateMultipartUpload);
         multipartOptions.metadata = options.metadata;
-        s3Provider_->uploadLargeObject(key, blob, object_keys::partSizeFor(size), multipartOptions);
+        s3Provider_->uploadLargeObject(key, blob, vl::vaultfmt::keys::partSizeFor(size), multipartOptions);
     }
     own.done();
     return s3::Controller::lastPutOutcome().version_id;

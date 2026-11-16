@@ -2,8 +2,8 @@
 
 #include "crypto/util/Gcm.hpp"
 #include "crypto/util/encrypt.hpp"
-#include "crypto/vhf1/Reader.hpp"
-#include "crypto/vhf1/Writer.hpp"
+#include <vl/vaultfmt/vhf1/Reader.hpp>
+#include <vl/vaultfmt/vhf1/Writer.hpp>
 #include "fs/PlaintextSource.hpp"
 #include "storage/PlaintextReader.hpp"
 
@@ -24,7 +24,7 @@ namespace vh::vault::content {
 namespace content_detail {
 
 constexpr std::size_t kIoChunk = 64 * 1024;
-constexpr uint8_t kChunkLog2 = crypto::vhf1::kWriterChunkLog2;
+constexpr uint8_t kChunkLog2 = vl::vaultfmt::vhf1::kWriterChunkLog2;
 
 struct Fd {
     explicit Fd(const int f) : fd(f) {}
@@ -54,10 +54,10 @@ uint64_t fdSize(const int fd) {
     return static_cast<uint64_t>(end);
 }
 
-crypto::vhf1::Salt saltOf(const std::string& generation) {
+vl::vaultfmt::vhf1::Salt saltOf(const std::string& generation) {
     const auto raw = crypto::util::b64_decode(generation);
-    if (raw.size() != crypto::vhf1::kSaltSize) throw storage::IntegrityError("The generation is not a VHF1 salt");
-    crypto::vhf1::Salt salt{};
+    if (raw.size() != vl::vaultfmt::vhf1::kSaltSize) throw storage::IntegrityError("The generation is not a VHF1 salt");
+    vl::vaultfmt::vhf1::Salt salt{};
     std::ranges::copy(raw, salt.begin());
     return salt;
 }
@@ -68,7 +68,7 @@ std::vector<uint8_t> ivOf(const std::string& generation) {
     return iv;
 }
 
-crypto::vhf1::KeyLookup lookupFor(const uint32_t keyVersion, const crypto::SecretKeyPtr& key) {
+vl::vaultfmt::vhf1::KeyLookup lookupFor(const uint32_t keyVersion, const crypto::SecretKeyPtr& key) {
     // Only the version the catalog recorded: a header naming another one fails as key_unavailable.
     return [keyVersion, key](const uint32_t version) -> crypto::SecretKeyPtr {
         return version == keyVersion ? key : nullptr;
@@ -112,7 +112,7 @@ Format formatOf(const std::string_view generationB64) {
         throw std::invalid_argument("Malformed content generation id");
     }
     if (raw.size() == crypto::util::AES_IV_SIZE) return Format::Gcm0;
-    if (raw.size() == crypto::vhf1::kSaltSize) return Format::Vhf1;
+    if (raw.size() == vl::vaultfmt::vhf1::kSaltSize) return Format::Vhf1;
     throw std::invalid_argument(fmt::format("Content generation id of {} bytes is neither a GCM IV nor a VHF1 salt",
                                             raw.size()));
 }
@@ -130,7 +130,7 @@ uint64_t sealedSize(const uint64_t plaintextSize, const Format format) {
     switch (format) {
     case Format::Plain: return plaintextSize;
     case Format::Gcm0: return plaintextSize + crypto::util::AES_TAG_SIZE;
-    case Format::Vhf1: return crypto::vhf1::objectSizeFor(plaintextSize, content_detail::kChunkLog2);
+    case Format::Vhf1: return vl::vaultfmt::vhf1::objectSizeFor(plaintextSize, content_detail::kChunkLog2);
     }
     throw std::invalid_argument("Unknown content format");
 }
@@ -143,8 +143,8 @@ std::optional<uint64_t> plaintextSizeOf(const uint64_t sealed, const Format form
         return sealed - crypto::util::AES_TAG_SIZE;
     case Format::Vhf1:
         try {
-            return crypto::vhf1::layoutFor(sealed, content_detail::kChunkLog2).plaintextSize;
-        } catch (const crypto::vhf1::Error&) {
+            return vl::vaultfmt::vhf1::layoutFor(sealed, content_detail::kChunkLog2).plaintextSize;
+        } catch (const vl::vaultfmt::vhf1::Error&) {
             return std::nullopt;
         }
     }
@@ -165,43 +165,43 @@ uint64_t sealedSizeOf(const uint64_t plaintextSize, const std::string_view gener
     return sealedSize(plaintextSize, formatOf(generationB64));
 }
 
-std::string generationOf(const crypto::vhf1::Salt& salt) {
+std::string generationOf(const vl::vaultfmt::vhf1::Salt& salt) {
     return crypto::util::b64_encode(std::vector<uint8_t>(salt.begin(), salt.end()));
 }
 
-crypto::vhf1::Expectation expectationOf(const Binding& binding) {
-    crypto::vhf1::Expectation e;
-    e.kind = crypto::vhf1::Kind::FileContent;
+vl::vaultfmt::vhf1::Expectation expectationOf(const Binding& binding) {
+    vl::vaultfmt::vhf1::Expectation e;
+    e.kind = vl::vaultfmt::vhf1::Kind::FileContent;
     e.vaultUid = binding.vaultUid;
     e.objectUid = binding.objectUid;
     e.generation = content_detail::saltOf(binding.generation);
     return e;
 }
 
-void throwIntegrity(const crypto::vhf1::Error& error, const std::string_view what) {
+void throwIntegrity(const vl::vaultfmt::vhf1::Error& error, const std::string_view what) {
     throw storage::IntegrityError(fmt::format("{} failed authentication ({}{})", what,
-                                              crypto::vhf1::errorCodeName(error.code()),
+                                              vl::vaultfmt::vhf1::errorCodeName(error.code()),
                                               error.chunkIndex() ? fmt::format(", chunk {}", *error.chunkIndex()) : ""));
 }
 
-crypto::vhf1::OpenedHeader openHeader(const std::span<const uint8_t> header, const Binding& binding,
+vl::vaultfmt::vhf1::OpenedHeader openHeader(const std::span<const uint8_t> header, const Binding& binding,
                                       const crypto::SecretKeyPtr& key) {
     try {
-        return crypto::vhf1::openHeader(header, expectationOf(binding),
+        return vl::vaultfmt::vhf1::openHeader(header, expectationOf(binding),
                                         content_detail::lookupFor(binding.keyVersion, key));
-    } catch (const crypto::vhf1::Error& e) {
+    } catch (const vl::vaultfmt::vhf1::Error& e) {
         throwIntegrity(e, "Content header");
     }
 }
 
-crypto::vhf1::HeaderParams fileHeader(const crypto::id::ObjectUid& vaultUid, const crypto::id::ObjectUid& objectUid,
+vl::vaultfmt::vhf1::HeaderParams fileHeader(const crypto::id::ObjectUid& vaultUid, const crypto::id::ObjectUid& objectUid,
                                       const uint32_t keyVersion) {
-    crypto::vhf1::HeaderParams p;
-    p.kind = crypto::vhf1::Kind::FileContent;
+    vl::vaultfmt::vhf1::HeaderParams p;
+    p.kind = vl::vaultfmt::vhf1::Kind::FileContent;
     p.keyVersion = keyVersion;
     p.vaultUid = vaultUid;
     p.objectUid = objectUid;
-    p.salt = crypto::vhf1::freshSalt();
+    p.salt = vl::vaultfmt::vhf1::freshSalt();
     p.chunkLog2 = content_detail::kChunkLog2;
     return p;
 }
@@ -213,7 +213,7 @@ Sealer::Sealer(const crypto::SecretKey& key, const uint32_t keyVersion, const cr
     : keyVersion_(keyVersion) {
     const auto params = fileHeader(vaultUid, objectUid, keyVersion);
     generation_ = generationOf(params.salt);
-    writer_ = std::make_unique<crypto::vhf1::Writer>(params, key, std::move(sink));
+    writer_ = std::make_unique<vl::vaultfmt::vhf1::Writer>(params, key, std::move(sink));
 }
 
 Sealer::~Sealer() = default;
@@ -225,7 +225,7 @@ uint64_t Sealer::objectSize() const { return writer_->objectSize(); }
 Sealed sealBuffer(const std::span<const uint8_t> plaintext, const crypto::SecretKey& key, const uint32_t keyVersion,
                   const crypto::id::ObjectUid& vaultUid, const crypto::id::ObjectUid& objectUid) {
     const auto params = fileHeader(vaultUid, objectUid, keyVersion);
-    return {.bytes = crypto::vhf1::seal(plaintext, params, key), .generation = generationOf(params.salt)};
+    return {.bytes = vl::vaultfmt::vhf1::seal(plaintext, params, key), .generation = generationOf(params.salt)};
 }
 
 std::string sealSourceToFile(const fs::PlaintextSource& source, const std::filesystem::path& path,
@@ -266,11 +266,11 @@ std::vector<uint8_t> openBuffer(const std::span<const uint8_t> sealed, const Bin
         }
     case Format::Vhf1:
         try {
-            auto plain = crypto::vhf1::open(sealed, expectationOf(binding),
+            auto plain = vl::vaultfmt::vhf1::open(sealed, expectationOf(binding),
                                             content_detail::lookupFor(binding.keyVersion, content_detail::borrow(key)));
             std::vector<uint8_t> out(plain.span().begin(), plain.span().end());
             return out;
-        } catch (const crypto::vhf1::Error& e) {
+        } catch (const vl::vaultfmt::vhf1::Error& e) {
             throwIntegrity(e, "Content");
         }
     }
@@ -362,7 +362,7 @@ struct StreamOpener::Impl {
     uint64_t received{};
     // Vhf1
     std::vector<uint8_t> header;
-    std::optional<crypto::vhf1::ChunkWalker> walker;
+    std::optional<vl::vaultfmt::vhf1::ChunkWalker> walker;
     // Gcm0
     std::unique_ptr<crypto::util::GcmStreamDecryptor> gcm;
     std::array<uint8_t, crypto::util::AES_TAG_SIZE> tag{};
@@ -421,12 +421,12 @@ void StreamOpener::update(std::span<const uint8_t> sealed, const Sink& sink) {
     try {
         while (!sealed.empty()) {
             if (!m.walker) {
-                const auto n = std::min(sealed.size(), crypto::vhf1::kHeaderSize - m.header.size());
+                const auto n = std::min(sealed.size(), vl::vaultfmt::vhf1::kHeaderSize - m.header.size());
                 m.header.insert(m.header.end(), sealed.begin(), sealed.begin() + static_cast<std::ptrdiff_t>(n));
                 m.received += n;
                 sealed = sealed.subspan(n);
-                if (m.header.size() < crypto::vhf1::kHeaderSize) continue;
-                auto opened = crypto::vhf1::openHeader(m.header, expectationOf(m.binding),
+                if (m.header.size() < vl::vaultfmt::vhf1::kHeaderSize) continue;
+                auto opened = vl::vaultfmt::vhf1::openHeader(m.header, expectationOf(m.binding),
                                                        content_detail::lookupFor(m.binding.keyVersion, m.key));
                 m.walker.emplace(std::move(opened), m.sealedSize);
                 continue;
@@ -435,7 +435,7 @@ void StreamOpener::update(std::span<const uint8_t> sealed, const Sink& sink) {
             m.received += sealed.size();
             sealed = {};
         }
-    } catch (const crypto::vhf1::Error& e) {
+    } catch (const vl::vaultfmt::vhf1::Error& e) {
         throwIntegrity(e, "Content");
     }
 }
@@ -449,9 +449,9 @@ void StreamOpener::finish(const Sink&) {
         return;
     }
     try {
-        if (!m.walker) throw crypto::vhf1::Error(crypto::vhf1::ErrorCode::BadMagic);
+        if (!m.walker) throw vl::vaultfmt::vhf1::Error(vl::vaultfmt::vhf1::ErrorCode::BadMagic);
         m.walker->finish();
-    } catch (const crypto::vhf1::Error& e) {
+    } catch (const vl::vaultfmt::vhf1::Error& e) {
         throwIntegrity(e, "Content");
     }
 }
