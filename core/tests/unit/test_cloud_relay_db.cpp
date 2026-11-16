@@ -42,6 +42,7 @@
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/local/stream_protocol.hpp>
 #include <boost/asio/ssl/context.hpp>
+#include <boost/asio/strand.hpp>
 #include <gtest/gtest.h>
 #include <sodium.h>
 #include <vl/keykit/base64url.hpp>
