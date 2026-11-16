@@ -117,6 +117,8 @@ public:
     // An apply stopped at this root for `reason`: true the first time for that root and reason (alert once).
     [[nodiscard]] static bool noteStopped(uint32_t vaultId, uint64_t epoch, const std::string& rootSha256,
                                           const std::string& producer, const std::string& reason);
+    // A recorded stop for `reason` is over (a publish succeeded past it); nothing else of the report changes.
+    static void clearStopped(uint32_t vaultId, const std::string& reason);
     // What storage.vault.get and `vh vault sync info` show: the recorded root, the apply in progress, the writers and
     // the last apply (null members when unknown).
     [[nodiscard]] static nlohmann::json status(uint32_t vaultId);

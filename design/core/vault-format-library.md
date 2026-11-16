@@ -1,6 +1,6 @@
 # The shared vault format library (wave 4, workstream J)
 
-Status: design for review (managed storage plan of 2026-11-12, §4.11 and workstream J); items 1-8 are built (items 7 and 8: "As built", the last section). It
+Status: design for review (managed storage plan of 2026-11-12, §4.11 and workstream J); items 1-8 are built (items 7 and 8: "As built"), and the server honours decision 7's writer floor (the last section). It
 covers how the server's file format, object naming and manifest code becomes one library that the server, the
 Desktop-only engine and the portal's browser reader link, what each of them needs from it, and in what order. It does
 not design the Desktop engine's File Provider side, the cloud's device access (workstream K) or the portal's screens.
@@ -328,3 +328,56 @@ the working content and journal, a key-lookup callback, the protocol suites on t
 **Item 13 (the wasm reader) needs:** an Emscripten build (OpenSSL's libcrypto, `-fwasm-exceptions`), a bytes-only C1
 entry (the root versions of a listing in, the canonical head out) beside `root_open`, KEV1 unwrap from vl-keykit built
 the same way, and the vectors run in Node.
+
+## As built: the writer floor (2026-11-16)
+
+vl-vaultfmt 0.2.0 added the WebAssembly reader and its C API, 0.3.0 the database-free engine (item 9) and the writer
+floor (decision 7; the library's `docs/engine.md`, "The writer floor"). The server now links 0.3.0 and honours the
+floor. Nothing else changes in its behaviour: the engine and the reader are compiled into the static library and
+unused here, and every addition to the API it uses has a default (`SessionHost::writerRevision` and `writerFloor`,
+`PublishOptions::writer_revision`, `writer_floor` and `known_floor`, `RemoteHead::above_floor`,
+`RootDocument::writer_floor`), so no call site had to change.
+
+- **Pin.** `subprojects/vl-vaultfmt.wrap` names the library's main at `54742cbd` (the merge of its pull request 4,
+  which changed only its CI after 0.3.0's `ad6490b`), as `vl-vaultfmt-0.3.0.tar.xz` made by the recipe in the wrap
+  (sha256 `a99becaa0ea7ce0551e62ed53e9bd8a1f72ecba3e8914a4813b10b946ee2ad47`, the same bytes made twice);
+  `core/meson.build` requires `>= 0.3.0` and the contract pins that.
+- **Apply.** `Service::applyRemote` stops on `RemoteHead::above_floor` right after the verify, before reconcile and
+  before `applying_*` is set: `stopAt` (the applier's stop, now public) records `manifest_writer_floor` and alerts once
+  per root. The publish path reaches the same stop: the moved head throws `HeadMoved`, whose apply stops.
+- **Publish.** `WriterFloorRefused` (a recorded root above this server's revision: a package downgraded under a
+  database a newer one recorded, or a root rebuilt over a missing head that keeps the recorded floor) is caught in
+  `Service::publishRounds`, recorded and alerted as the same stop against the root whose floor binds, and rethrown, so
+  it never takes another round; `CloudEngine::publishManifestV2` turns it into `SyncStalled`. Nothing was written: the
+  library refuses before any PUT. One case writes before it learns: a session whose cache still holds the recorded
+  root as its base (it published that root) does not read the head again, so a publish outside a pass (`vh vault
+  sync`) after a newer writer's root landed spends one lost round, its segments and a conditional root PUT that
+  fails, before the same stop; inside a pass the apply before the publish stops first. No root lands on a
+  conditional bucket (pinned by `AHeadAboveThisServersWriterRevisionIsNeitherAppliedNorPublishedOver`); on a
+  version_log bucket that round would leave a stray root version, repaired as any lost round's (not tested here).
+- **The message** (`writerFloorMessage`) says the vault was written by a newer version of Vaulthalla, that the
+  vaulthalla package on this server must be upgraded, and that nothing was changed; the subject says the same.
+- **Writer revision.** `vault_manifest::kWriterRevision` = `kBaselineWriterRevision` (1), and this server's roots need
+  no floor. It is raised there, and only in the same change as the migration that stores every member the new
+  revision adds (with `collect` and the applier carrying them): declaring a revision whose members the database drops
+  is the loss the floor exists to stop. The `Service` constructor takes it as a parameter so tests can stand in an
+  upgraded or downgraded server.
+- **Vectors.** `writer_floor.json` and `writer_floor_vectors.py` are copied into `design/encryption/vectors/`;
+  `test_vaultfmt_vectors.cpp` requires them identical to the library's and runs the roots and the decision table
+  through the linked library; `test_vhf1_vectors_contract.py` runs the generator's `--check`. `vectors.json` did not
+  change.
+
+**Decisions (rule 5; none touches stored data, keys or custody):**
+
+1. *The floor stop reuses `manifest_apply_report.stopped_*` and the `manifest_apply_stopped` alert* (reason
+   `manifest_writer_floor`), so the status the CLI and ws return shows it with no schema or contract shape change; the
+   contract's description lists the new reason. Undo: a separate column and alert key (a migration).
+2. *A refused publish records the stop against the recorded root* when its base copy names a floor above this
+   server's revision, else against the bucket's head when that is above it (re-verified, one HEAD and the root's GETs,
+   only on this error path); with neither, it is logged and not recorded. Undo: record nothing on a refused publish
+   and rely on the apply's stop (a downgraded server would then stall silently).
+3. *A successful publish clears a `manifest_writer_floor` stop* (one `UPDATE` per publish that wrote a root), because
+   after a downgrade no apply follows that would clear it. Other stop reasons are still cleared only by an apply, as
+   before. Undo: drop `ManifestApply::clearStopped` and its two calls.
+4. *The writer revision is a constructor parameter with the baseline as default*, not a test hook in the session
+   host. Undo: make it a constant only and drop the tests' upgraded/downgraded servers.

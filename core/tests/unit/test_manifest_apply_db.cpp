@@ -9,7 +9,8 @@
 //                    converges; a crash between operations leaves applying_* set (nothing published) and re-applies;
 //                    an open file is deferred, then applied or handed to the planner; real collector output with the
 //                    real trash form; a lost publish round applies and republishes; no base copy merges as a union;
-//                    share links follow a moved folder and go with a deleted one.
+//                    share links follow a moved folder and go with a deleted one; the writer floor: a head above
+//                    this server's revision is neither applied nor published over, a recorded one refuses the publish.
 
 #include "../helpers/bytes.hpp"
 #include "../helpers/db_suite.hpp"
@@ -144,9 +145,10 @@ protected:
         restart();
     }
     // A daemon restart: the manifest service's memory (its publisher cache) is gone, the database stays.
-    void restart() {
+    // `revision`: the writer revision of the restarted daemon (an upgraded or downgraded server).
+    void restart(const uint32_t revision = sync::vault_manifest::kWriterRevision) {
         service = std::make_unique<sync::vault_manifest::Service>(v.id(), *v.engine->vault->uid, store,
-                                                                   v.engine->encryptionManager);
+                                                                   v.engine->encryptionManager, revision);
     }
 
     [[nodiscard]] uint32_t id() const { return v.id(); }
@@ -167,9 +169,10 @@ protected:
 
     // Another server publishes `c` on the recorded root (its own cache, its own node id).
     // `shared`: the other writer is one of the root's writers (a replicated vault, see share()): it names itself and
-    // keeps the base's writers. `on`: the root it builds on (default: the recorded one).
+    // keeps the base's writers. `on`: the root it builds on (default: the recorded one). `floor`: the other writer is a
+    // newer Vaulthalla of that writer revision whose output needs it (the root's writer_floor).
     mf::PublishReport publishAs(mf::Content c, const std::string& node = "another-node", const bool shared = false,
-                                const std::optional<mf::Known>& on = std::nullopt) const {
+                                const std::optional<mf::Known>& on = std::nullopt, const uint32_t floor = 0) const {
         const auto state = db::query::sync::Manifest::state(id());
         c.producer.node_id = node;
         const auto k = v.engine->encryptionManager->currentKey();
@@ -177,6 +180,10 @@ protected:
         mf::PublishOptions o;
         o.now = mf::isoTime(std::time(nullptr));
         if (shared) o.self_node = node;
+        if (floor) {
+            o.writer_revision = floor;
+            o.writer_floor = floor;
+        }
         return mf::publish(*store, uid(), service->keyLookup(), {k.version, k.key}, c,
                            on ? *on : mf::Known{*state.epoch, *state.root_sha256, state.root_version_id}, cache, o);
     }
@@ -1471,6 +1478,144 @@ TEST_F(ManifestApplyDb, AReplicatedVaultRefusesWhatWouldMakeTheReplicasDiffer) {
     const auto before = v.engine->encryptionManager->get_key_version();
     EXPECT_EQ(refusalCode([&] { v.engine->encryptionManager->prepare_key_rotation(); }), "ok") << "solo: rotates";
     EXPECT_EQ(v.engine->encryptionManager->get_key_version(), before + 1);
+}
+
+}
+
+namespace vh::test_manifest_apply_db {
+
+namespace {
+
+// The stopped-apply alerts for the writer floor drained from the bus, and the last one's text.
+std::size_t floorAlerts(std::string* text = nullptr) {
+    std::size_t n = 0;
+    for (const auto& a : notifications::OperatorNotificationBus::instance().drain(512)) {
+        if (a.eventKey != "manifest_apply_stopped") continue;
+        const auto reason = a.tags.find("reason");
+        if (reason == a.tags.end() || reason->second != sync::vault_manifest::kWriterFloorStop) continue;
+        ++n;
+        if (text) *text = a.rendered.text;
+    }
+    return n;
+}
+
+nlohmann::json stopped(const uint32_t vaultId) {
+    const auto st = db::query::sync::ManifestApply::status(vaultId);
+    return st["last_apply"].is_object() ? st["last_apply"]["stopped"] : nlohmann::json(nullptr);
+}
+
+}
+
+// The writer floor (vl-vaultfmt docs/engine.md; design/core/vault-format-library.md decision 7). Roots this server
+// writes carry no floor, so every other test here is the "no floor, as before" case; this one pins it.
+TEST_F(ManifestApplyDb, RootsWithoutAFloorAreWrittenAndAppliedAsBefore) {
+    seed();
+    EXPECT_FALSE(head().root.writer_floor) << "this server's roots name no floor";
+    auto theirs = head().content;
+    at(theirs, "top.txt").name = "renamed.txt";
+    (void)publishAs(theirs);   // another writer of the baseline revision: no floor either
+    EXPECT_FALSE(head().root.writer_floor);
+    const auto r = service->applyRemote();
+    ASSERT_TRUE(r && r->recorded);
+    EXPECT_TRUE(stopped(id()).is_null());
+    write("/mine.txt", "local");
+    (void)service->publish();
+    EXPECT_FALSE(head().root.writer_floor);
+    EXPECT_TRUE(byName(head().content, "renamed.txt"));
+}
+
+// A newer Vaulthalla (writer revision 2) published a root of floor 2: this server (revision 1) takes nothing of it in
+// and publishes nothing over it, through its service and through its vault's own pass; the operator is alerted once
+// with a plain message, the status shows manifest_writer_floor, and an upgraded server applies it and clears the stop.
+TEST_F(ManifestApplyDb, AHeadAboveThisServersWriterRevisionIsNeitherAppliedNorPublishedOver) {
+    seed();
+    (void)floorAlerts();
+    const auto before = db::query::sync::Manifest::state(id());
+    auto theirs = head().content;
+    at(theirs, "top.txt").name = "renamed.txt";
+    const auto published = publishAs(theirs, "newer-node", false, std::nullopt, 2);
+    ASSERT_EQ(head().root.writer_floor, 2u);
+    const auto since = journal();
+
+    EXPECT_THROW((void)service->applyRemote(), sync::vault_manifest::ApplyStopped);
+    EXPECT_THROW((void)service->applyRemote(), sync::vault_manifest::ApplyStopped);
+    EXPECT_EQ(journal(), since) << "nothing applied";
+    write("/mine.txt", "a local change");
+    v.bucket->resetCounters();
+    EXPECT_THROW((void)service->publish(), sync::vault_manifest::ApplyStopped) << "HeadMoved, then the same stop";
+    EXPECT_THROW((void)v.engine->refreshRemoteIndexFromManifestIfChanged(), sync::model::SyncStalled) << "the pass";
+    EXPECT_EQ(v.bucket->counters().put, 0u) << "nothing published";
+    EXPECT_EQ(v.bucket->counters().del, 0u);
+    // The vault's own pass service still caches the root it published as its base, so a publish outside a pass (the
+    // CLI's) learns of the moved head only when its conditional root PUT fails: one lost round, no root, then the same
+    // stop. (Inside a pass the refresh above stalls first.)
+    EXPECT_THROW(v.engine->publishRemoteIndexManifestWithRetry(), sync::model::SyncStalled);
+    EXPECT_EQ(head().acceptance.root_sha256, published.published.known.root_sha256) << "no root over it";
+    EXPECT_EQ(v.bucket->counters().del, 0u);
+
+    const auto state = db::query::sync::Manifest::state(id());
+    EXPECT_EQ(state.epoch, before.epoch) << "nothing applied";
+    EXPECT_EQ(state.root_sha256, before.root_sha256);
+    EXPECT_FALSE(state.applying_epoch) << "stopped before the apply began";
+    EXPECT_TRUE(db::query::fs::File::getFileByPath(id(), "/top.txt"));
+    EXPECT_FALSE(db::query::fs::File::getFileByPath(id(), "/renamed.txt"));
+
+    std::string text;
+    EXPECT_EQ(floorAlerts(&text), 1u) << "once per root";
+    EXPECT_NE(text.find("written by a newer version of Vaulthalla"), std::string::npos) << text;
+    EXPECT_NE(text.find("Upgrade the vaulthalla package"), std::string::npos) << text;
+    EXPECT_NE(text.find("nothing was changed"), std::string::npos) << text;
+    EXPECT_EQ(stopped(id()), sync::vault_manifest::kWriterFloorStop);
+
+    // Upgraded (a server of revision 2): the head applies, the stop clears, and its next root keeps the floor.
+    restart(2);
+    const auto r = service->applyRemote();
+    ASSERT_TRUE(r && r->recorded);
+    EXPECT_TRUE(stopped(id()).is_null());
+    EXPECT_TRUE(db::query::fs::File::getFileByPath(id(), "/renamed.txt"));
+    (void)service->publish();
+    EXPECT_EQ(head().root.writer_floor, 2u) << "nobody lowers the floor";
+    EXPECT_TRUE(byName(head().content, "mine.txt"));
+    EXPECT_EQ(floorAlerts(), 0u);
+}
+
+// The recorded root is above this server's revision (a downgraded package over a database a newer one recorded):
+// nothing to apply, so the publish is the guard. WriterFloorRefused before any PUT, a stall through the pass, never a
+// retry; alerted once, shown in the status, cleared by the first publish of an upgraded server.
+TEST_F(ManifestApplyDb, APublishOverARecordedRootAboveThisServersRevisionIsRefused) {
+    seed();
+    auto theirs = head().content;
+    at(theirs, "top.txt").name = "renamed.txt";
+    (void)publishAs(theirs, "newer-node", false, std::nullopt, 2);
+    restart(2);   // the newer package took it in
+    ASSERT_TRUE(service->applyRemote());
+    const auto recorded = db::query::sync::Manifest::state(id());
+    (void)floorAlerts();
+
+    restart(1);   // downgraded
+    EXPECT_FALSE(service->applyRemote()) << "the recorded root is the head: nothing to apply";
+    write("/mine.txt", "a local change");
+    v.bucket->resetCounters();
+    try {
+        (void)service->publish();
+        ADD_FAILURE() << "published over a floor above this server's revision";
+    } catch (const mf::WriterFloorRefused& e) {
+        EXPECT_EQ(e.floor(), 2u);
+        EXPECT_EQ(e.revision(), 1u);
+    }
+    EXPECT_THROW((void)service->publishIfChanged(), mf::WriterFloorRefused);
+    EXPECT_THROW(v.engine->publishRemoteIndexManifestWithRetry(), sync::model::SyncStalled) << "the pass stalls";
+    EXPECT_EQ(v.bucket->counters().put, 0u) << "nothing published";
+    EXPECT_EQ(db::query::sync::Manifest::state(id()).epoch, recorded.epoch);
+    EXPECT_EQ(head().acceptance.root_sha256, *recorded.root_sha256);
+    EXPECT_EQ(floorAlerts(), 1u) << "once per root";
+    EXPECT_EQ(stopped(id()), sync::vault_manifest::kWriterFloorStop);
+
+    restart(2);   // upgraded again
+    const auto r = service->publish();
+    EXPECT_EQ(r.published.known.epoch, *recorded.epoch + 1);
+    EXPECT_TRUE(stopped(id()).is_null()) << "the floor no longer blocks";
+    EXPECT_TRUE(byName(head().content, "mine.txt"));
 }
 
 }

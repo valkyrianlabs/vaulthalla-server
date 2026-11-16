@@ -1,14 +1,15 @@
 [wrap-file]
-directory = vl-vaultfmt-0.1.0
-# No release exists yet: the tarball is `git archive` of vl-vaultfmt's commit cbbcf62569a8f096dd7cf52a544f384b2fa2effa
-# (version 0.1.0, untagged), made reproducibly (the same bytes with xz 5.4 and 5.8) with
-#   git -C vl-vaultfmt archive --format=tar --prefix=vl-vaultfmt-0.1.0/ cbbcf62569a8f096dd7cf52a544f384b2fa2effa \
-#     | xz -9 -T1 > vl-vaultfmt-0.1.0.tar.xz
+directory = vl-vaultfmt-0.3.0
+# No release exists yet: the tarball is `git archive` of vl-vaultfmt's commit 54742cbd2aecc839d2faa36ba3b2e5f129949ad9
+# (version 0.3.0, untagged: main after pull request 4, whose sources are those of 0.3.0's ad6490b; it changed only CI),
+# made reproducibly (the same bytes with xz 5.4 and 5.8) with
+#   git -C vl-vaultfmt archive --format=tar --prefix=vl-vaultfmt-0.3.0/ 54742cbd2aecc839d2faa36ba3b2e5f129949ad9 \
+#     | xz -9 -T1 > vl-vaultfmt-0.3.0.tar.xz
 # and committed under subprojects/packagecache/, so every build (and the Debian build, --wrap-mode=nodownload) uses it
-# without the network. source_url names the release asset 0.1.0 will publish; the wrap is bumped to that tarball then.
-source_url = https://github.com/valkyrianlabs/vl-vaultfmt/releases/download/v0.1.0/vl-vaultfmt-0.1.0.tar.xz
-source_filename = vl-vaultfmt-0.1.0.tar.xz
-source_hash = 7d8ca0ff68538286d45f379516c010af2b920b9ace63f47db5c4f3a9955e657e
+# without the network. source_url names the release asset 0.3.0 will publish; the wrap is bumped to that tarball then.
+source_url = https://github.com/valkyrianlabs/vl-vaultfmt/releases/download/v0.3.0/vl-vaultfmt-0.3.0.tar.xz
+source_filename = vl-vaultfmt-0.3.0.tar.xz
+source_hash = a99becaa0ea7ce0551e62ed53e9bd8a1f72ecba3e8914a4813b10b946ee2ad47
 
 [provide]
 vl-vaultfmt = vl_vaultfmt_dep

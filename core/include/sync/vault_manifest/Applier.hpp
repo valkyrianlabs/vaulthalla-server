@@ -40,6 +40,23 @@ public:
     explicit ApplyStopped(const std::string& message) : std::runtime_error(message) {}
 };
 
+// The apply stops at this root for `reason` (manifest_key_missing, manifest_key_mismatch, manifest_head_incomplete,
+// manifest_mirror_shared, manifest_writer_floor): recorded in manifest_apply_report.stopped_* (shown as
+// last_apply.stopped by storage.vault.get and `vh vault sync info`), the operator alerted once per root and reason
+// (manifest_apply_stopped), then ApplyStopped(why). Nothing is written to the vault's rows. The next apply that records
+// a root clears it.
+[[noreturn]] void stopAt(uint32_t vaultId, uint64_t epoch, const std::string& rootSha256, const std::string& producer,
+                         const std::string& reason, const std::string& why);
+
+// The writer floor (vl-vaultfmt docs/engine.md, "The writer floor"; design/core/vault-format-library.md decision 7): a
+// root whose writer_floor is above this server's writer revision was written by a newer Vaulthalla. It is never applied
+// (its members this database doesn't store would be dropped, and a later publish would carry the loss) and never
+// published over (vl::vaultfmt::manifest::WriterFloorRefused, before any PUT): the vault stalls until this server is
+// upgraded.
+inline constexpr const char* kWriterFloorStop = "manifest_writer_floor";
+// The operator's message for it.
+[[nodiscard]] std::string writerFloorMessage(uint64_t epoch, uint32_t floor, uint32_t revision);
+
 // Other writers' recovery envelope kids are carried into this server's roots (design: "Foreign envelopes"): a head
 // naming several writers is applied. What still refuses one: a vault on the mirror strategy (it deletes remote objects
 // its database doesn't hold), and every refusal the join will add (design item 6).

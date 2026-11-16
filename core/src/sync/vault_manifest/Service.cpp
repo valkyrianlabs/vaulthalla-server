@@ -73,8 +73,10 @@ std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> required(std::shared_ptr<vl
     return store;
 }
 
-vl::vaultfmt::manifest::SessionHost hostOf(const uint32_t vaultId, const std::shared_ptr<vault::EncryptionManager>& keys) {
+vl::vaultfmt::manifest::SessionHost hostOf(const uint32_t vaultId, const std::shared_ptr<vault::EncryptionManager>& keys,
+                                           const uint32_t writerRevision) {
     vl::vaultfmt::manifest::SessionHost host;
+    host.writerRevision = writerRevision;   // Service.hpp, kWriterRevision; writerFloor stays 0: no member needs one
     host.collect = [vaultId] { return db::query::sync::Manifest::collect(vaultId); };
     host.currentKey = [keys] {
         const auto current = keys->currentKey();
@@ -113,10 +115,11 @@ vl::vaultfmt::manifest::SessionHost hostOf(const uint32_t vaultId, const std::sh
 }
 
 Service::Service(const uint32_t vaultId, const vl::vaultfmt::manifest::Uid& vaultUid, std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> store,
-                 std::shared_ptr<vault::EncryptionManager> keys)
-    : vaultId_(vaultId), vaultUid_(vaultUid), keys_(std::move(keys)), store_(service_detail::required(store, keys_)),
-      session_(vaultUid, store_,
-               std::make_shared<service_detail::DatabaseState>(vaultId), service_detail::hostOf(vaultId, keys_)) {}
+                 std::shared_ptr<vault::EncryptionManager> keys, const uint32_t writerRevision)
+    : vaultId_(vaultId), writerRevision_(writerRevision), vaultUid_(vaultUid), keys_(std::move(keys)),
+      store_(service_detail::required(store, keys_)),
+      session_(vaultUid, store_, std::make_shared<service_detail::DatabaseState>(vaultId),
+               service_detail::hostOf(vaultId, keys_, writerRevision)) {}
 
 vl::vaultfmt::vhf1::KeyLookup Service::keyLookup() const { return service_detail::lookupOf(keys_); }
 
@@ -125,6 +128,9 @@ auto Service::publishRounds(F&& once) -> decltype(once()) {
     for (unsigned round = 1;; ++round) {
         try {
             return once();
+        } catch (const vl::vaultfmt::manifest::WriterFloorRefused& e) {
+            noteFloorRefused(e);   // nothing was written: a stall (the caller's), never another round
+            throw;
         } catch (const vl::vaultfmt::manifest::HeadMoved& e) {
             if (round >= kPublishRounds)
                 throw vl::vaultfmt::manifest::PublishConflict(
@@ -135,12 +141,55 @@ auto Service::publishRounds(F&& once) -> decltype(once()) {
     }
 }
 
+void Service::noteFloorRefused(const vl::vaultfmt::manifest::WriterFloorRefused& e) {
+    namespace mf = vl::vaultfmt::manifest;
+    // The root whose floor binds: the recorded one (its base copy names the floor; a publish over it, or over a root
+    // rebuilt in its place, keeps it), else the bucket's head (a first publish on a bucket another writer started).
+    const auto state = db::query::sync::Manifest::state(vaultId_);
+    std::optional<mf::Known> root;
+    std::string producer;
+    if (state.epoch && state.root_sha256)
+        if (const auto copy = db::query::sync::Manifest::base(vaultId_)) try {
+                const auto doc = mf::openRoot(copy->root, vaultUid_, keyLookup());
+                if (mf::writerFloorOf(doc) > writerRevision_) {
+                    root = mf::Known{*state.epoch, *state.root_sha256, std::nullopt};
+                    producer = doc.producer.node_id;
+                }
+            } catch (const std::exception&) {
+                // unreadable: judged by the head below
+            }
+    if (!root) try {
+            if (const auto head = session_.verifyRemote(); head && head->head && head->above_floor) {
+                root = mf::Known{head->epoch, head->root_sha256, std::nullopt};
+                producer = head->head->root.producer.node_id;
+            }
+        } catch (const std::exception& ve) {
+            log::Registry::cloud()->warn("[manifest] Vault {}: the root above this server's writer revision could not "
+                                         "be read again: {}",
+                                         vaultId_, ve.what());
+        }
+    if (!root) {
+        log::Registry::cloud()->error("[manifest] Vault {}: {}", vaultId_, e.what());
+        return;
+    }
+    try {
+        stopAt(vaultId_, root->epoch, root->root_sha256, producer, kWriterFloorStop,
+               writerFloorMessage(root->epoch, e.floor(), e.revision()));
+    } catch (const ApplyStopped&) {
+        // recorded and alerted; the caller rethrows the refusal
+    }
+}
+
 vl::vaultfmt::manifest::PublishReport Service::publish() {
-    return publishRounds([&] { return session_.publish(); });
+    auto report = publishRounds([&] { return session_.publish(); });
+    db::query::sync::ManifestApply::clearStopped(vaultId_, kWriterFloorStop);   // published: the floor no longer binds
+    return report;
 }
 
 std::optional<vl::vaultfmt::manifest::PublishReport> Service::publishIfChanged() {
-    return publishRounds([&] { return session_.publishIfChanged(); });
+    auto report = publishRounds([&] { return session_.publishIfChanged(); });
+    if (report) db::query::sync::ManifestApply::clearStopped(vaultId_, kWriterFloorStop);
+    return report;
 }
 
 std::optional<vl::vaultfmt::manifest::RemoteHead> Service::verifyRemote() { return session_.verifyRemote(); }
@@ -156,6 +205,10 @@ std::optional<ApplyReport> Service::applyRemote(const ApplyOptions& options) {
                                        "may be publishing under this server's identity (a cloned database)",
                                        verified->epoch));
     if (!verified || !verified->head) return std::nullopt;
+    if (verified->above_floor)   // before reconcile: nothing of it is taken in (Applier.hpp, kWriterFloorStop)
+        stopAt(vaultId_, verified->epoch, verified->root_sha256, verified->head->root.producer.node_id, kWriterFloorStop,
+               writerFloorMessage(verified->epoch, vl::vaultfmt::manifest::writerFloorOf(verified->head->root),
+                                  writerRevision_));
     auto withStore = options;
     if (!withStore.store) withStore.store = store_.get();
     auto report = apply(vaultId_, vaultUid_, keyLookup(), *verified->head, db::query::device::Devices::nodeId(), withStore);

@@ -538,8 +538,10 @@ hazard. Undo: drop the `shared` branch.
 base, applied/skipped/deferred/kept, conflicts decided and open, notes, time) and shown by `storage.vault.get` of an
 opaque_v1 vault (`manifest`: `VaultManifestStatus` with `last_apply`, `ManifestApplyReport`) and `vh vault sync info`
 (a "Manifest" section). A stopped apply (`manifest_key_missing`, `manifest_key_mismatch`, `manifest_head_incomplete`,
-`manifest_mirror_shared`) is recorded with its root and alerts the operator once per root and reason
-(`manifest_apply_stopped`); the next successful apply clears it. No console UI.
+`manifest_mirror_shared`, and since vl-vaultfmt 0.3.0 `manifest_writer_floor`: a head written by a newer Vaulthalla,
+stopped before reconcile, see `design/core/vault-format-library.md` "As built: the writer floor") is recorded with its
+root and alerts the operator once per root and reason (`manifest_apply_stopped`); the next successful apply clears it
+(a `manifest_writer_floor` stop that a refused publish recorded is also cleared by the next successful publish). No console UI.
 
 **Tests.** `ManifestApplyDb.AnotherWritersEnvelopeKidsAreCarriedForTheGrantsThisServerHolds` (carried, stable across
 publishes, no grant or envelope rows; not carried: a recipient without a grant here, a missing object, another
