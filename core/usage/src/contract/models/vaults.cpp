@@ -107,7 +107,9 @@ std::vector<WsModel> vaultModels() {
          str("at").desc("ISO-8601 UTC."),
          str("stopped").nullable().desc("The reason the last apply stopped at its root (the pass stalls; alerted once): "
                                         "manifest_key_missing, manifest_key_mismatch, manifest_head_incomplete, "
-                                        "manifest_mirror_shared; null when it did not stop.")}));
+                                        "manifest_mirror_shared, manifest_writer_floor (the root was written by a "
+                                        "newer Vaulthalla: upgrade this server; a refused publish records it too); "
+                                        "null when it did not stop.")}));
 
     out.push_back(model("AccessibleVault",
         "A vault the caller reaches (ops::vaults::toJson(AccessibleVault), core/src/ops/Vaults.cpp): a summary of the "

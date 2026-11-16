@@ -5348,7 +5348,7 @@
           ]
         },
         {
-          "description": "The reason the last apply stopped at its root (the pass stalls; alerted once): manifest_key_missing, manifest_key_mismatch, manifest_head_incomplete, manifest_mirror_shared; null when it did not stop.",
+          "description": "The reason the last apply stopped at its root (the pass stalls; alerted once): manifest_key_missing, manifest_key_mismatch, manifest_head_incomplete, manifest_mirror_shared, manifest_writer_floor (the root was written by a newer Vaulthalla: upgrade this server; a refused publish records it too); null when it did not stop.",
           "name": "stopped",
           "required": true,
           "types": [
@@ -23711,7 +23711,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "177da2887ae16bdbc7cce6758c07fc977d253ac9805685961327699ecfeafe67",
+  "models_hash": "b4e929c567bc343867dea372f4f0ee83eee42315f834079b4af7dffad0126d02",
   "protocol": {
     "min": 1,
     "version": 1

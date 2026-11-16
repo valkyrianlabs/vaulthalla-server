@@ -26,15 +26,26 @@
 // This namespace is the server's; the Session and the format are vl-vaultfmt's (vl::vaultfmt::manifest, #443).
 namespace vh::sync::vault_manifest {
 
+// This server's writer revision (vl-vaultfmt's writer floor; Applier.hpp, kWriterFloorStop): the manifest members
+// db::query::sync::Manifest::collect round-trips. A root whose writer_floor is above it is neither applied nor published
+// over. It stays at the library's baseline, and this server's roots need no floor (SessionHost::writerFloor 0). Raise it
+// here only in the same change as the migration that stores every member the new revision adds (and collect and the
+// applier carrying them); declaring a revision whose members this database drops is the loss the floor exists to stop.
+inline constexpr uint32_t kWriterRevision = vl::vaultfmt::manifest::kBaselineWriterRevision;
+
 class Service {
 public:
+    // `writerRevision`: kWriterRevision; tests stand in a server of another revision (an upgraded or a downgraded one).
     Service(uint32_t vaultId, const vl::vaultfmt::manifest::Uid& vaultUid, std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> store,
-            std::shared_ptr<vault::EncryptionManager> keys);
+            std::shared_ptr<vault::EncryptionManager> keys, uint32_t writerRevision = kWriterRevision);
 
     // Collects, publishes, records. When the bucket's head is not the recorded root (another writer published, or won
     // a round) the head is applied first (applyRemote) and the publish runs again, at most kPublishRounds times
     // (spec 06 I7), then PublishConflict. Rethrows ChainRejected (after recording and alerting), ApplyStopped,
-    // ApplyIncomplete (an apply skipped a change: nothing is published from a partial state) and the store's errors.
+    // ApplyIncomplete (an apply skipped a change: nothing is published from a partial state), WriterFloorRefused (the
+    // root it would build on needs a newer Vaulthalla: nothing written, recorded and alerted once as
+    // manifest_writer_floor; a stall, never retried here) and the store's errors. A publish that succeeds clears a
+    // recorded manifest_writer_floor stop.
     vl::vaultfmt::manifest::PublishReport publish();
     static constexpr unsigned kPublishRounds = 4;
     // publish() unless the database holds exactly what this service's last publish produced and the bucket's root is
@@ -49,7 +60,8 @@ public:
 
     // A pass's remote step (design/sync/manifest-applier.md, items 4 and 5): entries deferred while their file was
     // open are finished once it closed, then the head is verified and, when it moved, applied (Applier.hpp). nullopt
-    // when nothing was applied; a solo vault's pass costs its one HEAD. Rethrows ChainRejected and ApplyStopped.
+    // when nothing was applied; a solo vault's pass costs its one HEAD. Rethrows ChainRejected and ApplyStopped (a head
+    // above this server's writer revision stops before reconcile: manifest_writer_floor).
     std::optional<ApplyReport> applyRemote(const ApplyOptions& options = {});
 
     // Shared-vault trash this server purged locally (migration 148): each object older than `grace` is deleted from the
@@ -69,12 +81,15 @@ public:
 private:
     template <typename F>
     auto publishRounds(F&& once) -> decltype(once());
+    // A publish met WriterFloorRefused: the root whose floor binds is recorded as the stop and alerted once.
+    void noteFloorRefused(const vl::vaultfmt::manifest::WriterFloorRefused& e);
 
     // Serializes applyRemote (a pass, and a publish on another thread that met HeadMoved). Taken before the
     // session's mutex, never while it is held (the session releases it before HeadMoved reaches publishRounds); held
     // only on sync and publish paths, never in a FUSE callback or ws handler.
     std::mutex applyMutex_;
     uint32_t vaultId_;
+    uint32_t writerRevision_;
     vl::vaultfmt::manifest::Uid vaultUid_;
     std::shared_ptr<vault::EncryptionManager> keys_;
     std::shared_ptr<vl::vaultfmt::manifest::ObjectStore> store_;

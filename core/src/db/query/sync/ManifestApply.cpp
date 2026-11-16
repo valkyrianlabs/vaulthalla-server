@@ -411,6 +411,14 @@ bool ManifestApply::noteStopped(const uint32_t vaultId, const uint64_t epoch, co
     });
 }
 
+void ManifestApply::clearStopped(const uint32_t vaultId, const std::string& reason) {
+    Transactions::exec("ManifestApply::clearStopped", [&](pqxx::work& txn) {
+        txn.exec("UPDATE manifest_apply_report SET stopped_reason = NULL, stopped_root_sha256 = NULL, stopped_at = NULL "
+                 "WHERE vault_id = $1 AND stopped_reason = $2",
+                 pqxx::params{vaultId, reason});
+    });
+}
+
 nlohmann::json ManifestApply::status(const uint32_t vaultId) {
     using namespace manifest_apply_detail;
     return Transactions::exec("ManifestApply::status", [&](pqxx::work& txn) {

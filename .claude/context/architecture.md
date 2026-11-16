@@ -935,13 +935,13 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   VHF1, the object keys and the encrypted manifest below are `valkyrianlabs/vl-vaultfmt` (AGPL-3.0-or-later, shared with
   the Desktop-only engine and the portal's reader; namespaces `vl::vaultfmt::{vhf1,keys,manifest,test_support}`, headers
   `<vl/vaultfmt/...>`, the C API `vl_vaultfmt.h`), linked from the commit pinned in `subprojects/vl-vaultfmt.wrap` (a
-  `git archive` tarball under `subprojects/packagecache/` until 0.1.0 is released). Server code names them fully
+  `git archive` tarball under `subprojects/packagecache/` until a release exists; 0.3.0 at its main `54742cb`). Server code names them fully
   (`vl::vaultfmt::manifest::Content`, or a file-scope `namespace mf = vl::vaultfmt::manifest;` alias as before); the
   server's own Fwd headers include `<vl/vaultfmt/Fwd.hpp>`. Its suites, vectors copy and the VHF1 fuzz target live
   there; here stay the protocol suites through the S3 adapter (`test_manifest.cpp`, `test_manifest_interleavings.cpp`
   on the HTTP fake only), `test_vaultfmt_vectors.cpp` (the library's vectors identical to `design/encryption/vectors/`)
   and `tools/contracts/test_format_library_contract.py` (pinned wrap, no in-tree copy, no old include or namespace).
-  During co-development `subprojects/vl-vaultfmt-0.1.0` may be a local symlink to a checkout, never committed.
+  During co-development `subprojects/vl-vaultfmt-<version>` may be a local symlink to a checkout, never committed.
 - **VHF1 codec** (`vl::vaultfmt::vhf1`, vl-vaultfmt `include/vl/vaultfmt/vhf1/{Format,Writer,Reader}.hpp`; #365, spec
   `design/encryption/02-authenticated-file-format.md`). The library under VHF1 at rest (above) and the manifest v2
   objects below: the 120-byte header (HMAC-SHA-256 tag), per-sealing HKDF-SHA-256 keys from vault key + salt,
@@ -1037,7 +1037,17 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   grants have), the pending root's base copy (`remote_manifest_pending`, `Session::adoptBuiltOn`), the recorded
   root's `writers` (a trash is purged locally only while another writer exists), and the last apply
   (`manifest_apply_report`, `ManifestApply::status`: `storage.vault.get` `manifest`, `vh vault sync info`; a stopped
-  apply alerts once, `manifest_apply_stopped`).
+  apply alerts once, `manifest_apply_stopped`, through `vault_manifest::stopAt`).
+- **The writer floor** (vl-vaultfmt 0.3.0, its `docs/engine.md` "The writer floor"; design
+  `vault-format-library.md` decision 7 and "As built: the writer floor"). A root's `writer_floor` (absent = 0) is the
+  lowest writer revision allowed to take it in or publish over it. This server is `vault_manifest::kWriterRevision` =
+  `kBaselineWriterRevision` (1) and writes no floor (`SessionHost::writerFloor` 0). A head above it stops
+  `Service::applyRemote` before reconcile (`RemoteHead::above_floor`, stop reason `manifest_writer_floor`); a publish
+  over a recorded root above it gets `WriterFloorRefused` before any PUT, which `Service` records and alerts as the
+  same stop (`noteFloorRefused`) and `CloudEngine::publishManifestV2` turns into `SyncStalled`; a successful publish
+  or apply clears it (`ManifestApply::clearStopped`, `saveReport`). Raise `kWriterRevision` only with the migration
+  that stores every member of the new revision. Vectors: `design/encryption/vectors/writer_floor.json` (+ generator),
+  identical to the library's (`test_vaultfmt_vectors.cpp`).
 - **Two writers on one bucket** (design "As built: the mirror drill"; migrations 148, 149). Theirs' key checks are
   recomputed over the producer's vault id (`reconcile(..., SameKey)`). `Session::publishIfChanged` publishes nothing
   when the merged result equals the recorded root up to producer-specific values (`differsFromRecorded`). With another

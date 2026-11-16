@@ -1,0 +1,361 @@
+{
+ "description": "The manifest root's writer floor (vl-vaultfmt docs/engine.md). Roots are sealed under key version 2 of vectors.json's conventions (vault key 2 = bytes 0x20..0x3f), object uid = the vectors' vault uid; `segment` is the one segment each root pins.",
+ "generated_by": "vectors/writer_floor_vectors.py",
+ "vault_uid_hex": "5648f1a2b3c4d5e6f708192a3b4c5d6e",
+ "segment": {
+  "object_key": ".vaulthalla/seg/jffa5rtsg9k7833t1pq72k8qw4",
+  "object_hex": "895648460d0a1a0a000100780001100200000002000000005648f1a2b3c4d5e6f708192a3b4c5d6e93dea2e3598266740c7a0dae714d17e12f52f2c05b50e981954f6ce625316930d3aa7dd1746bf490cd824618651993a47919442c6592dea711fd2e3ceac2be6b3510dd0b78e977374f79b4c7a18b90635f7adb7176c212d8af76e445d4219fb1d1935db8f07843efd6ef9705ed04522d948577d2802e3c7068036110485da9ac7c433302240513b50c0e1c7e87c829f8558db36cee0ee4ec36dc77a0911a5757005f395a3bf43f0a0f0e1d3858724d6e84ffb2c1856b15056471c03c036ef005831aacfe52a878fb5d2a57eaac614ad124dcfb2739a09436be3306a459bf396ffda97cf2198fad8cacfb6b8fb3dd34933dd436eb7dd01b4dd27194b08543619ca2f8f7645fd4715f0166cc849fb1e66e93530f98137be5163386ce6998fd8e2205afcbb31fcdce8d711edf9a3fd0ac6e96641e0de366f29857c1f4c092a99a0eaf"
+ },
+ "roots": [
+  {
+   "name": "no_floor",
+   "key_version": 2,
+   "plaintext_utf8": "{\"epoch\":1,\"keys\":[{\"attestation\":null,\"created_at\":\"2026-11-15T12:00:00Z\",\"key_check\":null,\"retired_at\":null,\"version\":2}],\"layout\":\"OpaqueV1\",\"prev\":null,\"producer\":{\"node_id\":\"desktop-writer-floor\",\"software\":\"vl-vaultfmt vectors\"},\"publish\":\"version_log\",\"published_at\":\"2026-11-15T12:00:00Z\",\"segments\":[{\"count\":1,\"object_sha256\":\"62121aae233d70c6cd1bb6fd0f1334335c401bbfb633121e956dc4565010dce8\",\"range\":[\"00\",\"ff\"],\"sid\":\"jffa5rtsg9k7833t1pq72k8qw4\",\"size\":361}],\"snapshots\":[],\"stats\":{\"bytes\":0,\"dirs\":1,\"files\":0},\"type\":\"vh.manifest.root\",\"v\":1,\"vault_uid\":\"as4f38nkrkaydxr834n3pk2xdr\",\"writers\":[\"desktop-writer-floor\"]}",
+   "object_hex": "895648460d0a1a0a000100780001100300000002000000005648f1a2b3c4d5e6f708192a3b4c5d6e5648f1a2b3c4d5e6f708192a3b4c5d6efd5645c70dcba6a6656c34bdfb2fd5f7446d6ca918b897384fb33b90feb86758e251d10540dc21790b450ef835e3e06420d5cdd66a9c6f6545bada7d1c573fdd18812a526131f08dbcf626011c12bf015e9622a1f4c090b15bc824ba39a2837850c6423020603def1aaf7e001cf7dcdc5ea58897beff650ba7ee8e16400a7f089bbe71ceb64d6e00a0042d6f10bc1c4fd3d904ba4317e2c99040264070972527847e104261346ef88a932df0e08c56969565863e0e6edef74c2c13b293e79549222f203a9b1359e40fbbab89e8c8f4c0a9167cf2dd89f90354e2dc47965e949b92ac2b6702599d222cfaa7bfdcd1131ebd2adcf3074fac416720e1b23c6e7d8387a890b591618423f86dbd75a7b3d81356f7ebeab57c3ec5874e3bbabe541886df43bae2e7f4de037675414b684da2f4f46e975e0deeaa4ad0ac0556c6a991d6d09faa424924431dc5849c28b31c014d374c1da79ce262da6e4f7bd0bd56b5cd3a65eb9d1772fa40f53458f5abc821e570ca2744fd43db8db18107985af840dc03b9298f553f052ede5129827b5a45e15336a75c8513ddf8eef18a09a319909fd28135224cf1db34cabc6ad482fecc9a9ade1a798109b0cc3f2c009ef66194f6418e61c3c366497b89ccfef9986d36c17a91f8f64bbf88190a7f4a1020338b3e01439f3250971e7f4932afc6b32ca179040e647b94724d554724cd62ace188a8853206c4216e34ba6b6a51077ed128e1c832bac4d160e635e3b805dafb505a64af7b9eae82700bdb3aea2d47fdcffe170de37ebdea0cff66fc6ccc20ef1b54be2d14ed3bee991a549cc71d013aa8b093be415bc5325c04076f305fe1f5210190740cd0c448fc8ca6055fb35371925b4e0c2111107893184036daf74df20d84b9b934ec753ca92c760a2ba8e98b53d852a9307f64713179773ef8b6a29122c4ad2e1c7dc2e9e549188af59e379db69973faea2434f88d08e4925d62a59dd523647ea43ce6198d6cd0e0",
+   "object_sha256": "c16876b9a431d3589273cad48e17b8d6a9e6597b60df2185254543857dad76c1",
+   "writer_floor": 0
+  },
+  {
+   "name": "floor_1",
+   "key_version": 2,
+   "plaintext_utf8": "{\"epoch\":1,\"keys\":[{\"attestation\":null,\"created_at\":\"2026-11-15T12:00:00Z\",\"key_check\":null,\"retired_at\":null,\"version\":2}],\"layout\":\"OpaqueV1\",\"prev\":null,\"producer\":{\"node_id\":\"desktop-writer-floor\",\"software\":\"vl-vaultfmt vectors\"},\"publish\":\"version_log\",\"published_at\":\"2026-11-15T12:00:00Z\",\"segments\":[{\"count\":1,\"object_sha256\":\"62121aae233d70c6cd1bb6fd0f1334335c401bbfb633121e956dc4565010dce8\",\"range\":[\"00\",\"ff\"],\"sid\":\"jffa5rtsg9k7833t1pq72k8qw4\",\"size\":361}],\"snapshots\":[],\"stats\":{\"bytes\":0,\"dirs\":1,\"files\":0},\"type\":\"vh.manifest.root\",\"v\":1,\"vault_uid\":\"as4f38nkrkaydxr834n3pk2xdr\",\"writer_floor\":1,\"writers\":[\"desktop-writer-floor\"]}",
+   "object_hex": "895648460d0a1a0a000100780001100300000002000000005648f1a2b3c4d5e6f708192a3b4c5d6e5648f1a2b3c4d5e6f708192a3b4c5d6e7419c8f870fb899a967c98180a3d629f5a000509ead14c593fc7701dcb7cfac471029a499ec5dd62ddfe0aaf8baf7b62b091d8a759e45923766bf4a5cfd43f15a1b01c8f83e3ac0456d858972e37a8ffa6a631205e4345c6a4270ed170663d747b7f2f3b4d4534961e0c2c01999df33f3ef86770b4f7c9db1d3ad609e5a7fb5a954be3b4bbb1f536eb46a65a234218730e8b28b82f3fdc7de9a2907822c2b151f8826ade902a1b4ae6a8efa26ce1f4b6a7db48fc29a33c458384dc39ba35c33ebb186e22ac88129ba18df361d5ce723879b52404c3270ebea0d34d633969b86a0ed9c8e151ecd79d6a4d7076f3ede963a862c11a4c4f4a394bb26cf20dedc65b1cf4ed7feaf27cc37ef3bed41817991a23285f78d3527c7e4db094addd46ae536114529eaf5933cd32606024d772b7f2ecc86f90d8dfbe5e85e8cf422e0f72c2538bbfb7cc7cb4633938f69fa000d6598ed665212d42c08231a06cf23c77856a52c366d2cd0e240bd1111401acb930ee3d14f3380e128b5486c4dfacf63e0c5b26b0e3db6453a55e22383a792017b71cb7e083d63f35c8851af5d82ba9421db2b1712d6dad22a04eb688dd9b9cdcf770f507518faf1ca7320455c669143a02d8489f95f2f1b25c9b79164cae802f6db24420da2fc2cf52269ab923c0680c121f6617a82e053693ad1d307b29ee243a809a2017878ffe47a30b9bbbe8d86f66ac0d84177e59f07a6f2093a9ca96c7bf93aed7e46637afee11861adffeb7cea7927dc1876b4d5340c3ac0d06b849a5e44a58535f20253fcbbb72890251ad949543245025405c0d54be9ed34c4f09fb99fffba9a9688388a554291257ecb8812cde87e84ac59c5b731f4a14f3c0217bb081f82b66063e1f11231f5f14093f78854dcfce919b0dde285d9db8525710760803522af977c027c384863a10707683efa336b9f6c5aa01cfed7d830616e27015c45c021fb3d947e8dd87b68f6f9e833ddca27894f6c6b9b3775b392f866b41a4a05777ed54969c32f999b3",
+   "object_sha256": "1b8e5e5560555d8a7dafb1b4b44a174944bbb82a3d6edeccdf699fdad1f8aa1e",
+   "writer_floor": 1
+  },
+  {
+   "name": "floor_2",
+   "key_version": 2,
+   "plaintext_utf8": "{\"epoch\":1,\"keys\":[{\"attestation\":null,\"created_at\":\"2026-11-15T12:00:00Z\",\"key_check\":null,\"retired_at\":null,\"version\":2}],\"layout\":\"OpaqueV1\",\"prev\":null,\"producer\":{\"node_id\":\"desktop-writer-floor\",\"software\":\"vl-vaultfmt vectors\"},\"publish\":\"version_log\",\"published_at\":\"2026-11-15T12:00:00Z\",\"segments\":[{\"count\":1,\"object_sha256\":\"62121aae233d70c6cd1bb6fd0f1334335c401bbfb633121e956dc4565010dce8\",\"range\":[\"00\",\"ff\"],\"sid\":\"jffa5rtsg9k7833t1pq72k8qw4\",\"size\":361}],\"snapshots\":[],\"stats\":{\"bytes\":0,\"dirs\":1,\"files\":0},\"type\":\"vh.manifest.root\",\"v\":1,\"vault_uid\":\"as4f38nkrkaydxr834n3pk2xdr\",\"writer_floor\":2,\"writers\":[\"desktop-writer-floor\"]}",
+   "object_hex": "895648460d0a1a0a000100780001100300000002000000005648f1a2b3c4d5e6f708192a3b4c5d6e5648f1a2b3c4d5e6f708192a3b4c5d6ee4aa9fb85c8e8e2a62c3b06bc69f60833256c49be2ddd2119000f3071391683b7d231afa367ab298241ffba4792fb1aff321c8e02fefc7f3199a3f6b4a73da156c8aa756edf867c8e8a468cf30842478d6f88ad7bc483203e53160e8db1a45e8c4118ee9fc5007699a8ce7f4f9a048a1dfb3f4bf397fce81462ab30be3c45ae995d7689eb0a7069faad1deb137c944de5bb699c39f64c447da2a3851e49a970aa91b88ab3d59488060f9580099e4a0ca43cac389567ed47b181aa9162cd91b5d16cdc22722d4a504eeb416338257e9cefba5251eaeb59a402ffe559794b6178af336d69207168437aa309e0b1927e538e7511e6414bad162bd725386cc1810bc9cc6198d43afe81a0742f77430a683dcc12f6f4060dcb2b141d2cb2169fd6f974d0c329fe119399faa7fcf93b1d80b2c6598ba50e09dce388d3ebec84d7ac4523dfb94ca7dabc56b599ba9570d3576b6a6a65330de1442059d0a55b43cd97cc640b25ff9b91387afeb05359a9dc5e3ae3917e21bf9c8a46c9428787473dd260576595a9d01d0220dd8c78585b0cf376a4412a86adb6c29e35b046a009213bfb7eba55bdf7ceb4b4bc3ff94374c1bd97a0d0b49dad9bb89e4d4254f7c13e18a2b34a8befc6cbbb59944d84cc973c62cde5a032b5a618481ff29cccf0e0d244bb9eaaee36fb1e09a3008e85596e20cbbe92de18bfbf866a528eb95c78d69b07687fde41a8fa2134129bf976b2fc460323e1fbaeb88ecc6fd22a4cc10ea65b364406f69729a6cc1a1a0cebbbbec4d1dcf2a4b419cfc0f4f011954fbfe1c2919220b9252dc6dcc152e60323ed976ac4eedda8327b0edcc72bf3ee3f7e50e8803521042b2c585629c836eb85cc3d32aca59c37d62288ad619a3cdb270b7783a66945192dd5b732b790a2fdf1ed0e54ca63a0486375cec3dfbbe92dbdc338a058c2a7392e7f76401b3d70f99759c95c6cbc18ec821596eb9051da2cea4e2a1bb908e84c4bcbe1c0d36a19b6e0b81b4bccc485c8f09d7225474129df688",
+   "object_sha256": "6f8dd4cda342c7745c96bb96ae4da1e9064e763464d13bc828c6c2509bd2b07f",
+   "writer_floor": 2
+  }
+ ],
+ "decisions": [
+  {
+   "base_floor": 0,
+   "recorded_floor": 0,
+   "revision": 1,
+   "needs": 0,
+   "expect": {
+    "writer_floor": null
+   }
+  },
+  {
+   "base_floor": 0,
+   "recorded_floor": 0,
+   "revision": 1,
+   "needs": 1,
+   "expect": {
+    "writer_floor": 1
+   }
+  },
+  {
+   "base_floor": 0,
+   "recorded_floor": 0,
+   "revision": 1,
+   "needs": 2,
+   "expect": {
+    "error": "invalid_argument"
+   }
+  },
+  {
+   "base_floor": 0,
+   "recorded_floor": 0,
+   "revision": 2,
+   "needs": 0,
+   "expect": {
+    "writer_floor": null
+   }
+  },
+  {
+   "base_floor": 0,
+   "recorded_floor": 0,
+   "revision": 2,
+   "needs": 1,
+   "expect": {
+    "writer_floor": 1
+   }
+  },
+  {
+   "base_floor": 0,
+   "recorded_floor": 0,
+   "revision": 2,
+   "needs": 2,
+   "expect": {
+    "writer_floor": 2
+   }
+  },
+  {
+   "base_floor": 0,
+   "recorded_floor": 2,
+   "revision": 1,
+   "needs": 0,
+   "expect": {
+    "error": "writer_floor"
+   }
+  },
+  {
+   "base_floor": 0,
+   "recorded_floor": 2,
+   "revision": 1,
+   "needs": 1,
+   "expect": {
+    "error": "writer_floor"
+   }
+  },
+  {
+   "base_floor": 0,
+   "recorded_floor": 2,
+   "revision": 1,
+   "needs": 2,
+   "expect": {
+    "error": "invalid_argument"
+   }
+  },
+  {
+   "base_floor": 0,
+   "recorded_floor": 2,
+   "revision": 2,
+   "needs": 0,
+   "expect": {
+    "writer_floor": 2
+   }
+  },
+  {
+   "base_floor": 0,
+   "recorded_floor": 2,
+   "revision": 2,
+   "needs": 1,
+   "expect": {
+    "writer_floor": 2
+   }
+  },
+  {
+   "base_floor": 0,
+   "recorded_floor": 2,
+   "revision": 2,
+   "needs": 2,
+   "expect": {
+    "writer_floor": 2
+   }
+  },
+  {
+   "base_floor": 1,
+   "recorded_floor": 0,
+   "revision": 1,
+   "needs": 0,
+   "expect": {
+    "writer_floor": 1
+   }
+  },
+  {
+   "base_floor": 1,
+   "recorded_floor": 0,
+   "revision": 1,
+   "needs": 1,
+   "expect": {
+    "writer_floor": 1
+   }
+  },
+  {
+   "base_floor": 1,
+   "recorded_floor": 0,
+   "revision": 1,
+   "needs": 2,
+   "expect": {
+    "error": "invalid_argument"
+   }
+  },
+  {
+   "base_floor": 1,
+   "recorded_floor": 0,
+   "revision": 2,
+   "needs": 0,
+   "expect": {
+    "writer_floor": 1
+   }
+  },
+  {
+   "base_floor": 1,
+   "recorded_floor": 0,
+   "revision": 2,
+   "needs": 1,
+   "expect": {
+    "writer_floor": 1
+   }
+  },
+  {
+   "base_floor": 1,
+   "recorded_floor": 0,
+   "revision": 2,
+   "needs": 2,
+   "expect": {
+    "writer_floor": 2
+   }
+  },
+  {
+   "base_floor": 1,
+   "recorded_floor": 2,
+   "revision": 1,
+   "needs": 0,
+   "expect": {
+    "error": "writer_floor"
+   }
+  },
+  {
+   "base_floor": 1,
+   "recorded_floor": 2,
+   "revision": 1,
+   "needs": 1,
+   "expect": {
+    "error": "writer_floor"
+   }
+  },
+  {
+   "base_floor": 1,
+   "recorded_floor": 2,
+   "revision": 1,
+   "needs": 2,
+   "expect": {
+    "error": "invalid_argument"
+   }
+  },
+  {
+   "base_floor": 1,
+   "recorded_floor": 2,
+   "revision": 2,
+   "needs": 0,
+   "expect": {
+    "writer_floor": 2
+   }
+  },
+  {
+   "base_floor": 1,
+   "recorded_floor": 2,
+   "revision": 2,
+   "needs": 1,
+   "expect": {
+    "writer_floor": 2
+   }
+  },
+  {
+   "base_floor": 1,
+   "recorded_floor": 2,
+   "revision": 2,
+   "needs": 2,
+   "expect": {
+    "writer_floor": 2
+   }
+  },
+  {
+   "base_floor": 2,
+   "recorded_floor": 0,
+   "revision": 1,
+   "needs": 0,
+   "expect": {
+    "error": "writer_floor"
+   }
+  },
+  {
+   "base_floor": 2,
+   "recorded_floor": 0,
+   "revision": 1,
+   "needs": 1,
+   "expect": {
+    "error": "writer_floor"
+   }
+  },
+  {
+   "base_floor": 2,
+   "recorded_floor": 0,
+   "revision": 1,
+   "needs": 2,
+   "expect": {
+    "error": "invalid_argument"
+   }
+  },
+  {
+   "base_floor": 2,
+   "recorded_floor": 0,
+   "revision": 2,
+   "needs": 0,
+   "expect": {
+    "writer_floor": 2
+   }
+  },
+  {
+   "base_floor": 2,
+   "recorded_floor": 0,
+   "revision": 2,
+   "needs": 1,
+   "expect": {
+    "writer_floor": 2
+   }
+  },
+  {
+   "base_floor": 2,
+   "recorded_floor": 0,
+   "revision": 2,
+   "needs": 2,
+   "expect": {
+    "writer_floor": 2
+   }
+  },
+  {
+   "base_floor": 2,
+   "recorded_floor": 2,
+   "revision": 1,
+   "needs": 0,
+   "expect": {
+    "error": "writer_floor"
+   }
+  },
+  {
+   "base_floor": 2,
+   "recorded_floor": 2,
+   "revision": 1,
+   "needs": 1,
+   "expect": {
+    "error": "writer_floor"
+   }
+  },
+  {
+   "base_floor": 2,
+   "recorded_floor": 2,
+   "revision": 1,
+   "needs": 2,
+   "expect": {
+    "error": "invalid_argument"
+   }
+  },
+  {
+   "base_floor": 2,
+   "recorded_floor": 2,
+   "revision": 2,
+   "needs": 0,
+   "expect": {
+    "writer_floor": 2
+   }
+  },
+  {
+   "base_floor": 2,
+   "recorded_floor": 2,
+   "revision": 2,
+   "needs": 1,
+   "expect": {
+    "writer_floor": 2
+   }
+  },
+  {
+   "base_floor": 2,
+   "recorded_floor": 2,
+   "revision": 2,
+   "needs": 2,
+   "expect": {
+    "writer_floor": 2
+   }
+  }
+ ]
+}

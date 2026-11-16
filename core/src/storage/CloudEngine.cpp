@@ -551,6 +551,9 @@ void CloudEngine::publishManifestV2(const bool onlyIfChanged) const {
         throw SyncStalled(bucket_capability::noteChanged(vault->id, e.what()));
     } catch (const vl::vaultfmt::manifest::ApplyIncomplete& e) {
         throw SyncStalled(e.what());
+    } catch (const vl::vaultfmt::manifest::WriterFloorRefused& e) {
+        // Nothing was written; recorded and alerted once by the service. The vault waits for this server's upgrade.
+        throw SyncStalled(std::string(vh::sync::vault_manifest::kWriterFloorStop) + ": " + e.what());
     } catch (const vh::sync::vault_manifest::ApplyStopped& e) {
         throw SyncStalled(std::string("manifest_apply_stopped: ") + e.what());
     }

@@ -59,7 +59,7 @@ class FormatLibraryContract(unittest.TestCase):
         self.assertEqual(hashlib.sha256(tarball.read_bytes()).hexdigest(), digest.group(1))
         self.assertIn("vl-vaultfmt = vl_vaultfmt_dep", wrap)
         meson = read("core/meson.build")
-        self.assertIn("dependency('vl-vaultfmt', version: '>=0.1.0', fallback: ['vl-vaultfmt', 'vl_vaultfmt_dep'])", meson)
+        self.assertIn("dependency('vl-vaultfmt', version: '>=0.3.0', fallback: ['vl-vaultfmt', 'vl_vaultfmt_dep'])", meson)
         self.assertIn("VH_TEST_VAULTFMT_VECTORS_DIR", meson)
         self.assertIn("subprojects/vl-vaultfmt.wrap", read("debian/copyright"))
         # The library's copy of the vectors is checked identical to ours, as vl-keykit's is.

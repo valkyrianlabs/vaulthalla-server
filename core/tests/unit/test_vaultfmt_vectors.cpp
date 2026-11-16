@@ -6,11 +6,13 @@
 #include "../helpers/bytes.hpp"
 
 #include <vl/vaultfmt/manifest/Objects.hpp>
+#include <vl/vaultfmt/manifest/Publisher.hpp>
 #include <vl/vaultfmt/vhf1/Reader.hpp>
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <nlohmann/json.hpp>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -20,7 +22,7 @@ namespace vh::test_vaultfmt_vectors {
 TEST(VaultfmtVectors, TheLibrarysCopyIsThisRepositorysVectors) {
     const std::filesystem::path ours(VH_TEST_VECTORS_DIR), theirs(VH_TEST_VAULTFMT_VECTORS_DIR);
     if (theirs.empty()) GTEST_SKIP() << "vl-vaultfmt is a system library here, not the pinned subproject";
-    for (const auto* name : {"vectors.json", "vh_crypto_vectors.py"}) {
+    for (const auto* name : {"vectors.json", "vh_crypto_vectors.py", "writer_floor.json", "writer_floor_vectors.py"}) {
         SCOPED_TRACE(name);
         EXPECT_EQ(vh::test::bin::slurpText(ours / name), vh::test::bin::slurpText(theirs / name));
     }
@@ -58,6 +60,50 @@ TEST(VaultfmtVectors, TheLinkedLibraryReproducesThem) {
         const auto root = vl::vaultfmt::manifest::openRoot(vh::test::bin::fromHex(o.at("object_hex").get<std::string>()),
                                                            vault, keyOf);
         EXPECT_EQ(root.epoch, 1u);
+    }
+}
+
+// The writer floor's vectors (vl-vaultfmt's writer_floor.json, copied here beside vectors.json): every root's floor as
+// the linked library reads it, whether this server's writer revision may publish over it, and the decision table.
+TEST(VaultfmtVectors, TheWriterFloorVectorsAreTheLinkedLibrarysRules) {
+    namespace vhf1 = vl::vaultfmt::vhf1;
+    namespace mf = vl::vaultfmt::manifest;
+    const auto doc = nlohmann::json::parse(
+        vh::test::bin::slurpText(std::filesystem::path(VH_TEST_VECTORS_DIR) / "writer_floor.json"));
+    const auto& keys = vh::test::bin::goldenVectors().at("conventions").at("keys");
+    const auto keyOf = [&](const uint32_t v) -> vhf1::KeyPtr {
+        if (!keys.contains(std::to_string(v))) return nullptr;
+        return std::make_shared<const vhf1::Key>(vh::test::bin::fromHex(keys.at(std::to_string(v)).get<std::string>()));
+    };
+    vhf1::Uid vault{};
+    const auto vb = vh::test::bin::fromHex(doc.at("vault_uid_hex").get<std::string>());
+    std::copy(vb.begin(), vb.end(), vault.begin());
+    ASSERT_EQ(doc.at("roots").size(), 3u);
+    for (const auto& r : doc.at("roots")) {
+        SCOPED_TRACE(r.at("name").get<std::string>());
+        const auto root = mf::openRoot(vh::test::bin::fromHex(r.at("object_hex").get<std::string>()), vault, keyOf);
+        const auto floor = r.at("writer_floor").get<uint32_t>();
+        EXPECT_EQ(mf::writerFloorOf(root), floor);
+        EXPECT_EQ(root.writer_floor.has_value(), floor != 0) << "absent means 0, and 0 is never written";
+        if (floor > mf::kBaselineWriterRevision) EXPECT_THROW(mf::checkWriterFloor(root, mf::kBaselineWriterRevision),
+                                                              mf::WriterFloorRefused);
+        else EXPECT_NO_THROW(mf::checkWriterFloor(root, mf::kBaselineWriterRevision));
+    }
+    ASSERT_FALSE(doc.at("decisions").empty());
+    for (const auto& d : doc.at("decisions")) {
+        SCOPED_TRACE(d.dump());
+        const auto base = std::max(d.at("base_floor").get<uint32_t>(), d.at("recorded_floor").get<uint32_t>());
+        const auto revision = d.at("revision").get<uint32_t>(), needs = d.at("needs").get<uint32_t>();
+        const auto& expect = d.at("expect");
+        if (expect.contains("error")) {
+            const auto error = expect.at("error").get<std::string>();
+            if (error == "invalid_argument") EXPECT_THROW((void)mf::nextWriterFloor(base, revision, needs), std::invalid_argument);
+            else EXPECT_THROW((void)mf::nextWriterFloor(base, revision, needs), mf::WriterFloorRefused) << error;
+        } else {
+            const auto got = mf::nextWriterFloor(base, revision, needs);
+            if (expect.at("writer_floor").is_null()) EXPECT_EQ(got, 0u);
+            else EXPECT_EQ(got, expect.at("writer_floor").get<uint32_t>());
+        }
     }
 }
 

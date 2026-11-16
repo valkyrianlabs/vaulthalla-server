@@ -375,22 +375,7 @@ void carryEnvelopes(const Ctx& c, const mf::Uid& vaultUid, const mf::Loaded& hea
 
 // The apply stops at this root (the pass stalls); the operator is alerted once per root and reason.
 [[noreturn]] void stop(const uint32_t vaultId, const mf::Loaded& head, const std::string& reason, const std::string& why) {
-    if (Q::noteStopped(vaultId, head.acceptance.epoch, head.acceptance.root_sha256, head.root.producer.node_id, reason)) {
-        notifications::OperatorNotification n;
-        n.eventKey = "manifest_apply_stopped";
-        n.eventType = "sync";
-        n.severity = "warning";
-        n.recipientGroup = "security";
-        n.fingerprint = fmt::format("manifest-apply:{}:{}:{}", vaultId, reason, head.acceptance.root_sha256);
-        n.rendered.subject = fmt::format("[Vaulthalla] Vault {} can't take in a manifest root ({})", vaultId, reason);
-        n.rendered.text = why + "\n\nThe vault's sync is stalled; nothing was changed.\n";
-        n.rendered.html = "<p>" + why + "</p><p>The vault's sync is stalled; nothing was changed.</p>";
-        n.tags = {{"event_type", "sync"}, {"severity", "warning"}, {"vault_id", std::to_string(vaultId)},
-                  {"reason", reason}};
-        if (!notifications::OperatorNotificationBus::instance().enqueue(std::move(n)))
-            log::Registry::sync()->warn("[ManifestApply] Dropped the stopped-apply alert for vault {}", vaultId);
-    }
-    throw ApplyStopped(why);
+    stopAt(vaultId, head.acceptance.epoch, head.acceptance.root_sha256, head.root.producer.node_id, reason, why);
 }
 
 Ctx contextFor(const uint32_t vaultId, const ApplyOptions& options, ApplyReport& report) {
@@ -406,6 +391,38 @@ Ctx contextFor(const uint32_t vaultId, const ApplyOptions& options, ApplyReport&
     return c;
 }
 
+}
+
+void stopAt(const uint32_t vaultId, const uint64_t epoch, const std::string& rootSha256, const std::string& producer,
+            const std::string& reason, const std::string& why) {
+    if (applier_detail::Q::noteStopped(vaultId, epoch, rootSha256, producer, reason)) {
+        notifications::OperatorNotification n;
+        n.eventKey = "manifest_apply_stopped";
+        n.eventType = "sync";
+        n.severity = "warning";
+        n.recipientGroup = "security";
+        n.fingerprint = fmt::format("manifest-apply:{}:{}:{}", vaultId, reason, rootSha256);
+        n.rendered.subject = reason == kWriterFloorStop
+                                 ? fmt::format("[Vaulthalla] Vault {} was written by a newer Vaulthalla: upgrade this "
+                                               "server ({})",
+                                               vaultId, reason)
+                                 : fmt::format("[Vaulthalla] Vault {} can't take in a manifest root ({})", vaultId, reason);
+        n.rendered.text = why + "\n\nThe vault's sync is stalled; nothing was changed.\n";
+        n.rendered.html = "<p>" + why + "</p><p>The vault's sync is stalled; nothing was changed.</p>";
+        n.tags = {{"event_type", "sync"}, {"severity", "warning"}, {"vault_id", std::to_string(vaultId)},
+                  {"reason", reason}};
+        if (!notifications::OperatorNotificationBus::instance().enqueue(std::move(n)))
+            log::Registry::sync()->warn("[ManifestApply] Dropped the stopped-apply alert for vault {}", vaultId);
+    }
+    throw ApplyStopped(why);
+}
+
+std::string writerFloorMessage(const uint64_t epoch, const uint32_t floor, const uint32_t revision) {
+    return fmt::format("This vault was written by a newer version of Vaulthalla: its manifest root of epoch {} requires "
+                       "writer revision {}, and this server is revision {}. Upgrade the vaulthalla package on this "
+                       "server. Until then it neither takes in nor publishes over that root, so it can't drop what the "
+                       "newer version wrote; nothing was changed, and local changes stay unpublished until the upgrade",
+                       epoch, floor, revision);
 }
 
 std::size_t finishDeferred(const uint32_t vaultId, const ApplyOptions& options) {
