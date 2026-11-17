@@ -27,7 +27,9 @@
 //   signature  fbda258fa125ef4237a54b7cde732c073ba598fa4a1a782226aa82514ee5c36a
 //              3ad452e6d36593337dc1619e61391c6ae20685155b11cc2b6deaf637e893840c
 // Pinned by VaultKeyAttestation.MatchesTheDocumentedVector (test_vault_keys.cpp); also in
-// docs/vaults/secrets-and-key-export.md and .claude/context/key-backup.md.
+// docs/vaults/secrets-and-key-export.md and .claude/context/key-backup.md. The message, the public key, signing and
+// checking an attestation are vl-keykit's (attestation.hpp, spec 03 §6.5), the code Vaulthalla Desktop signs with
+// for the versions a Mac creates; signWithSeed and verifySignature remain for this node's other messages.
 namespace vh::vault::attestation {
 
 inline constexpr std::string_view kDomain = "vh-key-attest-v1";

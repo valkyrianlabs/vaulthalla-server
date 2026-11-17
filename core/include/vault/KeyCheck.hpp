@@ -13,7 +13,8 @@
 // vault_id is the vault's numeric id as ASCII decimal without sign or leading zeros ("42"); the version is the last 4
 // bytes, so the message is unambiguous. Test vector (key = bytes 0x00..0x1f): vault 42, version 3 →
 // 72e4c8b7f8ab43b8ed8869a57cef1703; vault 1, version 1 → c7a67cdafd3140b29e19b0b5e543cb13. Documented in
-// docs/vaults/secrets-and-key-export.md and .claude/context/key-backup.md; Desktop computes the same value.
+// docs/vaults/secrets-and-key-export.md and .claude/context/key-backup.md. Implemented by vl-keykit (attestation.hpp,
+// spec 03 §6.5), which Desktop links too: one implementation, vectors in design/encryption/vectors/key_provenance.json.
 namespace vh::vault {
 
 inline constexpr std::string_view kKeyCheckDomain = "vh-key-check-v1";

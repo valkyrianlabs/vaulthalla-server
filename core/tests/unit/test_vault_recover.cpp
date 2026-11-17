@@ -32,6 +32,8 @@
 #include "fs/model/File.hpp"
 #include "db/query/cloud/Link.hpp"
 #include "ops/CloudRestore.hpp"
+
+#include <vl/keykit/attestation.hpp>
 #include "ops/Error.hpp"
 #include "ops/RecoveryRecipients.hpp"
 #include "ops/VaultKeys.hpp"
@@ -134,6 +136,43 @@ TEST_F(VaultRecoverTrustAnchor, VerifiedWhenTheOriginalNodesAttestationVerifiesU
     auto exportPins = kitPins({});
     exportPins.keys.push_back({a.key_id, a.pk, "export"});
     EXPECT_TRUE(prove({evidenceBy(a, a.id, kVault, kVersion, *key, "export")}, exportPins).canonical());
+}
+
+// Spec 03 §6.5: a Mac signs the versions it creates as a server does, with vl-keykit (the code Desktop links): its
+// installation id as the node id, the vault id derived from the uid. The restore proves it by the same rule, and
+// nothing about a Mac origin is weaker: a missing, flipped or misdirected attestation is still not proof.
+TEST_F(VaultRecoverTrustAnchor, AMacOriginIsProvenExactlyAsAServerOriginIs) {
+    namespace pv = vl::keykit::provenance;
+    const std::string mac = "90y0p85pezmbhweprb138hvynr";  // an installation id: 26 base32 symbols, never a UUID
+    vl::keykit::Uid uid{};
+    uid[0] = 0x56, uid[1] = 0x48, uid[2] = 0xf1, uid[3] = 0xa2;
+    const uint64_t macVault = pv::macOriginVaultId(uid);
+    ASSERT_EQ(macVault, 1447621027u);  // key_provenance.json's Mac vector
+    const Bytes seed(32, 0x4d);
+    const auto pk = pv::attestationPublicKey(seed);
+    const auto check = pv::keyCheck(key->bytes(), macVault, kVersion);
+    ASSERT_EQ(check, vault::keyCheck(key->bytes(), static_cast<unsigned>(macVault), kVersion));
+    const auto sig = pv::attest(seed, mac, macVault, kVersion, check);
+    const auto evidence = [&](Bytes signature, const uint64_t vaultId = 0) {
+        return rec::Evidence{"export", mac, vaultId ? vaultId : macVault, check,
+                             vault::attestation::Attestation{.key_id = 1, .signature = std::move(signature)}};
+    };
+    auto pins = kitPins({});
+    pins.keys.push_back({1, Bytes(pk.begin(), pk.end()), "export"});
+
+    const auto p = prove({evidence(Bytes(sig.begin(), sig.end()))}, pins);
+    EXPECT_EQ(p.verdict, rec::Anchor::Verified) << p.detail;
+    EXPECT_TRUE(p.canonical());
+
+    Bytes flipped(sig.begin(), sig.end());
+    flipped[0] ^= 1;
+    EXPECT_EQ(prove({evidence(flipped)}, pins).verdict, rec::Anchor::Unverified);
+    EXPECT_EQ(prove({rec::Evidence{"export", mac, macVault, check, std::nullopt}}, pins).verdict, rec::Anchor::Unattested);
+    // Signed over another vault id (the Mac's other vault): the key check binds the claimed one, so it doesn't verify.
+    const auto other = pv::attest(seed, mac, macVault + 1, kVersion, pv::keyCheck(key->bytes(), macVault + 1, kVersion));
+    EXPECT_FALSE(prove({evidence(Bytes(other.begin(), other.end()))}, pins).canonical());
+    // Unpinned: no customer material names the Mac's key.
+    EXPECT_EQ(prove({evidence(Bytes(sig.begin(), sig.end()))}, rec::Pins{}).verdict, rec::Anchor::NoAnchor);
 }
 
 TEST_F(VaultRecoverTrustAnchor, MissingAnchorIsSalvageOnly) {

@@ -9,6 +9,7 @@
 #include "vault/model/Key.hpp"
 
 #include <paths.h>
+#include <vl/keykit/attestation.hpp>
 #include <sodium.h>
 
 #include <algorithm>
@@ -19,17 +20,6 @@
 namespace vh::vault::attestation {
 
 namespace {
-
-std::vector<uint8_t> keyCheckBytes(const std::string& hex) {
-    std::vector<uint8_t> out(16);
-    std::size_t len = 0;
-    if (hex.size() != 32 ||
-        sodium_hex2bin(out.data(), out.size(), hex.data(), hex.size(), nullptr, &len, nullptr) != 0 || len != 16)
-        throw std::invalid_argument("a key check is 32 hex digits");
-    for (const char c : hex)
-        if (c >= 'A' && c <= 'F') throw std::invalid_argument("a key check is lowercase hex");
-    return out;
-}
 
 // This node's signing seed, unsealed once per state directory (tests switch it) and kept in locked memory that is
 // wiped when the last signer releases it (#350).
@@ -86,25 +76,16 @@ Seed loadSeedLocked(SigningSeed& s) {
 
 }
 
+// The attestation message and the seed's public key are vl-keykit's (attestation.hpp, spec 03 §6.5): one implementation
+// for this server and Vaulthalla Desktop. Its refusals are std::invalid_argument, as this API documents.
 std::vector<uint8_t> message(const std::string_view nodeId, const uint64_t vaultId, const uint32_t version,
                              const std::string& keyCheckHex) {
-    if (nodeId.empty()) throw std::invalid_argument("an attestation needs this node's id");
-    const auto check = keyCheckBytes(keyCheckHex);
-    std::vector<uint8_t> out(kDomain.begin(), kDomain.end());
-    out.insert(out.end(), nodeId.begin(), nodeId.end());
-    for (int shift = 56; shift >= 0; shift -= 8) out.push_back(static_cast<uint8_t>(vaultId >> shift));
-    for (int shift = 24; shift >= 0; shift -= 8) out.push_back(static_cast<uint8_t>(version >> shift));
-    out.insert(out.end(), check.begin(), check.end());
-    return out;
+    return vl::keykit::provenance::attestationMessage(nodeId, vaultId, version, keyCheckHex);
 }
 
 std::vector<uint8_t> publicKeyFromSeed(const std::span<const uint8_t> seed) {
-    if (seed.size() != kSeedSize) throw std::invalid_argument("an attestation seed is 32 bytes");
-    std::vector<uint8_t> pk(crypto_sign_PUBLICKEYBYTES);
-    std::vector<uint8_t> sk(crypto_sign_SECRETKEYBYTES);
-    crypto_sign_seed_keypair(pk.data(), sk.data(), seed.data());
-    sodium_memzero(sk.data(), sk.size());
-    return pk;
+    const auto pk = vl::keykit::provenance::attestationPublicKey(seed);
+    return {pk.begin(), pk.end()};
 }
 
 std::vector<uint8_t> signWithSeed(const std::span<const uint8_t> seed, const std::span<const uint8_t> msg) {
@@ -127,13 +108,14 @@ bool verifySignature(const std::span<const uint8_t> publicKey, const std::span<c
 std::optional<Attestation> attest(const unsigned int vaultId, const unsigned int version,
                                   const std::string& keyCheckHex) {
     try {
-        const auto msg = message(db::query::device::Devices::nodeId(), vaultId, version, keyCheckHex);
+        const auto node = db::query::device::Devices::nodeId();
         auto& s = signingSeed();
         std::scoped_lock lock(s.mutex);
         const auto seed = loadSeedLocked(s);
         const auto pk = publicKeyFromSeed(seed->bytes());
+        const auto sig = vl::keykit::provenance::attest(seed->bytes(), node, vaultId, version, keyCheckHex);
         return Attestation{.key_id = db::query::vault::Key::attestationKeyId(pk),
-                           .signature = signWithSeed(seed->bytes(), msg)};
+                           .signature = std::vector<uint8_t>(sig.begin(), sig.end())};
     } catch (const std::exception& e) {
         log::Registry::crypto()->error("[KeyAttestation] Could not attest key version {} of vault {}: {}", version,
                                        vaultId, e.what());
@@ -190,13 +172,10 @@ Verdict check(const Attestation& attestation, const unsigned int vaultId, const 
     if (attestation.signature.empty()) return Verdict::Missing;
     const auto pk = db::query::vault::Key::attestationPublicKey(attestation.key_id);
     if (!pk) return Verdict::UnknownKey;
-    std::vector<uint8_t> msg;
-    try {
-        msg = message(db::query::device::Devices::nodeId(), vaultId, version, keyCheckHex);
-    } catch (const std::invalid_argument&) {
-        return Verdict::BadSignature;
-    }
-    return verifySignature(*pk, msg, attestation.signature) ? Verdict::Valid : Verdict::BadSignature;
+    return vl::keykit::provenance::verifyAttestation(*pk, db::query::device::Devices::nodeId(), vaultId, version,
+                                                     keyCheckHex, attestation.signature)
+               ? Verdict::Valid
+               : Verdict::BadSignature;
 }
 
 db::query::vault::Key::Provenance provenanceOf(const unsigned int vaultId, const unsigned int version,
