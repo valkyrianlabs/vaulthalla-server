@@ -870,6 +870,41 @@ TEST_F(ManifestApplyDb, TwoOwnVersionsAtOneEpochOnVersionLogTheHeadIsAdoptedTheO
     EXPECT_FALSE(byName(h, "top.txt"));
 }
 
+// version_log on Backblaze's measured order (2026-11-16: versions sorted by upload start): R1's reply is lost and its
+// upload completes only after the retry R2 was recorded, so R1 lands *below* R2, inside R2's settle window. It used to
+// refuse the vault (order_violation) at the next listing. Now R1 is this server's own superseded attempt (its producer,
+// R2's epoch and base): the next pass's read, which lists while a lost root PUT may still land, deletes it; the vault
+// publishes on, and a reader without this server's anchor takes R2.
+TEST_F(ManifestApplyDb, AnOwnRootLandingBelowTheRecordedOneOnBackblazeIsRemovedNotRefused) {
+    seed();   // on conditional PUTs (the fixture's store); the bucket turns Backblaze from here on
+    v.bucket->backblaze();
+    const auto known = *db::query::sync::Manifest::state(id()).epoch;
+    store = std::make_shared<storage::s3::ManifestStore>(v.bucket, mf::WriteCapability::VersionLog);
+    service = std::make_unique<sync::vault_manifest::Service>(id(), uid(), store, v.engine->encryptionManager);
+    const auto root = std::string(mf::kRootKey);
+    write("/first.txt", "in R1");
+    v.bucket->loseNextPut(root);
+    EXPECT_ANY_THROW((void)service->publish());
+    ASSERT_EQ(v.bucket->inFlight(root), 1u);
+    EXPECT_EQ(v.bucket->lastPutTimeout(root), storage::s3::kManifestRootPutDeadline) << "the root PUT's deadline";
+    write("/second.txt", "in R2");
+    const auto r2 = service->publish();
+    EXPECT_EQ(r2.published.known.epoch, known + 1);
+    const auto late = v.bucket->land(root);
+    const auto history = v.bucket->history(root);   // newest first
+    ASSERT_GE(history.size(), 2u);
+    EXPECT_EQ(history[1].version_id, late) << "ordered by its start: below the recorded root";
+    EXPECT_NO_THROW((void)service->applyRemote()) << "not an order violation";
+    for (const auto& ver : v.bucket->history(root)) EXPECT_NE(ver.version_id, late) << "removed as a stray";
+    EXPECT_FALSE(db::query::sync::Manifest::state(id()).refused_reason);
+    write("/third.txt", "in R3");
+    const auto r3 = service->publish();
+    EXPECT_EQ(r3.published.known.epoch, known + 2);
+    const auto h = head();   // a reader with no anchor
+    EXPECT_EQ(h.acceptance.root_sha256, r3.published.known.root_sha256);
+    for (const auto* name : {"first.txt", "second.txt", "third.txt"}) EXPECT_TRUE(byName(h.content, name)) << name;
+}
+
 
 // ── Replica prerequisites (design: "As built: replica prerequisites and status") ──────────────────────────────────────
 

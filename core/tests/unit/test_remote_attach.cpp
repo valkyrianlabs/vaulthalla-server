@@ -377,7 +377,7 @@ TEST_F(RemoteAttachTest, RemoteAttachEveryPreconditionRefusesWithNothingWritten)
 
     // A bucket that can't arbitrate the manifest's root: no conditional writes, no versions.
     auto insufficient = localVault(Versioning::Unversioned);
-    insufficient.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+    insufficient.bucket->backblaze();
     refused(insufficient, "bucket_capability_insufficient");
 
     // Legacy content: the format conversion finishes first.
@@ -846,7 +846,7 @@ TEST_F(RemoteAttachTest, RemoteAttachOnABucketWithoutVersions) {
 // its root (spec 06 §5), and the cutover records the root's version.
 TEST_F(RemoteAttachTest, RemoteAttachOnAVersionLogBucket) {
     auto v = localVault();
-    v.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+    v.bucket->backblaze();
     write(v, "/a.txt", "alpha");
     write(v, "/b.txt", "bravo");
     (void)start(v);

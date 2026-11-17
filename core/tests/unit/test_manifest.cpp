@@ -158,6 +158,9 @@ struct Writer {
     std::string node;
     std::optional<uint64_t> ownEpoch;
     std::optional<SettledWindow> settled;
+    // version_log: how many writers a root may name (PublishOptions::version_log_writers; one unless a test studies
+    // several writers, which a version_log bucket refuses).
+    std::size_t versionLogWriters{1};
 
     explicit Writer(std::shared_ptr<VersionedBucket> b,
                     const WriteCapability mode = WriteCapability::Unknown)
@@ -173,6 +176,7 @@ struct Writer {
         o.self_node = node;
         o.own_epoch = ownEpoch;
         o.settled = settled;
+        o.version_log_writers = versionLogWriters;
         o.sleep = [b = bucket](const std::chrono::milliseconds d) { b->advance(std::max<std::time_t>(1, d.count() / 1000)); };
         auto r = vl::vaultfmt::manifest::publish(*store, vault, lookup(), {current, keys.at(current)}, c, known, cache, o);
         known = r.published.known;
@@ -187,6 +191,7 @@ struct Writer {
         LoadOptions o;
         o.known = known;
         o.settled = settled;
+        o.self_node = node;
         return load(*store, vault, lookup(), o);
     }
 };
@@ -404,7 +409,7 @@ TEST(ManifestStore, PutOnceSendsAConditionOnlyWhereTheBucketHonoursIt) {
     }
 
     // Backblaze B2: a condition is refused outright (typed, nothing written)...
-    bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+    bucket->backblaze();
     vh::storage::s3::ManifestStore unprobed(bucket);
     const auto key = std::string(".vaulthalla/key/") + uidText(uidOf(9, 9));
     EXPECT_THROW((void)unprobed.putIfAbsent(key, body), ConditionsUnsupported);
@@ -464,7 +469,7 @@ TEST(ManifestStore, TheBaseStoreRefusesPlainWritesItCannotMake) {
 TEST(ManifestPublish, ABucketThatCanArbitrateNothingRefusesBeforeAnyRequest) {
     // Neither conditional writes nor versions (spec 06 §7, Insufficient): never half a publish.
     Writer w;
-    w.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+    w.bucket->backblaze();
     w.store = std::make_shared<vh::storage::s3::ManifestStore>(w.bucket, WriteCapability::Insufficient);
     w.bucket->resetCounters();
     EXPECT_THROW((void)w.publish(smallVault(3)), PublishUnsupported);
@@ -478,7 +483,7 @@ TEST(ManifestPublish, ABucketThatRejectsConditionsFailsTypedWithoutAPartialPubli
     // now a typed refusal (ConditionsUnsupported, which the engine turns into a stall and a re-probe), and the bucket
     // holds nothing of the publish.
     Writer w;
-    w.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+    w.bucket->backblaze();
     EXPECT_THROW((void)w.publish(smallVault(3)), ConditionsUnsupported);
     EXPECT_TRUE(w.bucket->keys().empty());
 }
@@ -852,7 +857,7 @@ namespace version_log_fixture {
 
 std::shared_ptr<VersionedBucket> b2Bucket() {
     auto b = std::make_shared<VersionedBucket>(Versioning::Enabled);
-    b->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;   // as Backblaze B2 answers them
+    b->backblaze();   // as Backblaze B2 answers them
     b->md5Etags = true;
     return b;
 }
@@ -898,10 +903,12 @@ void setWriters(Writer& w, const std::vector<std::string>& nodes) {
     w.cache = {};
 }
 
-// Two writers of one vault, both in its writers: a has published the base and built on the root naming both.
+// Two writers of one vault, both in its writers: a has published the base and built on the root naming both. Refused
+// in production on a version_log bucket (PublishOptions::version_log_writers); studied here as spec 06 §11's setting.
 std::pair<Writer, Writer> twoWriters(const std::shared_ptr<VersionedBucket>& bucket, const Content& base) {
     auto a = vlWriter(bucket, "node-a");
     auto b = vlWriter(bucket, "node-b");
+    a.versionLogWriters = b.versionLogWriters = vl::vaultfmt::manifest::kMaxWriters;
     (void)a.publish(base);                     // epoch 1
     setWriters(a, {"node-a", "node-b"});       // epoch 2
     auto touched = base;
@@ -1211,13 +1218,14 @@ TEST(ManifestPublishVersionLog, AVersionInsertedBelowASettledRootIsAnOrderViolat
     auto c = f::ofNode(smallVault(3), "node-a");
     (void)w.publish(c);
     const auto e1 = *w.known;
-    w.bucket->holdPut(std::string(kRootKey));   // a PUT that started now...
+    const auto started = w.bucket->startNow();   // another writer's root PUT starts now...
     nthFile(c, 0).size = 1;
-    (void)w.publish(c);                          // (epoch 2 settles while the order is still commit order)
+    (void)w.publish(c);                           // (epoch 2 settles meanwhile)
     ASSERT_TRUE(w.settled);
-    // ...commits later and is ordered by its start: below epoch 2, as succ(epoch 1). The provider broke A4.
-    w.bucket->orderBy(VersionedBucket::Order::Start);
-    (void)w.bucket->seed(std::string(kRootKey), f::rootLike(w, w.cache.base->root, 2, e1.root_sha256, "node-x"));
+    // ...and completes later, ordered by its start: below epoch 2, as succ(epoch 1) (Backblaze's order, A4 false).
+    // Another node's root there can't be explained by this writer: the order broke under a settled root.
+    (void)w.bucket->seedStarted(std::string(kRootKey), f::rootLike(w, w.cache.base->root, 2, e1.root_sha256, "node-x"),
+                                started);
     try {
         (void)w.loadKnown();
         ADD_FAILURE() << "a displaced settled root went unnoticed";

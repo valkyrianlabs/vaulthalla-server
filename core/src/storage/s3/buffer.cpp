@@ -2,6 +2,8 @@
 #include "storage/s3/curl/helpers.hpp"
 #include "log/Registry.hpp"
 
+#include <algorithm>
+
 using namespace vh::storage::s3;
 using namespace vh::storage::s3::curl;
 
@@ -140,6 +142,13 @@ void Controller::uploadBufferWithMetadataConditional(
     const HttpResponse resp = performCurl([&](CURL* h) {
         curl_easy_setopt(h, CURLOPT_URL, url.c_str());
         curl_easy_setopt(h, CURLOPT_UPLOAD, 1L);
+        // Bounded, as a streamed GET is: a stalled provider fails the PUT instead of holding the pass forever. With a
+        // deadline (the manifest root) the whole request is bounded too; either way curl closes the connection, and
+        // the caller treats the outcome as unknown (a body sent in full may still be committed by the provider).
+        curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 30L);
+        curl_easy_setopt(h, CURLOPT_LOW_SPEED_LIMIT, 1L);
+        curl_easy_setopt(h, CURLOPT_LOW_SPEED_TIME, 60L);
+        if (options.timeout) curl_easy_setopt(h, CURLOPT_TIMEOUT, static_cast<long>(std::max<long long>(1, options.timeout->count())));
         curl_easy_setopt(h, CURLOPT_HTTPHEADER, hdrs.get());
         curl_easy_setopt(h, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(ctx.size));
         curl_easy_setopt(h, CURLOPT_READDATA, &ctx);

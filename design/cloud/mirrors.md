@@ -40,7 +40,7 @@ no local file names are counted as orphans, "left alone, never downloaded" (`Clo
 | Area | Today | With two writers |
 |---|---|---|
 | Content objects `o/<uid>` | random file uids, one object per file, provider versions kept | **works**: no collisions; a same-file edit on both sides is a content conflict the existing machinery can decide |
-| Manifest publish | conditional publish with merge and retry (spec 03 §3.4) | **works on AWS/R2; on B2 only with spec 06** (`version_log`, A3/A4 confirmed) |
+| Manifest publish | conditional publish with merge and retry (spec 03 §3.4) | **works on AWS/R2; refused on B2**: Backblaze orders versions by upload start (spec 06 §4, A4 false, measured 2026-11-16), so a second writer on a `version_log` bucket is refused (spec 06 §5.5; §11 proposes one root log per writer) |
 | The other writer's changes | never applied to the database | **breaks**: B never sees A's new files, renames or deletes; A's objects are orphans to B |
 | Deletes | B still has a file A purged | **breaks**: B re-uploads it (`uploadLocalOnly`), and its publish keeps the entry (`mergePending`: B didn't change it, theirs has none, so ours), so the delete is undone |
 | Cold start | `PublisherCache` is in memory | **breaks**: after a restart `before = theirs`, so B's first publish drops every entry its database lacks, deleting A's new files from the manifest |
@@ -57,8 +57,9 @@ no local file names are counted as orphans, "left alone, never downloaded" (`Clo
 
 ## What the first version adds
 
-1. **Spec 06 on every replicated vault**, with `writers` listing the replicas. Multi-writer `version_log` buckets
-   only once A3 and A4 are confirmed live.
+1. **Spec 06 on every replicated vault**, with `writers` listing the replicas. Several writers on a `version_log`
+   bucket are refused: A4 is false on Backblaze (spec 06 §4, 2026-11-16), and the library refuses any root naming more
+   than one writer there (spec 06 §5.5). Replicated vaults need a bucket with conditional PUT.
 2. **A manifest applier, the core of the feature.** On every newly settled canonical root, a three-way merge into
    the database (designed in issue #442), with the last applied root as base. The base is a local copy of that root
    and its sealed segments plus an `applying` marker: the epoch and hash alone are not enough, because the bucket may
@@ -146,7 +147,9 @@ replica; replicas on different providers; more than three replicas; a conflict-r
 1. **Naming.** "Replica" in server code and the protocol; "mirrored" only in Desktop and portal copy. Rename the
    `mirror` sync strategy (to `image`, say) in the release that ships replicas, since both names would appear on one
    screen.
-2. **Multi-writer on B2 if A3/A4 fail live:** replicas refused on such buckets (spec 06 §10 Q2). No cloud arbiter.
+2. **Multi-writer on B2:** A4 failed live (2026-11-16): replicas are refused on such buckets, enforced (spec 06
+   §5.5). Recommended path, if wanted: one root log per writer (spec 06 §11.2); a settling period rests on a provider
+   bound Backblaze doesn't document (§11.1). No cloud arbiter.
 3. **Replica keys for rotation** (above) instead of a device ceremony per rotation. A KEV1 envelope of class `0`
    (customer-controlled: the customer's own server), kept outside `vault_recovery_grant`.
 4. **Tree conflict rules:** settled in issue #442 under the compatibility policy's rule 5, as listed in "What the

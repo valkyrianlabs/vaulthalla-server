@@ -344,7 +344,7 @@ protected:
     // A bucket that answers like Backblaze B2 (spec 06): conditional PUTs refused with 501, versions kept, MD5 ETags.
     // The vault's binding is probed (version_log), and so is the restored vault's (through the controller factory).
     static void likeBackblaze(const Origin& o) {
-        o.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+        o.bucket->backblaze();
         o.bucket->md5Etags = true;
         db::query::vault::BucketCapability::record(o.id, storage::s3::probeBucket(*o.bucket));
         useBucket(o.bucket, vl::vaultfmt::manifest::WriteCapability::VersionLog);
@@ -812,6 +812,33 @@ TEST_F(VaultRecoverDb, AJoinIsARestoreThatAddsThisNodeToTheWritersAndKeepsTheOth
     EXPECT_THROW(engine->encryptionManager->prepare_key_rotation(), ops::Refused) << "a replica doesn't rotate";
 }
 
+// Several writers on a version_log bucket are refused (Backblaze orders a key's versions by upload start, measured
+// 2026-11-16: another writer's slow root can land below one this server settled). A join by kit stops before anything
+// is written, whether the root says version_log or only the bucket's probe does; the library refuses such a root too.
+TEST_F(VaultRecoverDb, AJoinOfAVersionLogVaultIsRefusedBeforeAnythingIsWritten) {
+    auto o = populated(Versioning::Enabled, /*backblaze=*/true);
+    const auto kit = kitOf(o);
+    becomeAnotherNode(o.id);
+    auto cfg = config::Registry::get();
+    cfg.sync.replicas.experimental = true;
+    config::Registry::set(cfg);
+    ops::vault_recover::Request req;
+    req.api_key_id = apiKey();
+    req.bucket = o.bucketName;
+    req.kit = &kit;
+    const auto roots = o.bucket->history(std::string(mf::kRootKey)).size();
+    try {
+        (void)ops::vault_replicas::join(superUser, req, keys::Channel::Cli);
+        ADD_FAILURE() << "a join on a version_log bucket was taken";
+    } catch (const ops::Refused& e) {
+        EXPECT_EQ(e.code, "join_version_log");
+        EXPECT_NE(std::string(e.what()).find("upload start"), std::string::npos) << e.what();
+    }
+    EXPECT_EQ(o.bucket->history(std::string(mf::kRootKey)).size(), roots) << "no root was published";
+    cfg.sync.replicas.experimental = false;
+    config::Registry::set(cfg);
+}
+
 TEST_F(VaultRecoverDb, DryRunWritesNothing) {
     auto o = populated();
     const auto kit = kitOf(o);
@@ -1238,6 +1265,35 @@ TEST_F(VaultRecoverFromCloud, AJoinAsksForIntentJoinAndKeepsTheOtherWriter) {
     ASSERT_TRUE(r.written) << r.report.dump(2);
     const auto writers = db::query::sync::Manifest::state(*r.vault_id).writers;
     EXPECT_EQ(writers, (std::vector<std::string>{nodeA, db::query::device::Devices::nodeId()}));
+    cfg.sync.replicas.experimental = false;
+    config::Registry::set(cfg);
+}
+
+// vh vault join --from-cloud on a vault whose bucket is version_log (every managed vault is on Backblaze): the keys
+// are delivered, then the join is refused before anything is written, as a join by kit is (the command then cancels
+// the restore and reports the replica left).
+TEST_F(VaultRecoverFromCloud, AJoinOfAVersionLogVaultIsRefusedAfterTheKeysArriveAndWritesNothing) {
+    auto o = populated(Versioning::Enabled, /*backblaze=*/true);
+    enrolled(o);
+    becomeAnotherNode(o.id);
+    auto cfg = config::Registry::get();
+    cfg.sync.replicas.experimental = true;
+    config::Registry::set(cfg);
+    const auto started = ops::cloud_restore::start(superUser, vaultUid_, keys::Channel::Cli,
+                                                   ops::cloud_restore::Intent::Join);
+    std::optional<ops::cloud_restore::Delivered> delivered;
+    for (int i = 0; i < 5 && !delivered; ++i) delivered = ops::cloud_restore::poll(superUser, started.restore_id);
+    ASSERT_TRUE(delivered);
+    ops::vault_recover::Request req;
+    req.api_key_id = apiKey();
+    req.bucket = o.bucketName;
+    req.exported = &delivered->exported;
+    req.vault_uid = vaultUid_;
+    req.checkpoint = delivered->checkpoint;
+    const auto roots = o.bucket->history(std::string(mf::kRootKey)).size();
+    EXPECT_EQ(code([&] { return ops::vault_replicas::join(superUser, req, keys::Channel::Cli); }), "join_version_log");
+    EXPECT_EQ(o.bucket->history(std::string(mf::kRootKey)).size(), roots) << "no root was published";
+    ops::cloud_restore::cancel(superUser, started.restore_id);
     cfg.sync.replicas.experimental = false;
     config::Registry::set(cfg);
 }

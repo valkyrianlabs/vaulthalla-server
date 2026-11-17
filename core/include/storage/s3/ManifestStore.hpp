@@ -3,6 +3,7 @@
 #include "storage/Fwd.hpp"
 #include <vl/vaultfmt/manifest/Store.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -14,6 +15,15 @@
 // upstream request. Tests use the same adapter over the versioned fake bucket (tests/helpers/versioned_bucket.hpp).
 // The manifest's own files include nothing of the server; this is where the two meet.
 namespace vh::storage::s3 {
+
+// The deadline of one manifest root PUT, whole request (connect, body, reply). Roots are small (a few KiB; a large
+// vault's, with thousands of segment references, well under a megabyte), so 60 s is ample on any link that can sync at
+// all, and it bounds how long a root's body can be in flight: past it curl closes the connection, a body not sent in
+// full can't be committed, and the publish treats the outcome as unknown (spec 06 §5.2 step 2). It can't bound a
+// provider that received the whole body and commits later: Backblaze then orders that version by its start, below
+// newer ones (spec 06 §4, measured 2026-11-16), which the publish and the session handle as this writer's own
+// superseded attempt. Other manifest objects keep the stall bound only (segments can be large).
+inline constexpr std::chrono::seconds kManifestRootPutDeadline{60};
 
 class ManifestStore final : public vl::vaultfmt::manifest::ObjectStore {
 public:

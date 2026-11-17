@@ -618,7 +618,8 @@ TEST_F(LiveR2, LayoutMigrationPrimitives) {
                                        storage::s3::RequestOptions{.system_headers = {},
                                                                    .metadata = {{"vh-encrypted", "true"},
                                                                                 {"vh-iv", "AAAAAAAAAAAAAAAA"},
-                                                                                {"vh-key-version", "1"}}});
+                                                                                {"vh-key-version", "1"}},
+                                                                   .timeout = {}});
         written.push_back(legacyKey);
         bool listed = false;
         std::string token;

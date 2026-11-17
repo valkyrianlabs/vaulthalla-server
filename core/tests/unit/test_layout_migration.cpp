@@ -618,7 +618,7 @@ TEST_F(LayoutMigrationTest, LayoutMigrationUnversionedBucket) {
 // and its verifying state publishes the manifest as versions of the root.
 TEST_F(LayoutMigrationTest, LayoutMigrationOntoABackblazeLikeBucketPublishesTheManifestAsVersions) {
     auto v = legacyVault();
-    v.bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+    v.bucket->backblaze();
     v.bucket->md5Etags = true;
     db::query::vault::BucketCapability::record(v.id(), storage::s3::probeBucket(*v.bucket));
     write(v, "/a.txt", "a1");

@@ -996,7 +996,13 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   reads without a probe). Both modes: the root names `publish` and `writers` (the base's set while it names this
   node; a node that never published here takes over with itself alone); a head newer than this node's
   `own_epoch` that excludes it is `superseded`, a head of another node in the other mode `publish_mode_mismatch`, an
-  id inside a recorded settle window `order_violation` (each refused, alerted `manifest_<code>`). GC on VersionLog:
+  id inside a recorded settle window `order_violation` (each refused, alerted `manifest_<code>`), except this node's own
+  superseded attempt (a sibling of the settled root it produced: a lost-reply root PUT that Backblaze, ordering versions
+  by upload start, landed below the retry), which the publish and the read delete (vl-vaultfmt 0.4.0
+  `windowIntruders`); for 15 minutes after a failed root PUT `verifyRemote` lists instead of one HEAD. One writer per
+  version_log bucket: a root naming several is `WritersRefused` (`version_log_writers`), a join `join_version_log`
+  (spec 06 §5.5, §11). The root PUT has a 60 s deadline (`storage::s3::kManifestRootPutDeadline`; every buffer PUT a
+  30 s connect bound and fails below 1 byte/s for 60 s). GC on VersionLog:
   segments unreferenced 24 h (`remote_manifest_gc`) lose every version by id; the root janitor
   (`collectRootVersions`, daily) keeps head + 2 canonical predecessors, deletes older canonical roots after 7 days and
   non-canonical versions and markers after 24 h. `Service::verifyRemote` on VersionLog: HEAD while the ETag is the

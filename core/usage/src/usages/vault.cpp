@@ -394,7 +394,8 @@ static std::shared_ptr<CommandUsage> join(const std::weak_ptr<CommandUsage>& par
         "vault is built here from the bucket's manifest with nothing downloaded until a file is read, and this "
         "server's first manifest root adds it to the vault's writers, keeping the others. Super admins only, from this "
         "host's CLI or a paired device. Refused for a vault that already has 3 writers, a bucket without conditional "
-        "writes (Backblaze B2 for now), a recovery recipient this server can't hold too, and a vault this server "
+        "writes (Backblaze B2, which orders versions by upload start: a second writer's root could land below one "
+        "already settled), a recovery recipient this server can't hold too, and a vault this server "
         "already holds. A replicated vault doesn't rotate its key: remove the other replicas first.";
     cmd->optional = {Optional::ManyToOne("s3_api_key",
                                          "Name or ID of this server's API key that reaches the bucket (with --kit, or "

@@ -166,7 +166,7 @@ vl_keykit_dep = dependency('vl-keykit', version: '>=0.5.0', fallback: ['vl-keyki
 # pinned in subprojects/vl-vaultfmt.wrap, whose tarball is committed under subprojects/packagecache/ like vl-keykit's.
 # It builds against the vl-keykit and the vendored nlohmann/json above. Its golden vectors are the ones in
 # design/encryption/vectors/ (test_vaultfmt_vectors checks the copy). Fuzzed in its own CI.
-vl_vaultfmt_dep = dependency('vl-vaultfmt', version: '>=0.3.0', fallback: ['vl-vaultfmt', 'vl_vaultfmt_dep'])
+vl_vaultfmt_dep = dependency('vl-vaultfmt', version: '>=0.4.0', fallback: ['vl-vaultfmt', 'vl_vaultfmt_dep'])
 
 deps = [
     dependency('libsodium', required: true),
