@@ -1,5 +1,7 @@
 #include "vault/Recover.hpp"
 
+#include <vl/keykit/attestation.hpp>
+
 #include <vl/keykit/kev1.hpp>
 #include <vl/vaultfmt/vhf1/Format.hpp>
 #include "log/Registry.hpp"
@@ -361,10 +363,11 @@ Proof prove(const uint32_t version, const std::span<const uint8_t> key, const st
         signers.push_back(e.attestation->key_id);
         if (e.node_id.empty() || e.vault_id == 0 || e.vault_id > UINT32_MAX) continue;
         const auto check = keyCheck(key, static_cast<unsigned>(e.vault_id), version);
-        const auto message = attestation::message(e.node_id, e.vault_id, version, check);
         for (const auto& k : pins.keys) {
-            if (k.public_key.size() != attestation::kPublicKeySize) continue;
-            if (!attestation::verifySignature(k.public_key, message, e.attestation->signature)) continue;
+            // vl-keykit's verification (attestation.hpp): the one the producers' signatures are checked against.
+            if (!vl::keykit::provenance::verifyAttestation(k.public_key, e.node_id, e.vault_id, version, check,
+                                                          e.attestation->signature))
+                continue;
             if (isSelf(k)) {
                 selfVerified = true;
                 continue;

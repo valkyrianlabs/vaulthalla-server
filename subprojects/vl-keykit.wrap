@@ -1,12 +1,14 @@
 [wrap-file]
-directory = vl-keykit-0.2.0
-source_url = https://github.com/valkyrianlabs/vl-keykit/releases/download/v0.2.0/vl-keykit-0.2.0.tar.xz
-source_filename = vl-keykit-0.2.0.tar.xz
-source_hash = 676a981493871e9541c50ed1165ec00709c22fe60686e94229339866364a44a0
-# 0.2.0's account_key.cpp and recovery_policy.cpp both define a file-local kVersionStem, so the library doesn't build as
-# one unity translation unit (this project's unity=on reaches subprojects). The patch renames the policy's; remove it
-# with the release that fixes it.
-diff_files = vl-keykit-0.2.0-unity.patch
+directory = vl-keykit-0.5.0
+# No release exists yet: the tarball is `git archive` of vl-keykit's commit bfeff025633c881d37fbcb780a231cb5a2acb8e5
+# (version 0.5.0, branch feat/desktop-attestation: key provenance, spec 03 §6.5), made with
+#   git -C vl-keykit archive --format=tar --prefix=vl-keykit-0.5.0/ <commit> | xz -9 -T1 > vl-keykit-0.5.0.tar.xz
+# and committed under subprojects/packagecache/, so every build (and the Debian build, --wrap-mode=nodownload) uses it
+# without the network. source_url names the release asset 0.5.0 will publish; the wrap is bumped to that tarball then.
+# 0.2.1 fixed the unity clash 0.2.0 needed a patch for.
+source_url = https://github.com/valkyrianlabs/vl-keykit/releases/download/v0.5.0/vl-keykit-0.5.0.tar.xz
+source_filename = vl-keykit-0.5.0.tar.xz
+source_hash = 59b3ea1fbe573359e552ff577694f80bb472415609fc8cc95493910b483fb857
 
 [provide]
 vl-keykit = vl_keykit_dep

@@ -162,7 +162,7 @@ class Node:
 
 def snapshot_tree(node: Node, fuse_name: str, hashes: bool = True) -> dict:
     """path → {kind, size, mode, mtime, target, sha256} through the node's mount (reads files when hashes)."""
-    root = f"MNT/{fuse_name}"
+    root = shlex.quote(f"MNT/{fuse_name}")  # a vault's name may hold spaces (a Mac's "Drill Taxes …", restored as named)
     listing = node.sh(f"cd {root} && find . -mindepth 1 -printf '%y\\t%s\\t%m\\t%T@\\t%p\\t%l\\n'").stdout
     tree = {}
     for line in listing.splitlines():

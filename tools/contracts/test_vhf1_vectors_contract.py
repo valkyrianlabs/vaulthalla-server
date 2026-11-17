@@ -20,6 +20,8 @@ VECTORS_DIR = REPO / "design" / "encryption" / "vectors"
 REFERENCE = VECTORS_DIR / "vh_crypto_vectors.py"
 # vl-vaultfmt 0.3.0's own vectors for the manifest root's writer floor, copied beside the verbatim pair.
 WRITER_FLOOR_REFERENCE = VECTORS_DIR / "writer_floor_vectors.py"
+# Key provenance (spec 03 §6.5), copied verbatim to vl-keykit, which implements it for this server and Desktop.
+KEY_PROVENANCE_REFERENCE = VECTORS_DIR / "key_provenance_vectors.py"
 CPP_COPY_TEST = REPO / "core" / "tests" / "unit" / "test_vaultfmt_vectors.cpp"
 CPP_VECTORS_HELPER = REPO / "core" / "tests" / "helpers" / "bytes.hpp"
 MESON = REPO / "core" / "meson.build"
@@ -42,6 +44,15 @@ class Vhf1VectorsContract(unittest.TestCase):
                 self.fail("the CI image must carry python3-cryptography so writer_floor_vectors.py --check runs")
             self.skipTest("python cryptography is not installed (CI runs this)")
         result = subprocess.run([sys.executable, str(WRITER_FLOOR_REFERENCE), "--check"], capture_output=True,
+                                text=True, timeout=300, check=False)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_key_provenance_reference_check_passes(self) -> None:
+        if importlib.util.find_spec("cryptography") is None:
+            if os.environ.get("CI"):
+                self.fail("the CI image must carry python3-cryptography so key_provenance_vectors.py --check runs")
+            self.skipTest("python cryptography is not installed (CI runs this)")
+        result = subprocess.run([sys.executable, str(KEY_PROVENANCE_REFERENCE), "--check"], capture_output=True,
                                 text=True, timeout=300, check=False)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

@@ -21,7 +21,7 @@ namespace vh::test_keykit_vectors {
 TEST(KeykitVectors, TheLibrarysCopyIsThisRepositorysVectors) {
     const std::filesystem::path ours(VH_TEST_VECTORS_DIR), theirs(VH_TEST_KEYKIT_VECTORS_DIR);
     if (theirs.empty()) GTEST_SKIP() << "vl-keykit is a system library here, not the pinned subproject";
-    for (const auto* name : {"vectors.json", "vh_crypto_vectors.py"}) {
+    for (const auto* name : {"vectors.json", "vh_crypto_vectors.py", "key_provenance.json", "key_provenance_vectors.py"}) {
         SCOPED_TRACE(name);
         EXPECT_EQ(vh::test::bin::slurpText(ours / name), vh::test::bin::slurpText(theirs / name));
     }

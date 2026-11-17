@@ -544,6 +544,45 @@ verification (spec 01 §6.3) is the same code.
   material, deleted root versioned and unversioned, corrupt segment). The drill (§7): `vhh drill recover` (fake S3
   with versioning, three private instances with their own databases and swtpm) and `tools/harness/drill_recover_r2.sh`.
 
+### 6.5 Amendment (2026-11-17): a Mac as a key version's origin
+
+Vaulthalla Desktop keeps Desktop-only vaults with no server (vaulthalla-desktop `docs/desktop-vaults.md`). Until now a
+Mac attested nothing, so a server taking such a vault over (`vh vault recover --from-cloud`) found every version
+`unattested` and could only salvage. Decision (maintainer, 2026-11-17): **a Mac signs for the key versions it creates
+the way a server does**, and the server proves a Mac-origin version exactly as it proves a server-origin one.
+
+**What a restore proves for a version today (unchanged).** With the bytes K of version v and a per-version origin
+(node id N, that node's vault id I: vaulthalla-cloud#31, vaulthalla-server#452):
+
+- the key check `kc = BLAKE2b-128(key = K, "vh-key-check-v1" ‖ ASCII-decimal(I) ‖ UInt32BE(v))` recomputed from K
+  equals every recorded check (the bucket's root, the export, the cloud's records); a mismatch refuses the version;
+- an Ed25519 signature over `"vh-key-attest-v1" ‖ N ‖ UInt64BE(I) ‖ UInt32BE(v) ‖ kc` verifies under an attestation
+  key the customer's material pins: a kit's `attestation_public_keys`, or, from the cloud, the version's recorded
+  `attestation.public_key`; the restoring node's own keys never count (`self_attested`).
+
+**The same proof for a Mac (no second format).**
+
+| Field | Server | Mac |
+| --- | --- | --- |
+| N, node id | `device_node.node_id`, a UUID string (36 characters, hyphens) | the Mac's Vaulthalla Cloud installation id: 26 lower-case Crockford base32 symbols, no hyphen. The two forms can't be equal, so no Mac origin is ever a server's. |
+| I, vault id | the vault's local serial (1 to 2^31 - 1) | **derived from the vault uid**: `1 + (UInt32BE(uid[0..3]) mod (2^31 - 1))`, the same range. A Desktop-only vault has no local number; this one is a function of the vault itself (anyone holding the uid recomputes it, nothing new is stored), and it fits every existing field (the key check's decimal, the attestation's UInt64BE, the server's 32-bit vault ids). Two of a Mac's vaults may share an I (chance 2^-31); that proves nothing about either, because kc is keyed by each vault's own key. |
+| signing key | Ed25519 from a TPM-sealed 32-byte seed (`KeyProvider "key_attest"`), id `key_attestation_keys.id` | Ed25519 from a 32-byte seed in the Mac's **app-only** keychain group (`<TEAM>.sh.vaulthalla.app.account`), this device only, never the group the Finder extension shares; the Secure Enclave can't hold it (it signs only P-256, and the format is Ed25519). Id: `1 + (UInt32BE(SHA-256(public key)[0..3]) mod (2^31 - 1))`, so it needs no counter; every attestation carries its public key. |
+
+A vault placed on another Mac (or adopted from a server) keeps every recorded origin: the versions the first Mac made
+stay proven by its attestations (the cloud never replaces a recorded version's origin), and the new holder attests
+only the versions it creates, under its own N and I. A Mac never attests a version it didn't create.
+
+**One implementation.** The key check, the attestation message, signing and verifying, and the Mac's I move to
+vl-keykit 0.5.0 (`vl/keykit/attestation.hpp`, and its C API for Desktop), with vectors in `vectors/vectors.json`
+`key_provenance` (generated here, copied there). vl-keykit, not vl-vaultfmt: it already owns the formats beside these
+(the recovery kit that pins `attestation_public_keys` and names the origin node and vault, KEV1, the account key's
+Ed25519 statements), and vl-vaultfmt depends on it. `vault/KeyCheck.cpp` and `vault/KeyAttestation.cpp` keep their API
+and call it; nothing here re-implements them.
+
+**Nothing weakens.** The restore rule (§6.2 step 4, `VaultRecoverTrustAnchor.*`) is not touched: a Mac-origin version
+without an attestation, or with one that doesn't verify over its N, I, v and kc under a pinned key, is still unproven
+and the restore still stops with `salvage_required`.
+
 ### 6.3 Sealed vaults
 
 Spec 04's manifest is written by devices under the vault content key; the same restore reads it with the sealed
