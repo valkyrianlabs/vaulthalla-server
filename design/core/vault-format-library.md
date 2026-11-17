@@ -381,3 +381,20 @@ unused here, and every addition to the API it uses has a default (`SessionHost::
    before. Undo: drop `ManifestApply::clearStopped` and its two calls.
 4. *The writer revision is a constructor parameter with the baseline as default*, not a test hook in the session
    host. Undo: make it a constant only and drop the tests' upgraded/downgraded servers.
+
+## As built: 0.4.0, start-ordered versions (2026-11-16)
+
+Backblaze orders a key's versions by upload start (spec 06 §4, measured live). vl-vaultfmt 0.4.0 makes one writer safe
+under that order and refuses several on a `version_log` bucket (spec 06 §5.2 "A late root of our own", §5.5).
+
+- **Pin.** `subprojects/vl-vaultfmt.wrap` names the library's branch `fix/start-ordered-versions` at `0e81c8d0`
+  (untagged), as `vl-vaultfmt-0.4.0.tar.xz` made by the recipe in the wrap (sha256
+  `b78d34a28ea218c9c349d6f823ddbc8253ab6e7ebf030da313cace44c6323395`, the same bytes with xz 5.4.5 on the Linux box and
+  5.8.4 on the Mac); `core/meson.build` requires `>= 0.4.0` and the contract pins that.
+- **No call site changed for the protocol:** the session sets the writer's identity for the window check itself
+  (`LoadOptions::self_node`, `PublishOptions::self_vault_id`), and `version_log_writers` defaults to one.
+- **Server changes beside it:** the root PUT's 60 s deadline and every buffer PUT's connect and stall bounds
+  (`RequestOptions::timeout`, `kManifestRootPutDeadline`); `requireJoinable`'s message and `join_version_log` for a
+  probe that found `version_log`; the HTTP fake's `backblaze()` / `loseNextPut` / `land` / `lastPutTimeout`, the
+  default of every `version_log` suite here; the server's interleaving and multi-writer tests on `version_log` raise
+  `version_log_writers`, as the library's do.

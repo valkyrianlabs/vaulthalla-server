@@ -178,7 +178,7 @@ public:
 class HttpFakeBucket final : public Bucket {
 public:
     HttpFakeBucket() {
-        bucket_->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+        bucket_->backblaze();
         bucket_->md5Etags = true;
     }
     std::shared_ptr<ObjectStore> store() override {
@@ -496,6 +496,7 @@ private:
         PublishOptions o;
         o.now = isoTime(kStart);
         o.self_node = nodeName(0);
+        o.version_log_writers = kMaxWriters;   // the suite studies several writers (refused in production)
         o.sleep = [b = world_.bucket](const std::chrono::milliseconds d) { b->advance(std::max<std::time_t>(1, d.count() / 1000)); };
         const auto first = publish(*store, world_.vault, world_.lookup(), world_.sealing(), baseContent(), std::nullopt, cache, o);
         auto named = first.published.root;
@@ -576,6 +577,7 @@ private:
         PublishOptions o;
         o.now = isoTime(kStart + 600 + 60 * (++w.clock));
         o.self_node = nodeName(w.index);
+        o.version_log_writers = kMaxWriters;   // spec 06 §11's setting: production refuses several writers here
         o.own_epoch = w.db.own_epoch;
         o.settled = w.db.settled;
         o.sleep = [b = world_.bucket](const std::chrono::milliseconds d) { b->advance(std::max<std::time_t>(1, d.count() / 1000)); };

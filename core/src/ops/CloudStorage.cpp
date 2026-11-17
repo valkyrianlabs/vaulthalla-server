@@ -1280,6 +1280,13 @@ std::optional<JoinedBucket> joinBucketKey(const Actor& actor, const std::string&
         const auto ov = d::cs::overview(*link);
         const auto v = std::ranges::find_if(ov.vaults, [&](const auto& x) { return x.vault_uid == vaultUid; });
         if (v == ov.vaults.end() || !v->bucket) return std::nullopt;
+        // Managed storage on Backblaze publishes without conditional writes (version_log), where several writers are
+        // refused (spec 06 §5.5: versions ordered by upload start). Refused before a credential is issued for it; the
+        // join's own check (vault_recover's requireJoinable) would refuse it after.
+        if (d::providerOf(ov.provider) == vault::model::S3Provider::BackblazeB2)
+            throw Refused("join_version_log",
+                          "the vault's managed storage is on Backblaze, which orders versions by upload start: a second "
+                          "server can't write it safely, so it can't be joined");
         auto c = d::cs::requestCredential(*link, vaultUid);
         const auto& keys = runtime::Deps::get().apiKeyManager;
         if (!keys) throw Conflict("the API key manager is not available");

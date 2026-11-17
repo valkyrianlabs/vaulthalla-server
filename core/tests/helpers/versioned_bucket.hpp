@@ -46,6 +46,10 @@
 //                                  silently dropped).
 //   ignoreGetIfMatch               a GET's If-Match is not enforced.
 //   listingLag / orderBy+holdPut / expireNoncurrent   spec 06 §4's A3, A4 and A6, broken on purpose (see there).
+//   backblaze()                    Backblaze B2 as measured live (2026-11-16): Reject501 and versions ordered by upload
+//                                  start, the default of every version_log suite.
+//   loseNextPut(key) / land(key)   a PUT whose reply is lost and that commits later, at its start (Order::Start).
+//   lastPutTimeout(key)            the deadline the last buffer PUT of key carried (RequestOptions::timeout).
 //   setNow(t) / advance(s)         the clock writes stamp LastModified with; every mutation then ticks it by 1 s
 //                                  (autoTick) so versions have strictly increasing timestamps.
 // Seeding and inspection never meter: seed(), seedDeleteMarker(), purgeVersion(), history(), current(), version().
@@ -111,6 +115,7 @@ public:
         std::optional<std::string> lock_mode;                  // GOVERNANCE | COMPLIANCE (Object Lock)
         std::optional<std::time_t> retain_until;
         bool legal_hold{};
+        uint64_t started{};   // when its upload started (the bucket's request sequence); Order::Start sorts by it
 
         [[nodiscard]] uint64_t size() const { return reported_size.value_or(body.size()); }
     };
@@ -216,8 +221,41 @@ public:
     }
     void holdPut(const std::string& key) {
         std::scoped_lock lock(mutex_);
-        const auto it = objects_.find(key);
-        heldAt_[{key, std::this_thread::get_id()}] = it == objects_.end() ? 0 : it->second.size();
+        heldAt_[{key, std::this_thread::get_id()}] = ++startSeq_;
+    }
+    // Backblaze B2 as measured live on 2026-11-16 (misc/s3_version_checks.py): conditional PUTs refused (501, nothing
+    // written) and a key's versions ordered by when their upload started (A4 false; A3 held: a version is listed once
+    // its upload completed, and keeps its place once listed). What every version_log suite here runs on.
+    void backblaze() {
+        conditionalPuts = ConditionalPuts::Reject501;
+        orderBy(Order::Start);
+    }
+    // A lost reply: the next PUT of `key` without conditions starts (its place in the order is taken) and fails as a
+    // transport error would, without committing; land(key) commits it later (as a provider that received the whole
+    // body and stalled does), under Order::Start at its start, below everything written since.
+    void loseNextPut(const std::string& key) {
+        std::scoped_lock lock(mutex_);
+        ++loseNext_[key];
+    }
+    std::string land(const std::string& key) {
+        std::scoped_lock lock(mutex_);
+        auto& queue = inFlight_[key];
+        if (queue.empty()) throw std::logic_error("no lost PUT of " + key + " to land (test)");
+        auto v = std::move(queue.front());
+        queue.erase(queue.begin());
+        const auto started = v.started;
+        return writeLocked(key, std::move(v), started).version_id;
+    }
+    [[nodiscard]] std::size_t inFlight(const std::string& key) const {
+        std::scoped_lock lock(mutex_);
+        const auto it = inFlight_.find(key);
+        return it == inFlight_.end() ? 0 : it->second.size();
+    }
+    // The deadline (RequestOptions::timeout) the last buffer PUT of `key` carried.
+    [[nodiscard]] std::optional<std::chrono::seconds> lastPutTimeout(const std::string& key) const {
+        std::scoped_lock lock(mutex_);
+        const auto it = putTimeouts_.find(key);
+        return it == putTimeouts_.end() ? std::nullopt : it->second;
     }
     // expireNoncurrent(prefix, days): a lifecycle rule; advance() then purges versions of keys under prefix that have
     // been noncurrent (superseded by a newer version or a marker) for more than `days`. A6 broken when it covers the
@@ -277,6 +315,20 @@ public:
         v.storage_class = std::move(storageClass);
         v.reported_size = reportedSize;
         return writeLocked(key, std::move(v)).version_id;
+    }
+
+    // A request start, for seedStarted: a version seeded with it is ordered (Order::Start) as an upload that started
+    // then and completed now.
+    uint64_t startNow() {
+        std::scoped_lock lock(mutex_);
+        return ++startSeq_;
+    }
+    std::string seedStarted(const std::string& key, std::vector<uint8_t> body, const uint64_t started) {
+        std::scoped_lock lock(mutex_);
+        Version v;
+        v.body = std::move(body);
+        v.etag = etagOf(v.body);
+        return writeLocked(key, std::move(v), started).version_id;
     }
 
     std::string seed(const std::string& key, const std::string& body,
@@ -984,10 +1036,17 @@ private:
         return v.version_id;
     }
 
-    // Applies a write with the current mode's semantics; returns the stored version.
-    const Version& writeLocked(const std::string& key, Version v) const {
+    // Applies a write with the current mode's semantics; returns the stored version. `started`: when its upload started
+    // (0: now, or where this thread's holdPut said).
+    const Version& writeLocked(const std::string& key, Version v, const uint64_t started = 0) const {
         auto& stack = objects_[key];
         v.last_modified = stampLocked();
+        v.started = started ? started : ++startSeq_;
+        if (!started)
+            if (const auto held = heldAt_.find({key, std::this_thread::get_id()}); held != heldAt_.end()) {
+                v.started = held->second;
+                heldAt_.erase(held);
+            }
         v.delete_marker = false;
         switch (mode_) {
         case Versioning::Unversioned:
@@ -1002,12 +1061,10 @@ private:
             v.version_id = newVersionIdLocked();
             break;
         }
-        if (order_ == Order::Start)
-            if (const auto held = heldAt_.find({key, std::this_thread::get_id()}); held != heldAt_.end()) {
-                const auto at = std::min(held->second, stack.size());
-                heldAt_.erase(held);
-                return *stack.insert(stack.begin() + static_cast<std::ptrdiff_t>(at), std::move(v));
-            }
+        if (order_ == Order::Start && mode_ == Versioning::Enabled) {
+            const auto at = std::ranges::upper_bound(stack, v.started, {}, &Version::started);
+            return *stack.insert(at, std::move(v));
+        }
         stack.push_back(std::move(v));
         return stack.back();
     }
@@ -1024,6 +1081,7 @@ private:
             marker.version_id = "null";
             marker.delete_marker = true;
             marker.last_modified = stampLocked();
+            marker.started = ++startSeq_;
             stack.push_back(std::move(marker));
             return "null";
         }
@@ -1032,6 +1090,7 @@ private:
             marker.version_id = newVersionIdLocked();
             marker.delete_marker = true;
             marker.last_modified = stampLocked();
+            marker.started = ++startSeq_;
             objects_[key].push_back(marker);
             return marker.version_id;
         }
@@ -1061,6 +1120,14 @@ private:
         v.etag = etagOf(v.body);
         v.meta = options.metadata;
         v.storage_class = storageClassOf(options);
+        putTimeouts_[key] = options.timeout;
+        if (!ifMatch && !ifNoneMatch && mode_ == Versioning::Enabled)
+            if (const auto lose = loseNext_.find(key); lose != loseNext_.end() && lose->second > 0) {
+                --lose->second;
+                v.started = ++startSeq_;
+                inFlight_[key].push_back(std::move(v));
+                throw std::runtime_error("S3 request failed: the reply was lost; the upload is still in flight (test)");
+            }
         const auto& written = writeLocked(key, std::move(v));
         recordPutOutcomeForTesting({.etag = written.etag, .version_id = outcomeIdLocked(written)});
         loseResponseIfAsked();
@@ -1120,7 +1187,11 @@ private:
     Versioning mode_;
     std::time_t listingLag_{0};
     Order order_{Order::Commit};
-    mutable std::map<std::pair<std::string, std::thread::id>, std::size_t> heldAt_;
+    mutable std::map<std::pair<std::string, std::thread::id>, uint64_t> heldAt_;   // the held PUT's start
+    mutable uint64_t startSeq_{0};                                                  // request starts
+    mutable std::map<std::string, unsigned> loseNext_;
+    mutable std::map<std::string, std::vector<Version>> inFlight_;                  // lost PUTs not landed
+    mutable std::map<std::string, std::optional<std::chrono::seconds>> putTimeouts_;
     std::optional<std::string> expirePrefix_;
     unsigned expireDays_{0};
     mutable std::map<std::string, std::vector<Version>> objects_;   // oldest → newest per key

@@ -492,6 +492,12 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
   merges, repair, GC of every version, janitor, lost reply, 5xx before commit, failed delete, writers and mode,
   listing lag, settle-window order violation, rollback/fork/gap, a lifecycle-expired head). The fake's knobs
   `listingLag(s)`, `orderBy(Start)` + `holdPut(key)` (per thread), `expireNoncurrent(prefix, days)` break A3, A4, A6.
+  `backblaze()` is Backblaze as measured live on 2026-11-16 (Reject501, versions ordered by upload start), the default
+  of every version_log suite; `loseNextPut(key)` / `land(key)` a lost-reply root PUT that completes later at its start;
+  `lastPutTimeout(key)` the deadline a buffer PUT carried. `ManifestApplyDb.AnOwnRootLandingBelowTheRecordedOne*` and
+  `S3BufferPutDeadline.*` (test_s3_data_path_wire.cpp: real curl, a listener that never answers) cover the late root
+  and the root PUT's 60 s deadline. Several writers on version_log are refused in production; the interleaving suite
+  studies them with `PublishOptions::version_log_writers` raised.
   `<vl/vaultfmt/testing/hooked_store.hpp>` (`HookedStore`) wraps any `ObjectStore` with before/after hooks: a version landed
   mid-publish, the scheduler's parking. `ManifestVersionLog*` (`test_manifest_interleavings.cpp`, DB-free, ~35 s):
   actors on threads parked at every root PUT, ListObjectVersions and DELETE (other requests ride in the slot; the

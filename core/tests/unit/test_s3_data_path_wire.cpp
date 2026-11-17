@@ -15,6 +15,7 @@
 // compared byte for byte (the vl-sigv4 data-path migration was checked that way against the code before it).
 
 #include "storage/s3/Controller.hpp"
+#include "storage/s3/ManifestStore.hpp"
 #include "storage/s3/curl/helpers.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "vault/model/APIKey.hpp"
@@ -31,6 +32,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
@@ -417,4 +419,37 @@ TEST_F(S3DataPathWire, UntrimmedHeaderValuesAreSignedAsS3ReadsThem) {
                                    .headers = vlsig::HeaderList(r.headers.begin(), r.headers.end()), .body = r.body};
     const auto verified = vlsig::verify(input, key->secret_access_key, *signedAt);
     EXPECT_TRUE(verified.ok()) << verified.message;
+}
+
+// A buffer PUT with a deadline (the manifest root's: storage::s3::kManifestRootPutDeadline, 60 s) fails once it passes,
+// against a provider that takes the connection and never answers: curl aborts the transfer and closes the connection
+// instead of holding the pass forever, and the caller treats the outcome as unknown (spec 06 §5.2 step 2). Here with a
+// 2 s deadline against a listener that never accepts (the kernel completes the handshake and buffers the request).
+TEST(S3BufferPutDeadline, APutThatGetsNoAnswerFailsAtItsDeadline) {
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT_GE(fd, 0);
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+    ASSERT_EQ(::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof addr), 0);
+    ASSERT_EQ(::listen(fd, 4), 0);
+    socklen_t len = sizeof addr;
+    ::getsockname(fd, reinterpret_cast<sockaddr*>(&addr), &len);
+    vh::storage::upstream::guard::setForTesting({});
+    const auto key = std::make_shared<vh::vault::model::APIKey>(
+        7, "deadline-unit", vh::vault::model::S3Provider::AWS, "AKIADEADLINEUNIT0000", "deadline+secret=000000000000000000",
+        "us-east-2", "http://127.0.0.1:" + std::to_string(ntohs(addr.sin_port)));
+    const vh::storage::s3::Controller controller{key, "vh-deadline-bucket"};
+    vh::storage::s3::RequestOptions options;
+    options.timeout = std::chrono::seconds(2);
+    const auto started = std::chrono::steady_clock::now();
+    EXPECT_THROW(controller.uploadBufferWithMetadataConditional(".vaulthalla/root", std::vector<uint8_t>(64, 7), options,
+                                                                std::nullopt, std::nullopt),
+                 std::runtime_error);
+    const auto took = std::chrono::steady_clock::now() - started;
+    EXPECT_GE(took, std::chrono::milliseconds(1900));
+    EXPECT_LT(took, std::chrono::seconds(20)) << "bounded by the deadline, not by the stall bound (60 s)";
+    ::close(fd);
+    static_assert(vh::storage::s3::kManifestRootPutDeadline == std::chrono::seconds(60));
 }

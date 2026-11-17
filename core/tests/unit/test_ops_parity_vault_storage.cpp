@@ -66,7 +66,7 @@ protected:
         protocols::shell::commands::vault::registerCommands(router);
         owner = createUser("vs_owner_" + tag(), "unprivileged");
         bucket = std::make_shared<VersionedBucket>(Versioning::Enabled);
-        bucket->conditionalPuts = VersionedBucket::ConditionalPuts::Reject501;
+        bucket->backblaze();
         storage::bucket_capability::setControllerFactoryForTesting(
             [](unsigned int, const std::string&) -> std::shared_ptr<storage::s3::Controller> { return bucket; });
     }

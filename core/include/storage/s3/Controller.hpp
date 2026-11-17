@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <chrono>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -60,6 +61,11 @@ namespace vh::storage::s3 {
     struct RequestOptions {
         std::map<std::string, std::string> system_headers;
         std::unordered_map<std::string, std::string> metadata;
+        // A buffer upload's deadline for the whole request (connect, body, reply). Past it curl aborts the transfer and
+        // closes the connection: the PUT throws and its outcome is unknown (a provider that received the whole body may
+        // still commit it). Unset: no total bound, only the stall bound every buffer upload has (connect 30 s, under
+        // 1 byte/s for 60 s). The manifest root gets kManifestRootPutDeadline (ManifestStore).
+        std::optional<std::chrono::seconds> timeout{};
     };
 
     class RequestBudgetExceeded final : public std::runtime_error {

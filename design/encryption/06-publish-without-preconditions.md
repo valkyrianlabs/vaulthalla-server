@@ -4,7 +4,9 @@ Status: design for review (managed storage plan of 2026-11-12, workstream E, ste
 implemented: the capability probe (§7), and the `version_log` publish, read, repair, GC and `writers` (§5). Each
 section's "As implemented" note records where the code differs from or adds to the text. §8.3's automated suite
 passes against Backblaze (us-west-004; rerun 2026-11-14 on the code as pushed, after a first run on 2026-11-12 failed
-on one wrong assertion in the test).
+on one wrong assertion in the test). **2026-11-16, live:** Backblaze orders a key's versions by when their upload
+*started*, not when it finished: A4 is false there (§4). One writer is proven safe under that order (§5.2 "As
+implemented", §6); several writers on a `version_log` bucket are refused, and §11 proposes what they would need.
 Depends on [01](01-provider-blind-storage.md) and [03](03-metadata-recovery.md); used by
 [`design/cloud/mirrors.md`](../cloud/mirrors.md). Normative words: MUST, MUST NOT, SHOULD.
 
@@ -19,6 +21,8 @@ changes no VHF1, KEV1, key or segment format and does not design mirrors, which 
   enforces `encrypt_upstream=true` and `opaque_v1`. Everything else here is a proposal; open choices are in §10.
 - **Found, not decided:** B2 answers conditional PUTs with `501 NotImplemented`. Confirmed live on 2026-11-12
   (`s3.us-west-004`, both `If-None-Match: *` and `If-Match`, nothing written), after reports from others.
+- **Found, 2026-11-16:** B2 orders a key's versions by upload start (§4, A4 false). Consequence, implemented: one
+  writer per `version_log` bucket; a join, or any root naming several writers, is refused there (§5.5).
 
 ## 2. Today: what depends on conditional writes
 
@@ -76,19 +80,45 @@ B2 documents always-on versioning, `ListObjectVersions`, delete-by-name hiding o
 version id; not listing consistency or the order of near-simultaneous versions. **Checked live on 2026-11-12**
 (`s3.us-west-004`, one run, `misc/s3_version_checks.py`): A1, A2, A5, A7 and A8 held in every check. A3 held in 200
 sequential PUT-then-list trials and A4 with six concurrent writers on one key (72 versions, 72 listings, none out of
-order): evidence, not proof. **Not verified:** a writer whose body stalls while others commit (B2 answered the
-stalled PUT with `500 InternalError`), and A6 (the run stopped before the lifecycle check).
+order). Not verified then: a writer whose body stalls while others commit (B2 answered the stalled PUT with
+`500 InternalError`), and A6.
 
-| | Assumption | Needed by |
-|---|---|---|
-| A1 | every PUT creates a new version and returns `x-amz-version-id` | all |
-| A2 | `ListObjectVersions` lists one key's versions newest first with id, ETag, `IsLatest`, and pages correctly | all |
-| A3 | listings are linearizable with PUTs: a listing issued after a PUT returned shows that version and every version ordered before it | two or more writers |
-| A4 | the order is commit order and stable: no version ever appears below one a listing already showed; ties ordered alike for all clients | two or more writers |
-| A5 | GET and DELETE by version id work; deleting the newest version makes the previous one current | all |
-| A6 | no lifecycle rule expires noncurrent `.vaulthalla/root` versions (configuration; B2 rules are per name prefix) | all |
-| A7 | a single PUT's ETag is its body's MD5 (else §5.2 step 2 fetches and hashes) | optimization |
-| A8 | GET `If-Match` and `x-amz-copy-source-if-match` are honoured | read paths (§2) |
+**Checked live again on 2026-11-16** (`s3.us-west-004`, bucket `vh-test-ver-*` created and removed by the run,
+`misc/s3_version_checks.py`, read-only for everything but its own bucket): 28 checks passed, 5 failed.
+
+- **A1, A2, A5, A7, A8 hold** as before: distinct version ids on every PUT, listings newest first with ETags and
+  `IsLatest`, paging (4 pages of 2) equal to one listing, GET and DELETE by version id, delete markers listed and
+  removable, MD5 ETags, `If-Match` on GET and on copy honoured.
+- **A6 holds as configuration:** a lifecycle rule limited to the `o/` prefix is accepted and read back.
+- **A3 holds as far as a test can show it:** a `ListObjectVersions` right after a PUT returned showed that version as
+  newest in 2,000 of 2,000 trials on fresh connections (885 s), and with 2, 4 and 8 concurrent writers every writer's
+  listing showed its own version. Its second half ("and every version ordered before it") fails with A4: a version
+  ordered before ours is not listed while its upload is in flight.
+- **A4 is false on Backblaze.** Versions are ordered by when their upload **started**, not when it finished. A PUT
+  that started first and whose body stalled 1, 3, 8 or 20 s while a second PUT of the same key started and completed
+  sorted **below** the second, after a listing had already shown the second alone (4 of 4). With 8 concurrent writers
+  3 of 96 listings were not the tail of the final order (0 of 24 with 2 writers, 0 of 48 with 4). Once both versions
+  were visible the order did not change again in the next 5 s. So: a version can appear below one already listed for
+  as long as an upload that started before it stays in flight, and only then.
+
+| | Assumption | Needed by | Backblaze, 2026-11-16 |
+|---|---|---|---|
+| A1 | every PUT creates a new version and returns `x-amz-version-id` | all | holds |
+| A2 | `ListObjectVersions` lists one key's versions newest first with id, ETag, `IsLatest`, and pages correctly | all | holds |
+| A3 | listings are linearizable with PUTs: a listing issued after a PUT returned shows that version and every version ordered before it | two or more writers | first half holds (2,000 of 2,000); second half fails with A4 |
+| A4 | the order is commit order and stable: no version ever appears below one a listing already showed; ties ordered alike for all clients | two or more writers | **false**: ordered by upload start; stable once both are listed |
+| A5 | GET and DELETE by version id work; deleting the newest version makes the previous one current | all | holds |
+| A6 | no lifecycle rule expires noncurrent `.vaulthalla/root` versions (configuration; B2 rules are per name prefix) | all | per-prefix rules accepted |
+| A7 | a single PUT's ETag is its body's MD5 (else §5.2 step 2 fetches and hashes) | optimization | holds |
+| A8 | GET `If-Match` and `x-amz-copy-source-if-match` are honoured | read paths (§2) | holds |
+
+**What start ordering does to one writer.** Its root PUTs are sequential, so only one can be in flight at a time,
+except when the client gave up on one: a PUT whose reply was lost (the client's deadline, a dropped connection, a 5xx)
+can still be completed by the provider if it received the whole body. That root then lands at its start, **below**
+roots this writer listed and recorded since. Every such version is this writer's own superseded attempt, which §5.2
+removes. What bounds how late it can land: the client's deadline bounds how long the body can be in flight (a body
+not received in full is never committed); nothing a client does bounds a provider that received the whole body and
+commits later (§5.2, "As implemented").
 
 ## 5. The `version_log` publish path
 
@@ -158,6 +188,45 @@ after 24 h (§5.4).
   A loser retries at once, without jitter: every round has a winner (I7), so a delay buys nothing.
 - **Recording.** `remote_manifest_state` gains `root_version_id`, `base_version_id`, `settle_window` and `own_epoch`
   (the epoch of the last root this node published itself), migration 137.
+- **A late root of our own (start ordering, 2026-11-16; vl-vaultfmt 0.4.0).** A root PUT whose reply was lost and
+  whose upload the provider completes after the retry won lands inside the settled root's window, below it. It used
+  to be `order_violation` (the vault refused) at the next listing. `windowIntruders` (vl-vaultfmt `VersionLog.hpp`)
+  now splits a window's intruders: **own**, an authentic root of the settled root's epoch on the settled root's base
+  (a sibling of it, so built on a root this writer had recorded) whose producer is this writer (node id, and vault id
+  where the writer has one): its own superseded attempt, deleted by id by the publish (`PublishReport::repaired`) and
+  by the session's read (`Loaded::strays`); **foreign**, anything else, still `order_violation`. For one writer every
+  intruder is own: it seals roots one at a time on its recorded root, so a version that sorts between the base and
+  the settled root started after the base and before the settled root, on the base. The identity check, not the
+  noted set (`publishing_roots`), recognises it: each record resets that set, and by then the late root's hash is
+  gone. Where nothing newer is recorded the late root is adopted instead (the earliest successor of the recorded
+  root, `OwnPast` through the noted set; spec "As built: own roots" of `design/sync/manifest-applier.md`).
+- **Reading while a late root may land.** Under start ordering that root lands below the current version, which a
+  HEAD can't see. For 15 minutes after a publish whose root PUT failed (`Session::kLateRootWatchSeconds`, in memory)
+  `verifyRemote` lists instead of trusting one HEAD, so it is deleted before a reader without this writer's anchor (a
+  restore, a fresh reader, which by C1 would take it as the earliest successor) meets it. Past that, or after a
+  restart, the next publish's listing (it lists the settled window) and the daily root janitor (non-canonical below
+  the head, after 24 h) remove it.
+- **What bounds how late a root can land.** vaulthalla-server's root PUT has a deadline of 60 s for the whole request
+  (`storage::s3::kManifestRootPutDeadline`; every buffer PUT also has a 30 s connect bound and fails below 1 byte/s
+  for 60 s; before this change none had any bound). At the deadline curl aborts and closes the connection, the store
+  throws, and the publish treats the outcome as unknown (step 2). A body not received in full can never be committed,
+  so the deadline bounds how long a root's body is in flight. It can't bound a provider that received the whole body
+  and commits later: that is the remaining window (below). Roots are small (a few KiB; thousands of segment
+  references stay well under a megabyte), so 60 s is ample on any link that syncs at all. The library's stores
+  document the same duty (`ObjectStore::put`, the engine's `put` callback for Desktop's URLSession store); its test
+  doubles have no transport.
+- **The window that remains, one writer.** Between a late root landing and this writer's next listing (bounded by
+  the watch while it runs; else the next publish or the janitor's day), a reader that doesn't hold this writer's
+  anchor (a blind restore, a reader anchored at the base or older) takes the late root, an older state of this
+  writer's own, by C1. The writer itself never does, and never refuses for it. A late root that lands below an older
+  window (after further roots were built on the retry) is below the writer's listings; every reader takes the newer
+  chain (its head has the higher epoch), and the janitor deletes it. A late root whose hash aged out of the noted set
+  (256 root PUTs without a record) and that would be adopted (nothing newer recorded) stalls the vault as
+  `manifest_own_unexplained`, as before. **Tests:** vl-vaultfmt `EngineLateLander` (every position, with and without
+  a restart), `ManifestPublishVersionLog.AnOwnLateRootBelowTheSettledOneIsRemovedNotAnOrderViolation`; here
+  `ManifestApplyDb.AnOwnRootLandingBelowTheRecordedOneOnBackblazeIsRemovedNotRefused` (the adapters on the HTTP fake,
+  the database, the 60 s deadline carried) and `S3BufferPutDeadline.APutThatGetsNoAnswerFailsAtItsDeadline` (real
+  curl against a listener that never answers).
 
 ### 5.3 Reader (`Service::verifyRemote`, `manifest::load`, `vault::recover`)
 
@@ -217,6 +286,28 @@ root as a gap (`ManifestChainVersionLog.AnAnchorBehindAMissingVersion*`).
 
 ### 5.5 Who may write (both paths)
 
+**One writer on a `version_log` bucket (2026-11-16).** Several writers there are refused, because Backblaze orders
+versions by upload start (§4): another writer's root that started first and completed later can land below a root
+this writer settled, which §5.4's finding 7a showed and §11 doesn't make safe yet. Enforced in the library, so every
+path meets it: a publish whose root would name more than one writer throws `WritersRefused` before any PUT
+(`PublishOptions::version_log_writers`, default 1; a join carried in the options, a replicated vault whose bucket was
+re-probed as `version_log`, a restore onto one of the root's writers); a removal that leaves one writer is taken. The
+server refuses a join earlier, before anything is written: `requireJoinable` (`ops/VaultRecover.cpp`) refuses
+`join_version_log` when the root names `version_log` or the binding's probe found it, for a join by kit and through the
+cloud alike (`VaultRecoverDb.AJoinOfAVersionLogVaultIsRefusedBeforeAnythingIsWritten`,
+`VaultRecoverFromCloud.AJoinOfAVersionLogVaultIsRefusedAfterTheKeysArriveAndWritesNothing`; through the cloud the
+command then cancels the restore and reports the replica left). A managed vault on Backblaze is refused earlier still,
+before its bucket credential is asked for (`cloud_storage::joinBucketKey`,
+`CloudStorageTest.AJoinOfAManagedVaultOnBackblazeIsRefusedBeforeAnyCredential`); the cloud has approved the join by then
+(its approval adds the replica), so the refusal is reported back as a leave. The cloud refusing such a join at its
+request is the cloud's to add (vaulthalla-cloud). The engine's `join` refuses on such a bucket
+(`writers_refused`, C status 632; `EngineTwoMacsVersionLog.ASecondMacCantJoinAVersionLogVaultAndNothingIsRecorded`).
+A restore elsewhere still takes the vault over (its first root names the restoring node alone); while the old node
+keeps publishing the two race as two writers: under commit order the old node stops as `superseded`; under start
+order either one can be refused (`order_violation` or `fork`) when the other's root lands below its own. Nothing is
+lost (each database keeps its state), but stop the old server before restoring a `version_log` vault elsewhere.
+
+
 The root gains `writers`, the node ids allowed to publish (the producer among them; one for a solo vault). **A daemon
 not in the head's `writers` stops publishing the vault** (`manifest_superseded`, alert); any key holder may change the
 set. This closes a gap: spec 03 §6.2 step 7 expects the old node to see a fork after a restore elsewhere, but it does
@@ -241,7 +332,8 @@ took the vault over, has nothing its database lacks.
 | Slow writer lands long after others moved on | its `prev` already has a successor: sibling; it deletes its version and merges onto the head; readers ignore it |
 | Three writers on one base | the earliest wins, the others merge and race again; *n* writers settle within *n* rounds (I7) |
 | Reader in the middle | sees a prefix of the canonical chain (A3) and GETs the head by version id, even under a newer loser |
-| Restore elsewhere while the old node lives | the restored root has `writers = [new]`; if the old node wins a race the restore merges onto it, keeps its `writers`, and the old node stops (§5.5) |
+| Restore elsewhere while the old node lives | the restored root has `writers = [new]`; if the old node wins a race the restore merges onto it, keeps its `writers`, and the old node stops (§5.5); on a start-ordered bucket either side may be refused instead (§5.5) |
+| Lost reply, root lands late (one writer, start order) | before the retry is sealed, or before the retry's listing: adopted (the earliest successor, noted); after the retry won or was recorded: inside the settled window, this writer's own superseded attempt, deleted (§5.2); after roots on the retry: below the listings, the janitor's |
 | Bucket replays an old root as a new version | stale: ignored, reported, repaired; rollback detection as spec 03 §4.5 |
 
 **As implemented:** "restore elsewhere while the old node lives": the restore's first publish names the restored
@@ -285,6 +377,28 @@ rests on documented B2 behaviour**; two or more writers (a mirror, a restore rac
 
 **As implemented:** I1-I9 are checked after every step of the §8.2 scheduler. Under broken A4 the suite found the
 I6 exception described in §5.4 (repair deleting a displaced settled root with nothing on top).
+
+**Under start ordering (Backblaze, 2026-11-16), one writer.** A3's first half and A1, A2, A5, A6 hold; A4 fails only
+for a root PUT this writer gave up on (§4). I1, I2, I4, I7 (one round), I9 hold unchanged. **I3** holds for the
+writer: a version that sorts inside its settled window is its own superseded attempt (§5.2), removed, never a
+reason to change its chain; one from anyone else is `order_violation` (I8). **I5** holds for the writer and for every
+reader that holds its anchor; a reader without it (blind, or anchored at the base or older) can take a late root
+between its landing and the writer's next listing (§5.2, "The window that remains"). **I6** reads: Vaulthalla
+deletes only versions off the canonical chain from the deleting writer's settled anchor (strays, losers, its own
+superseded attempts inside its settled window, which C1 from an older anchor would take: deleting them makes every
+anchor agree again), canonical roots ≥ 3 epochs and 7 days behind, and unreferenced segments as before. **I8** detects
+every foreign intruder. **Several writers:** A4 is needed and false; I3, and with it I5 and I6, fail (finding 7a), so
+they are refused (§5.5); §11 is the proposal.
+
+| Invariant | One writer, commit order | One writer, start order (B2) | Several writers, start order (B2) |
+|---|---|---|---|
+| I1, I2, I9 | hold | hold | hold |
+| I3 | holds | holds for the writer (own late roots removed) | **fails** (refused) |
+| I4 | holds | holds | holds only with I3 |
+| I5 | holds | writer and anchored readers; blind readers: the window of §5.2 | **fails** (refused) |
+| I6 | holds | holds as restated above | **fails** (finding 7a; refused) |
+| I7 | one round | one round | n rounds only with I3 |
+| I8 | holds | holds (foreign intruders) | holds: detects, after the fact |
 
 ## 7. Choosing the path
 
@@ -379,6 +493,16 @@ once, so none has a root on top of a displaced one and the repair rule's change 
 test). A head under a crashed loser past
 `expireNoncurrent` fails as `fork` (`ManifestChainVersionLog`). `vault::recover` over a bucket with a losing sibling
 and a marker: `VaultRecoverDb.OnABackblazeLike*`. The one extra LIST: `ManifestPublishVersionLog.ASoloPublish*`.
+**Backblaze's order is the fakes' default (2026-11-16).** vl-vaultfmt's `MemoryBucket::provider(Backblaze)` and this
+repository's `VersionedBucket::backblaze()` refuse conditional PUTs (501) and order a key's versions by when their
+upload started; a version is listed once complete and keeps its place. Every suite that runs `version_log` uses them.
+`loseNextPut(key)` / `land(key)` model the late root (a lost reply whose upload completes later, at its start). The
+single-writer story under it: publish, repair, GC and the janitor, the crash and lost-reply cases, and the late root
+in every position (`EngineLateLander`: before the retry is sealed, between the retry's PUT and its listing, after the
+retry won, after a crash before its record, after its record, after roots on it; each with and without a restart),
+`ManifestPublishVersionLog.AnOwnLateRootBelowTheSettledOneIsRemovedNotAnOrderViolation`, and here through the adapters
+`ManifestApplyDb.AnOwnRootLandingBelowTheRecordedOneOnBackblazeIsRemovedNotRefused`. The interleaving suites keep
+studying several writers with `version_log_writers` raised (production refuses them).
 §8.3: `LiveB2.TheManifestPublishesAsVersionsOfItsRoot` (opt-in; passes live as of 2026-11-14: publishes 2-4 cost
 2 PUT and 1 LIST each, the first 3 PUT and 3 LIST) covers the probe, publishes, a blind
 reload, a repaired sibling, GC of every version and an envelope; items 3-8 are not automated.
@@ -401,14 +525,103 @@ key lists versions and deletes by id; (8) the recover drill on B2, then two daem
    with §8.1-8.2: solo `opaque_v1` vaults then work on B2. Managed remotes (plan workstream E) build on 3-5. *Done;
    not yet run against Backblaze (§8.3).*
 6. The drill in `version_log` mode on the fake (`vhh drill recover`), then live (§8.3 item 8).
-7. Multi-writer enablement (wave 3) once A3 and A4 are confirmed (`mirrors.md`).
+7. Multi-writer enablement (wave 3). A4 is false on Backblaze (2026-11-16): several writers on a `version_log`
+   bucket are refused (§5.5); replicas need conditional PUT (AWS, R2). For B2, §11's proposal, if the maintainer
+   takes it (`mirrors.md`).
 
 ## 10. Open questions (recommendation first)
 
 1. **Path for B2:** versions of the root key under C1; epoch-named roots only for providers without versioning, later.
-2. **If B2 breaks A3 or A4:** solo vaults only on B2 (mirrors refuse such buckets), plus a settle delay (decide on a
-   listing Δ after the PUT) only if the measured lag is bounded. No cloud arbiter.
+2. **If B2 breaks A3 or A4:** it breaks A4 (2026-11-16, §4). Answered as recommended: solo vaults only on B2,
+   enforced (§5.5; a join or a root naming several writers is refused). A settle delay is worked out in §11.1: it
+   rests on a bound Backblaze doesn't document, so §11 recommends one root log per writer instead. No cloud arbiter.
 3. **Root history:** three canonical roots and seven days, kept by the janitor; no lifecycle rule on the root.
 4. **A provider failing GET `If-Match`:** refuse the bucket rather than read unpinned.
 5. **`writers` in both modes,** shipped with work item 5 (a root format addition to spec 03 §3.2).
 6. **Backblaze (plan §8):** add listing consistency and the order of near-simultaneous versions to question 1.
+   Measured: listings show a completed version at once; near-simultaneous versions are ordered by upload start.
+
+## 11. Several writers on a start-ordered bucket (proposal for the maintainer; nothing here is built)
+
+**The model, as measured** (§4). Each version *v* of the root key has a start *s(v)* (when the provider took the
+request) and a completion *c(v)* ≥ *s(v)*. A listing at provider time *t* shows the versions with *c(v)* ≤ *t*, ordered
+by *s(v)*, and that order never changes once two versions are both listed. The hazard is a version *S* with
+*s(S)* < *s(R)* that completes after the listing on which a writer settled *R*: it sorts below *R* and, by C1, may
+displace it. One writer only meets its own (§5.2). Two writers meet each other's.
+
+### 11.1 A settling period
+
+**Rule.** A root *R* is canonical (recorded, built on, read as known) only once a listing ℓ whose **provider time**
+*T*(ℓ) satisfies *T*(ℓ) ≥ *c*(*R*) + *D* + *L* + ε still makes *R* the earliest successor of its base.
+
+- **What each writer bounds.** *D*: the deadline of a root PUT, from the client's start of the request to its end
+  (body and reply). At *D* the client aborts and closes the connection; a body not received in full is never
+  committed. The client starts before the provider does, so a version that ever completes has had its body received
+  by *s(v)* + *D*. Proposed *D* = 15 s for a replicated vault (roots are small; today's 60 s is the solo default).
+- **What the provider must bound (assumption B).** *L*: from receiving a whole body to committing it. Backblaze
+  documents no such bound. With B, *c(v)* ≤ *s(v)* + *D* + *L* for every version that completes.
+- **Where "now" comes from (assumption C).** The provider's clock only: *T*(ℓ) is the `Date` header of the
+  `ListObjectVersions` response, *c*(*R*) the `Date` of *R*'s PUT response (an upper bound of *s*(*R*); `LastModified`
+  serves for other writers' roots once its meaning, start or completion, is measured: either is ≥ *s*). ε covers the
+  `Date` header's one-second resolution and the skew between the provider's front ends. Local clocks only pace the
+  sleep; they decide nothing (writers' clocks stay untrusted, §3).
+- **Why it is sound under B and C (I3).** Let *S* sort before *R*, *R* settled on ℓ. Then *s(S)* < *s(R)* ≤ *c(R)*, and
+  by B *c(S)* ≤ *s(S)* + *D* + *L* < *c(R)* + *D* + *L* ≤ *T*(ℓ) (C: ε), so ℓ listed *S* and C1 on ℓ chose *S*, not *R*:
+  contradiction. Every base is settled by induction, so I3 holds; I4-I7 and I9 follow as in §6 (I7: *n* writers
+  settle within *n* rounds, each round now one wait long). I8 still detects a violation of B or C after the fact.
+- **What the publisher waits for.** After its PUT and first listing (which decides a loss at once, as today), a
+  publish that would win sleeps until the provider's clock passes *c*(*R*) + *D* + *L* + ε, lists again (the settling
+  listing) and records only if *R* is still the earliest successor. Its changes stay pending meanwhile.
+- **What a reader waits for.** A head newer than *T*(ℓ) − *D* − *L* − ε is *settling*: shown as such, never recorded as
+  known, never a checkpoint, never built on (a writer that meets a settling head waits for it before applying it). A
+  reader without an anchor then decides exactly as writers do, because nothing can enter below a settled root.
+- **Cost per publish.** One more `ListObjectVersions` (the settling listing) and the wait: about 30 s with *D* = 15 s
+  and *L* = 10 s, so a publish takes half a minute longer to become known. A lost round costs another wait. A pass
+  that changed nothing still costs one HEAD; readers pay nothing extra (the listing's `Date` comes free).
+- **Residual risk.** B is the provider's tail latency, not a property it promises: an internal retry or a storage
+  node failover after the body was received can commit later than *L*. Then a late sibling sorts below a settled
+  root. Every writer anchored on that root detects it (`order_violation`) and stops: safe, but every writer of the
+  vault stops until an operator resolves it. A reader without an anchor, meeting it while the displaced root is the
+  head, takes the late sibling (an older state). Not silent for writers; possibly wrong for a restore at that moment.
+- **What a live test must show before it could be enabled** (each run on its own `vh-test-*` bucket, approved one
+  at a time): (1) what `LastModified` records (start or completion) and how the `Date` header behaves: resolution,
+  monotonicity, skew across fresh connections and front ends (thousands of samples); (2) the commit latency after a
+  whole body is received: clients that send the full body and then close without reading the reply, sizes like
+  roots, thousands of trials, the time each version appears against the `Date` it carries; (3) that a body aborted
+  before it was sent in full never appears (thousands of trials, watched for at least an hour); (4) under 2 to 8
+  concurrent writers with client stalls up to *D*, every decision taken on a listing at *T* ≥ *c* + *D* + *L* + ε is
+  final: 0 violations in at least 10,000 settle decisions, *L* taken well above the measured tail. Even then B
+  would rest on measurement, not on a promise.
+
+**Verdict.** A settling period makes the protocol sound only under B, which Backblaze doesn't document; its failure
+mode stops every writer of the vault. It is not recommended as the way to several writers.
+
+### 11.2 One root log per writer (recommended)
+
+Each writer publishes its own root chain under its own key, `.vaulthalla/root/<writer>` (one bucket, content shared:
+`o/<uid>` names are already collision-free). Each log has exactly one writer, which is the case this change proves
+safe under start ordering (§5.2, §6) with A1, A2, A5 and A6 alone: no timing assumption. Each root names the heads of
+the other writers' logs it applied (`applied: {node: [epoch, sha]}`), so for any set of heads one either dominates
+(it applied every other writer's latest: the vault's state) or the heads are concurrent (the replicas' merge in
+progress, which every writer already performs through the applier, `design/sync/manifest-applier.md`).
+
+- **Writer:** publish on its own log as a solo vault does; apply the other logs' new heads as it applies another
+  writer's root today (the base copy per log).
+- **Reader and restore:** list the logs named by the writers set, take the dominating head; with none, the newest
+  head's state with a "replicas not yet merged" report (a restore merges them as the applier would).
+- **Costs:** a pass that changed nothing costs one HEAD per writer (at most three); a publish costs the solo price;
+  GC keeps every log's last three roots' segments; the janitor runs per log.
+- **Format:** a root key per writer, the `applied` member (a writer floor, so older writers can't drop it), the wasm
+  reader and restore taught to pick the dominating head. Spec 03 §3 amendment, vectors.
+- **Invariants:** I1-I9 per log as for one writer; across logs, convergence is the applier's (already tested on
+  conditional buckets by the mirror drill).
+
+### 11.3 The rest
+
+- **An arbiter** (a compare-and-swap pointer at vaulthalla.cloud): sound by construction; still rejected for BYOS and
+  for availability and trust (§3). Acceptable only for managed vaults if 11.2 proves too costly.
+- **One bucket per writer:** what 11.2 gives, at the price of a bucket and key per replica and cross-bucket content
+  references; not needed, one key per writer suffices.
+
+**Recommendation:** 11.2, one root log per writer; until it is built, several writers stay refused on `version_log`
+buckets (§5.5), and replicated vaults need a bucket with conditional PUT.

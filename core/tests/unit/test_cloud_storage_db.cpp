@@ -150,6 +150,7 @@ struct FakeCloud {
     bool holdPending = false;    // switched-on buckets stay pending
     bool loseNextCredential = false;
     bool reachable = true;
+    std::string provider = "fake";   // the account's managed-storage provider (b2: Backblaze)
     std::set<std::string> foreign;   // registered by another deployment
     std::vector<std::string> calls;
 
@@ -333,7 +334,7 @@ struct FakeCloud {
                                {"account_key_offline_copy_confirmed", offlineCopy},
                                {"ejection", nullptr},
                                {"ejection_portal_url", portal ? json(*portal) : json(nullptr)},
-                               {"provider", "fake"},
+                               {"provider", provider},
                                {"vaults", vaultList}});
         }
         if (r.method == "GET" && path == "/v1/billing")
@@ -1298,6 +1299,25 @@ TEST_F(CloudStorageTest, AManagedVaultRestoredHereGetsAKeyOfItsOwnAndIsAdoptedOn
     EXPECT_EQ(cloud_.keys.at(again.key_id).state, "active") << "acknowledged once adopted";
     EXPECT_EQ(storage::remote_access::mode(id), storage::remote_access::Mode::Full);
     DB::remove(id);   // later tests in the suite share the fake cloud buckets and API key manager
+}
+
+// vh vault join --from-cloud of a managed vault on Backblaze: managed storage there publishes without conditional
+// writes (version_log), where a second writer is refused (spec 06 §5.5). Refused before a bucket credential is asked
+// for; on another provider the key is issued as before.
+TEST_F(CloudStorageTest, AJoinOfAManagedVaultOnBackblazeIsRefusedBeforeAnyCredential) {
+    linkAndPin();
+    const auto id = activeVault();
+    const auto uid = uidOf(id);
+    const auto credentialRequests = [&] {
+        return std::ranges::count_if(cloud_.calls, [](const std::string& c) {
+            return c.starts_with("POST /v1/storage/vaults/") && c.ends_with("/credentials");
+        });
+    };
+    cloud_.provider = "b2";
+    const auto before = credentialRequests();
+    EXPECT_EQ(code([&] { return cs::joinBucketKey(superUser, uid); }), "join_version_log");
+    EXPECT_EQ(credentialRequests(), before) << "no credential was asked for";
+    cloud_.provider = "fake";
 }
 
 TEST_F(CloudStorageTest, NoRestoreKeyWithoutAConfirmedAccountKey) {

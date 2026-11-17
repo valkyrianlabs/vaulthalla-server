@@ -234,8 +234,8 @@ and `ManifestChain*` in both modes, DB-backed `test_manifest_db.cpp`, `VaultReco
    compare-and-set skip, an open working copy deferred then applied or turned into a conflict, a share link on a
    moved and on a deleted folder, cached bytes dropped and rehydrated, the journal contract classifying the writers,
    and a solo vault's pass still costing one HEAD.
-4. Two daemons on one fake bucket in the Tier B harness (a `vhh drill mirror`), then on Backblaze (spec 06 §8.3
-   item 8) once A3 and A4 are confirmed.
+4. Two daemons on one fake bucket in the Tier B harness (a `vhh drill mirror`). Not on Backblaze: A4 is false there
+   (spec 06 §4, 2026-11-16) and several writers on a `version_log` bucket are refused (spec 06 §5.5).
 
 ## Work items, in landing order
 
@@ -456,6 +456,13 @@ before anything is applied:
   another one; that publish then meets it (412, or C1 naming it) and adopts it. At 256 the oldest hash goes: that takes
   256 root PUTs without one record, and a dropped hash that matters (its root lands later still) stalls the vault
   (`ApplyStopped`), never misapplies it. Undo: the last hash alone (the first fix), which stalled this case.
+  *Below the recorded root (start ordering, 2026-11-16).* On Backblaze a late root sorts by its upload start, so when
+  the retry already won (or was recorded) it lands below it, inside the settled window. The noted set no longer holds
+  it then (the record reset it): the producer identity does. vl-vaultfmt 0.4.0 recognises it as this server's own
+  superseded attempt (`windowIntruders`, a sibling of the settled root by this node and vault) and deletes it, where it
+  used to refuse the vault as `order_violation` (spec 06 §5.2, "A late root of our own";
+  `ManifestApplyDb.AnOwnRootLandingBelowTheRecordedOneOnBackblazeIsRemovedNotRefused`). Undo: vl-vaultfmt's
+  `windowIntruders` back to `windowBroken` (every intruder refuses).
 - *OwnUnexplained*: names this node and vault but fails the rest. No publish of this server leaves one (every publish
   builds on `known`, and a moved head is applied or adopted before the next), so another installation is publishing
   under this identity: `ApplyStopped`, never guessed.
@@ -557,7 +564,7 @@ vault's or key version's envelope, a kid that isn't its bytes' hash), `.AMirrorV
 2. Key rotation by one replica: the other can't open roots sealed under the new key (`manifest_key_missing`, a stall,
    no loss); the rotation owner and the key hand-over are `mirrors.md`'s.
 3. ~~Content edit/edit across replicas~~, 4. ~~an orphan collection~~ and 5. ~~the drill on a fake bucket~~: done,
-   see "As built: the mirror drill" below. Backblaze still waits for spec 06's A3 and A4.
+   see "As built: the mirror drill" below. Backblaze: refused (spec 06 §4: versions ordered by upload start; §5.5).
 
 
 ## As built: the mirror drill (branch `feat/replica-drill`; migrations 148, 149)
@@ -672,7 +679,7 @@ sessions are refused (MCP excludes all three commands). No operator page and no 
 | Two ways to deliver the keys, one join underneath: the recovery kit (`vh vault join --kit`, no cloud at all; BYOS with the operator's own `--api-key`) and the linked account through the restore relay (`--from-cloud`) | drop `ops::vault_replicas::join` and `Request::join` |
 | Only a solo vault rotates: every path that mints a key version refuses on a replicated vault, saying how (remove the other replicas, rotate, join them again: a join delivers the current keys). No replica keys, no pending versions | drop `refuseIfReplicated` in `EncryptionManager::prepare_key_rotation` / `mintSalvageKey` and `runSalvage` |
 | Refused on a replicated vault: layout migration, key salvage, a second copy of the vault uid on one server, the `mirror` strategy, adding (or revoking) a recovery recipient here | the `refuseIfReplicated` calls in `VaultLayout::start`, `Vaults::refuseMirrorOnReplica`, `RecoveryRecipients::add/revoke`, and the `vault_uid_exists` check |
-| At most three writers (`kMaxWriters`); replicas only on buckets with conditional PUT (a `version_log` root or probe refuses the join) until spec 06's A3 and A4 are confirmed live | `requireJoinable`, `WritersRefused` |
+| At most three writers (`kMaxWriters`); replicas only on buckets with conditional PUT (a `version_log` root or probe refuses the join, `join_version_log`; the library refuses any root naming several writers there, `PublishOptions::version_log_writers`): A4 is false on Backblaze (spec 06 §4, 2026-11-16) | `requireJoinable`, `WritersRefused`, `version_log_writers` |
 
 **Decisions of mine (compatibility policy, rule 5), each with its undo:**
 
@@ -696,7 +703,8 @@ sessions are refused (MCP excludes all three commands). No operator page and no 
 **How it runs.** `vh vault join` is `vh vault recover` in join mode (`ops::vault_recover::Request::join`): the same D1
 proofs, every version canonical (`join_key_unproven` otherwise; no salvage), the manifest's name (`--into` refused),
 nothing downloaded. `requireJoinable` refuses `join_no_manifest`, `join_already_writer`, `replica_limit`,
-`join_version_log`, `join_publish_mode` (the probe of the binding is not conditional) and `join_grant_local_only` (a
+`join_version_log` (the root names `version_log`, or the binding's probe found it), `join_publish_mode` (the probe
+found neither mode) and `join_grant_local_only` (a
 usable recipient the root lists that this server can't re-enroll identically, or an account-key grant it doesn't pin).
 `Recover::apply` records the loaded root's writers and the writers change "add this node"; the vault's first publish
 then names the old writers plus this node. The other side applies that root on its next pass and keeps the new writer

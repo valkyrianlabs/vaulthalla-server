@@ -148,15 +148,21 @@ void requireJoinable(const rec::Plan& plan, const rec::Material& material, const
                       fmt::format("key version(s) {} are not proven by an attestation key your material pins; a join "
                                   "delivers every version canonically (--dry-run shows why per version)",
                                   versionList(blocking)));
-    // Spec 06's version_log (Backblaze) takes several writers only once A3 and A4 are confirmed live.
+    // Several writers on a version_log bucket are refused (spec 06 §4, §11): Backblaze orders a key's versions by when
+    // their upload started (measured 2026-11-16), so another writer's slow root can land below one this server
+    // settled, which the protocol can't make safe for several writers. The library refuses such a root too
+    // (PublishOptions::version_log_writers); refusing here writes nothing.
     if (plan.publish_mode && *plan.publish_mode == "version_log")
-        throw Refused("join_version_log", "the vault's bucket publishes its manifest without conditional writes "
-                                          "(version_log): replicas need a bucket with conditional PUT for now");
+        throw Refused("join_version_log",
+                      "the vault's bucket publishes its manifest without conditional writes (version_log), where the "
+                      "provider orders versions by upload start (Backblaze): a second writer there could have its root "
+                      "land below one the first already settled, so replicas need a bucket with conditional PUT");
     if (const auto probe = storage::bucket_capability::probeBinding(req.api_key_id, req.bucket, true)) {
         if (probe->capability != mf::WriteCapability::Conditional)
-            throw Refused("join_publish_mode",
-                          fmt::format("the bucket's probe found {} ({}); replicas need conditional PUT, the mode the "
-                                      "vault's root publishes with",
+            throw Refused(probe->capability == mf::WriteCapability::VersionLog ? "join_version_log" : "join_publish_mode",
+                          fmt::format("the bucket's probe found {} ({}); replicas need conditional PUT: on a bucket "
+                                      "without it (version_log) the provider orders versions by upload start, and a "
+                                      "second writer's root could land below one the first already settled",
                                       mf::to_string(probe->capability), probe->reason));
     }
     // Every recovery grant must be one this server holds too (re-enrolled from the root): a grant one replica has

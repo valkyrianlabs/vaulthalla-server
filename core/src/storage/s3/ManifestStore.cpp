@@ -2,6 +2,8 @@
 
 #include "storage/s3/Controller.hpp"
 
+#include <vl/vaultfmt/manifest/Objects.hpp>
+
 #include <pugixml.hpp>
 
 #include <cstdio>
@@ -10,6 +12,13 @@
 namespace vh::storage::s3 {
 
 namespace manifest_store_detail {
+
+// The root's PUT carries its deadline (kManifestRootPutDeadline); every other manifest object the stall bound only.
+RequestOptions optionsFor(const std::string& key) {
+    RequestOptions o;
+    if (key == vl::vaultfmt::manifest::kRootKey) o.timeout = kManifestRootPutDeadline;
+    return o;
+}
 
 // "2026-11-05T12:00:00.000Z" (ListObjectsV2 LastModified).
 std::optional<std::time_t> parseListTime(const std::string& value) {
@@ -80,7 +89,7 @@ std::optional<std::string> ManifestStore::headEtag(const std::string& key) {
 std::string ManifestStore::put(const std::string& key, const std::vector<uint8_t>& bytes,
                          const std::optional<std::string>& ifMatch, const std::optional<std::string>& ifNoneMatch) {
     try {
-        s3_->uploadBufferWithMetadataConditional(key, bytes, RequestOptions{}, ifMatch, ifNoneMatch);
+        s3_->uploadBufferWithMetadataConditional(key, bytes, manifest_store_detail::optionsFor(key), ifMatch, ifNoneMatch);
     } catch (const ConditionalRequestFailed& e) {
         throw vl::vaultfmt::manifest::PreconditionFailed(e.what());
     } catch (const PreconditionsUnsupported& e) {
@@ -91,7 +100,8 @@ std::string ManifestStore::put(const std::string& key, const std::vector<uint8_t
 
 vl::vaultfmt::manifest::PutResult ManifestStore::put(const std::string& key, const std::vector<uint8_t>& bytes) {
     try {
-        s3_->uploadBufferWithMetadataConditional(key, bytes, RequestOptions{}, std::nullopt, std::nullopt);
+        s3_->uploadBufferWithMetadataConditional(key, bytes, manifest_store_detail::optionsFor(key), std::nullopt,
+                                                 std::nullopt);
     } catch (const RequestBudgetExceeded&) {
         throw;  // refused before anything was sent
     } catch (const upstream::BucketProtected&) {

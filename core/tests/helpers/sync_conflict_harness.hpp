@@ -130,7 +130,7 @@ public:
 
     void uploadObjectWithMetadata(const std::filesystem::path& key, const std::filesystem::path& file,
                                   const std::unordered_map<std::string, std::string>& metadata) const override {
-        uploadObjectWithMetadata(key, file, storage::s3::RequestOptions{.system_headers = {}, .metadata = metadata});
+        uploadObjectWithMetadata(key, file, storage::s3::RequestOptions{.system_headers = {}, .metadata = metadata, .timeout = {}});
     }
 
     void uploadBufferWithMetadata(const std::filesystem::path& key, const std::vector<uint8_t>& buffer,
@@ -143,7 +143,7 @@ public:
 
     void uploadBufferWithMetadata(const std::filesystem::path& key, const std::vector<uint8_t>& buffer,
                                   const std::unordered_map<std::string, std::string>& metadata) const override {
-        uploadBufferWithMetadata(key, buffer, storage::s3::RequestOptions{.system_headers = {}, .metadata = metadata});
+        uploadBufferWithMetadata(key, buffer, storage::s3::RequestOptions{.system_headers = {}, .metadata = metadata, .timeout = {}});
     }
 
     void uploadBufferWithMetadataConditional(const std::filesystem::path& key, const std::vector<uint8_t>& buffer,
@@ -166,7 +166,7 @@ public:
                                              const std::unordered_map<std::string, std::string>& metadata,
                                              const std::optional<std::string>& ifMatch,
                                              const std::optional<std::string>& ifNoneMatch) const override {
-        uploadBufferWithMetadataConditional(key, buffer, storage::s3::RequestOptions{.system_headers = {}, .metadata = metadata},
+        uploadBufferWithMetadataConditional(key, buffer, storage::s3::RequestOptions{.system_headers = {}, .metadata = metadata, .timeout = {}},
                                             ifMatch, ifNoneMatch);
     }
 
