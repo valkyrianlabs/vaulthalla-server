@@ -3,7 +3,7 @@
 How a node lets a hosted AI client (Claude on the web, phone and desktop, ChatGPT, Claude Code and Codex on another
 machine) use its MCP tools through OAuth 2.1 on the public HTTPS port, without weakening anything the local `vh mcp`
 and the device listener's `/mcp` enforce today. Held here, never published, until it is built; the operator page
-(`docs/admin/remote-connectors.md`) is written with step 9.
+(`docs/admin/remote-connectors.md`) is written with step 10.
 
 Governing texts: MCP authorization, revision 2025-11-25 (the catalog's newest version), and the RFCs it names: OAuth
 2.1 (draft-ietf-oauth-v2-1-13), RFC 8414 (server metadata), RFC 9728 (protected resource metadata), RFC 8707
@@ -32,7 +32,7 @@ document-00). Vendor facts (Claude, ChatGPT, Codex) are in the brief that commis
 | Effect per leaf | Every leaf declares `CommandEffect::Read|Write|Destructive`; `Invocation::effect` is the stronger of op and leaf; `Catalog::leaves()` | The scope ceiling (below) is a catalog filter on exactly this field. `Unset` is refused. |
 | Exclusions | `mcp::exclusions()`; key handlers refuse under `AgentCallScope` (D4) | Unchanged; `connector` (the new command group) is added, so no agent can see or change grants. |
 | Step-up | `auth::stepup::require(family, target)`; Channel Agent always refuses (`methods: []`); Web grants bound to user + refresh jti + family + target; families `keys`, `device.trust`, `data.destroy` (target-bound, no password alone) and the family-wide ones; console `StepUpDialog` | Remote calls run as Channel Agent, so every step-up operation is refused; the refusal text is replaced by a plain one. Consent and the switch use a new target-bound family `connector.trust` (rules of `device.trust`: passkey or TOTP, never password alone, a cooldown family). |
-| Who may approve | Devices follow D3 (any signed-in user, own account, no new permission bits); MFA "privileged" set; super admin | No new permission bits. A node policy names who may grant (open question 1); each user grants only for their own account. |
+| Who may approve | Devices follow D3 (any signed-in user, own account, no new permission bits); MFA "privileged" set; super admin | No new permission bits. Who may grant is one policy function (super admins, "Decided"); each user grants only for their own account. |
 | Revocation triggers | `identities::Manager::setPublishedHook` → `reconcile(userIds)` (used by key-backup grants), `auth::Manager::revokeSessions`, `auth::mfa::recovery` effects | The same hooks end grants (below). |
 | Token storage | `refresh_tokens.token_hash` = `crypto::hash::tokenDigest()` (`sha256:<hex>`), `verifyToken` constant time | Same digest for connector refresh tokens; access tokens and codes never touch disk. |
 | Audit | `audit::record(Event, message)` into the hash-chained `audit_event`; `log::AuditOrigin` suffix on every line a command writes | New `connector.*` actions; origin `connector <grant id16>`. |
@@ -79,7 +79,7 @@ bound and nginx answers these paths 404, as any unknown path is today.
 | `POST /oauth/token` `grant_type=refresh_token` | `refresh_token`, `client_id`, `resource?` (must match), `scope?` (may narrow, never widen) | as above, with a new refresh token | `invalid_grant` for every refresh failure (Claude's expectation), 503 as above |
 | `POST /oauth/revoke` | `token`, `token_type_hint?`, `client_id` | 200 always (RFC 7009) | A refresh token ends its grant; an access token ends only itself; another client's token is a silent no-op. |
 | `POST /oauth/register` (only while DCR is on, else 404) | RFC 7591 JSON: `redirect_uris` (required), `client_name`, `token_endpoint_auth_method: "none"`, `grant_types` ⊆ {authorization_code, refresh_token}, `response_types` = [code] | 201 `{client_id: "vhc_…", client_id_issued_at, client_name, redirect_uris, token_endpoint_auth_method: "none", grant_types, response_types}`; no secret, no registration access token | `invalid_redirect_uri`, `invalid_client_metadata`; 429 |
-| `POST /mcp` | `Authorization: Bearer <access token>`; the device transport's rules (JSON, no batch, version header) | the same JSON-RPC answers as the device `/mcp` | No or bad token: 401 `WWW-Authenticate: Bearer resource_metadata="<origin>/.well-known/oauth-protected-resource/mcp", scope="read"` (+ `error="invalid_token"` when one was sent). Token for another audience: 401. `Origin` present: 403 (as on the device listener; see open item in step 9). `GET`/`DELETE`: 405. 429 over the limits. |
+| `POST /mcp` | `Authorization: Bearer <access token>`; the device transport's rules (JSON, no batch, version header) | the same JSON-RPC answers as the device `/mcp` | No or bad token: 401 `WWW-Authenticate: Bearer resource_metadata="<origin>/.well-known/oauth-protected-resource/mcp", scope="read"` (+ `error="invalid_token"` when one was sent). Token for another audience: 401. `Origin` present: 403 (as on the device listener; see open item in step 10). `GET`/`DELETE`: 405. 429 over the limits. |
 
 **Scopes are a ceiling on `effect`,** cumulative: `read` = Read leaves; `write` = Read and Write; `destructive` = all
 three, and a destructive call still needs `confirm: {"destructive": true}`. `tools/list` shows only tools under the
@@ -105,8 +105,8 @@ it runs exactly as the device's `/mcp` does, with origin `connector <grant id16>
 
 The starting position holds. CIMD is what Claude recommends and ChatGPT prefers, so both work with the default; DCR
 adds no identity at all (a name anyone can type) and an unauthenticated write path, so it stays off. A CLI that can
-only do DCR is served by an operator-registered client id or by turning DCR on (step 9 checks Codex and Claude Code;
-open question 4). In every case the consent page names the identity it actually has: for CIMD the host of the
+only do DCR is served by an operator-registered client id or by turning DCR on (step 10 checks Codex and Claude Code;
+"Decided" below). In every case the consent page names the identity it actually has: for CIMD the host of the
 `client_id` URL ("published by claude.ai"), for DCR "a self-registered app; its name is not verified", for a
 registered client "registered by <operator> on <date>"; and always the exact redirect host.
 
@@ -136,7 +136,7 @@ present that client id).
 | Authorization code | `vh_ac_` + 32 random bytes, base64url | memory, by digest, bound to client, redirect URI, challenge, resource, scope, user, request | 60 s, single use | A restart only makes the user click again. |
 | Access token | `vh_at_` + 32 random bytes | memory only, by digest, with grant id, audience, ceiling, expiry | 15 min | Short (MCP: SHOULD be short-lived). Revocation is immediate anyway (grant checked per call); the lifetime bounds a stolen token whose grant is not yet revoked. Lost on restart: clients get 401 and refresh, which Claude does. |
 | Refresh token | `vh_rt_` + 32 random bytes | `connector_refresh_tokens.token_digest` = `tokenDigest()` (sha256; 256-bit server-minted, so no password hash) | rotated on every use; 30 days idle | OAuth 2.1 requires rotation for public clients. |
-| Grant | row | `connector_grants` | 90 days absolute, then reconnect (open question 3) | A forgotten connection ends by itself. |
+| Grant | row | `connector_grants` | 90 days absolute, then reconnect ("Decided") | A forgotten connection ends by itself. |
 
 Opaque random tokens, not JWTs: only this node validates them, revocation needs a lookup either way, and nothing
 signed or decodable is handed to the vendor. The prefixes let secret scanners recognise a leaked token.
@@ -154,8 +154,8 @@ interpreted.
 
 ## Data model (migration 151)
 
-- `connector_settings` (singleton): `enabled`, `public_origin`, `grantors` (open question 1), `max_scope`
-  (open question 2), `cimd_enabled` (true), `dcr_enabled` (false), `enabled_by` → users SET NULL, `enabled_at`.
+- `connector_settings` (singleton): `enabled`, `public_origin`, `max_scope` (default `write`), `client_hosts`
+  (empty = any), `dcr_enabled` (false), `changed_by` → users SET NULL, `changed_at`.
 - `connector_clients`: `id` uuid, `client_id` TEXT UNIQUE, `kind` (`cimd|registered|dcr`), `name`, `redirect_uris`
   TEXT[], `document_sha256`, `fetched_at`, `cache_until`, `created_by` → users SET NULL, `created_at`,
   `last_used_at`, `disabled_at`. DCR rows that never complete a grant are deleted after 24 h; at most 100 live.
@@ -173,9 +173,9 @@ dev +100), which the nginx renderer reads.
 ## Who approves, and when a grant ends
 
 The signed-in console user approves for their own account only (no admin approves on someone's behalf), when the
-node's `grantors` policy includes them, with a `connector.trust` step-up bound to the request id and scope. A grant
+grantor policy (`connector::mayGrant`: super admins) includes them, with a `connector.trust` step-up bound to the request id and scope. A grant
 ends: revoked by its user or a super admin; its user deactivated or deleted (`setPublishedHook` → reconcile, and the
-per-call check); its user no longer in `grantors` (same); `revokeSessions` for that user (a password change or "sign
+per-call check); its user no longer a grantor (same); `revokeSessions` for that user (a password change or "sign
 out everywhere" also disconnects apps); an MFA recovery-code sign-in or an admin MFA reset; refresh or code reuse;
 idle or absolute expiry; its client removed; the switch turned off (every grant is revoked, so turning it on again
 never revives a forgotten connection).
@@ -195,7 +195,7 @@ with one line of what it allows, and only up to `max_scope`); and the custody bo
 > console are never available to it.
 
 Approve (then the step-up dialog) and Deny. Never auto-approved, not even for a client approved before. A user outside
-`grantors` sees why and can only deny. CSRF: there is no cookie-authenticated form; approval is a ws command on the
+the grantor policy sees why and can only deny. CSRF: there is no cookie-authenticated form; approval is a ws command on the
 console's own authenticated socket (Origin checked, `ws/OriginPolicy`), naming a 256-bit single-use request id, and
 needing a step-up gesture. Clickjacking: `frame-ancestors 'none'` and `X-Frame-Options: DENY` (already on every
 response of the site), plus the step-up gesture. Open redirects: the page only navigates to the `redirect` the daemon
@@ -282,16 +282,46 @@ are log lines through `RefusalLogThrottle`, never audit events, so nobody outsid
 - **RFC 7592 client management, token introspection, OpenID (`id_token`, userinfo), client logos.**
 - **Automatic `insufficient_scope` step-up:** see "Scopes"; reconnecting with wider access is the user's action.
 - **Remote console approvals for step-up operations** (`console_approval` for an agent): refused remotely, as given.
-- **A vendor allowlist or "trusted vendor" auto-approval:** every consent is explicit (open question 5).
+- **A vendor allowlist or "trusted vendor" auto-approval:** every consent is explicit ("Decided").
 - **Reaching a node without a public hostname** (through the Vaulthalla Cloud relay, or a listener with its own
   certificate): later; v1 is nginx with a certbot certificate only.
 - **An address allowlist rendered into nginx** (Claude's egress ranges): the browser and CLI clients come from
   elsewhere; documented as an optional firewall step.
 
+## Scoped devices (shape only; build step 4)
+
+Vaulthalla Desktop is about to give each AI app (Claude Code, Codex) its own device pairing per node, and the owner
+wants such a pairing to carry fewer permissions than his account. The ceiling built for grants is the same mechanism:
+the execution path takes it from the principal's limit (`protocols::mcp::Principal::ceiling`), not from anything only
+the connector knows. What a scoped device adds:
+
+- **Chosen at approval.** `device.pairing.approve` takes `scope` (`read` | `write` | `destructive`); a pairing
+  request may carry `requested_scope` (Desktop asks `read` for an AI app), which the approval preselects and may only
+  narrow, never widen. Absent means `destructive`: a Desktop pairing is the person's own app and stays exactly as it
+  is today.
+- **Stored on the device row.** `devices.scope TEXT NOT NULL DEFAULT 'destructive'` (the next migration; existing rows
+  unchanged), carried on `device::Peer` as `readOnly()` is for relayed browsers, and shown by `device.list` (and
+  `vh device list`). A scope never widens in place: a wider one is a new pairing.
+- **`/mcp` through the same ceiling.** One line: `protocols/device/Mcp.cpp` sets `Principal::ceiling` from the peer
+  instead of `Destructive`. Nothing else in steps 1 to 3 changes.
+- **ws commands by effect.** Every ws contract entry (`WsCommandUsage`) gains an `effect` (`read` | `write` |
+  `destructive`; a contract test refuses an entry without one, as `McpCatalog.EveryLeafDeclaresAnEffectAndOnlyLeaves`
+  does for CLI leaves). For a scoped device the ws router refuses a command whose effect is above the ceiling or
+  unknown: ERROR `device_scope {scope, effect}`, beside the relayed read-only check (which could then become scope
+  `read` plus the relay's narrower lane set). HTTP lanes: `read` = GET/HEAD `/preview*`, `/download*`, `/transfer*`;
+  `write` adds `/upload*`.
+- **Never for a scoped device, whatever its scope:** `device.pairing.*` (opening, approving, denying pairings),
+  `device.approval.*` (it neither asks for console approvals nor registers an approval key: a scoped device's commands
+  run under step-up `Channel::Agent`, which never steps up), `device.backup.grant.*` and `vault.keys.export|import`
+  (key custody stays with the person's own devices), `device.revoke` of any device but itself, and `connector.*`.
+- **Tests.** Pairing with each scope and with a narrowed request; a widened request refused; `device.list` shows it;
+  `/mcp` lists and runs only within the ceiling; a table-driven router probe over every ws command (allowed exactly
+  when within the ceiling and not in the never-list); existing Desktop pairings behave exactly as before.
+
 ## Build plan (each step lands separately, with its tests)
 
 1. **Shared MCP transport and the effect ceiling.** Move the HTTP handling out of `protocols/device/Mcp.cpp` into
-   `protocols/mcp/HttpTransport` with a `Principal {user, origin, ceiling, live()}`; `Catalog::tools(ceiling)` and
+   `protocols/mcp/HttpTransport` with a `Principal {user, origin, ceiling, ended()}`; `Catalog::tools(ceiling)` and
    a ceiling refusal in `prepare`. Tests: the device `/mcp` tests unchanged; `McpCatalog.CeilingListsAndRefuses*`
    table-driven over every leaf and typed tool (read never reaches a Write or Destructive leaf; `Unset` refused).
 2. **Migration 151, query layer, `connector::Grants`.** Tests (DB): code and refresh lifecycle, rotation CAS under
@@ -300,18 +330,21 @@ are log lines through `RefusalLogThrottle`, never audit events, so nobody outsid
 3. **`ops::connector`, `vh connector`, ws `connector.*`, step-up family `connector.trust`, exclusions, audit.** Tests:
    CLI option and example checks, `stepUpTable` entries, `exclusions()` covers `connector`, ws/CLI parity, policy
    and super-admin rules, `WebSocketCommandMap` typing.
-4. **`ConnectorServer` and the OAuth endpoints, CIMD fetcher.** Tests (DB-free): redirect matcher (exact, loopback
+4. **Scoped devices** (section above): the migration adding `devices.scope`, `device.pairing.approve` and
+   `device.list`, the peer's ceiling into `/mcp`, the ws `effect` annotation and its contract test, the router and
+   lane checks. Lands before the connector listener, so both remote principals share one tested ceiling.
+5. **`ConnectorServer` and the OAuth endpoints, CIMD fetcher.** Tests (DB-free): redirect matcher (exact, loopback
    ports, fragments, userinfo, case, IDN), resource canonicalisation, metadata documents; SSRF table (each refused
    range v4/v6, mapped and NAT64 forms, decimal and octal IP spellings, rebinding via a test resolver hook,
    redirects, oversize, slow, wrong type); token endpoint (wrong verifier, `plain`, missing `resource`, mismatched
    redirect or client, code reuse revokes, refresh narrowing, `invalid_grant` everywhere); rate limits; Host 421.
-5. **Bearer `/mcp`.** Tests: 401 challenge format, audience, ceiling in `tools/list` and `tools/call`, step-up
+6. **Bearer `/mcp`.** Tests: 401 challenge format, audience, ceiling in `tools/list` and `tools/call`, step-up
    refusal text, per-call revocation and deactivation (next call 401), concurrency cap, audit origin.
-6. **nginx and status.** `render_managed_nginx_config` locations on certbot sites only, the marker, `error_page`;
+7. **nginx and status.** `render_managed_nginx_config` locations on certbot sites only, the marker, `error_page`;
    `deploy/lifecycle/tests` render tests and `nginx -t` on the rendered file in CI; status probes behind test hooks.
-7. **Console.** `/connect/authorize`, `/connect/error`, Connected apps, Settings › Remote connectors; route budgets;
+8. **Console.** `/connect/authorize`, `/connect/error`, Connected apps, Settings › Remote connectors; route budgets;
    the claims lint; `login?next=` stays same-origin; Playwright: consent with TOTP step-up, deny, expired request.
-8. **End-to-end with a real client.** `tools/harness/tests/test_connector_e2e.py` (Tier B, opt-in like the other live
+9. **End-to-end with a real client.** `tools/harness/tests/test_connector_e2e.py` (Tier B, opt-in like the other live
    harness tests): a private daemon behind a harness nginx with a test CA, a local HTTPS server publishing a CIMD
    document, and the official MCP Python SDK (`mcp` package: `streamablehttp_client` with `OAuthClientProvider`,
    which does discovery, CIMD or DCR, PKCE and refresh) as the client; consent approved by the harness's ws client
@@ -319,7 +352,7 @@ are log lines through `RefusalLogThrottle`, never audit events, so nobody outsid
    of packages (contract check). Asserts: discovery from the 401, CIMD flow, read tools only, a read call runs, a
    write call refused, refresh rotation, replayed refresh ends the grant, `vh connector revoke` → 401, user
    deactivated → 401, switch off → 404 through nginx. A DCR and an operator-registered variant run the same script.
-9. **Docs and acceptance.** `docs/admin/remote-connectors.md` (custody text, the public-host requirements, the
+10. **Docs and acceptance.** `docs/admin/remote-connectors.md` (custody text, the public-host requirements, the
    firewall option), release fragments. Proof on a lab node with a public hostname: Claude (web, phone, desktop),
    ChatGPT, Claude Code (`claude mcp login`) and Codex (`codex mcp login`) each connect, list, read, are refused a
    write under `read`, and are cut off by revocation; outside probes: off = 404, wrong Host, open-redirect attempts,
@@ -327,19 +360,21 @@ are log lines through `RefusalLogThrottle`, never audit events, so nobody outsid
    replaces the blanket 403). Then the usual proof: unit and DB suites, `make itest`, the harness test, quiet builds
    on Linux and macOS, `vlr check`.
 
-## Open questions for the owner
+## Decided (2026-11-22)
 
-1. **Who may grant, by default?** Recommendation: **super admins only** (`grantors: super_admin`), with `users`
-   (every account, for itself) as the other setting. Granting sends the user's data through a third party; on a
-   shared node that should be the operator's call first.
-2. **The widest scope a grant may have, by default?** Recommendation: **`write`**; `destructive` only after the
-   operator raises `max_scope`. Destructive calls are still confirmed per call, but that confirmation comes from the
-   agent's side, which a prompt injection can supply.
-3. **Grant lifetime.** Recommendation: **90 days absolute, 30 days idle**, then reconnect (one click and a step-up).
-   The alternative is no absolute limit (only idle), more convenient and weaker against a forgotten connection.
-4. **CLI clients that need DCR.** Recommendation: **keep DCR off**; if step 9 shows Codex or Claude Code can't use
-   CIMD or a pre-registered id, the operator turns DCR on per node with the unverified-name labelling. Accept that
-   such a CLI needs one operator step?
-5. **Which CIMD hosts are accepted.** Recommendation: **any HTTPS host**, shown prominently, with an optional
-   operator allowlist (`client_hosts`). A default allowlist of Anthropic and OpenAI hosts would be safer against
-   phishing but breaks every other client and puts us in the business of tracking vendor domains.
+The five open questions were decided by the coordinator with the recommended defaults, recorded for the owner. Each is
+one constant or one setting, so it can change later without a redesign:
+
+| Question | Decision | Where it lives |
+|---|---|---|
+| Who may grant | Super admins only, each for their own account | `connector::mayGrant` (one function) |
+| Widest scope | `write`; `destructive` only when the operator raises it | `connector_settings.max_scope` (default `write`) |
+| Grant lifetime | 90 days at most; ends after 30 days without a refresh | `connector::kGrantLifetime`, `kRefreshIdle` |
+| DCR | Off | `connector_settings.dcr_enabled` (default false) |
+| CIMD hosts | Any HTTPS host, its name, client-id host and exact redirect host on the consent page | `connector_settings.client_hosts` (empty = any; the operator allowlist's place) |
+
+The recommendations as they were argued, for the record: granting sends the user's data through a third party, so a
+shared node's operator decides first; a destructive call's per-call confirmation comes from the agent's side, which a
+prompt injection can supply; a forgotten connection should end by itself; DCR adds no identity, only an
+unauthenticated write path; a default vendor allowlist would break every other client. If step 10 shows that Codex or
+Claude Code can use neither CIMD nor a pre-registered id, the operator turns DCR on for that node.

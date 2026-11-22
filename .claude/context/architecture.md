@@ -175,6 +175,12 @@ One catalog, two transports. `core/usage/{include/Mcp.hpp,src/mcp/}` (`vh::mcp`)
 usage book and the operation catalog and no daemon types, so the client links it directly; the daemon links it too
 (remote `/mcp` on the device listener runs `Invocation::line` through `Router::executeLine(line, deviceUser)`; see
 "Device listener and pairing").
+- **Effect ceiling** (`withinCeiling`, `parseCeiling`, `ceilingRefusal`; `design/core/mcp-remote-signin.md`): a
+  principal's limit, `Read` | `Write` | `Destructive`. `Catalog::tools(ceiling)` lists vh_help and vh_read always, vh_run
+  from Write, typed tools by effect; `Catalog::prepare(tool, args, ceiling)` refuses anything above it (a plain tool
+  error, before any confirmation is asked for; an unknown effect fails closed below Destructive); `mcp::Server` takes
+  it (default Destructive = the catalog without a ceiling, what `vh mcp` and paired devices get). Tests:
+  `McpCatalog.Ceiling*`, `McpServer.ACeilingLimits*`.
 - Compiled into `vaulthalla-cli` rather than fetched from the daemon: `tools/list` and `vh skill install` work with the
   daemon down, there is no new socket command, and skew fails closed (an older daemon rejects options it doesn't
   declare; `mcp`/`skill` reaching a daemon get "runs in the vh client", `commands/client.cpp`).
@@ -313,7 +319,8 @@ Normative protocol: `docs/pairing.md` in `valkyrianlabs/vaulthalla-desktop` (its
   chunks. Requests run under `access::DevicePrincipalScope` (thread-local): `access::authenticate` and the upload
   coordinator take the principal instead of a cookie, refuse the share lanes (`?share=1`: 403), and the usual
   `Need` → RBAC mapping applies as the device's user; audit lines carry `[via device <id16>]`. `/mcp`
-  (`protocols/device/Mcp.cpp`): Streamable HTTP, POST only (GET/DELETE 405: no SSE, no MCP session id), JSON
+  (`protocols/device/Mcp.cpp` → the shared transport `protocols/mcp/HttpTransport` with a `Principal {user, origin,
+  ceiling, ended}`; the device's ceiling is Destructive): Streamable HTTP, POST only (GET/DELETE 405: no SSE, no MCP session id), JSON
   responses (202 for notifications), `Origin` present → 403, unknown `MCP-Protocol-Version` → 400, JSON content type
   required, batches refused; the `vh mcp` catalog and `mcp::Server` with an executor running
   `shell::Router::executeLine(line, deviceUser, nullptr)` on its own thread, abandoned after 10 min (the command is

@@ -1,21 +1,20 @@
 #pragma once
 
 #include "protocols/http/Router.hpp"
+#include "protocols/mcp/HttpTransport.hpp"
 #include "protocols/ws/Fwd.hpp"
 
 #include <chrono>
 #include <memory>
 
-// Remote MCP on the device listener: Streamable HTTP (POST /mcp, JSON responses, no SSE stream, no MCP session id)
-// for a paired device's session only. The catalog and JSON-RPC server are the ones `vh mcp` uses (core/usage/src/mcp):
-// the same tools, exclusions (key and secret export, pairing, the listener's exposure, ...), destructive gate and
-// structured confirmations. Each tool call runs as one non-interactive CLI line through shell::Router::executeLine
-// for the device's user, abandoned after a deadline (the command itself is not interrupted).
+// Remote MCP on the device listener: the shared Streamable HTTP transport (protocols/mcp/HttpTransport.hpp) for a
+// paired device's session only, as the device's user, with the device's ceiling (every effect today; a scoped device
+// carries a narrower one later, design/core/mcp-remote-signin.md "Scoped devices").
 namespace vh::protocols::device::mcp {
 
 [[nodiscard]] protocols::http::model::preview::Response handle(protocols::http::request&& req, const std::shared_ptr<ws::Session>& principal);
 
-inline constexpr std::chrono::minutes kCallDeadline{10};
+inline constexpr std::chrono::minutes kCallDeadline = protocols::mcp::kCallDeadline;
 void setCallDeadlineForTesting(std::chrono::milliseconds deadline);
 
 }

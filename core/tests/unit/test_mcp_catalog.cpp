@@ -514,6 +514,118 @@ TEST(McpServer, LifecycleListAndCall) {
     EXPECT_EQ(ran, std::vector<std::string>{"group list --json"}) << "an excluded command never reaches the executor";
 }
 
+// ---- the effect ceiling (design/core/mcp-remote-signin.md: a connector grant's scope, later a scoped device's) ----
+
+TEST(McpCatalog, CeilingNamesAndTheFullCeilingIsTheCatalogWithoutOne) {
+    EXPECT_EQ(mcp::parseCeiling("read"), CommandEffect::Read);
+    EXPECT_EQ(mcp::parseCeiling("write"), CommandEffect::Write);
+    EXPECT_EQ(mcp::parseCeiling("destructive"), CommandEffect::Destructive);
+    for (const auto* bad : {"", "Read", "admin", "unset", "read write"}) EXPECT_FALSE(mcp::parseCeiling(bad)) << bad;
+    for (const auto e : {CommandEffect::Unset, CommandEffect::Read, CommandEffect::Write, CommandEffect::Destructive})
+        EXPECT_TRUE(mcp::withinCeiling(e, CommandEffect::Destructive));
+    EXPECT_FALSE(mcp::withinCeiling(CommandEffect::Unset, CommandEffect::Write)) << "unknown effect fails closed";
+    EXPECT_FALSE(mcp::withinCeiling(CommandEffect::Read, CommandEffect::Unset)) << "an unset ceiling allows nothing";
+    EXPECT_EQ(catalog().tools(CommandEffect::Destructive), catalog().tools());
+}
+
+TEST(McpCatalog, CeilingListsOnlyToolsWithinIt) {
+    const auto names = [](const json& tools) {
+        std::set<std::string> out;
+        for (const auto& t : tools) out.insert(t.at("name").get<std::string>());
+        return out;
+    };
+    const auto all = toolsByName();
+    for (const auto ceiling : {CommandEffect::Unset, CommandEffect::Read, CommandEffect::Write}) {
+        const auto& listed = catalog().tools(ceiling);
+        const auto got = names(listed);
+        EXPECT_TRUE(got.contains("vh_help") && got.contains("vh_read"));
+        EXPECT_EQ(got.contains("vh_run"), ceiling == CommandEffect::Write);
+        for (const auto& t : listed) {
+            const auto name = t.at("name").get<std::string>();
+            EXPECT_EQ(t, all.at(name)) << name << ": a limited list carries the same definitions";
+            if (name == "vh_run") continue;
+            const auto& a = t.at("annotations");
+            EXPECT_FALSE(a.at("destructiveHint").get<bool>()) << name;
+            if (ceiling != CommandEffect::Write) {
+                EXPECT_TRUE(a.at("readOnlyHint").get<bool>()) << name;
+            }
+        }
+        // And nothing within the ceiling is missing.
+        for (const auto& [name, t] : all.items()) {
+            if (name == "vh_run" || name == "vh_help" || name == "vh_read") continue;
+            const auto& a = t.at("annotations");
+            // An unset ceiling lists what Read does (the narrowest list).
+            const bool within = ceiling == CommandEffect::Write ? !a.at("destructiveHint").get<bool>()
+                                                                : a.at("readOnlyHint").get<bool>();
+            EXPECT_EQ(got.contains(name), within) << name;
+        }
+    }
+}
+
+TEST(McpCatalog, CeilingRefusesEveryLeafAndTypedToolAboveItBeforeAnyConfirmation) {
+    const auto refusedByCeiling = [](const std::variant<mcp::Invocation, json>& prepared) {
+        const auto* r = std::get_if<json>(&prepared);
+        return r && r->at("isError").get<bool>() && !r->contains("structuredContent") &&
+               text(*r).starts_with("This connection ") && text(*r).find("nothing was run") != std::string::npos;
+    };
+    size_t checked = 0;
+    for (const auto& leaf : catalog().leaves()) {
+        if (leaf.excluded) continue;
+        const json args{{"command", leaf.command}};
+        for (const auto ceiling : {CommandEffect::Read, CommandEffect::Write}) {
+            const auto prepared = catalog().prepare("vh_run", args, ceiling);
+            if (ceiling == CommandEffect::Read) {
+                EXPECT_TRUE(refusedByCeiling(prepared)) << "vh_run is not offered to a read-only principal: " << leaf.command;
+                continue;
+            }
+            if (leaf.effect == CommandEffect::Destructive) {
+                EXPECT_TRUE(refusedByCeiling(prepared)) << leaf.command;
+                ++checked;
+            } else {
+                EXPECT_FALSE(refusedByCeiling(prepared)) << leaf.command;
+            }
+        }
+        const auto read = catalog().prepare("vh_read", args, CommandEffect::Read);
+        if (leaf.effect == CommandEffect::Read) {
+            EXPECT_FALSE(refusedByCeiling(read)) << leaf.command;
+        } else {
+            EXPECT_TRUE(std::holds_alternative<json>(read)) << leaf.command;
+        }
+    }
+    EXPECT_GT(checked, 5u);
+    const auto all = toolsByName();
+    for (const auto& [name, t] : all.items()) {
+        if (name == "vh_run" || name == "vh_help" || name == "vh_read") continue;
+        const auto& a = t.at("annotations");
+        for (const auto ceiling : {CommandEffect::Read, CommandEffect::Write}) {
+            const bool above = ceiling == CommandEffect::Read ? !a.at("readOnlyHint").get<bool>()
+                                                              : a.at("destructiveHint").get<bool>();
+            const auto prepared = catalog().prepare(name, json::object(), ceiling);
+            EXPECT_EQ(refusedByCeiling(prepared), above) << name;
+        }
+    }
+    // Help never changes anything, so a read-only principal may ask for it on any command.
+    EXPECT_FALSE(refusedByCeiling(catalog().prepare("vh_read", {{"command", "vault delete --help"}}, CommandEffect::Read)));
+}
+
+TEST(McpServer, ACeilingLimitsListAndCallAndNeverReachesTheExecutor) {
+    std::vector<std::string> ran;
+    mcp::Server server(catalog(), [&](const mcp::Invocation& call) {
+        ran.push_back(call.line);
+        return mcp::CommandOutput{.exit_code = 0, .out = "[]", .err = {}};
+    }, "9.9.9", CommandEffect::Read);
+    EXPECT_EQ((*server.handle({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "tools/list"}}))["result"]["tools"],
+              catalog().tools(CommandEffect::Read));
+    auto r = server.handle({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "tools/call"},
+                            {"params", {{"name", "vh_run"}, {"arguments", {{"command", "group create team"}}}}}});
+    ASSERT_TRUE(r);
+    EXPECT_TRUE((*r)["result"]["isError"].get<bool>()) << "a listed-elsewhere tool is a tool error, not unknown";
+    r = server.handle({{"jsonrpc", "2.0"}, {"id", 3}, {"method", "tools/call"},
+                       {"params", {{"name", "vh_read"}, {"arguments", {{"command", "group list"}}}}}});
+    EXPECT_FALSE((*r)["result"]["isError"].get<bool>());
+    EXPECT_EQ(ran, std::vector<std::string>{"group list --json"});
+}
+
 // ---- the MCP layer's destructive gate ---------------------------------------------------------------------------
 
 TEST(McpCatalog, DestructiveCommandsNeedTheAcknowledgementBeforeAnythingRuns) {
