@@ -16,6 +16,9 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <functional>
 #include <map>
 #include <memory>
@@ -631,6 +634,75 @@ TEST(McpServer, ACeilingLimitsListAndCallAndNeverReachesTheExecutor) {
                        {"params", {{"name", "vh_read"}, {"arguments", {{"command", "group list"}}}}}});
     EXPECT_FALSE((*r)["result"]["isError"].get<bool>());
     EXPECT_EQ(ran, std::vector<std::string>{"group list --json"});
+}
+
+// ---- serverInfo: icons, description and websiteUrl (MCP 2025-11-25) ------------------------------------------------
+
+std::string base64Decode(const std::string_view in) {
+    static constexpr std::string_view kAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    uint32_t acc = 0;
+    int bits = 0;
+    for (const char c : in) {
+        if (c == '=') break;
+        const auto v = kAlphabet.find(c);
+        if (v == std::string_view::npos) return {};
+        acc = (acc << 6) | static_cast<uint32_t>(v);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            out.push_back(static_cast<char>((acc >> bits) & 0xff));
+        }
+    }
+    return out;
+}
+
+TEST(McpServer, IconsAreTheAssetsBytes) {
+    ASSERT_EQ(mcp::icons().size(), 2u);
+    const auto assets = std::filesystem::path(VH_TEST_ASSETS_DIR).parent_path() / "usage" / "assets";
+    for (const auto& icon : mcp::icons()) {
+        std::ifstream f(assets / ("vaulthalla-" + std::to_string(icon.size) + ".png"), std::ios::binary);
+        ASSERT_TRUE(f) << icon.size;
+        const std::string file((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        const auto bytes = base64Decode(icon.png_base64);
+        EXPECT_EQ(bytes, file) << "regenerate with tools/dev/mcp_icons.py: " << icon.size;
+        // A PNG whose IHDR says exactly this size.
+        ASSERT_GT(bytes.size(), 24u);
+        EXPECT_EQ(bytes.substr(1, 3), "PNG");
+        const auto be32 = [&](const std::size_t at) {
+            return (static_cast<uint32_t>(static_cast<unsigned char>(bytes[at])) << 24) |
+                   (static_cast<uint32_t>(static_cast<unsigned char>(bytes[at + 1])) << 16) |
+                   (static_cast<uint32_t>(static_cast<unsigned char>(bytes[at + 2])) << 8) |
+                   static_cast<uint32_t>(static_cast<unsigned char>(bytes[at + 3]));
+        };
+        EXPECT_EQ(be32(16), static_cast<uint32_t>(icon.size));
+        EXPECT_EQ(be32(20), static_cast<uint32_t>(icon.size));
+    }
+}
+
+TEST(McpServer, IconsDescriptionAndWebsiteOnlyFrom20251125) {
+    mcp::Server server(catalog(), [](const mcp::Invocation&) { return mcp::CommandOutput{}; }, "9.9.9");
+    const auto info = [&](const char* version) {
+        return (*server.handle({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "initialize"},
+                                {"params", {{"protocolVersion", version}}}}))["result"]["serverInfo"];
+    };
+    const auto current = info("2025-11-25");
+    ASSERT_TRUE(current.contains("icons"));
+    ASSERT_EQ(current["icons"].size(), 2u);
+    for (const auto& icon : current["icons"]) {
+        EXPECT_TRUE(icon["src"].get<std::string>().starts_with("data:image/png;base64,iVBOR"));
+        EXPECT_EQ(icon["mimeType"], "image/png");
+        ASSERT_EQ(icon["sizes"].size(), 1u);
+    }
+    EXPECT_EQ(current["icons"][0]["sizes"][0], "64x64");
+    EXPECT_EQ(current["icons"][1]["sizes"][0], "128x128");
+    EXPECT_EQ(current["websiteUrl"], "https://vaulthalla.io");
+    EXPECT_FALSE(current["description"].get<std::string>().empty());
+    for (const auto* older : {"2025-06-18", "2025-03-26"}) {
+        const auto old = info(older);
+        EXPECT_EQ(old["name"], "vaulthalla") << older;
+        for (const auto* key : {"icons", "description", "websiteUrl"}) EXPECT_FALSE(old.contains(key)) << older << " " << key;
+    }
 }
 
 // ---- the MCP layer's destructive gate ---------------------------------------------------------------------------

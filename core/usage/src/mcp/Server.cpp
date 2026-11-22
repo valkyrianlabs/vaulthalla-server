@@ -65,9 +65,23 @@ std::optional<Json> Server::handle(const Json& message) {
             protocolVersion_ = std::ranges::find(kProtocolVersions, requested) != kProtocolVersions.end()
                                    ? requested
                                    : std::string(kProtocolVersions.front());
+            Json info{{"name", kServerName}, {"title", "Vaulthalla"}, {"version", version_}};
+            // Revisions are dates, so a later one sorts after: icons, description and websiteUrl from 2025-11-25 on.
+            if (protocolVersion_ >= kIconsSince) {
+                Json list = Json::array();
+                for (const auto& icon : icons()) {
+                    const auto px = std::to_string(icon.size);
+                    list.push_back({{"src", "data:image/png;base64," + std::string(icon.png_base64)},
+                                    {"mimeType", "image/png"},
+                                    {"sizes", Json::array({px + "x" + px})}});
+                }
+                info["icons"] = std::move(list);
+                info["description"] = kServerDescription;
+                info["websiteUrl"] = kWebsiteUrl;
+            }
             return response(id, {{"protocolVersion", protocolVersion_},
                                  {"capabilities", {{"tools", {{"listChanged", false}}}}},
-                                 {"serverInfo", {{"name", kServerName}, {"title", "Vaulthalla"}, {"version", version_}}},
+                                 {"serverInfo", std::move(info)},
                                  {"instructions", instructions()}});
         }
         if (method == "ping") return response(id, Json::object());

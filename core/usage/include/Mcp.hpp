@@ -143,6 +143,19 @@ private:
 // What initialize tells the agent before it sees any tool.
 std::string instructions();
 
+// serverInfo's icons, description and websiteUrl: sent only to clients on MCP 2025-11-25 or later (they joined the
+// schema then), never to one that asked for an older revision.
+struct Icon {
+    std::string_view png_base64{};  // the PNG's bytes, base64
+    int size = 0;                   // square, in pixels
+};
+// Vaulthalla's logo at 64 and 128 pixels (core/usage/assets, generated into src/mcp/Icons.cpp by tools/dev/mcp_icons.py).
+const std::vector<Icon>& icons();
+inline constexpr std::string_view kIconsSince = "2025-11-25";
+inline constexpr std::string_view kWebsiteUrl = "https://vaulthalla.io";
+inline constexpr std::string_view kServerDescription =
+    "Your self-hosted Vaulthalla server: vaults, files, users, groups, sync and recovery, used as your own account.";
+
 // ---------------------------------------------------------------------------------------------------------------
 // Agent skill (vh skill install): the hand-written SKILL.md and where each agent looks for it.
 // ---------------------------------------------------------------------------------------------------------------
