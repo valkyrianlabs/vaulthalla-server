@@ -179,8 +179,12 @@ usage book and the operation catalog and no daemon types, so the client links it
   principal's limit, `Read` | `Write` | `Destructive`. `Catalog::tools(ceiling)` lists vh_help and vh_read always, vh_run
   from Write, typed tools by effect; `Catalog::prepare(tool, args, ceiling)` refuses anything above it (a plain tool
   error, before any confirmation is asked for; an unknown effect fails closed below Destructive); `mcp::Server` takes
-  it (default Destructive = the catalog without a ceiling, what `vh mcp` and paired devices get). Tests:
+  it (default Destructive = the catalog without a ceiling, what `vh mcp` and unscoped paired devices get). Tests:
   `McpCatalog.Ceiling*`, `McpServer.ACeilingLimits*`.
+- **serverInfo** for clients on 2025-11-25 or later: `icons` (Vaulthalla's logo, 64 and 128 px PNG as `data:` URIs,
+  `core/usage/assets/vaulthalla-{64,128}.png` embedded by `tools/dev/mcp_icons.py` into `src/mcp/Icons.cpp`),
+  `description` and `websiteUrl` (`https://vaulthalla.io`); an older revision gets none of the three. Tests:
+  `McpServer.IconsAreTheAssetsBytes`, `McpServer.IconsDescriptionAndWebsiteOnlyFrom20251125`.
 - Compiled into `vaulthalla-cli` rather than fetched from the daemon: `tools/list` and `vh skill install` work with the
   daemon down, there is no new socket command, and skew fails closed (an older daemon rejects options it doesn't
   declare; `mcp`/`skill` reaching a daemon get "runs in the vh client", `commands/client.cpp`).
@@ -348,7 +352,7 @@ Normative protocol: `docs/pairing.md` in `valkyrianlabs/vaulthalla-desktop` (its
   coordinator take the principal instead of a cookie, refuse the share lanes (`?share=1`: 403), and the usual
   `Need` → RBAC mapping applies as the device's user; audit lines carry `[via device <id16>]`. `/mcp`
   (`protocols/device/Mcp.cpp` → the shared transport `protocols/mcp/HttpTransport` with a `Principal {user, origin,
-  ceiling, ended}`; the device's ceiling is Destructive): Streamable HTTP, POST only (GET/DELETE 405: no SSE, no MCP session id), JSON
+  ceiling, ended}`; the device's ceiling is its scope, Destructive unless it is a scoped device): Streamable HTTP, POST only (GET/DELETE 405: no SSE, no MCP session id), JSON
   responses (202 for notifications), `Origin` present → 403, unknown `MCP-Protocol-Version` → 400, JSON content type
   required, batches refused; the `vh mcp` catalog and `mcp::Server` with an executor running
   `shell::Router::executeLine(line, deviceUser, nullptr)` on its own thread, abandoned after 10 min (the command is
@@ -364,7 +368,8 @@ Normative protocol: `docs/pairing.md` in `valkyrianlabs/vaulthalla-desktop` (its
   Router are unchanged; `TlsTransport.hpp` keeps Asio's SSL headers out of `Session.hpp`. Chosen over a socketpair
   handoff: no second hop, no out-of-band identity channel, and the session holds the device identity
   (`devicePeer()`) itself.
-- **Session modes** `Device` / `DevicePairing` (`SessionMode`). Device: no tokens (`session::Manager::validate` is
+- **Session modes** `Device` / `DevicePairing` (`SessionMode`). A scoped device (below, "Scoped devices") is the same
+  Device mode and the same RBAC as its user; its scope is only a further ceiling, never a permission. Device: no tokens (`session::Manager::validate` is
   true while the user is `authorizing()` and the session open), `rbacActor()` = `human(user)`, classify = the Human set
   minus `auth.login|logout|refresh|register` and the share-recipient commands, plus `device.*`; deactivation or
   deletion is seen on the next command. Pairing: only `device.pair.*`, `meta.contract.get` and `meta.hello`; anything else is ERROR
@@ -414,6 +419,44 @@ Normative protocol: `docs/pairing.md` in `valkyrianlabs/vaulthalla-desktop` (its
   relay (`closeRelayedDeviceSessions`). A relayed pairing request carries no `approval_key`; pending requests show
   `via`; a relay-paired device gets no key-backup grant. Tests: `test_cloud_relay_protocol.cpp`,
   `test_cloud_relay_db.cpp`.
+
+### Scoped devices (migration 152; `design/core/mcp-remote-signin.md`, "Scoped devices")
+
+A paired device may be held to less than its user's rights: `devices.scope` read | write | destructive (default
+destructive = no limit, every pairing before scopes). Vaulthalla Desktop uses it for the pairings it makes for AI apps.
+**Rule: a ceiling, never a second permission system.** Every request still runs through the same ops and RBAC as the
+device's user, in full; the scope is applied in addition (effective = RBAC ∩ scope): no permission bits, roles,
+per-device sets or configurable scope contents, only the three values and the `effect` each command declares in the
+contract (ambiguous = the higher effect). The only fixed list (`Router::isScopedDeviceForbidden`) refuses, never grants.
+Anything finer stays RBAC's.
+- **Audit:** approval details carry `scope` and `requested_scope`; `device.scope.set {from, to}`; origins
+  `device <id16>[ mcp] scope <scope>` (unscoped: unchanged; `vh::device::auditOrigin`; grants:
+  `connector::auditOrigin`, `connector <id8> scope <scope>`); refusals `device.scope.refused` (outcome denied;
+  device, surface ws|http|mcp, command or `(unknown)`, effect, scope; `device::scope_audit`, 5 a minute per device,
+  then `suppressed` on the next recorded one); `vh device scopes` reads the effect table, `Router::scopedDeviceMayRun`,
+  the MCP catalog's ceiling and `scope::laneClasses()`; `vh audit list --device <n> | --grant <id>` (ws `audit.list
+  {device_id | grant_id}`, `ops::audit::forDevice|forGrant`: origin prefixes of the current and previous key, or
+  details.device / details.grant_id).
+- **Pairing:** `device.pair.request {scope?}` asks (shown as `requested_scope` in `device.pairing.pending`, absent when
+  nothing was asked); `device.pairing.approve {scope?}` decides (default: what was asked, else destructive; wider than
+  asked is `invalid`). A scope narrower than destructive is appended to the device.trust target
+  (`device.pairing.approve:<request>:<spki>:<code digest>:<scope>`), so an approval for one scope never pairs another;
+  an unscoped approval's target is unchanged. `vh device approve --scope`.
+- **Peer:** `device::authorize` copies the row's scope to `Peer::scope`; `Peer::scoped()`. `device.scope.set {device_id,
+  scope}` / `vh device scope` (`ops::devices::setScope`): narrowing by its user or a super admin, no step-up; widening by
+  its user only, device.trust `device.scope.set:<row>:<scope>`; refused `device_scope` from a scoped device and from the
+  device itself; closes the device's live sessions (they reconnect under the new scope); audited `device.scope.set`.
+  `vh device scope` is an MCP exclusion.
+- **Enforcement:** ws: every contract command declares an `effect` (`contract::effectTable()`,
+  `core/usage/src/contract/ws/effects.cpp`, exported as `effect`; `UsageContract.EveryWsCommandDeclaresAnEffect`);
+  `Router::classifyCommand` answers `DenyScope` (ERROR `device_scope {scope, effect}`) for a command above the scope, of
+  unknown effect, or in `Router::isScopedDeviceForbidden` (device.pair*, device.approval.*, device.backup.grant.*,
+  vault.keys.export|export.confirm|import, connector.*, device.scope.set); `ops::devices::revoke` refuses a scoped
+  device unpairing another. Step-up: a scoped device's `stepup::Scope` channel is Agent (never steps up). HTTP lanes:
+  `protocols::device::scope::laneEffect` (read: GET/HEAD /preview*, /download*, POST /preview/batch, /transfer*, /mcp;
+  write: /upload* and anything else), refused 403 `device_scope`. `/mcp`: the principal's ceiling is the scope.
+  Tests: `DeviceScope.*` (DB-free), `ScopedDevicesDb.*`, `DeviceHttpTest.AScopedDeviceIsHeldToItsScopeOnEveryLane`,
+  `SqlDeployerHistoryDb.DeviceScopeMigration152*`. Capability `device.scope`.
 
 ### Super-admin initial credential
 

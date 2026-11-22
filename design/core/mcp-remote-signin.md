@@ -293,7 +293,27 @@ are log lines through `RefusalLogThrottle`, never audit events, so nobody outsid
 Vaulthalla Desktop is about to give each AI app (Claude Code, Codex) its own device pairing per node, and the owner
 wants such a pairing to carry fewer permissions than his account. The ceiling built for grants is the same mechanism:
 the execution path takes it from the principal's limit (`protocols::mcp::Principal::ceiling`), not from anything only
-the connector knows. What a scoped device adds:
+the connector knows.
+
+**The rule (the owner, 2026-11-22): a ceiling, never a second permission system.** A scope only narrows. Every request
+from a scoped device still runs through the same ops and the same RBAC check as the device's user, in full; the scope
+is applied in addition (effective = RBAC ∩ scope). There are no new permission bits, roles, per-device sets or
+configuration of what a scope contains: three fixed values, `read` < `write` < `destructive`, defined by the `effect`
+each command declares in the one published contract (CLI leaves already; ws commands and HTTP lanes now), held there by
+tests. The one fixed exception is a constant list of trust-boundary commands no scoped device runs whatever its scope
+(pairing, approvals, key-backup grants, vault key export and import, connectors, scope changes): it can only refuse,
+never grant. Anything finer (one vault, one share) stays RBAC's job. A command whose effect is ambiguous takes the
+higher one.
+
+**Accountable at audit time, through the existing hash-chained trail:** the approval records who approved, which
+device, the scope asked for and the scope given; a scope change records who, from and to; every audited line a scoped
+device causes carries `device <id16> scope <scope>` in its origin (a grant's: `connector <id8> scope <scope>`); every
+refusal by the scope is recorded (`device.scope.refused`: device, surface, command, effect, scope), at most 5 a minute
+per device, the rest counted and reported with the next one; `vh device scopes` answers what each scope allows from
+the same sources the enforcement reads; `vh audit list --device <n>` (or `--grant <id>`) shows one device's or
+grant's history.
+
+What a scoped device adds:
 
 - **Chosen at approval.** `device.pairing.approve` takes `scope` (`read` | `write` | `destructive`); a pairing
   request may carry `requested_scope` (Desktop asks `read` for an AI app), which the approval preselects and may only
@@ -409,3 +429,43 @@ What landed, and where it differs from the text above (compatibility policy rule
 7. **Audit actions:** `connector.enable`, `connector.disable`, `connector.policy.change`, `connector.client.add`,
    `connector.client.remove`, `connector.grant.create`, `connector.token.issue {from: code|refresh}`,
    `connector.grant.revoke {reason}`; a reuse also notifies the user (`connector.grant.reuse`).
+
+## As built: scoped devices and the server's icons (2026-11-22, build step 4)
+
+1. **Effects for every ws command** live in one table (`core/usage/src/contract/ws/effects.cpp`), applied by the book
+   and exported as each command's `effect`; a test requires one per command. They follow the CLI leaves' rule;
+   removing a membership, an assignment, an override or a role binding is `write` (it can be put back), deleting an
+   entity, revoking a credential, link or session, or anything that can't be undone is `destructive`.
+2. **The scope is read at the handshake** (`Peer::scope`). Changing it closes the device's live sessions instead of
+   updating them in place, so no connection ever runs under a scope wider than its row's.
+3. **Approval binding:** the scope is appended to the device.trust target only when it is narrower than
+   `destructive`, so an unscoped approval's target, and every client that echoes it, are unchanged.
+4. **`device.scope.set`** may be called by an unscoped device (Desktop managing the pairings it made for AI apps), but
+   never for itself and never by a scoped device. Widening someone else's device is refused even to a super admin;
+   narrowing is allowed to the owner and super admins. `vh device scope` is an MCP exclusion.
+5. **HTTP lanes:** read covers GET/HEAD previews and downloads, `POST /preview/batch` (readiness, at most a derived
+   preview queued, which is a cache) and the calibration lanes (`/transfer*`, nothing stored); every `/upload*`
+   request is write; anything unclassified is write (fail closed). No lane deletes, so none is destructive.
+6. **The console** shows a device's access in Devices and lets the approver choose it in the pairing dialog (up to
+   what the request asked). It sends `scope` only when it narrows, so an old server never sees the member from an
+   approval that doesn't need it.
+7. **serverInfo icons:** the console's icon (`web/src/app/icon.png`) scaled to 64 and 128 pixels, committed as
+   `core/usage/assets/vaulthalla-{64,128}.png` and embedded by `tools/dev/mcp_icons.py`, with `description` and
+   `websiteUrl`, for clients on 2025-11-25 or later only.
+8. **A ceiling over RBAC, by the owner's rule** (in "Scoped devices" above): the router, the HTTP lanes and `/mcp`
+   refuse only; every allowed request then runs the existing ops and RBAC as the device's user. Ambiguous effects take
+   the higher one, which made these ws commands destructive (their CLI leaves agree): `role.vault.unassign`,
+   `role.vault.overrides.remove`, `group.member.remove`, `s3.gateway.buckets.unbind`,
+   `s3.gateway.credentials.defaultRole.clear`, `s3.gateway.credentials.{defaultRole,roles}.overrides.remove`,
+   `s3.gateway.credentials.roles.revoke`, `s3.gateway.credentials.selectedVaults.remove`,
+   `pricing.budget.policy.disable`, `s3.gateway.budget.policy.disable`, `upstream.admin.disable`,
+   `upstream.events.disable`, `vault.remote.abort`. Cancelling one's own upload stays write (it discards only that
+   session's uncommitted bytes).
+9. **Audit:** approval details `scope` and `requested_scope`; `device.scope.set {from, to, widened}`; origins
+   `device <id16>[ mcp] scope <scope>` (an unscoped device's unchanged) and `connector <id8> scope <scope>`
+   (`connector::auditOrigin`, used by the connector listener in step 5); `device.scope.refused` (outcome denied,
+   surface ws|http|mcp, the command or `(unknown)`, effect, scope; 5 a minute per device, then `suppressed` on the next
+   one recorded; MCP refusals reach it through the catalog's `_meta["vaulthalla/ceiling_refused"]` and
+   `mcp::Server::onCeilingRefusal`); `vh device scopes [--scope] [--json]` built from the effect table,
+   `Router::scopedDeviceMayRun`, the catalog's ceiling and `scope::laneClasses()` (tested against `laneEffect`);
+   `vh audit list --device <n> | --grant <id>` and ws `audit.list {device_id | grant_id}`.

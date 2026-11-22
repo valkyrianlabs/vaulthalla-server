@@ -28,6 +28,8 @@ struct NewDevice {
     std::string approval_key_sha256{};
     // Paired through the Vaulthalla Cloud relay (devices.paired_via = 'relay', migration 144).
     bool relayed = false;
+    // Scoped devices (migration 152): read | write | destructive.
+    std::string scope{"destructive"};
 };
 
 class Devices {
@@ -46,6 +48,8 @@ public:
     // Throws ops::Conflict when the key is already a device's (current or previous), or the approval key is known.
     [[nodiscard]] static Device insert(const NewDevice& d);
     [[nodiscard]] static std::optional<Device> rename(uint32_t id, const std::string& name);
+    // Sets a live device's scope; the row, or nullopt if absent or revoked.
+    [[nodiscard]] static std::optional<Device> setScope(uint32_t id, const std::string& scope);
     // Sets revoked_at once (a revoked row keeps its first revocation time), and revokes the device's approval key and
     // key-backup grant (#362, reason device_revoked) with it. Returns the row, or nullopt if absent.
     [[nodiscard]] static std::optional<Device> revoke(uint32_t id);

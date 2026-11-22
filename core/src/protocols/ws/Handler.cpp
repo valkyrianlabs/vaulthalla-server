@@ -127,6 +127,7 @@ void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("device.list", &handler::Devices::list);
     r->registerPayload("device.rename", &handler::Devices::rename);
     r->registerPayload("device.revoke", &handler::Devices::revoke);
+    r->registerPayload("device.scope.set", &handler::Devices::scopeSet);
     r->registerSessionOnlyHandler("device.remote.status", &handler::Devices::remoteStatus);
     r->registerSessionOnlyHandler("device.remote.enable", &handler::Devices::remoteEnable);
     r->registerSessionOnlyHandler("device.remote.disable", &handler::Devices::remoteDisable);

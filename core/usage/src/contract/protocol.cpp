@@ -57,6 +57,13 @@ std::vector<Capability> capabilities() {
         {.name = "device.mcp",
          .since = "1.16.0",
          .description = "The device listener serves remote MCP (JSON-RPC over POST /mcp) as the device's user."},
+        {.name = "device.scope",
+         .since = "1.23.0",
+         .description = "A pairing may carry a scope (read, write or destructive; absent = destructive, as before): "
+                        "device.pair.request `scope` asks, device.pairing.approve `scope` decides (equal or narrower "
+                        "than what was asked), device.list shows it, device.scope.set changes it. A scoped device runs "
+                        "only commands within it (every ws command declares an `effect`) and answers device_scope "
+                        "otherwise; its /mcp and HTTP lanes are held to it too."},
         {.name = "device.server.identity",
          .since = "1.16.0",
          .description = "A paired device can read the server key's pin (SPKI SHA-256) over its own session "

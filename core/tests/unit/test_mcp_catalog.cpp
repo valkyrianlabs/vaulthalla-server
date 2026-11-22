@@ -159,7 +159,7 @@ TEST(McpCatalog, ExclusionListIsExactlyTheAgreedOne) {
                                             "secrets device-identity rotate", "secrets reseal", "setup",
                                             "setup set-super-admin-password", "teardown", "fs get", "fs put", "mcp",
                                             "skill", "device pair", "device approve", "device deny",
-                                            "device remote enable", "device remote disable", "cloud link",
+                                            "device scope", "device remote enable", "device remote disable", "cloud link",
                                             "cloud unlink", "cloud recovery enroll", "cloud recovery unenroll",
                                             "cloud key confirm", "cloud key forget", "cloud storage enable",
                                             "cloud storage disable", "cloud storage accept", "cloud storage decline",

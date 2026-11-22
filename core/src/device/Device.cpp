@@ -27,6 +27,7 @@ void to_json(nlohmann::json& j, const Device& d) {
         {"revoked_at", optTime(d.revoked_at)},
         {"revoked", d.revoked()},
         {"paired_via", d.paired_via},
+        {"scope", d.scope},
     };
 }
 

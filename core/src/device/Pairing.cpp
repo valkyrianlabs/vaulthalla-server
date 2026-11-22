@@ -116,7 +116,8 @@ std::vector<PendingRequest> Pairing::pending(const uint32_t ownerId, const time_
                                      .device_id = crypto::toHex(r.device_spki), .relayed = r.relayed,
                                      .code_choices = r.choices,
                                      .created_at = toTime(r.created_at), .expires_at = toTime(r.expires_at),
-                                     .approval_key_present = r.approval_key.has_value()});
+                                     .approval_key_present = r.approval_key.has_value(),
+                                     .requested_scope = r.requested_scope});
     }
     std::ranges::sort(out, {}, &PendingRequest::created_at);
     return out;
@@ -146,11 +147,12 @@ ApprovalClaim Pairing::beginApproval(const uint32_t ownerId, const std::string& 
     r.state = RequestState::Approving;
     return ApprovalClaim{.request_id = requestId, .owner_id = r.owner_id, .device_id = crypto::toHex(r.device_spki),
                          .name = r.name, .platform = r.platform, .app_version = r.app_version,
-                         .source_ip = r.source_ip, .approval_key = r.approval_key, .relayed = r.relayed};
+                         .source_ip = r.source_ip, .approval_key = r.approval_key, .relayed = r.relayed,
+                         .requested_scope = r.requested_scope};
 }
 
-std::string Pairing::checkApproval(const uint32_t ownerId, const std::string& requestId, const std::string& code,
-                                   const time_point now) {
+ApprovalCheck Pairing::checkApproval(const uint32_t ownerId, const std::string& requestId, const std::string& code,
+                                     const time_point now) {
     std::scoped_lock lock(mutex_);
     expireLocked(now);
     const auto it = ownedLocked(ownerId, requestId);
@@ -160,7 +162,8 @@ std::string Pairing::checkApproval(const uint32_t ownerId, const std::string& re
         throw ops::Invalid("that is not the code the device shows: the request was denied (pair again from the "
                            "device and compare the codes)");
     }
-    return crypto::toHex(it->second.device_spki);
+    return ApprovalCheck{.device_id = crypto::toHex(it->second.device_spki),
+                         .requested_scope = it->second.requested_scope};
 }
 
 void Pairing::finishApproval(const std::string& requestId, const uint32_t deviceRowId, const time_point now) {
@@ -216,6 +219,7 @@ PairRequestReceipt Pairing::request(const Peer& peer, const PairRequestInput& in
     r.relayed = peer.relayed;
     r.commitment = input.commitment;
     r.approval_key = input.approval_key;
+    r.requested_scope = input.requested_scope;
     r.nonce_server = crypto::randomNonce();
     r.created_at = now;
     r.expires_at = std::min(now + kPairingRequestLifetime, PairingClock::from_time_t(window_->expires_at));

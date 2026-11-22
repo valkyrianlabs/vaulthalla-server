@@ -22,7 +22,9 @@ class Router {
     // answered ERROR with data.code "device_unknown" (the same for unknown and revoked keys: no oracle).
     // DenyReadOnly: a relayed (Vaulthalla Cloud) device session asked for a command outside the read-only set; it is
     // answered ERROR with data.code "relay_read_only".
-    enum class CommandAuthDecision { Allow, RequireHumanAuth, Deny, DenyDeviceUnknown, DenyReadOnly };
+    // DenyScope: a scoped device's session asked for a command above its scope (the contract's per-command effect),
+    // of unknown effect, or one a scoped device never runs (isScopedDeviceForbidden).
+    enum class CommandAuthDecision { Allow, RequireHumanAuth, Deny, DenyDeviceUnknown, DenyReadOnly, DenyScope };
 
     using SessionPtr = std::shared_ptr<Session>;
     using Handler = std::function<void(json&&, const SessionPtr&)>;
@@ -66,6 +68,12 @@ class Router {
     // through it, may run: browsing, metadata, downloads and the change feed. An allowlist: a command added later is
     // refused there until it is added here on purpose (UsageContract walks every registered command).
     [[nodiscard]] static bool isRelayedReadCommand(std::string_view command);
+    // Scoped devices (design/core/mcp-remote-signin.md): what one never runs whatever its scope: pairing
+    // (device.pair*), approvals (device.approval.*), key-backup grants, key export and import, remote connectors and
+    // scope changes. device.revoke of another device is refused by ops::devices (it needs the payload).
+    [[nodiscard]] static bool isScopedDeviceForbidden(std::string_view command);
+    // Whether a scoped device whose scope is `scope` may run `command` (its effect within the scope, and not forbidden).
+    [[nodiscard]] static bool scopedDeviceMayRun(std::string_view command, std::string_view scope);
     [[nodiscard]] static CommandAuthDecision classifyCommand(std::string_view command, const Session& session);
     // The answer to a command no handler is registered for, once the session may run it (web and device sessions;
     // pairing-only ones get device_unknown first): ERROR "Unknown command" with data.code "unknown_command".

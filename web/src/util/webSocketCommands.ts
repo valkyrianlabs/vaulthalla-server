@@ -1008,6 +1008,8 @@ export interface WebSocketCommandMap {
   // `all` (every user's devices) is for super admins.
   'device.list': { payload: WsContract['device.list']['payload']; response: { devices: Device[] } }
   'device.rename': { payload: WsContract['device.rename']['payload']; response: { device: Device } }
+  // Scoped devices: change what a device may do (the console doesn't send it yet; Desktop will).
+  'device.scope.set': { payload: WsContract['device.scope.set']['payload']; response: { device: Device } }
   'device.revoke': { payload: WsContract['device.revoke']['payload']; response: { device: Device } }
   // Super admins: whether devices on other hosts may connect (the listener is loopback-only otherwise).
   'device.remote.status': WsContract['device.remote.status']

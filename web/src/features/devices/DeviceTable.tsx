@@ -13,7 +13,16 @@ import { confirm } from '@/components/ui/Confirm'
 import { notify } from '@/components/ui/Toast'
 import { BanIcon, CheckIcon, CopyIcon, PenIcon } from '@/components/ui/icons'
 import type { Device } from '@/models/device'
-import { DEVICE_READS, byStatus, deviceLabel, devicePlatform, pairedViaRelay, shortDeviceId, type KeyBackupGrant } from '@/features/devices/model'
+import {
+  DEVICE_READS,
+  byStatus,
+  deviceLabel,
+  devicePlatform,
+  pairedViaRelay,
+  scopeLabel,
+  shortDeviceId,
+  type KeyBackupGrant,
+} from '@/features/devices/model'
 import { RELAY_LABELS } from '@/features/cloudRelay/labels'
 import { KeyBackupCell } from '@/features/devices/KeyBackupCell'
 
@@ -127,6 +136,13 @@ export const DeviceTable = ({
       sortValue: d => devicePlatform(d),
       cell: d => <span data-testid="device-platform">{devicePlatform(d)}</span>,
       hideBelow: 'sm',
+    },
+    {
+      key: 'scope',
+      header: 'Access',
+      sortValue: d => scopeLabel(d.scope),
+      cell: d => <span data-testid="device-scope">{scopeLabel(d.scope)}</span>,
+      hideBelow: 'md',
     },
     {
       key: 'version',

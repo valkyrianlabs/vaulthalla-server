@@ -24,6 +24,11 @@ struct Filter {
     std::optional<uint32_t> actor_id{};
     std::optional<uint32_t> vault_id{};
     std::optional<std::string> outcome{};
+    // One device or grant (ops::audit::forDevice / forGrant): events whose origin starts with one of these ("device
+    // <id16>": what it did) OR whose details[details_key] is details_value (what was done to it). Empty: no filter.
+    std::vector<std::string> origin_prefixes{};
+    std::optional<std::string> details_key{};
+    std::optional<std::string> details_value{};
 };
 
 class Trail {

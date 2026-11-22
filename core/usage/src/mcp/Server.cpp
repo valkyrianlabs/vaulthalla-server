@@ -95,7 +95,15 @@ std::optional<Json> Server::handle(const Json& message) {
             if (!args.is_object()) return errorResponse(id, kInvalidParams, "tools/call arguments must be an object");
 
             auto prepared = catalog_.prepare(name, args, ceiling_);
-            if (auto* immediate = std::get_if<Json>(&prepared)) return response(id, std::move(*immediate));
+            if (auto* immediate = std::get_if<Json>(&prepared)) {
+                if (onCeilingRefusal_ && immediate->contains("_meta") &&
+                    immediate->at("_meta").contains(std::string(kCeilingRefusalMeta))) {
+                    const auto& m = immediate->at("_meta").at(std::string(kCeilingRefusalMeta));
+                    onCeilingRefusal_(m.value("command", name),
+                                      m.at("effect").is_string() ? m.at("effect").get<std::string>() : std::string());
+                }
+                return response(id, std::move(*immediate));
+            }
             const auto& call = std::get<Invocation>(prepared);
             CommandOutput output;
             try {

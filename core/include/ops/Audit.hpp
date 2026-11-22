@@ -41,6 +41,13 @@ struct Verification {
 
 [[nodiscard]] bool canView(const Actor& actor);
 
+// Narrows `filter` to one paired device (its row id): what it did (origin "device <id16>", current and previous key,
+// whatever its scope) and what was done to it (details.device). NotFound for no such row.
+void forDevice(Filter& filter, uint32_t deviceRowId);
+// Narrows `filter` to one connector grant (its uuid): its tool calls (origin "connector <id8>") and its own events
+// (details.grant_id).
+void forGrant(Filter& filter, const std::string& grantId);
+
 // Newest first; limit 1..1000.
 [[nodiscard]] Page list(const Actor& actor, const Filter& filter, std::size_t limit);
 [[nodiscard]] Verification verify(const Actor& actor);

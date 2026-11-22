@@ -38,7 +38,10 @@ struct PendingList {
 [[nodiscard]] PendingList pending(const Actor& actor);
 
 // Number matching: `code` must be the one the device shows (any other code denies the request: ops::Invalid).
-[[nodiscard]] Device approve(const Actor& actor, const std::string& requestId, const std::string& code);
+// Scoped devices: `scope` (read | write | destructive) is what the device may do; absent: what the request asked, else
+// destructive. Never wider than the request asked (ops::Invalid). A narrower scope is part of the device.trust target.
+[[nodiscard]] Device approve(const Actor& actor, const std::string& requestId, const std::string& code,
+                             const std::optional<std::string>& scope = std::nullopt);
 void deny(const Actor& actor, const std::string& requestId);
 
 // ---- pairing, device side
@@ -51,6 +54,8 @@ struct PairRequest {
     // #361: the device's approval key, a P-256 SubjectPublicKeyInfo (standard base64 of its 91-byte DER). Optional;
     // shown with the request (approval_key_present) and registered with the device when it is approved.
     std::optional<std::string> approval_key{};
+    // Scoped devices: the access asked for (read | write | destructive); the approver decides, equal or narrower.
+    std::optional<std::string> scope{};
 };
 [[nodiscard]] vh::device::PairRequestReceipt pairRequest(const vh::device::Peer& peer, const PairRequest& req);
 [[nodiscard]] std::time_t pairConfirm(const vh::device::Peer& peer, const std::string& requestId,
@@ -76,7 +81,14 @@ using Ref = std::string;
 [[nodiscard]] Device rename(const Actor& actor, const Ref& device, const std::string& name);
 // The device's user, a super admin, or the device itself (`self`: the calling connection, which acts as its user).
 // Closes the device's live sessions. Revocation is final.
+// A scoped `self` may revoke only itself (ops::Refused device_scope).
 Device revoke(const Actor& actor, const Ref& device, const vh::device::Peer* self = nullptr);
+
+// Scoped devices: sets a device's scope. Narrowing: its user or a super admin, no step-up. Widening: its user only,
+// device.trust "device.scope.set:<row>:<scope>". Refused (device_scope) from a scoped `self`, and from the device
+// itself. Closes the device's live sessions. Audited device.scope.set.
+Device setScope(const Actor& actor, const Ref& device, const std::string& scope,
+                const vh::device::Peer* self = nullptr);
 
 // device.identity.rotate (spec §4): on the device's own session, `certificate` (DER) endorsed by the old key's
 // `signature` over the rotation message. Returns the new device id.

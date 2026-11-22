@@ -52,6 +52,8 @@ struct PairRequestInput {
     crypto::Hash commitment{};
     // #361: the device's approval key (validated P-256 SPKI), shown with the request and registered with the device.
     std::optional<crypto::PublicKey> approval_key{};
+    // Scoped devices: the scope the device asks for ("read" | "write" | "destructive"), validated by the caller.
+    std::optional<std::string> requested_scope{};
 };
 
 struct PairRequestReceipt {
@@ -74,6 +76,7 @@ struct PendingRequest {
     std::time_t created_at{};
     std::time_t expires_at{};
     bool approval_key_present{false};  // the request carries an approval key (#361)
+    std::optional<std::string> requested_scope{};  // scoped devices: what the request asked for
 };
 
 // An approval in progress: the request is held (Approving) until finishApproval/abortApproval.
@@ -87,6 +90,13 @@ struct ApprovalClaim {
     std::string source_ip{};
     std::optional<crypto::PublicKey> approval_key{};
     bool relayed{false};
+    std::optional<std::string> requested_scope{};
+};
+
+// What checkApproval found: the device key the approval would pair, and the scope the request asked for.
+struct ApprovalCheck {
+    std::string device_id{};
+    std::optional<std::string> requested_scope{};
 };
 
 struct RequestStatus {
@@ -117,8 +127,8 @@ public:
                                               time_point now);
     // The same checks as beginApproval (a wrong code denies), without holding the request: the device key (SPKI SHA-256
     // hex) the approval would pair. ops::devices::approve binds its device.trust step-up to it (#359).
-    [[nodiscard]] std::string checkApproval(uint32_t ownerId, const std::string& requestId, const std::string& code,
-                                            time_point now);
+    [[nodiscard]] ApprovalCheck checkApproval(uint32_t ownerId, const std::string& requestId, const std::string& code,
+                                              time_point now);
     void finishApproval(const std::string& requestId, uint32_t deviceRowId, time_point now);
     // The devices row could not be written: the request is denied (the device starts over).
     void abortApproval(const std::string& requestId, time_point now);
@@ -151,6 +161,7 @@ private:
         crypto::Hash commitment{}, nonce_server{};
         std::optional<crypto::PublicKey> approval_key{};
         bool relayed{false};
+        std::optional<std::string> requested_scope{};
         std::string code{};  // the SAS, once confirmed
         std::array<std::string, 3> choices{};
         RequestState state{RequestState::AwaitingConfirm};

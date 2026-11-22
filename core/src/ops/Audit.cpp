@@ -3,10 +3,13 @@
 #include "audit/Trail.hpp"
 #include "db/query/device/Device.hpp"
 #include "identities/User.hpp"
+#include "ops/Error.hpp"
 #include "rbac/permission/admin/Audits.hpp"
 #include "rbac/resolver/admin/all.hpp"
 #include "vault/KeyAttestation.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <ctime>
 #include <map>
 
@@ -43,6 +46,25 @@ bool canView(const Actor& actor) {
     if (!actor) return false;
     using Perm = rbac::permission::admin::AuditPermissions;
     return rbac::resolver::Admin::has<Perm>({.user = actor, .permission = Perm::View});
+}
+
+void forDevice(Filter& filter, const uint32_t deviceRowId) {
+    const auto row = db::query::device::Devices::byId(deviceRowId);
+    if (!row) throw NotFound("no device " + std::to_string(deviceRowId));
+    filter.origin_prefixes = {"device " + row->spki_sha256.substr(0, 16)};
+    if (row->previous_spki_sha256) filter.origin_prefixes.push_back("device " + row->previous_spki_sha256->substr(0, 16));
+    filter.details_key = "device";
+    filter.details_value = std::to_string(deviceRowId);
+}
+
+void forGrant(Filter& filter, const std::string& grantId) {
+    const bool uuid = grantId.size() == 36 && std::ranges::all_of(grantId, [](const unsigned char c) {
+        return std::isxdigit(c) != 0 || c == '-';
+    });
+    if (!uuid) throw Invalid("a grant id is the uuid `vh connector list --all --json` shows");
+    filter.origin_prefixes = {"connector " + grantId.substr(0, 8)};
+    filter.details_key = "grant_id";
+    filter.details_value = grantId;
 }
 
 Page list(const Actor& actor, const Filter& filter, const std::size_t limit) {

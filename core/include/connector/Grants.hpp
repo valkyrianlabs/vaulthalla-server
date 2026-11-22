@@ -67,6 +67,10 @@ struct Grant {
     Scope scope{Scope::Read};
 };
 
+// The audit origin of a grant's tool calls ("[via ...]" and the chain's `origin`): "connector <first 8 of the grant
+// id> scope <scope>", so one audit line says which grant acted and under what limit.
+[[nodiscard]] std::string auditOrigin(const Grant& grant);
+
 struct NewGrant {
     std::string client_row{};
     std::string client_id{};

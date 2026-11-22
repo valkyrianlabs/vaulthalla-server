@@ -1,5 +1,5 @@
 import type { Response } from '@/lib/ws/client'
-import type { Device } from '@/models/device'
+import type { Device, DeviceScope } from '@/models/device'
 import { RELAY_LABELS } from '@/features/cloudRelay/labels'
 
 // Paired devices (Vaulthalla Desktop). Normative protocol: docs/pairing.md in valkyrianlabs/vaulthalla-desktop (§3 number matching,
@@ -42,6 +42,18 @@ export const requestLabel = (request: Pick<PendingRequest, 'via' | 'platform' | 
 // The platform column: a relay-paired device is a web browser via the relay whatever it calls itself.
 export const devicePlatform = (device: Pick<Device, 'paired_via' | 'platform'>) =>
   pairedViaRelay(device) ? RELAY_LABELS.viaRelay : device.platform || '—'
+
+// Scoped devices: what a device may do, in the console's words (absent: a server before scopes, no limit).
+export const SCOPE_LABELS: Readonly<Record<DeviceScope, string>> = {
+  read: 'Read only',
+  write: 'Read and change',
+  destructive: 'Full access',
+}
+export const scopeLabel = (scope: DeviceScope | undefined) => SCOPE_LABELS[scope ?? 'destructive']
+const SCOPE_RANK: Readonly<Record<DeviceScope, number>> = { read: 1, write: 2, destructive: 3 }
+// The scopes an approval may give: what the request asked for or less (anything, when it asked for none).
+export const scopesUpTo = (asked: DeviceScope | undefined): DeviceScope[] =>
+  (['read', 'write', 'destructive'] as const).filter(s => SCOPE_RANK[s] <= SCOPE_RANK[asked ?? 'destructive'])
 
 // Live devices first (newest pairing first), revoked ones after.
 export const byStatus = (a: Device, b: Device) => Number(a.revoked) - Number(b.revoked) || b.created_at - a.created_at

@@ -28,10 +28,17 @@ std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& parent) {
                                       "prefix").withGen("prefix", contract::gen::pattern("auth.")),
                      Optional::Single("limit", "How many events (1..1000, default 50)", "limit", "n")
                          .withGen("n", contract::gen::intRange(1, 50)),
+                     Optional::Single("device", "Only one paired device: what it did (under whatever scope) and what "
+                                      "was done to it; its number from `vh device list --all`", "device", "number"),
+                     Optional::Single("grant", "Only one connector grant: its tool calls and its own events; its id",
+                                      "grant", "id"),
                      since, until};
     cmd->optional_flags = {jsonOut};
     cmd->examples = {{"vh audit list", "The 50 newest events."},
-                     {"vh audit list --action auth. --since 2026-11-01", "Sign-ins and sign-outs since November 1."}};
+                     {"vh audit list --action auth. --since 2026-11-01", "Sign-ins and sign-outs since November 1."},
+                     {"vh audit list --device 7", "Everything device 7 did, and every change to it."},
+                     {"vh audit list --device 7 --action device.scope.refused",
+                      "What device 7's scope refused it."}};
     return cmd;
 }
 

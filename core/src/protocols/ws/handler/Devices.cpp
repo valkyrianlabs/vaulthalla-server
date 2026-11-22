@@ -120,6 +120,9 @@ json Devices::pairRequest(const json& payload, const std::shared_ptr<Session>& s
         .approval_key = payload.is_object() && payload.contains("approval_key") && !payload.at("approval_key").is_null()
                             ? std::optional(requiredString(payload, "approval_key"))
                             : std::nullopt,
+        .scope = payload.is_object() && payload.contains("scope") && !payload.at("scope").is_null()
+                     ? std::optional(requiredString(payload, "scope"))
+                     : std::nullopt,
     });
     return {{"request_id", receipt.request_id},
             {"nonce_server", vh::device::crypto::toHex(receipt.nonce_server)},
@@ -187,25 +190,32 @@ json Devices::pairingClose(const json& payload, const std::shared_ptr<Session>& 
 json Devices::pairingPending(const std::shared_ptr<Session>& session) {
     const auto list = devices::pending(actorOf(session));
     json requests = json::array();
-    for (const auto& r : list.requests)
-        requests.push_back({{"request_id", r.request_id},
-                            {"name", r.name},
-                            {"platform", r.platform},
-                            {"app_version", r.app_version},
-                            {"source_ip", r.source_ip},
-                            {"device_id", r.device_id},
-                            {"code_choices", r.code_choices},
-                            {"approval_key_present", r.approval_key_present},
-                            {"via", r.relayed ? "relay" : "listener"},
-                            {"created_at", static_cast<int64_t>(r.created_at)},
-                            {"expires_at", static_cast<int64_t>(r.expires_at)}});
+    for (const auto& r : list.requests) {
+        json entry{{"request_id", r.request_id},
+                   {"name", r.name},
+                   {"platform", r.platform},
+                   {"app_version", r.app_version},
+                   {"source_ip", r.source_ip},
+                   {"device_id", r.device_id},
+                   {"code_choices", r.code_choices},
+                   {"approval_key_present", r.approval_key_present},
+                   {"via", r.relayed ? "relay" : "listener"},
+                   {"created_at", static_cast<int64_t>(r.created_at)},
+                   {"expires_at", static_cast<int64_t>(r.expires_at)}};
+        // Scoped devices: only when the request asked (an old console never sees the member otherwise).
+        if (r.requested_scope) entry["requested_scope"] = *r.requested_scope;
+        requests.push_back(std::move(entry));
+    }
     return {{"window", list.window ? windowJson(*list.window) : json(nullptr)}, {"requests", std::move(requests)},
             {"server_time", serverTime()}};
 }
 
 json Devices::pairingApprove(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto scope = payload.is_object() && payload.contains("scope") && !payload.at("scope").is_null()
+                           ? std::optional(requiredString(payload, "scope"))
+                           : std::nullopt;
     return {{"device", devices::approve(actorOf(session), requiredString(payload, "request_id"),
-                                        requiredString(payload, "code"))}};
+                                        requiredString(payload, "code"), scope)}};
 }
 
 json Devices::pairingDeny(const json& payload, const std::shared_ptr<Session>& session) {
@@ -216,6 +226,12 @@ json Devices::pairingDeny(const json& payload, const std::shared_ptr<Session>& s
 json Devices::list(const json& payload, const std::shared_ptr<Session>& session) {
     const bool all = payload.is_object() && payload.value("all", false);
     return {{"devices", devices::list(actorOf(session), all)}};
+}
+
+json Devices::scopeSet(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto* self = session && session->devicePeer() ? session->devicePeer().get() : nullptr;
+    return {{"device", devices::setScope(actorOf(session), requiredString(payload, "device_id"),
+                                         requiredString(payload, "scope"), self)}};
 }
 
 json Devices::rename(const json& payload, const std::shared_ptr<Session>& session) {

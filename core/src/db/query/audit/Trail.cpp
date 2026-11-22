@@ -2,6 +2,7 @@
 
 #include "db/Transactions.hpp"
 
+#include <nlohmann/json.hpp>
 #include <pqxx/pqxx>
 
 #include <stdexcept>
@@ -149,9 +150,15 @@ std::vector<vh::audit::Record> Trail::list(const Filter& f, const std::size_t li
                 "AND ($2::bigint IS NULL OR occurred_us >= $2) AND ($3::bigint IS NULL OR occurred_us < $3) "
                 "AND ($4::text IS NULL OR starts_with(action, $4)) AND ($5::int IS NULL OR actor_id = $5) "
                 "AND ($6::int IS NULL OR vault_id = $6) AND ($7::text IS NULL OR outcome = $7) "
+                "AND (($9::jsonb IS NULL AND $10::text IS NULL) "
+                "     OR EXISTS (SELECT 1 FROM jsonb_array_elements_text($9::jsonb) p WHERE starts_with(origin, p)) "
+                "     OR ($10::text IS NOT NULL AND details::jsonb ->> $10 = $11)) "
                 "ORDER BY seq DESC LIMIT $8",
             pqxx::params{f.before_seq, f.since_us, f.until_us, f.action_prefix, f.actor_id, f.vault_id, f.outcome,
-                         static_cast<int64_t>(limit)});
+                         static_cast<int64_t>(limit),
+                         f.origin_prefixes.empty() ? std::optional<std::string>()
+                                                   : std::optional<std::string>(nlohmann::json(f.origin_prefixes).dump()),
+                         f.details_key, f.details_value});
         out.reserve(res.size());
         for (const auto row : res) out.push_back(recordFrom(row));
         return out;

@@ -27,7 +27,7 @@ std::optional<T> optional(const json& payload, const char* key) {
 
 json Audit::list(const json& payload, const std::shared_ptr<Session>& session) {
     if (!payload.is_object()) throw ops::Invalid("audit.list expects an object");
-    const ops::audit::Filter filter{
+    ops::audit::Filter filter{
         .before_seq = optional<uint64_t>(payload, "before_seq"),
         .since_us = optional<uint64_t>(payload, "since_us"),
         .until_us = optional<uint64_t>(payload, "until_us"),
@@ -36,6 +36,11 @@ json Audit::list(const json& payload, const std::shared_ptr<Session>& session) {
         .vault_id = optional<uint32_t>(payload, "vault_id"),
         .outcome = optional<std::string>(payload, "outcome"),
     };
+    const auto device = optional<uint32_t>(payload, "device_id");
+    const auto grant = optional<std::string>(payload, "grant_id");
+    if (device && grant) throw ops::Invalid("device_id and grant_id can't be combined");
+    if (device) ops::audit::forDevice(filter, *device);
+    if (grant) ops::audit::forGrant(filter, *grant);
     const auto limit = optional<uint64_t>(payload, "limit").value_or(100);
     const auto page = ops::audit::list(session ? session->user : nullptr, filter, static_cast<std::size_t>(limit));
     json events = json::array();

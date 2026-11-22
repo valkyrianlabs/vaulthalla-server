@@ -164,6 +164,7 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
         {"connector.enable", "a super admin's origin-bound target: ConnectorOpsDb.SwitchingOnTakesAStepUpBoundToTheOrigin..."},
         {"connector.policy.update", "only when it widens: ConnectorOpsDb.ThePolicyWidensOnlyWithAStepUp..."},
         {"connector.clients.add", "bound to the name and URIs: ConnectorOpsDb.RegisteredClientsBindTheirStepUp..."},
+        {"device.scope.set", "only when it widens, bound to the device and scope: ScopedDevicesDb.ScopeSetNarrows..."},
         {"device.approval.key.register", "a paired device's own session: test_device_approvals_db.cpp"},
         {"device.backup.grant.create", "needs a paired device and an exportable vault: test_key_backup_grants_db.cpp"},
         {"device.backup.grant.extend", "needs a live grant: test_key_backup_grants_db.cpp"},

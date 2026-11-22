@@ -13,7 +13,10 @@
 #include "runtime/Deps.hpp"
 #include "identities/User.hpp"
 #include "device/Peer.hpp"
+#include "device/ScopeAudit.hpp"
+#include "protocols/device/Scope.hpp"
 #include "log/AuditOrigin.hpp"
+#include "Contract.hpp"  // core/usage: the ws book's per-command effects (scoped devices)
 
 #include <fmt/format.h>
 
@@ -273,6 +276,21 @@ bool Router::isRelayedReadCommand(const std::string_view command) {
     return containsCommand(commands, command);
 }
 
+bool Router::isScopedDeviceForbidden(const std::string_view command) {
+    for (const std::string_view prefix : {"device.pair", "device.approval.", "device.backup.grant.", "connector."})
+        if (command.starts_with(prefix)) return true;
+    constexpr std::array exact{std::string_view{"vault.keys.export"}, std::string_view{"vault.keys.export.confirm"},
+                               std::string_view{"vault.keys.import"}, std::string_view{"device.scope.set"}};
+    return containsCommand(exact, command);
+}
+
+bool Router::scopedDeviceMayRun(const std::string_view command, const std::string_view scope) {
+    if (isScopedDeviceForbidden(command)) return false;
+    const auto effect = ::vh::contract::ws::effectOf(command);
+    // An unknown command (or one without an effect) is refused: fail closed.
+    return effect && protocols::device::scope::allows(scope, *effect);
+}
+
 model::Response Router::unknownCommand(std::string&& command, json&& msg) {
     // The text stays what clients before the code matched on.
     return {std::move(command), std::move(msg), Status::ERROR, json{{"code", "unknown_command"}}, "Unknown command"};
@@ -292,6 +310,9 @@ Router::CommandAuthDecision Router::classifyCommand(const std::string_view comma
         // design/cloud/relay.md: a relayed browser has at most its user's rights, narrowed to reading.
         if (const auto& peer = session.devicePeer(); peer && peer->readOnly() && !isRelayedReadCommand(command))
             return CommandAuthDecision::DenyReadOnly;
+        // Scoped devices: within its scope, and never pairing, approvals, key custody or connectors.
+        if (const auto& peer = session.devicePeer(); peer && peer->scoped() && !scopedDeviceMayRun(command, peer->scope))
+            return CommandAuthDecision::DenyScope;
         // No password sign-in, refresh tokens or account creation through a device; a device signs out by being
         // unpaired (device.revoke).
         if (isSessionLifecycleCommand(command) && command != "auth.isAuthenticated") return CommandAuthDecision::Deny;
@@ -376,6 +397,27 @@ void Router::routeMessage(json&& msg, const SessionPtr& session) {
             return;
         }
 
+        if (decision == CommandAuthDecision::DenyScope) {
+            const auto& peer = session->devicePeer();
+            const auto scope = peer ? peer->scope : std::string("read");
+            const auto effect = ::vh::contract::ws::effectOf(command);
+            // A security signal, recorded in the trail (throttled per device, with a count of what was skipped).
+            if (peer)
+                ::vh::device::scope_audit::refused(*peer, session->user, "ws", command,
+                                                   effect ? std::optional<std::string_view>(*effect) : std::nullopt);
+            logRefusal(fmt::format("Scoped device asked for {} from client {}", commandForLog(command),
+                                   refusalClient(*session)),
+                       "", fmt::format(" (command: {})", printableCommand(command)));
+            const auto text = isScopedDeviceForbidden(command)
+                                  ? "This device has limited access (" + scope + "): it can't do this."
+                                  : "This device is limited to " + scope + " access, and this needs " +
+                                        effect.value_or("more") + ".";
+            Response(std::move(command), std::move(msg), Status::ERROR,
+                     json{{"code", "device_scope"}, {"scope", scope}, {"effect", effect ? json(*effect) : json(nullptr)}},
+                     text)(session);
+            return;
+        }
+
         if (decision == CommandAuthDecision::Deny ||
             (decision == CommandAuthDecision::RequireHumanAuth &&
              !runtime::Deps::get().sessionManager->validate(session, accessToken))) {
@@ -405,7 +447,7 @@ void Router::routeMessage(json&& msg, const SessionPtr& session) {
         std::optional<log::AuditOrigin> origin;
         if (const auto& peer = session->devicePeer(); peer && peer->paired()) {
             ::vh::device::touch(*peer);
-            origin.emplace("device " + peer->shortId());
+            origin.emplace(::vh::device::auditOrigin(*peer));
             log::Registry::ws()->debug("[Router] device {} ({}) runs {}", peer->shortId(),
                                        session->user ? session->user->name() : std::string{"-"},
                                        commandForLog(command));

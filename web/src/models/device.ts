@@ -18,4 +18,8 @@ export interface Device {
   revoked_at: number | null
   revoked: boolean
   paired_via: 'listener' | 'relay'
+  // Scoped devices: the most it may do within its user's rights (absent from servers before scopes: no limit).
+  scope?: DeviceScope
 }
+
+export type DeviceScope = 'read' | 'write' | 'destructive'

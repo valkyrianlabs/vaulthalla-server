@@ -221,6 +221,7 @@ Json wsJson() {
                     {"response_model", c.response_model ? Json(*c.response_model) : Json(nullptr)},
                     {"client_timeout_ms", c.client_timeout.count()}};
         if (c.step_up) entry["step_up"] = *c.step_up;  // #359: annotated commands only (additive)
+        if (!c.effect.empty()) entry["effect"] = c.effect;  // scoped devices (additive)
         out.push_back(std::move(entry));
     }
     return out;

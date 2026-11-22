@@ -1399,6 +1399,46 @@ TEST_F(SqlDeployerHistoryDb, ConnectorGrantsMigration151IsAdditiveAndIdempotent)
     });
 }
 
+// 152 (scoped devices) on a 151-era database: existing devices read destructive (unchanged rights), the CHECK holds,
+// and running it again changes nothing.
+TEST_F(SqlDeployerHistoryDb, DeviceScopeMigration152KeepsEveryDeviceUnscoped) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("ALTER TABLE devices DROP CONSTRAINT IF EXISTS devices_scope");
+        txn.exec("ALTER TABLE devices DROP COLUMN IF EXISTS scope");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '152_device_scope.sql'");
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_152_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto device = txn.exec("INSERT INTO devices (user_id, name, platform, spki_sha256) VALUES "
+                                     "($1, 'Mac', 'macOS', repeat('c', 64)) RETURNING id",
+                                     pqxx::params{owner}).one_field_ref().as<int>();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "152_device_scope.sql"));
+        EXPECT_EQ(recordedHash(txn, "152_device_scope.sql"), currentHash("152_device_scope.sql"));
+        EXPECT_EQ(txn.exec("SELECT scope FROM devices WHERE id = $1", pqxx::params{device}).one_field_ref().as<std::string>(),
+                  "destructive");
+        const auto refused = [&](const std::string& sql) {
+            pqxx::subtransaction sub(txn, "check");
+            try {
+                sub.exec(sql, pqxx::params{device});
+            } catch (const pqxx::sql_error&) {
+                return true;
+            }
+            return false;
+        };
+        EXPECT_TRUE(refused("UPDATE devices SET scope = 'admin' WHERE id = $1"));
+        txn.exec("UPDATE devices SET scope = 'read' WHERE id = $1", pqxx::params{device});
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "152_device_scope.sql")));
+        EXPECT_EQ(txn.exec("SELECT scope FROM devices WHERE id = $1", pqxx::params{device}).one_field_ref().as<std::string>(),
+                  "read") << "re-running keeps a set scope";
+    });
+}
+
 TEST_F(SqlDeployerHistoryDb, RecoveryRecipientsMigrationIsAdditiveIdempotentAndCustomerOnly) {
     inRolledBackTxn([](pqxx::work& txn) {
         txn.exec("DROP TABLE IF EXISTS vault_key_envelope");

@@ -1,4 +1,6 @@
 #include "protocols/http/Session.hpp"
+#include "protocols/device/Scope.hpp"
+#include "device/ScopeAudit.hpp"
 
 #include "config/Registry.hpp"
 #include "log/Registry.hpp"
@@ -430,9 +432,19 @@ bool Session::serve(HeaderParser& parser) {
         if (peer.readOnly() && !isReadOnlyDeviceRequest(parser.get().method(), target))
             return refuse("relay_read_only: a session through Vaulthalla Cloud can only preview and download",
                           status::forbidden);
+        namespace device_scope = protocols::device::scope;
+        if (const auto effect = device_scope::laneEffect(parser.get().method(), target);
+            peer.scoped() && !device_scope::allows(peer.scope, effect)) {
+            const auto lane = target.substr(0, target.find('?'));  // never the query: it names files
+            ::vh::device::scope_audit::refused(peer, device_->principal->user, "http",
+                                               std::string(boost::beast::http::to_string(parser.get().method())) + " " +
+                                                   std::string(lane),
+                                               effect);
+            return refuse("device_scope: this device is limited to " + peer.scope + " access", status::forbidden);
+        }
         ::vh::device::touch(peer);
         principalScope.emplace(device_->principal);
-        origin.emplace("device " + peer.shortId());
+        origin.emplace(::vh::device::auditOrigin(peer));
     }
 
     try {

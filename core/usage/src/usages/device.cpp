@@ -21,6 +21,10 @@ const auto requestPos = Positional::WithAliases("request", "The pairing request 
                                                 {"request", "request_id"},
                                                 contract::gen::ref("device.pairing_request", {"request_id"}));
 
+const auto scopeOpt = Optional::ManyToOne(
+    "scope", "What the device may do: read, write or destructive (default: what it asked for, else destructive)",
+    {"scope"}, "scope");
+
 const auto codeOpt = Optional::ManyToOne("code", "The six-digit code the device shows (number matching)", {"code"},
                                          "code")
                          .withGen("code", contract::gen::ref("device.pairing_request", {"code"}));
@@ -65,9 +69,11 @@ std::shared_ptr<CommandUsage> approve(const std::weak_ptr<CommandUsage>& parent)
     cmd->description = "Approve a pairing request with the code the device shows. Asks which of the three codes it "
                        "is; --code answers without asking. A wrong code denies the request.";
     cmd->positionals = {requestPos};
-    cmd->optional = {codeOpt};
+    cmd->optional = {codeOpt, scopeOpt};
     cmd->examples = {{"vh device approve 7f3a9c1d2e4b6a80", "Approve after picking the code your Mac shows."},
-                     {"vh device approve 7f3a9c1d2e4b6a80 --code 482913", "Approve non-interactively."}};
+                     {"vh device approve 7f3a9c1d2e4b6a80 --code 482913", "Approve non-interactively."},
+                     {"vh device approve 7f3a9c1d2e4b6a80 --code 482913 --scope read",
+                      "Approve an AI app's pairing with read-only access."}};
     return cmd;
 }
 
@@ -116,6 +122,33 @@ std::shared_ptr<CommandUsage> revoke(const std::weak_ptr<CommandUsage>& parent) 
     return cmd;
 }
 
+std::shared_ptr<CommandUsage> scope(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
+    cmd->aliases = {"scope"};
+    cmd->description = "Change what a device may do: read, write or destructive (full: no limit beyond your account's "
+                       "own). Narrowing needs no confirmation; widening is for the device's own user. Its open "
+                       "connections close, and it reconnects with the new scope.";
+    cmd->positionals = {devicePos, Positional::Alias("scope", "read, write or destructive", "scope",
+                                                     contract::gen::constant("read"))};
+    cmd->examples = {{"vh device scope 3 read", "Make device 3 read-only."}};
+    return cmd;
+}
+
+std::shared_ptr<CommandUsage> scopes(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Read;
+    cmd->aliases = {"scopes"};
+    cmd->description = "What each device scope allows, from the contract the daemon enforces: the ws commands, the "
+                       "MCP tools and vh commands an agent on the device may run, and the HTTP lanes. A scope only "
+                       "narrows: the device's user's own permissions apply first, always.";
+    cmd->optional = {Optional::ManyToOne("scope", "Only this scope: read or write", {"scope"}, "scope")};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh device scopes --scope read", "Everything a read-only device could do."},
+                     {"vh device scopes --json", "Both scopes, as JSON."}};
+    return cmd;
+}
+
 std::shared_ptr<CommandUsage> remote(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->aliases = {"remote"};
@@ -159,7 +192,9 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
                         "your permissions.";
     root->subcommands = {pair(root->weak_from_this()),    pending(root->weak_from_this()), approve(root->weak_from_this()),
                          deny(root->weak_from_this()),    list(root->weak_from_this()),    rename(root->weak_from_this()),
-                         revoke(root->weak_from_this()),  remote(root->weak_from_this())};
+                         revoke(root->weak_from_this()),  scope(root->weak_from_this()),
+                         scopes(root->weak_from_this()),
+                         remote(root->weak_from_this())};
     root->examples = {
         {"vh device pair", "Pair a Mac running Vaulthalla Desktop with your account."},
         {"vh device list", "Your paired devices."},

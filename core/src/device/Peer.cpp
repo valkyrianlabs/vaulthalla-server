@@ -34,6 +34,7 @@ Authorization authorize(const crypto::PublicKey& key, const std::string& address
 
     peer->deviceRowId = row->id;
     peer->pairedViaRelay = row->paired_via == "relay";
+    peer->scope = row->scope;
     // #362: a device that hasn't connected for 90 days loses its key-backup grant before this connection counts.
     try {
         (void)ops::backup_grants::revokeIfIdle(*row);

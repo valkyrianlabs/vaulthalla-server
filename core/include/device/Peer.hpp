@@ -29,11 +29,16 @@ struct Peer {
     // the browser's address as the relay reports it: display and per-address limits only, never loopback.
     bool relayed = false;
     bool pairedViaRelay = false;
+    // Scoped devices (migration 152): the row's scope, read at the handshake ("read" | "write" | "destructive"). A
+    // change closes the device's sessions, so a connection never runs under a scope wider than the row's.
+    std::string scope{"destructive"};
     // Last time last_seen_at was written for this connection (steady clock, seconds), for throttling.
     mutable std::atomic<int64_t> lastTouchSeconds{0};
 
     [[nodiscard]] bool paired() const noexcept { return deviceRowId.has_value(); }
     [[nodiscard]] bool readOnly() const noexcept { return relayed || pairedViaRelay; }
+    // Limited to less than its user's rights: never pairs, approves, steps up or handles keys (Router, ops, StepUp).
+    [[nodiscard]] bool scoped() const noexcept { return scope != "destructive"; }
     // The first 16 hex digits of the key: how log lines name a device.
     [[nodiscard]] std::string shortId() const { return spkiHex.substr(0, 16); }
 };

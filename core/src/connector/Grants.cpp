@@ -90,6 +90,10 @@ std::optional<Revocation> parseRevocation(const std::string_view s) noexcept {
     return std::nullopt;
 }
 
+std::string auditOrigin(const Grant& grant) {
+    return "connector " + grant.row.id.substr(0, 8) + " scope " + std::string(protocols::shell::effectName(grant.scope));
+}
+
 bool mayGrant(const identities::User& user) { return user.authorizing() && user.isSuperAdmin(); }
 
 std::string mintToken(const std::string_view prefix) {

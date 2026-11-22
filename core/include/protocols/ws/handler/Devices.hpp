@@ -29,6 +29,8 @@ struct Devices {
     // Devices.
     static json list(const json& payload, const std::shared_ptr<Session>& session);
     static json rename(const json& payload, const std::shared_ptr<Session>& session);
+    // Scoped devices: device.scope.set (ops::devices::setScope).
+    static json scopeSet(const json& payload, const std::shared_ptr<Session>& session);
     static json revoke(const json& payload, const std::shared_ptr<Session>& session);
     // Key-backup grants (#362, ops/BackupGrants.hpp): a console session manages its own devices' grants, a device's
     // session its own.
