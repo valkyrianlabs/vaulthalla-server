@@ -1,6 +1,7 @@
 #include "protocols/ws/Handler.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/handler/CloudRelay.hpp"
+#include "protocols/ws/handler/Connector.hpp"
 #include "protocols/ws/handler/Auth.hpp"
 #include "protocols/ws/handler/Mfa.hpp"
 #include "protocols/ws/handler/StepUp.hpp"
@@ -186,6 +187,16 @@ void Handler::registerVaultKeyHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("cloud.relay.status", &handler::CloudRelay::status);
     r->registerPayload("cloud.relay.enable", &handler::CloudRelay::enable);
     r->registerPayload("cloud.relay.disable", &handler::CloudRelay::disable);
+    // design/core/mcp-remote-signin.md: remote connectors (ops::connector).
+    r->registerPayload("connector.status", &handler::Connector::status);
+    r->registerPayload("connector.enable", &handler::Connector::enable);
+    r->registerPayload("connector.disable", &handler::Connector::disable);
+    r->registerPayload("connector.policy.update", &handler::Connector::policyUpdate);
+    r->registerPayload("connector.grants.list", &handler::Connector::grantsList);
+    r->registerPayload("connector.grants.revoke", &handler::Connector::grantsRevoke);
+    r->registerPayload("connector.clients.list", &handler::Connector::clientsList);
+    r->registerPayload("connector.clients.add", &handler::Connector::clientsAdd);
+    r->registerPayload("connector.clients.remove", &handler::Connector::clientsRemove);
 }
 
 void Handler::registerMetaHandlers(const std::shared_ptr<Router>& r) {

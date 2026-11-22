@@ -27,7 +27,8 @@ std::vector<WsCommandUsage> commands() {
         if (std::ranges::find(it->refusal_codes, "step_up_required") == it->refusal_codes.end())
             it->refusal_codes.emplace_back("step_up_required");
         // #360: the recovery cooldown's families (auth::stepup::cooldownFamily) refuse while it runs.
-        static constexpr std::array kCooldownFamilies{"keys", "device.trust", "identity.admin", "secrets", "settings"};
+        static constexpr std::array kCooldownFamilies{"keys",     "device.trust", "identity.admin",
+                                                      "secrets",  "settings",     "connector.trust"};
         if (std::ranges::find(kCooldownFamilies, row.family) != kCooldownFamilies.end() &&
             std::ranges::find(it->refusal_codes, "recovery_cooldown") == it->refusal_codes.end())
             it->refusal_codes.emplace_back("recovery_cooldown");

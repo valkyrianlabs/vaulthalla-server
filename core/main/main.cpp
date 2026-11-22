@@ -27,6 +27,7 @@
 // Seed
 #include "seed/include/seed_db.hpp"
 #include "ops/BackupGrants.hpp"
+#include "connector/Grants.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "seed/include/init_db_tables.hpp"
 
@@ -181,7 +182,21 @@ void initDeps() {
     } catch (const std::exception& e) {
         vh::log::Registry::vaulthalla()->warn("[!] Key-backup grant check failed: {}", e.what());
     }
-    vh::ops::backup_grants::installIdentityHook();
+    try {
+        (void)vh::connector::reconcile();
+    } catch (const std::exception& e) {
+        vh::log::Registry::vaulthalla()->warn("[!] Connector grant check failed: {}", e.what());
+    }
+    // One publication hook per process: key-backup grants (#362) and connector grants end with their user's rights.
+    vh::identities::Manager::setPublishedHook([](const std::vector<uint32_t>& userIds, const bool everyone) {
+        if (everyone) {
+            (void)vh::ops::backup_grants::reconcile();
+            (void)vh::connector::reconcile();
+        } else if (!userIds.empty()) {
+            (void)vh::ops::backup_grants::reconcile(userIds);
+            (void)vh::connector::reconcile(userIds);
+        }
+    });
 }
 
 // --- Wiring ---

@@ -53,17 +53,29 @@
 // auth.stepup.grant, auth.stepup.fail, auth.stepup.required.
 namespace vh::auth::stepup {
 
-enum class Family : uint8_t { Keys, DeviceTrust, AccountCredentials, IdentityAdmin, Secrets, Settings, DataDestroy };
+// ConnectorTrust (design/core/mcp-remote-signin.md): switching remote connectors on, widening their policy, registering
+// a client and approving a grant; target-bound, never the password alone, a recovery-cooldown family.
+enum class Family : uint8_t {
+    Keys,
+    DeviceTrust,
+    AccountCredentials,
+    IdentityAdmin,
+    Secrets,
+    Settings,
+    DataDestroy,
+    ConnectorTrust
+};
 
-inline constexpr std::array<Family, 7> kFamilies{Family::Keys,          Family::DeviceTrust, Family::AccountCredentials,
+inline constexpr std::array<Family, 8> kFamilies{Family::Keys,          Family::DeviceTrust, Family::AccountCredentials,
                                                  Family::IdentityAdmin, Family::Secrets,     Family::Settings,
-                                                 Family::DataDestroy};
+                                                 Family::DataDestroy,   Family::ConnectorTrust};
 
-// "keys", "device.trust", "account.credentials", "identity.admin", "secrets", "settings", "data.destroy".
+// "keys", "device.trust", "account.credentials", "identity.admin", "secrets", "settings", "data.destroy",
+// "connector.trust".
 [[nodiscard]] std::string_view to_string(Family family) noexcept;
 [[nodiscard]] std::optional<Family> parseFamily(std::string_view name) noexcept;
 
-// keys, device.trust and data.destroy: a grant names the exact target and is spent by one use.
+// keys, device.trust, data.destroy and connector.trust: a grant names the exact target and is spent by one use.
 [[nodiscard]] bool targetBound(Family family) noexcept;
 // D3: the password alone may satisfy only these (account.credentials, identity.admin, secrets, settings), and only for
 // an account that need not have MFA and has no usable factor.
@@ -72,7 +84,8 @@ inline constexpr std::array<Family, 7> kFamilies{Family::Keys,          Family::
 // key-backup grant commands are device.trust).
 [[nodiscard]] bool deviceApprovalMaySatisfy(Family family) noexcept;
 
-// The recovery cooldown's families (#360; design 7.4, D4): keys, device.trust, identity.admin, secrets, settings. While
+// The recovery cooldown's families (#360; design 7.4, D4): keys, device.trust, identity.admin, secrets, settings (and
+// connector.trust: a remote connector hands the account to a third party). While
 // the account's cooldown runs (a recovery-code sign-in or an MFA reset, auth/mfa/Recovery.hpp) require() refuses them
 // on web and device sessions with ops::RecoveryCooldown, before any grant is looked at, and no ceremony for them
 // begins. Factors enrolled meanwhile are marked created_during_recovery and are not offered for these families until

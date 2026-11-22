@@ -1,4 +1,5 @@
 #include "auth/mfa/Recovery.hpp"
+#include "connector/Grants.hpp"
 #include "db/query/device/BackupGrant.hpp"
 #include "ops/BackupGrants.hpp"
 
@@ -137,6 +138,8 @@ SignInEffects afterRecoveryCodeSignIn(const std::shared_ptr<protocols::ws::Sessi
     out.sessions_revoked =
         ops::sessions::revoke(user, session->tokens->refreshToken->jti, {.all_others = true}, session);
     out.grants_revoked = revokeKeyBackupGrants(user->id, Reason::RecoveryCode, user->id);
+    // Connected apps too: a recovery-code sign-in may mean the account was taken over.
+    (void)connector::revokeForUser(user->id, connector::Revocation::MfaRecovery, {.id = user->id, .name = user->name()});
     out.devices = devices(user->id);
 
     vh::audit::record({.action = "auth.mfa.recovery.signin", .outcome = vh::audit::Outcome::Info,

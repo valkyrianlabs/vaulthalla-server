@@ -58,6 +58,40 @@ std::vector<WsModel> deviceModels() {
          uinteger("streams_accepted").desc("Since the daemon started."),
          uinteger("streams_refused").desc("Since the daemon started: bad tickets, failed key proofs, limits.")}));
 
+    out.push_back(model("ConnectorStatus",
+        "Remote connectors (design/core/mcp-remote-signin.md): ops::connector::toJson(Status).",
+        {boolean("enabled").desc("The switch."),
+         str("public_origin").nullable().desc("https://<host>, where hosted AI clients reach this server."),
+         str("resource").nullable().desc("The MCP endpoint grants are bound to: public_origin + /mcp."),
+         str("max_scope").oneOf({"read", "write", "destructive"}).desc("The widest scope a grant may be given."),
+         boolean("dcr_enabled").desc("Dynamic client registration (off by default)."),
+         strArray("client_hosts").desc("The only hosts a client-id metadata document may come from; empty: any."),
+         uinteger("changed_by").nullable().desc("The user id of the last change."), integer("changed_at").nullable().desc("Unix seconds; null: never changed."),
+         uinteger("live_grants"), uinteger("clients").desc("Live clients.")}));
+
+    out.push_back(model("ConnectorGrant",
+        "A remote connector grant, a connected app (migration 151): ops::connector::toJson(Grant).",
+        {str("id").desc("uuid"), uinteger("user_id"),
+         str("client_id").desc("A client-id metadata document URL, or vhc_… for a registered or dynamic client."),
+         str("client_name").desc("As the client named itself (verified only for registered clients)."),
+         str("client_host").desc("The client id's host (empty for vhc_… ids)."),
+         str("redirect_host").desc("Where the grant's authorization code went."),
+         boolean("loopback").desc("The redirect goes to a program on the approver's computer."),
+         str("scope").oneOf({"read", "write", "destructive"}), str("label").nullable(),
+         integer("created_at"), integer("expires_at").desc("At most 90 days after created_at."),
+         integer("last_used_at").nullable(), str("last_ip").nullable(),
+         integer("revoked_at").nullable(),
+         str("revoked_reason").oneOf({"manual", "user_inactive", "grantor_policy", "refresh_reuse", "code_reuse",
+                                      "switch_off", "expired", "client_removed", "sessions_revoked", "mfa_recovery"})
+             .nullable()}));
+
+    out.push_back(model("ConnectorClient",
+        "A remote connector client (migration 151): ops::connector::toJson(ClientRow).",
+        {str("id").desc("uuid"), str("client_id"), str("kind").oneOf({"cimd", "registered", "dcr"}), str("name"),
+         strArray("redirect_uris"), uinteger("created_by").nullable().desc("The registering user's id."),
+         integer("created_at"),
+         integer("last_used_at").nullable(), integer("disabled_at").nullable()}));
+
     out.push_back(model("KeyBackupGrant",
         "A paired device's key-backup grant (#362, migration 130; MFA design note section 6.4): "
         "ops::backup_grants::toJson, core/src/ops/BackupGrants.cpp.",

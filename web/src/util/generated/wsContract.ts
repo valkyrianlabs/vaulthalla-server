@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'f14dec94b0ad564ea133841b91b99eaf8b78e8f4dc6cb64f9157e73f6b0e67e3'
+export const WS_CONTRACT_HASH = 'b0dd7e85344094952cbf1c6cb022a7b914d40165851493e2befce91ef6604222'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'b4e929c567bc343867dea372f4f0ee83eee42315f834079b4af7dffad0126d02'
+export const WS_MODELS_HASH = 'eedd8719497ec0e5851ab019bdcfa45771cbce05fe4417badcb20c3490178a32'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -392,6 +392,55 @@ export interface WsModels {
     top_remote_ips_limited: string[]
     top_remote_ips_available: boolean
     checked_at: number
+  }
+  /**
+   * A remote connector client (migration 151): ops::connector::toJson(ClientRow).
+   */
+  'ConnectorClient': {
+    id: string
+    client_id: string
+    kind: 'cimd' | 'registered' | 'dcr'
+    name: string
+    redirect_uris: string[]
+    created_by: number | null
+    created_at: number
+    last_used_at: number | null
+    disabled_at: number | null
+  }
+  /**
+   * A remote connector grant, a connected app (migration 151): ops::connector::toJson(Grant).
+   */
+  'ConnectorGrant': {
+    id: string
+    user_id: number
+    client_id: string
+    client_name: string
+    client_host: string
+    redirect_host: string
+    loopback: boolean
+    scope: 'read' | 'write' | 'destructive'
+    label: string | null
+    created_at: number
+    expires_at: number
+    last_used_at: number | null
+    last_ip: string | null
+    revoked_at: number | null
+    revoked_reason: 'manual' | 'user_inactive' | 'grantor_policy' | 'refresh_reuse' | 'code_reuse' | 'switch_off' | 'expired' | 'client_removed' | 'sessions_revoked' | 'mfa_recovery' | null
+  }
+  /**
+   * Remote connectors (design/core/mcp-remote-signin.md): ops::connector::toJson(Status).
+   */
+  'ConnectorStatus': {
+    enabled: boolean
+    public_origin: string | null
+    resource: string | null
+    max_scope: 'read' | 'write' | 'destructive'
+    dcr_enabled: boolean
+    client_hosts: string[]
+    changed_by: number | null
+    changed_at: number | null
+    live_grants: number
+    clients: number
   }
   /**
    * services.db_sweeper.* (Config.cpp to_json(DBSweeperConfig)).
@@ -3620,7 +3669,7 @@ export interface WsContract {
       approval: {
         approval_id: string
         state: 'pending' | 'approved' | 'denied' | 'expired'
-        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy' | 'connector.trust'
         target: string | null
         summary: string
         device: { id: number; device_id: string; name: string }
@@ -3647,7 +3696,7 @@ export interface WsContract {
       approval: {
         approval_id: string
         state: 'pending' | 'approved' | 'denied' | 'expired'
-        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy' | 'connector.trust'
         target: string | null
         summary: string
         device: { id: number; device_id: string; name: string }
@@ -3669,7 +3718,7 @@ export interface WsContract {
       approvals: {
         approval_id: string
         state: 'pending' | 'approved' | 'denied' | 'expired'
-        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy' | 'connector.trust'
         target: string | null
         summary: string
         device: { id: number; device_id: string; name: string }
@@ -3838,7 +3887,7 @@ export interface WsContract {
       cooldown_until: number | null
       recovery_restricted: boolean
       step_up: {
-        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+        family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy' | 'connector.trust'
         target: string | null
         expires_at: number
       }[]
@@ -4044,21 +4093,22 @@ export interface WsContract {
   }
   /**
    * Start confirming a sensitive change that answered step_up_required: name its family and, for keys,
-   * device.trust and data.destroy, the target the refusal named. Answers the methods the account can use
-   * (webauthn: pass webauthn.publicKey to navigator.credentials.get(); password_totp: the password and an
-   * authenticator code together; password: only for an account that need not have MFA and has no factor,
-   * never for keys, device.trust or data.destroy) and a ceremony id valid for 120 s. A new begin replaces the
-   * open ceremony. step_up_unavailable: the account has nothing that can confirm this family (add a passkey
-   * or an authenticator app). Web sessions only: a paired device is denied.
+   * device.trust, data.destroy and connector.trust, the target the refusal named. Answers the methods the
+   * account can use (webauthn: pass webauthn.publicKey to navigator.credentials.get(); password_totp: the
+   * password and an authenticator code together; password: only for an account that need not have MFA and has
+   * no factor, never for a target-bound family: keys, device.trust, data.destroy, connector.trust) and a
+   * ceremony id valid for 120 s. A new begin replaces the open ceremony. step_up_unavailable: the account has
+   * nothing that can confirm this family (add a passkey or an authenticator app). Web sessions only: a paired
+   * device is denied.
    */
   'auth.stepup.begin': {
     payload: {
-      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy' | 'connector.trust'
       target?: string | null
     }
     response: {
       stepup_id: string
-      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy' | 'connector.trust'
       target: string | null
       methods: string[]
       webauthn?: {
@@ -4098,7 +4148,7 @@ export interface WsContract {
       code?: string
     }
     response: {
-      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy' | 'connector.trust'
       target: string | null
       expires_at: number
       uses: number | null
@@ -4465,6 +4515,138 @@ export interface WsContract {
     }
   }
   /**
+   * Register a client for an app that can't publish a client-id metadata document: a name and 1-16 exact
+   * redirect URIs (https, or http to 127.0.0.1, [::1] or localhost, any port). A connector.trust step-up
+   * bound to them. Answers the client id the app is configured with. Super admins.
+   */
+  'connector.clients.add': {
+    payload: { name: string; redirect_uris: string[] }
+    response: {
+      id: string
+      client_id: string
+      kind: 'cimd' | 'registered' | 'dcr'
+      name: string
+      redirect_uris: string[]
+      created_by: number | null
+      created_at: number
+      last_used_at: number | null
+      disabled_at: number | null
+    }
+  }
+  /**
+   * The clients this server knows (operator-registered, fetched client-id metadata documents, dynamic
+   * registrations), live first. Super admins.
+   */
+  'connector.clients.list': {
+    payload: null
+    response: { clients: WsModels['ConnectorClient'][] }
+  }
+  /**
+   * Remove a client (by id or a unique 8+ character prefix): it can't sign in again, and its grants end at
+   * once (client_removed). Super admins.
+   */
+  'connector.clients.remove': {
+    payload: { id: string }
+    response: { grants_revoked: number }
+  }
+  /**
+   * Switch remote connectors off: every grant ends at once (switch_off); turning it on again revives none.
+   * Super admins.
+   */
+  'connector.disable': {
+    payload: null
+    response: {
+      enabled: boolean
+      public_origin: string | null
+      resource: string | null
+      max_scope: 'read' | 'write' | 'destructive'
+      dcr_enabled: boolean
+      client_hosts: string[]
+      changed_by: number | null
+      changed_at: number | null
+      live_grants: number
+      clients: number
+    }
+  }
+  /**
+   * Switch remote connectors on at a public https origin (a host name, port 443). A connector.trust step-up
+   * bound to the origin, unless it is already on there. Super admins.
+   */
+  'connector.enable': {
+    payload: { url: string }
+    response: {
+      enabled: boolean
+      public_origin: string | null
+      resource: string | null
+      max_scope: 'read' | 'write' | 'destructive'
+      dcr_enabled: boolean
+      client_hosts: string[]
+      changed_by: number | null
+      changed_at: number | null
+      live_grants: number
+      clients: number
+    }
+  }
+  /**
+   * The caller's grants (connected apps), live first; with all, every user's (super admins).
+   */
+  'connector.grants.list': {
+    payload: { all?: boolean }
+    response: { grants: WsModels['ConnectorGrant'][] }
+  }
+  /**
+   * End a grant now (its user or a super admin), by id or a unique 8+ character prefix; or, with all, every
+   * live grant (super admins) or one user's (user_id: that user, or a super admin). Never asks for a step-up.
+   */
+  'connector.grants.revoke': {
+    payload: { id?: string; all?: boolean; user_id?: number | null }
+    response: { revoked: number }
+  }
+  /**
+   * Change what grants may be given: the widest scope, dynamic client registration, and which hosts a
+   * client-id metadata document may come from (empty: any https host). A change that widens anything takes a
+   * connector.trust step-up; lowering the widest scope ends the grants above it. Super admins.
+   */
+  'connector.policy.update': {
+    payload: {
+      max_scope?: 'read' | 'write' | 'destructive' | null
+      dcr_enabled?: boolean | null
+      client_hosts?: string[] | null
+    }
+    response: {
+      enabled: boolean
+      public_origin: string | null
+      resource: string | null
+      max_scope: 'read' | 'write' | 'destructive'
+      dcr_enabled: boolean
+      client_hosts: string[]
+      changed_by: number | null
+      changed_at: number | null
+      live_grants: number
+      clients: number
+    }
+  }
+  /**
+   * Remote connectors: the switch, the public origin hosted AI clients reach this server at, the policy
+   * (widest scope, dynamic registration, client hosts) and how many grants and clients are live. Super
+   * admins.
+   */
+  'connector.status': {
+    payload: null
+    response: {
+      enabled: boolean
+      public_origin: string | null
+      resource: string | null
+      max_scope: 'read' | 'write' | 'destructive'
+      dcr_enabled: boolean
+      client_hosts: string[]
+      changed_by: number | null
+      changed_at: number | null
+      live_grants: number
+      clients: number
+    }
+  }
+  /**
    * The caller's saved dashboard layout for a key; exists is false (empty layout) when none is saved. A
    * non-object payload reads the default key.
    */
@@ -4539,7 +4721,7 @@ export interface WsContract {
    */
   'device.approval.request': {
     payload: {
-      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy'
+      family: 'keys' | 'device.trust' | 'account.credentials' | 'identity.admin' | 'secrets' | 'settings' | 'data.destroy' | 'connector.trust'
       target?: string | null
       summary: string
     }
@@ -7732,6 +7914,15 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'cloud.storage.rotate',
   'cloud.storage.status',
   'cloud.storage.switch',
+  'connector.clients.add',
+  'connector.clients.list',
+  'connector.clients.remove',
+  'connector.disable',
+  'connector.enable',
+  'connector.grants.list',
+  'connector.grants.revoke',
+  'connector.policy.update',
+  'connector.status',
   'dashboard.preferences.get',
   'dashboard.preferences.reset',
   'dashboard.preferences.update',
@@ -8032,6 +8223,9 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'auth.user.update': 'identity.admin',
   'cloud.key.confirm': 'keys',
   'cloud.relay.enable': 'device.trust',
+  'connector.clients.add': 'connector.trust',
+  'connector.enable': 'connector.trust',
+  'connector.policy.update': 'connector.trust',
   'device.approval.key.register': 'device.trust',
   'device.backup.grant.confirm': 'device.trust',
   'device.backup.grant.create': 'device.trust',
@@ -8143,6 +8337,15 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'cloud.storage.rotate': 15000,
   'cloud.storage.status': 15000,
   'cloud.storage.switch': 15000,
+  'connector.clients.add': 15000,
+  'connector.clients.list': 15000,
+  'connector.clients.remove': 15000,
+  'connector.disable': 15000,
+  'connector.enable': 15000,
+  'connector.grants.list': 15000,
+  'connector.grants.revoke': 15000,
+  'connector.policy.update': 15000,
+  'connector.status': 15000,
   'dashboard.preferences.get': 15000,
   'dashboard.preferences.reset': 15000,
   'dashboard.preferences.update': 15000,

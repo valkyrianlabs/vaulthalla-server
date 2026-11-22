@@ -37,9 +37,9 @@ TEST(StepUpFamilies, NamesTargetsAndWhatMaySatisfyThem) {
         EXPECT_EQ(parseFamily(name), f) << name;
     }
     EXPECT_EQ(names, (std::set<std::string>{"keys", "device.trust", "account.credentials", "identity.admin", "secrets",
-                                             "settings", "data.destroy"}));
+                                             "settings", "data.destroy", "connector.trust"}));
     EXPECT_FALSE(parseFamily("everything"));
-    for (const auto f : {Family::Keys, Family::DeviceTrust, Family::DataDestroy}) {
+    for (const auto f : {Family::Keys, Family::DeviceTrust, Family::DataDestroy, Family::ConnectorTrust}) {
         EXPECT_TRUE(targetBound(f)) << to_string(f);
         EXPECT_FALSE(passwordMaySatisfy(f)) << "D3: never the password alone for " << to_string(f);
     }
@@ -51,6 +51,7 @@ TEST(StepUpFamilies, NamesTargetsAndWhatMaySatisfyThem) {
     EXPECT_TRUE(deviceApprovalMaySatisfy(Family::Keys));
     EXPECT_TRUE(deviceApprovalMaySatisfy(Family::DeviceTrust));
     EXPECT_FALSE(deviceApprovalMaySatisfy(Family::DataDestroy));
+    EXPECT_FALSE(deviceApprovalMaySatisfy(Family::ConnectorTrust)) << "a connector is a person's console decision";
 }
 
 TEST(StepUpGrants, AGrantServesOnlyItsBindingFamilyTargetAndWindow) {

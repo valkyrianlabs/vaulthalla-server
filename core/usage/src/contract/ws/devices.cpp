@@ -307,7 +307,7 @@ std::vector<WsCommandUsage> deviceCommands() {
                        "10 per hour per device (rate_limited). Poll device.approval.status on this same session.",
         .auth = "device",
         .payload = {str("family").oneOf({"keys", "device.trust", "account.credentials", "identity.admin", "secrets",
-                                         "settings", "data.destroy"}),
+                                         "settings", "data.destroy", "connector.trust"}),
                     str("target").opt().nullable().desc("The refusal's target (keys, device.trust, data.destroy)."),
                     str("summary").gen(gen::pattern("Export key {a}{a}{a}"))},
         .response = deviceApprovalFields(),
@@ -520,6 +520,97 @@ std::vector<WsCommandUsage> deviceCommands() {
         .response = modelFields("CloudRelayStatus"),
         .refusal_codes = {"denied", "unauthorized"},
         .response_model = "CloudRelayStatus",
+        .client_timeout = kDefaultTimeout,
+    });
+
+
+    // ---- remote connectors (design/core/mcp-remote-signin.md; ops::connector) ----------------------------------------
+    const auto connectorStatus = [](std::string command, std::string description, std::vector<WsField> payload,
+                                    std::vector<std::string> refusals, const bool none) {
+        WsCommandUsage c{.command = std::move(command), .description = std::move(description)};
+        c.input = none ? "none" : "payload";
+        c.payload = std::move(payload);
+        c.response = modelFields("ConnectorStatus");
+        c.refusal_codes = std::move(refusals);
+        c.response_model = "ConnectorStatus";
+        c.client_timeout = kDefaultTimeout;
+        return c;
+    };
+    out.push_back(connectorStatus(
+        "connector.status",
+        "Remote connectors: the switch, the public origin hosted AI clients reach this server at, the policy "
+        "(widest scope, dynamic registration, client hosts) and how many grants and clients are live. Super admins.",
+        {}, {"denied", "unauthorized"}, true));
+    out.push_back(connectorStatus(
+        "connector.enable",
+        "Switch remote connectors on at a public https origin (a host name, port 443). A connector.trust step-up "
+        "bound to the origin, unless it is already on there. Super admins.",
+        {str("url").gen(gen::pattern("https://vh{a}{a}{a}.example")).desc("https://<host>: the origin only.")},
+        {"denied", "invalid", "unauthorized"}, false));
+    out.push_back(connectorStatus(
+        "connector.disable",
+        "Switch remote connectors off: every grant ends at once (switch_off); turning it on again revives none. "
+        "Super admins.",
+        {}, {"denied", "unauthorized"}, true));
+    out.push_back(connectorStatus(
+        "connector.policy.update",
+        "Change what grants may be given: the widest scope, dynamic client registration, and which hosts a client-id "
+        "metadata document may come from (empty: any https host). A change that widens anything takes a "
+        "connector.trust step-up; lowering the widest scope ends the grants above it. Super admins.",
+        {str("max_scope").oneOf({"read", "write", "destructive"}).opt().nullable(),
+         boolean("dcr_enabled").opt().nullable().gen(gen::boolean()),
+         strArray("client_hosts").opt().nullable().desc("Host names; empty: any https host.")},
+        {"denied", "invalid", "unauthorized"}, false));
+    out.push_back({
+        .command = "connector.grants.list",
+        .description = "The caller's grants (connected apps), live first; with all, every user's (super admins).",
+        .payload = {boolean("all").opt().gen(gen::boolean())},
+        .response = {objectArray("grants", "ConnectorGrant")},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "connector.grants.revoke",
+        .description = "End a grant now (its user or a super admin), by id or a unique 8+ character prefix; or, with "
+                       "all, every live grant (super admins) or one user's (user_id: that user, or a super admin). "
+                       "Never asks for a step-up.",
+        .payload = {str("id").opt().desc("A grant id, or a unique 8+ character prefix."),
+                    boolean("all").opt().gen(gen::boolean()),
+                    uinteger("user_id").opt().nullable().gen(gen::ref("user", {"id"}))},
+        .response = {uinteger("revoked").desc("How many grants ended.")},
+        .refusal_codes = opsRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "connector.clients.list",
+        .description = "The clients this server knows (operator-registered, fetched client-id metadata documents, "
+                       "dynamic registrations), live first. Super admins.",
+        .input = "none",
+        .response = {objectArray("clients", "ConnectorClient")},
+        .refusal_codes = {"denied", "unauthorized"},
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "connector.clients.add",
+        .description = "Register a client for an app that can't publish a client-id metadata document: a name and "
+                       "1-16 exact redirect URIs (https, or http to 127.0.0.1, [::1] or localhost, any port). A "
+                       "connector.trust step-up bound to them. Answers the client id the app is configured with. "
+                       "Super admins.",
+        .payload = {str("name").gen(gen::pattern("Laptop {a}{a}{a}")).desc("1-64 characters."),
+                    strArray("redirect_uris").gen(gen::constant("http://127.0.0.1/callback"))},
+        .response = modelFields("ConnectorClient"),
+        .refusal_codes = {"denied", "invalid", "unauthorized"},
+        .response_model = "ConnectorClient",
+        .client_timeout = kDefaultTimeout,
+    });
+    out.push_back({
+        .command = "connector.clients.remove",
+        .description = "Remove a client (by id or a unique 8+ character prefix): it can't sign in again, and its grants "
+                       "end at once (client_removed). Super admins.",
+        .payload = {str("id").gen(gen::ref("connector.client", {"id"}))
+                        .desc("A client id (uuid), or a unique 8+ character prefix.")},
+        .response = {uinteger("grants_revoked")},
+        .refusal_codes = opsRefusals(),
         .client_timeout = kDefaultTimeout,
     });
 

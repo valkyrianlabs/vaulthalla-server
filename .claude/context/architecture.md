@@ -175,6 +175,12 @@ One catalog, two transports. `core/usage/{include/Mcp.hpp,src/mcp/}` (`vh::mcp`)
 usage book and the operation catalog and no daemon types, so the client links it directly; the daemon links it too
 (remote `/mcp` on the device listener runs `Invocation::line` through `Router::executeLine(line, deviceUser)`; see
 "Device listener and pairing").
+- **Effect ceiling** (`withinCeiling`, `parseCeiling`, `ceilingRefusal`; `design/core/mcp-remote-signin.md`): a
+  principal's limit, `Read` | `Write` | `Destructive`. `Catalog::tools(ceiling)` lists vh_help and vh_read always, vh_run
+  from Write, typed tools by effect; `Catalog::prepare(tool, args, ceiling)` refuses anything above it (a plain tool
+  error, before any confirmation is asked for; an unknown effect fails closed below Destructive); `mcp::Server` takes
+  it (default Destructive = the catalog without a ceiling, what `vh mcp` and paired devices get). Tests:
+  `McpCatalog.Ceiling*`, `McpServer.ACeilingLimits*`.
 - Compiled into `vaulthalla-cli` rather than fetched from the daemon: `tools/list` and `vh skill install` work with the
   daemon down, there is no new socket command, and skew fails closed (an older daemon rejects options it doesn't
   declare; `mcp`/`skill` reaching a daemon get "runs in the vh client", `commands/client.cpp`).
@@ -214,6 +220,34 @@ usage book and the operation catalog and no daemon types, so the client links it
   identical skill = no-op, a changed one only with `--force`. Tests: `test_mcp_catalog.cpp` (DB-free),
   `core/tests/cli/test_mcp_client.py` (meson `cli_mcp_client`: real client, scripted daemon, temp HOME).
   Operator doc: `docs/admin/mcp-and-agents.md`.
+
+### Remote connectors (`connector/`, migration 151; `design/core/mcp-remote-signin.md`)
+
+OAuth 2.1 remote sign-in for hosted AI clients (Claude, ChatGPT) and CLIs on other machines, built in steps (the
+design's build plan); nothing listens yet (the connector listener is step 5). Decided 2026-11-22: super admins only
+grant (`connector::mayGrant`), widest scope `write` unless `connector_settings.max_scope` is raised, grants last
+`kGrantLifetime` (90 d) and end after `kRefreshIdle` (30 d), DCR off, any https CIMD host (`client_hosts` empty).
+- **Tables:** `connector_settings` (singleton, absent = off; `public_origin`, `max_scope`, `dcr_enabled`,
+  `client_hosts`), `connector_clients` (cimd | registered | dcr), `connector_grants` (uuid; user CASCADE; scope read |
+  write | destructive; `revoked_reason` final), `connector_refresh_tokens` (`tokenDigest` only, `successor_id`).
+  Access tokens and codes are never stored. Query layer `db/query/connector/Connector.hpp` (TEXT[] travel as JSON).
+- **`connector::Grants`** (`connector/Grants.hpp`): `create` (audited `connector.grant.create`),
+  `issueFirstRefreshToken` (once per grant: a second code redemption gets nothing), `refresh` (one locked transaction,
+  `Grants::rotate`: current → successor; a retired token again → `refresh_reuse`, grant and tokens revoked, user
+  notified, except once within `kLostResponseAllowance` (10 s) while its successor is unused, which revokes that
+  successor and issues another; wrong client changes nothing; expired → `expired`), `revoke*` (audited
+  `connector.grant.revoke {reason}`), `endCondition`/`reconcile` (user inactive, not a grantor, past lifetime, idle,
+  a code unredeemed after 10 min). Triggers: main.cpp's identity publication hook (with key-backup grants),
+  `auth::Manager::revokeSessions` (`sessions_revoked`: sign out everywhere, deactivation, deletion, MFA reset), a
+  recovery-code sign-in (`mfa_recovery`), the Janitor. Tokens: `vh_rt_`/`vh_at_`/`vh_ac_` + base64url(32 random
+  bytes). Tests: `ConnectorGrantsDb.*`, `SqlDeployerHistoryDb.ConnectorGrantsMigration151*`.
+- **`ops::connector`** (`ops/Connector.hpp`; `vh connector …`, ws `connector.*`, models `ConnectorStatus`,
+  `ConnectorGrant`, `ConnectorClient`): super admins only, except listing and revoking one's own grants. Switching on
+  (`--url`, `connector::urls::canonicalOrigin`: https, a DNS name, port 443), widening the policy and registering a
+  client take step-up `connector.trust` (target-bound; targets `connector.enable:<origin>`, `connector.policy:…`,
+  `connector.client.add:<digest>`); the CLI is Host (exempt); Channel Agent is refused, and `connector` is an MCP
+  exclusion. Off revokes every grant (`switch_off`); a lower `max_scope` ends the grants above it. Audited
+  `connector.enable|disable|policy.change|client.add|client.remove`. Tests: `ConnectorOpsDb.*`, `ConnectorUrls.*`.
 
 ### WebSocket flow
 
@@ -313,7 +347,8 @@ Normative protocol: `docs/pairing.md` in `valkyrianlabs/vaulthalla-desktop` (its
   chunks. Requests run under `access::DevicePrincipalScope` (thread-local): `access::authenticate` and the upload
   coordinator take the principal instead of a cookie, refuse the share lanes (`?share=1`: 403), and the usual
   `Need` → RBAC mapping applies as the device's user; audit lines carry `[via device <id16>]`. `/mcp`
-  (`protocols/device/Mcp.cpp`): Streamable HTTP, POST only (GET/DELETE 405: no SSE, no MCP session id), JSON
+  (`protocols/device/Mcp.cpp` → the shared transport `protocols/mcp/HttpTransport` with a `Principal {user, origin,
+  ceiling, ended}`; the device's ceiling is Destructive): Streamable HTTP, POST only (GET/DELETE 405: no SSE, no MCP session id), JSON
   responses (202 for notifications), `Origin` present → 403, unknown `MCP-Protocol-Version` → 400, JSON content type
   required, batches refused; the `vh mcp` catalog and `mcp::Server` with an executor running
   `shell::Router::executeLine(line, deviceUser, nullptr)` on its own thread, abandoned after 10 min (the command is
@@ -591,11 +626,12 @@ Tests: `WsAuthRouting.PasskeySignInIsForAnonymousWebSocketsOnly`, `PasskeyRateLi
 
 **Step-up (#359; MFA design note §5.4, D3, D6).** `auth::stepup` (`core/{include,src}/auth/stepup/`):
 `require(family, target?)` is called in the ops layer (and the MFA factor handlers) after validation and typed
-confirmations, right before the mutation. Families: `keys`, `device.trust`, `data.destroy` (target-bound, single use;
+confirmations, right before the mutation. Families: `keys`, `device.trust`, `data.destroy`, `connector.trust` (target-bound, single use;
 targets name the action and object: `vault.keys.export:<id>|all`, `vault.keys.import:<id>`,
 `device.pairing.approve:<request>:<spki>:<sha256(code)[:16]>`, `device.remote.enable`,
 `storage.vault.remove:<id>[:now][:upstream]`, `recovery.point.delete:<id>`, `vault.recovery.suspend:<id>`,
-`upstream.bucket.{cleanup,unprotect,lifecycle.set}:<bucket row>`), and `account.credentials`, `identity.admin`,
+`upstream.bucket.{cleanup,unprotect,lifecycle.set}:<bucket row>`, `connector.enable:<origin>`, `connector.policy:…`,
+`connector.client.add:<digest>`), and `account.credentials`, `identity.admin`,
 `secrets`, `settings` (family-wide). The command → family table is `contract::stepUpTable()`
 (`core/usage/src/contract/ws/stepup.cpp`), exported as `step_up` on annotated commands and as `WS_CONTRACT_STEP_UP`.
 Who asks is a thread-local `stepup::Scope`: the ws router sets it per routed command (Web, or Device on the device

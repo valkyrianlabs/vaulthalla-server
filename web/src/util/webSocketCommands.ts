@@ -1078,6 +1078,16 @@ export interface WebSocketCommandMap {
   'cloud.relay.status': WsContract['cloud.relay.status']
   'cloud.relay.enable': WsContract['cloud.relay.enable']
   'cloud.relay.disable': WsContract['cloud.relay.disable']
+  // Remote connectors (design/core/mcp-remote-signin.md); typed from the server's contract. No console page yet.
+  'connector.status': WsContract['connector.status']
+  'connector.enable': WsContract['connector.enable']
+  'connector.disable': WsContract['connector.disable']
+  'connector.policy.update': WsContract['connector.policy.update']
+  'connector.grants.list': WsContract['connector.grants.list']
+  'connector.grants.revoke': WsContract['connector.grants.revoke']
+  'connector.clients.list': WsContract['connector.clients.list']
+  'connector.clients.add': WsContract['connector.clients.add']
+  'connector.clients.remove': WsContract['connector.clients.remove']
 }
 
 export type WSCommandPayload<K extends keyof WebSocketCommandMap> = WebSocketCommandMap[K]['payload']

@@ -35,6 +35,10 @@ std::vector<WsStepUp> stepUpTable() {
          "always (during a recovery cooldown: only the device's approval key, D4)"},
         {"device.backup.grant.extend", "device.trust", kTarget, ""},
         {"device.backup.grant.confirm", "device.trust", kTarget, ""},
+        // connector.trust: target-bound, single use (design/core/mcp-remote-signin.md)
+        {"connector.enable", "connector.trust", kTarget, "when it is off, or on at another origin"},
+        {"connector.policy.update", "connector.trust", kTarget, "when the change widens anything"},
+        {"connector.clients.add", "connector.trust", kTarget, ""},
         // account.credentials: family-wide, the grant window
         {"auth.user.change_password", "account.credentials", false, ""},
         {"auth.mfa.factor.remove", "account.credentials", false, ""},

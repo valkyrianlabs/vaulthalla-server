@@ -82,6 +82,7 @@ std::string_view to_string(const Family family) noexcept {
         case Family::Secrets: return "secrets";
         case Family::Settings: return "settings";
         case Family::DataDestroy: return "data.destroy";
+        case Family::ConnectorTrust: return "connector.trust";
     }
     return "?";
 }
@@ -93,7 +94,8 @@ std::optional<Family> parseFamily(const std::string_view name) noexcept {
 }
 
 bool targetBound(const Family family) noexcept {
-    return family == Family::Keys || family == Family::DeviceTrust || family == Family::DataDestroy;
+    return family == Family::Keys || family == Family::DeviceTrust || family == Family::DataDestroy ||
+           family == Family::ConnectorTrust;
 }
 
 bool passwordMaySatisfy(const Family family) noexcept { return !targetBound(family); }
@@ -104,7 +106,7 @@ bool deviceApprovalMaySatisfy(const Family family) noexcept {
 
 bool cooldownFamily(const Family family) noexcept {
     return family == Family::Keys || family == Family::DeviceTrust || family == Family::IdentityAdmin ||
-           family == Family::Secrets || family == Family::Settings;
+           family == Family::Secrets || family == Family::Settings || family == Family::ConnectorTrust;
 }
 
 void requireNoCooldown(const uint32_t userId, const Family family) {

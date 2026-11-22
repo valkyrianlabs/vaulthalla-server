@@ -34,6 +34,17 @@ struct Exclusion {
 };
 const std::vector<Exclusion>& exclusions();
 
+// The effect ceiling: how far a principal may act through MCP, whatever its user may do (a connector grant's scope;
+// later, a scoped device's). Read = read-effect commands only; Write = read and write; Destructive = everything the
+// catalog offers (the local `vh mcp` and a paired device today), with the destructive gate as always. A ceiling below
+// Destructive refuses a command of unknown effect (fail closed); Destructive is exactly the catalog without ceilings.
+[[nodiscard]] bool withinCeiling(protocols::shell::CommandEffect effect, protocols::shell::CommandEffect ceiling) noexcept;
+// "read" | "write" | "destructive" (the CommandEffect names) -> the ceiling; anything else -> nullopt.
+[[nodiscard]] std::optional<protocols::shell::CommandEffect> parseCeiling(std::string_view name) noexcept;
+// The plain tool error for a call above the ceiling (`what` names the command or tool).
+[[nodiscard]] std::string ceilingRefusal(const std::string& what, protocols::shell::CommandEffect effect,
+                                         protocols::shell::CommandEffect ceiling);
+
 // One command line the transport runs for the agent: never interactive, never with a confirmation flag the agent did
 // not pass in `confirm`.
 struct Invocation {
@@ -68,11 +79,17 @@ public:
 
     // The tools/list `tools` array.
     [[nodiscard]] const Json& tools() const;
+    // The tools a principal limited to `ceiling` sees: vh_help and vh_read always, vh_run from Write, typed tools whose
+    // effect is within it.
+    [[nodiscard]] const Json& tools(protocols::shell::CommandEffect ceiling) const;
     [[nodiscard]] bool hasTool(const std::string& name) const;
 
     // A tools/call: either the command to run, or the finished CallToolResult (vh_help, bad arguments, an unknown or
     // excluded command).
     [[nodiscard]] std::variant<Invocation, Json> prepare(const std::string& tool, const Json& arguments) const;
+    // The same, refusing (a CallToolResult error, before any confirmation is asked for) a call above `ceiling`.
+    [[nodiscard]] std::variant<Invocation, Json> prepare(const std::string& tool, const Json& arguments,
+                                                         protocols::shell::CommandEffect ceiling) const;
 
     // The CallToolResult for a command that ran: stdout as text, isError with stderr on a non-zero exit, and a
     // structured needs_confirmation result when the refusal names one of the command's confirmation flags.
@@ -105,7 +122,9 @@ using Executor = std::function<CommandOutput(const Invocation&)>;
 // one response out (none for notifications and for responses the client sends).
 class Server {
 public:
-    Server(const Catalog& catalog, Executor executor, std::string version);
+    // `ceiling` limits what tools/list shows and tools/call runs (see withinCeiling); the default is no limit.
+    Server(const Catalog& catalog, Executor executor, std::string version,
+           protocols::shell::CommandEffect ceiling = protocols::shell::CommandEffect::Destructive);
 
     [[nodiscard]] std::optional<Json> handle(const Json& message);
     // A line that did not parse as JSON: the JSON-RPC parse error to answer with.
@@ -118,6 +137,7 @@ private:
     Executor executor_;
     std::string version_;
     std::string protocolVersion_{kProtocolVersions.front()};
+    protocols::shell::CommandEffect ceiling_;
 };
 
 // What initialize tells the agent before it sees any tool.

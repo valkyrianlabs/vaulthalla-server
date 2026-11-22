@@ -2757,6 +2757,326 @@
       "name": "ConnectionStats"
     },
     {
+      "description": "A remote connector client (migration 151): ops::connector::toJson(ClientRow).",
+      "fields": [
+        {
+          "description": "uuid",
+          "name": "id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "client_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "cimd",
+            "registered",
+            "dcr"
+          ],
+          "name": "kind",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "items": "string",
+          "name": "redirect_uris",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The registering user's id.",
+          "minimum": 0,
+          "name": "created_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "created_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "last_used_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "disabled_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "name": "ConnectorClient"
+    },
+    {
+      "description": "A remote connector grant, a connected app (migration 151): ops::connector::toJson(Grant).",
+      "fields": [
+        {
+          "description": "uuid",
+          "name": "id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "user_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "A client-id metadata document URL, or vhc_… for a registered or dynamic client.",
+          "name": "client_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "As the client named itself (verified only for registered clients).",
+          "name": "client_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The client id's host (empty for vhc_… ids).",
+          "name": "client_host",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Where the grant's authorization code went.",
+          "name": "redirect_host",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The redirect goes to a program on the approver's computer.",
+          "name": "loopback",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "enum": [
+            "read",
+            "write",
+            "destructive"
+          ],
+          "name": "scope",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "label",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "created_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "At most 90 days after created_at.",
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "last_used_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "last_ip",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "revoked_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "enum": [
+            "manual",
+            "user_inactive",
+            "grantor_policy",
+            "refresh_reuse",
+            "code_reuse",
+            "switch_off",
+            "expired",
+            "client_removed",
+            "sessions_revoked",
+            "mfa_recovery"
+          ],
+          "name": "revoked_reason",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "name": "ConnectorGrant"
+    },
+    {
+      "description": "Remote connectors (design/core/mcp-remote-signin.md): ops::connector::toJson(Status).",
+      "fields": [
+        {
+          "description": "The switch.",
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "https://<host>, where hosted AI clients reach this server.",
+          "name": "public_origin",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The MCP endpoint grants are bound to: public_origin + /mcp.",
+          "name": "resource",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The widest scope a grant may be given.",
+          "enum": [
+            "read",
+            "write",
+            "destructive"
+          ],
+          "name": "max_scope",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Dynamic client registration (off by default).",
+          "name": "dcr_enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The only hosts a client-id metadata document may come from; empty: any.",
+          "items": "string",
+          "name": "client_hosts",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The user id of the last change.",
+          "minimum": 0,
+          "name": "changed_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds; null: never changed.",
+          "name": "changed_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "live_grants",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Live clients.",
+          "minimum": 0,
+          "name": "clients",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "name": "ConnectorStatus"
+    },
+    {
       "description": "services.db_sweeper.* (Config.cpp to_json(DBSweeperConfig)).",
       "fields": [
         {
@@ -5515,7 +5835,7 @@
           ]
         },
         {
-          "description": "After a recovery-code sign-in or an MFA reset, keys, device.trust, identity.admin, secrets and settings are refused (recovery_cooldown) for this long.",
+          "description": "After a recovery-code sign-in or an MFA reset, keys, device.trust, identity.admin, secrets, settings and connector.trust are refused (recovery_cooldown) for this long.",
           "maximum": 168,
           "minimum": 1,
           "name": "recovery_cooldown_hours",
@@ -23711,7 +24031,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "b4e929c567bc343867dea372f4f0ee83eee42315f834079b4af7dffad0126d02",
+  "models_hash": "eedd8719497ec0e5851ab019bdcfa45771cbce05fe4417badcb20c3490178a32",
   "protocol": {
     "min": 1,
     "version": 1
@@ -24137,7 +24457,8 @@
                 "identity.admin",
                 "secrets",
                 "settings",
-                "data.destroy"
+                "data.destroy",
+                "connector.trust"
               ],
               "name": "family",
               "required": true,
@@ -24376,7 +24697,8 @@
                 "identity.admin",
                 "secrets",
                 "settings",
-                "data.destroy"
+                "data.destroy",
+                "connector.trust"
               ],
               "name": "family",
               "required": true,
@@ -24508,7 +24830,8 @@
                 "identity.admin",
                 "secrets",
                 "settings",
-                "data.destroy"
+                "data.destroy",
+                "connector.trust"
               ],
               "name": "family",
               "required": true,
@@ -25517,7 +25840,7 @@
           ]
         },
         {
-          "description": "Unix seconds: the recovery cooldown while it runs (keys, device.trust, identity.admin, secrets and settings answer recovery_cooldown until then), else null.",
+          "description": "Unix seconds: the recovery cooldown while it runs (keys, device.trust, identity.admin, secrets, settings and connector.trust answer recovery_cooldown until then), else null.",
           "name": "cooldown_until",
           "required": true,
           "types": [
@@ -25544,7 +25867,8 @@
                 "identity.admin",
                 "secrets",
                 "settings",
-                "data.destroy"
+                "data.destroy",
+                "connector.trust"
               ],
               "name": "family",
               "required": true,
@@ -27082,7 +27406,7 @@
       "client_timeout_ms": 15000,
       "command": "auth.stepup.begin",
       "confirmations": [],
-      "description": "Start confirming a sensitive change that answered step_up_required: name its family and, for keys, device.trust and data.destroy, the target the refusal named. Answers the methods the account can use (webauthn: pass webauthn.publicKey to navigator.credentials.get(); password_totp: the password and an authenticator code together; password: only for an account that need not have MFA and has no factor, never for keys, device.trust or data.destroy) and a ceremony id valid for 120 s. A new begin replaces the open ceremony. step_up_unavailable: the account has nothing that can confirm this family (add a passkey or an authenticator app). Web sessions only: a paired device is denied.",
+      "description": "Start confirming a sensitive change that answered step_up_required: name its family and, for keys, device.trust, data.destroy and connector.trust, the target the refusal named. Answers the methods the account can use (webauthn: pass webauthn.publicKey to navigator.credentials.get(); password_totp: the password and an authenticator code together; password: only for an account that need not have MFA and has no factor, never for a target-bound family: keys, device.trust, data.destroy, connector.trust) and a ceremony id valid for 120 s. A new begin replaces the open ceremony. step_up_unavailable: the account has nothing that can confirm this family (add a passkey or an authenticator app). Web sessions only: a paired device is denied.",
       "input": "payload",
       "operation": null,
       "payload": [
@@ -27094,7 +27418,8 @@
             "identity.admin",
             "secrets",
             "settings",
-            "data.destroy"
+            "data.destroy",
+            "connector.trust"
           ],
           "name": "family",
           "required": true,
@@ -27103,7 +27428,7 @@
           ]
         },
         {
-          "description": "The refusal's target (keys, device.trust, data.destroy); ignored for the others.",
+          "description": "The refusal's target (keys, device.trust, data.destroy, connector.trust); ignored for the others.",
           "name": "target",
           "required": false,
           "types": [
@@ -27142,7 +27467,8 @@
             "identity.admin",
             "secrets",
             "settings",
-            "data.destroy"
+            "data.destroy",
+            "connector.trust"
           ],
           "name": "family",
           "required": true,
@@ -27474,7 +27800,8 @@
             "identity.admin",
             "secrets",
             "settings",
-            "data.destroy"
+            "data.destroy",
+            "connector.trust"
           ],
           "name": "family",
           "required": true,
@@ -30290,6 +30617,869 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
+      "command": "connector.clients.add",
+      "confirmations": [],
+      "description": "Register a client for an app that can't publish a client-id metadata document: a name and 1-16 exact redirect URIs (https, or http to 127.0.0.1, [::1] or localhost, any port). A connector.trust step-up bound to them. Answers the client id the app is configured with. Super admins.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "1-64 characters.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "Laptop {a}{a}{a}"
+          },
+          "name": "name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "const",
+            "values": [
+              "http://127.0.0.1/callback"
+            ]
+          },
+          "items": "string",
+          "name": "redirect_uris",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "description": "uuid",
+          "name": "id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "client_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "cimd",
+            "registered",
+            "dcr"
+          ],
+          "name": "kind",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "items": "string",
+          "name": "redirect_uris",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The registering user's id.",
+          "minimum": 0,
+          "name": "created_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "created_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "last_used_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "disabled_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "response_model": "ConnectorClient",
+      "step_up": "connector.trust",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "connector.clients.list",
+      "confirmations": [],
+      "description": "The clients this server knows (operator-registered, fetched client-id metadata documents, dynamic registrations), live first. Super admins.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "items": "object",
+          "model": "ConnectorClient",
+          "name": "clients",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "connector.clients.remove",
+      "confirmations": [],
+      "description": "Remove a client (by id or a unique 8+ character prefix): it can't sign in again, and its grants end at once (client_removed). Super admins.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "A client id (uuid), or a unique 8+ character prefix.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "connector.client",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "grants_revoked",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "connector.disable",
+      "confirmations": [],
+      "description": "Switch remote connectors off: every grant ends at once (switch_off); turning it on again revives none. Super admins.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "The switch.",
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "https://<host>, where hosted AI clients reach this server.",
+          "name": "public_origin",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The MCP endpoint grants are bound to: public_origin + /mcp.",
+          "name": "resource",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The widest scope a grant may be given.",
+          "enum": [
+            "read",
+            "write",
+            "destructive"
+          ],
+          "name": "max_scope",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Dynamic client registration (off by default).",
+          "name": "dcr_enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The only hosts a client-id metadata document may come from; empty: any.",
+          "items": "string",
+          "name": "client_hosts",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The user id of the last change.",
+          "minimum": 0,
+          "name": "changed_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds; null: never changed.",
+          "name": "changed_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "live_grants",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Live clients.",
+          "minimum": 0,
+          "name": "clients",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": "ConnectorStatus",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "connector.enable",
+      "confirmations": [],
+      "description": "Switch remote connectors on at a public https origin (a host name, port 443). A connector.trust step-up bound to the origin, unless it is already on there. Super admins.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "https://<host>: the origin only.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "https://vh{a}{a}{a}.example"
+          },
+          "name": "url",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "description": "The switch.",
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "https://<host>, where hosted AI clients reach this server.",
+          "name": "public_origin",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The MCP endpoint grants are bound to: public_origin + /mcp.",
+          "name": "resource",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The widest scope a grant may be given.",
+          "enum": [
+            "read",
+            "write",
+            "destructive"
+          ],
+          "name": "max_scope",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Dynamic client registration (off by default).",
+          "name": "dcr_enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The only hosts a client-id metadata document may come from; empty: any.",
+          "items": "string",
+          "name": "client_hosts",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The user id of the last change.",
+          "minimum": 0,
+          "name": "changed_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds; null: never changed.",
+          "name": "changed_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "live_grants",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Live clients.",
+          "minimum": 0,
+          "name": "clients",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": "ConnectorStatus",
+      "step_up": "connector.trust",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "connector.grants.list",
+      "confirmations": [],
+      "description": "The caller's grants (connected apps), live first; with all, every user's (super admins).",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "all",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "items": "object",
+          "model": "ConnectorGrant",
+          "name": "grants",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "connector.grants.revoke",
+      "confirmations": [],
+      "description": "End a grant now (its user or a super admin), by id or a unique 8+ character prefix; or, with all, every live grant (super admins) or one user's (user_id: that user, or a super admin). Never asks for a step-up.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "A grant id, or a unique 8+ character prefix.",
+          "name": "id",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "all",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "user",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "user_id",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "How many grants ended.",
+          "minimum": 0,
+          "name": "revoked",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "connector.policy.update",
+      "confirmations": [],
+      "description": "Change what grants may be given: the widest scope, dynamic client registration, and which hosts a client-id metadata document may come from (empty: any https host). A change that widens anything takes a connector.trust step-up; lowering the widest scope ends the grants above it. Super admins.",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "enum": [
+            "read",
+            "write",
+            "destructive"
+          ],
+          "name": "max_scope",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "dcr_enabled",
+          "required": false,
+          "types": [
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "description": "Host names; empty: any https host.",
+          "items": "string",
+          "name": "client_hosts",
+          "required": false,
+          "types": [
+            "array",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "description": "The switch.",
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "https://<host>, where hosted AI clients reach this server.",
+          "name": "public_origin",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The MCP endpoint grants are bound to: public_origin + /mcp.",
+          "name": "resource",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The widest scope a grant may be given.",
+          "enum": [
+            "read",
+            "write",
+            "destructive"
+          ],
+          "name": "max_scope",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Dynamic client registration (off by default).",
+          "name": "dcr_enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The only hosts a client-id metadata document may come from; empty: any.",
+          "items": "string",
+          "name": "client_hosts",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The user id of the last change.",
+          "minimum": 0,
+          "name": "changed_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds; null: never changed.",
+          "name": "changed_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "live_grants",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Live clients.",
+          "minimum": 0,
+          "name": "clients",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": "ConnectorStatus",
+      "step_up": "connector.trust",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "connector.status",
+      "confirmations": [],
+      "description": "Remote connectors: the switch, the public origin hosted AI clients reach this server at, the policy (widest scope, dynamic registration, client hosts) and how many grants and clients are live. Super admins.",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "The switch.",
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "https://<host>, where hosted AI clients reach this server.",
+          "name": "public_origin",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The MCP endpoint grants are bound to: public_origin + /mcp.",
+          "name": "resource",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The widest scope a grant may be given.",
+          "enum": [
+            "read",
+            "write",
+            "destructive"
+          ],
+          "name": "max_scope",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Dynamic client registration (off by default).",
+          "name": "dcr_enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The only hosts a client-id metadata document may come from; empty: any.",
+          "items": "string",
+          "name": "client_hosts",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The user id of the last change.",
+          "minimum": 0,
+          "name": "changed_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Unix seconds; null: never changed.",
+          "name": "changed_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "live_grants",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Live clients.",
+          "minimum": 0,
+          "name": "clients",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": "ConnectorStatus",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
       "command": "dashboard.preferences.get",
       "confirmations": [],
       "description": "The caller's saved dashboard layout for a key; exists is false (empty layout) when none is saved. A non-object payload reads the default key.",
@@ -30658,7 +31848,8 @@
             "identity.admin",
             "secrets",
             "settings",
-            "data.destroy"
+            "data.destroy",
+            "connector.trust"
           ],
           "name": "family",
           "required": true,
@@ -55331,5 +56522,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "f14dec94b0ad564ea133841b91b99eaf8b78e8f4dc6cb64f9157e73f6b0e67e3"
+  "ws_hash": "b0dd7e85344094952cbf1c6cb022a7b914d40165851493e2befce91ef6604222"
 }

@@ -8,6 +8,7 @@
 #include "UsageManager.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <map>
 #include <set>
@@ -102,6 +103,9 @@ const std::vector<Exclusion>& exclusions() {
         {{"cloud", "storage", "billing"}, "billing opens in a browser, for the account holder"},
         {{"cloud", "relay", "enable"}, "whether browsers may reach this server through Vaulthalla Cloud is decided by a human"},
         {{"cloud", "relay", "disable"}, "whether browsers may reach this server through Vaulthalla Cloud is decided by a human"},
+        // Remote connectors: which AI apps may act as the account from elsewhere, and how far, is a person's decision
+        // (design/core/mcp-remote-signin.md); an agent can neither widen its own grant nor see or end anyone's.
+        {{"connector"}, "which AI apps may connect to this server remotely, and with what access, is decided by a human"},
     };
     return list;
 }
@@ -563,6 +567,27 @@ Json fieldSchema(const contract::FieldSpec& f, const std::string& fallbackDescri
 
 }  // namespace
 
+bool withinCeiling(const CommandEffect effect, const CommandEffect ceiling) noexcept {
+    if (ceiling == CommandEffect::Destructive) return true;  // the full limit: exactly what ran before ceilings existed
+    return effect != CommandEffect::Unset && ceiling != CommandEffect::Unset && effect <= ceiling;
+}
+
+std::optional<CommandEffect> parseCeiling(const std::string_view name) noexcept {
+    for (const auto e : {CommandEffect::Read, CommandEffect::Write, CommandEffect::Destructive})
+        if (protocols::shell::effectName(e) == name) return e;
+    return std::nullopt;
+}
+
+std::string ceilingRefusal(const std::string& what, const CommandEffect effect, const CommandEffect ceiling) {
+    const auto limit = ceiling == CommandEffect::Write
+                           ? std::string("may read and change, but not run destructive commands")
+                           : std::string("is read-only");
+    const auto kind = effect == CommandEffect::Unset ? std::string("command of unknown effect")
+                                                     : std::string(protocols::shell::effectName(effect)) + " command";
+    return "This connection " + limit + ", and " + what + " is a " + kind +
+           ": nothing was run. Whoever connected this app can reconnect it with wider access.";
+}
+
 // ---- Impl -------------------------------------------------------------------------------------------------------
 
 struct Catalog::Impl {
@@ -571,6 +596,7 @@ struct Catalog::Impl {
     std::map<const CommandUsage*, size_t> leafIndex;
     std::vector<Typed> typed;
     Json tools = Json::array();
+    std::array<Json, 2> limitedTools{Json::array(), Json::array()};  // read, write ceilings
     std::set<std::string> toolNames;
 
     Impl() {
@@ -711,6 +737,17 @@ struct Catalog::Impl {
                          {"annotations", annotationsFor(CommandEffect::Destructive, "Run a vh command")}});
         for (const auto& t : typed) tools.push_back(t.definition);
         for (const auto& t : tools) toolNames.insert(t.at("name").get<std::string>());
+        // The lists a narrower principal sees: vh_help and vh_read always, vh_run from write, typed tools by effect.
+        for (const auto ceiling : {CommandEffect::Read, CommandEffect::Write}) {
+            auto& out = limitedTools[ceiling == CommandEffect::Read ? 0 : 1];
+            for (const auto& t : tools) {
+                const auto name = t.at("name").get<std::string>();
+                if (name == "vh_help" || name == "vh_read" || (name == "vh_run" && ceiling == CommandEffect::Write))
+                    out.push_back(t);
+            }
+            for (const auto& t : typed)
+                if (withinCeiling(t.effect, ceiling)) out.push_back(t.definition);
+        }
     }
 
     // ---- invocations --------------------------------------------------------------------------------------------
@@ -718,11 +755,14 @@ struct Catalog::Impl {
     // Adds confirmations and --json, renders the line. `error` is set when the call is refused.
     std::variant<Invocation, Json> finalize(const std::string& tool, const Leaf& leaf, std::vector<Tok> toks,
                                             const Json& confirm, const bool help, const CommandEffect effect,
-                                            const std::vector<std::pair<std::string, std::optional<std::string>>>& options) const {
+                                            const std::vector<std::pair<std::string, std::optional<std::string>>>& options,
+                                            const CommandEffect ceiling) const {
         Invocation inv{.tool = tool, .command = leaf.command,
                        .effect = help ? CommandEffect::Read : effect, .gates = leaf.gateNames()};
         std::string spelled = "vh";
         for (const auto& t : toks) spelled += " " + renderToken(t);
+        // The principal's limit comes first: a command above it is refused before any confirmation is asked for.
+        if (!withinCeiling(inv.effect, ceiling)) return errorResult(ceilingRefusal("vh " + leaf.command, inv.effect, ceiling));
         bool destructiveAck = false;
         if (!confirm.is_null()) {
             if (!confirm.is_object()) return errorResult("confirm must be an object, e.g. {\"yes\": true}");
@@ -774,7 +814,8 @@ struct Catalog::Impl {
         return inv;
     }
 
-    std::variant<Invocation, Json> prepareCommand(const std::string& tool, const Json& args) const {
+    std::variant<Invocation, Json> prepareCommand(const std::string& tool, const Json& args,
+                                                  const CommandEffect ceiling) const {
         if (!args.is_object()) return errorResult("arguments must be an object with a command");
         for (const auto& [key, value] : args.items())
             if (key != "command" && key != "confirm") return errorResult("unknown argument '" + key + "'");
@@ -826,7 +867,7 @@ struct Catalog::Impl {
             }
             // Help on a group: read-only and gate-free; run it as the help leaf would.
             Leaf group{.node = node, .path = path, .command = joinWords(path)};
-            return finalize(tool, group, std::move(toks), Json(), true, CommandEffect::Read, call.options);
+            return finalize(tool, group, std::move(toks), Json(), true, CommandEffect::Read, call.options, ceiling);
         }
 
         for (const auto& [key, value] : call.options)
@@ -842,10 +883,11 @@ struct Catalog::Impl {
                                                          : "the typed tool " + leaf->typedTools.front() + " or vh_run") +
                                ".");
         return finalize(tool, *leaf, std::move(toks), args.value("confirm", Json()), help, leaf->node->effect,
-                        call.options);
+                        call.options, ceiling);
     }
 
-    std::variant<Invocation, Json> prepareTyped(const Typed& t, const Json& args) const {
+    std::variant<Invocation, Json> prepareTyped(const Typed& t, const Json& args, const CommandEffect ceiling) const {
+        if (!withinCeiling(t.effect, ceiling)) return errorResult(ceilingRefusal("vh " + t.leaf->command, t.effect, ceiling));
         if (!args.is_object()) return errorResult("arguments must be an object");
         const auto& cli = *t.op.cli;
         const auto& node = *t.leaf->node;
@@ -943,7 +985,7 @@ struct Catalog::Impl {
 
         Parsed parsed = parse(toks);
         return finalize(t.name, *t.leaf, std::move(toks), args.value("confirm", Json()), false, t.effect,
-                        parsed.options);
+                        parsed.options, ceiling);
     }
 
     // ---- vh_help ------------------------------------------------------------------------------------------------
@@ -1061,14 +1103,26 @@ Catalog::~Catalog() = default;
 
 const Json& Catalog::tools() const { return impl_->tools; }
 
+const Json& Catalog::tools(const CommandEffect ceiling) const {
+    if (ceiling == CommandEffect::Destructive) return impl_->tools;
+    return impl_->limitedTools[ceiling == CommandEffect::Write ? 1 : 0];  // Unset reads as the narrowest
+}
+
 bool Catalog::hasTool(const std::string& name) const { return impl_->toolNames.contains(name); }
 
 std::variant<Invocation, Json> Catalog::prepare(const std::string& tool, const Json& arguments) const {
+    return prepare(tool, arguments, CommandEffect::Destructive);
+}
+
+std::variant<Invocation, Json> Catalog::prepare(const std::string& tool, const Json& arguments,
+                                                const CommandEffect ceiling) const {
     const Json args = arguments.is_null() ? Json::object() : arguments;
     if (tool == "vh_help") return impl_->help(args);
-    if (tool == "vh_read" || tool == "vh_run") return impl_->prepareCommand(tool, args);
+    if (tool == "vh_run" && !withinCeiling(CommandEffect::Write, ceiling))
+        return errorResult(ceilingRefusal("vh_run", CommandEffect::Write, ceiling));
+    if (tool == "vh_read" || tool == "vh_run") return impl_->prepareCommand(tool, args, ceiling);
     for (const auto& t : impl_->typed)
-        if (t.name == tool) return impl_->prepareTyped(t, args);
+        if (t.name == tool) return impl_->prepareTyped(t, args, ceiling);
     return errorResult("unknown tool " + tool);
 }
 

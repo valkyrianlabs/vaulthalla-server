@@ -1,4 +1,5 @@
 #include "auth/Manager.hpp"
+#include "connector/Grants.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "auth/session/Manager.hpp"
@@ -183,6 +184,12 @@ std::shared_ptr<identities::User> Manager::getUser(const uint32_t id) {
 void Manager::revokeSessions(const uint32_t userId) {
     // Refresh tokens first, so no live session can rehydrate from one while the runtime sessions are dropped.
     db::query::auth::RefreshToken::revokeAll(userId);
+    // Connected apps (remote connectors) end with the sessions: "sign out everywhere" means every token.
+    try {
+        (void)connector::revokeForUser(userId, connector::Revocation::SessionsRevoked);
+    } catch (const std::exception& e) {
+        log::Registry::auth()->error("[AuthManager] Failed to revoke the connector grants of user id {}: {}", userId, e.what());
+    }
     if (const auto& sessions = runtime::Deps::get().sessionManager)
         for (const auto& session : sessions->getSessionsByUserId(userId)) {
             try {

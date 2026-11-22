@@ -37,8 +37,9 @@ std::string instructions() {
            "the human to run `vh vault keys export <vault>` in their own terminal. Afterwards, report what changed.";
 }
 
-Server::Server(const Catalog& catalog, Executor executor, std::string version)
-    : catalog_(catalog), executor_(std::move(executor)), version_(std::move(version)) {}
+Server::Server(const Catalog& catalog, Executor executor, std::string version,
+               const protocols::shell::CommandEffect ceiling)
+    : catalog_(catalog), executor_(std::move(executor)), version_(std::move(version)), ceiling_(ceiling) {}
 
 Json Server::parseError() { return errorResponse(nullptr, kParseError, "Parse error"); }
 
@@ -70,7 +71,7 @@ std::optional<Json> Server::handle(const Json& message) {
                                  {"instructions", instructions()}});
         }
         if (method == "ping") return response(id, Json::object());
-        if (method == "tools/list") return response(id, {{"tools", catalog_.tools()}});
+        if (method == "tools/list") return response(id, {{"tools", catalog_.tools(ceiling_)}});
         if (method == "tools/call") {
             if (!params.is_object() || !params.contains("name") || !params["name"].is_string())
                 return errorResponse(id, kInvalidParams, "tools/call needs params.name");
@@ -79,7 +80,7 @@ std::optional<Json> Server::handle(const Json& message) {
             const Json args = params.value("arguments", Json::object());
             if (!args.is_object()) return errorResponse(id, kInvalidParams, "tools/call arguments must be an object");
 
-            auto prepared = catalog_.prepare(name, args);
+            auto prepared = catalog_.prepare(name, args, ceiling_);
             if (auto* immediate = std::get_if<Json>(&prepared)) return response(id, std::move(*immediate));
             const auto& call = std::get<Invocation>(prepared);
             CommandOutput output;

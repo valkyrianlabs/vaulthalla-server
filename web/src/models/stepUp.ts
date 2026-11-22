@@ -12,6 +12,7 @@ export type StepUpFamily =
   | 'secrets'
   | 'settings'
   | 'data.destroy'
+  | 'connector.trust'
 
 export type StepUpMethod = 'webauthn' | 'password_totp' | 'password'
 
@@ -30,6 +31,7 @@ const FAMILIES: readonly StepUpFamily[] = [
   'secrets',
   'settings',
   'data.destroy',
+  'connector.trust',
 ]
 const METHODS: readonly StepUpMethod[] = ['webauthn', 'password_totp', 'password']
 
@@ -56,11 +58,12 @@ export const STEP_UP_ACTION: Readonly<Record<StepUpFamily, string>> = {
   secrets: 'Change stored secrets and credentials',
   settings: 'Change server settings',
   'data.destroy': 'Permanently remove data',
+  'connector.trust': 'Let an app connect to this server remotely',
 }
 
 // Target-bound families confirm one exact action, once; the others hold for the grant window.
 export const isTargetBound = (family: StepUpFamily): boolean =>
-  family === 'keys' || family === 'device.trust' || family === 'data.destroy'
+  family === 'keys' || family === 'device.trust' || family === 'data.destroy' || family === 'connector.trust'
 
 export const stepUpWindowText = (request: StepUpRequest): string => {
   if (isTargetBound(request.family)) return 'This confirms this one change.'

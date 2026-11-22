@@ -1337,6 +1337,68 @@ TEST_F(SqlDeployerHistoryDb, ReplicaJoinMigration150IsAdditiveAndIdempotent) {
     });
 }
 
+// 151 (remote connectors, design/core/mcp-remote-signin.md) on a 150-era database: new tables only, the switch can't
+// be on without an origin, a grant can't name an unknown scope or reason, a refresh token is stored as a digest, and
+// running it again changes nothing.
+TEST_F(SqlDeployerHistoryDb, ConnectorGrantsMigration151IsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("DROP TABLE IF EXISTS connector_refresh_tokens");
+        txn.exec("DROP TABLE IF EXISTS connector_grants");
+        txn.exec("DROP TABLE IF EXISTS connector_clients");
+        txn.exec("DROP TABLE IF EXISTS connector_settings");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '151_connector_grants.sql'");
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "151_connector_grants.sql"));
+        EXPECT_EQ(recordedHash(txn, "151_connector_grants.sql"), currentHash("151_connector_grants.sql"));
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM connector_settings").one_field_ref().as<int>(), 0) << "absent = off";
+
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_151_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto refused = [&](const std::string& sql) {
+            pqxx::subtransaction sub(txn, "check");
+            try {
+                sub.exec(sql);
+            } catch (const pqxx::sql_error&) {
+                return true;
+            }
+            return false;
+        };
+        EXPECT_TRUE(refused("INSERT INTO connector_settings (enabled) VALUES (TRUE)"));
+        EXPECT_TRUE(refused("INSERT INTO connector_settings (public_origin) VALUES ('http://vh.example')"));
+        EXPECT_TRUE(refused("INSERT INTO connector_settings (id) VALUES (2)"));
+        txn.exec("INSERT INTO connector_settings (enabled, public_origin) VALUES (TRUE, 'https://vh.example')");
+        EXPECT_EQ(txn.exec("SELECT max_scope FROM connector_settings").one_field_ref().as<std::string>(), "write");
+        EXPECT_FALSE(txn.exec("SELECT dcr_enabled FROM connector_settings").one_field_ref().as<bool>());
+
+        const auto client = txn.exec("INSERT INTO connector_clients (client_id, kind, name, redirect_uris) VALUES "
+                                     "('https://client.example/c.json', 'cimd', 'Client', "
+                                     "ARRAY['https://client.example/cb']) RETURNING id::text")
+                                .one_field_ref().as<std::string>();
+        EXPECT_TRUE(refused("INSERT INTO connector_clients (client_id, kind, name, redirect_uris) VALUES "
+                            "('x', 'other', 'n', ARRAY['https://a/b'])"));
+        const auto grant = [&](const std::string& scope, const std::string& extra = "") {
+            return "INSERT INTO connector_grants (user_id, client_row, client_id, client_name, redirect_uri, scope, "
+                   "resource, approved_via, expires_at" + std::string(extra.empty() ? "" : ", revoked_at, revoked_reason") +
+                   ") VALUES (" + std::to_string(owner) + ", '" + client + "', 'c', 'n', 'https://client.example/cb', '" +
+                   scope + "', 'https://vh.example/mcp', 'webauthn', NOW() + interval '90 days'" + extra + ")";
+        };
+        txn.exec(grant("read"));
+        EXPECT_TRUE(refused(grant("admin")));
+        EXPECT_TRUE(refused(grant("read", ", NOW(), 'whatever'")));
+        txn.exec(grant("write", ", NOW(), 'refresh_reuse'"));
+        const auto g = txn.exec("SELECT id::text FROM connector_grants LIMIT 1").one_field_ref().as<std::string>();
+        EXPECT_TRUE(refused("INSERT INTO connector_refresh_tokens (grant_id, token_digest, expires_at) VALUES ('" + g +
+                            "', 'vh_rt_plaintext', NOW())"));
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "151_connector_grants.sql")));
+    });
+}
+
 TEST_F(SqlDeployerHistoryDb, RecoveryRecipientsMigrationIsAdditiveIdempotentAndCustomerOnly) {
     inRolledBackTxn([](pqxx::work& txn) {
         txn.exec("DROP TABLE IF EXISTS vault_key_envelope");
