@@ -1,4 +1,5 @@
 #include "db/Janitor.hpp"
+#include "connector/Grants.hpp"
 #include "auth/mfa/Factors.hpp"
 #include "config/Registry.hpp"
 #include "db/query/fs/ChangeLog.hpp"
@@ -77,6 +78,17 @@ void reconcileBackupGrants() {
     }
 }
 
+// Connector grants (design/core/mcp-remote-signin.md): past their lifetime, idle, never redeemed, or their user's rights
+// gone.
+void reconcileConnectorGrants() {
+    try {
+        if (const auto n = vh::connector::reconcile(); n > 0)
+            log::Registry::vaulthalla()->info("[DBSweeper] Ended {} connector grant(s)", n);
+    } catch (const std::exception& e) {
+        log::Registry::vaulthalla()->warn("[DBSweeper] Connector grant check failed: {}", e.what());
+    }
+}
+
 // TOTP enrollments never confirmed within their 10 minutes (#356): the sealed seed of an unusable factor.
 void purgeTotpEnrollments() {
     try {
@@ -138,6 +150,7 @@ void vh::db::Janitor::runLoop() {
             janitor_impl::pruneFsChanges();
             janitor_impl::purgeTotpEnrollments();
             janitor_impl::reconcileBackupGrants();
+            janitor_impl::reconcileConnectorGrants();
             nextDbSweep = std::chrono::steady_clock::now() + sweep_interval_;
         }
 

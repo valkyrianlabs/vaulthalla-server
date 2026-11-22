@@ -221,6 +221,27 @@ usage book and the operation catalog and no daemon types, so the client links it
   `core/tests/cli/test_mcp_client.py` (meson `cli_mcp_client`: real client, scripted daemon, temp HOME).
   Operator doc: `docs/admin/mcp-and-agents.md`.
 
+### Remote connectors (`connector/`, migration 151; `design/core/mcp-remote-signin.md`)
+
+OAuth 2.1 remote sign-in for hosted AI clients (Claude, ChatGPT) and CLIs on other machines, built in steps (the
+design's build plan); nothing listens yet (the connector listener is step 5). Decided 2026-11-22: super admins only
+grant (`connector::mayGrant`), widest scope `write` unless `connector_settings.max_scope` is raised, grants last
+`kGrantLifetime` (90 d) and end after `kRefreshIdle` (30 d), DCR off, any https CIMD host (`client_hosts` empty).
+- **Tables:** `connector_settings` (singleton, absent = off; `public_origin`, `max_scope`, `dcr_enabled`,
+  `client_hosts`), `connector_clients` (cimd | registered | dcr), `connector_grants` (uuid; user CASCADE; scope read |
+  write | destructive; `revoked_reason` final), `connector_refresh_tokens` (`tokenDigest` only, `successor_id`).
+  Access tokens and codes are never stored. Query layer `db/query/connector/Connector.hpp` (TEXT[] travel as JSON).
+- **`connector::Grants`** (`connector/Grants.hpp`): `create` (audited `connector.grant.create`),
+  `issueFirstRefreshToken` (once per grant: a second code redemption gets nothing), `refresh` (one locked transaction,
+  `Grants::rotate`: current → successor; a retired token again → `refresh_reuse`, grant and tokens revoked, user
+  notified, except once within `kLostResponseAllowance` (10 s) while its successor is unused, which revokes that
+  successor and issues another; wrong client changes nothing; expired → `expired`), `revoke*` (audited
+  `connector.grant.revoke {reason}`), `endCondition`/`reconcile` (user inactive, not a grantor, past lifetime, idle,
+  a code unredeemed after 10 min). Triggers: main.cpp's identity publication hook (with key-backup grants),
+  `auth::Manager::revokeSessions` (`sessions_revoked`: sign out everywhere, deactivation, deletion, MFA reset), a
+  recovery-code sign-in (`mfa_recovery`), the Janitor. Tokens: `vh_rt_`/`vh_at_`/`vh_ac_` + base64url(32 random
+  bytes). Tests: `ConnectorGrantsDb.*`, `SqlDeployerHistoryDb.ConnectorGrantsMigration151*`.
+
 ### WebSocket flow
 
 **Connection cap (#164).** `ws::Server::onAccept` takes a `ConnectionSlot` (`protocols/ws/ConnectionLimit.hpp`)
