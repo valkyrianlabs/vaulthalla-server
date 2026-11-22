@@ -261,8 +261,8 @@ std::vector<WsModel> adminSettingsModels() {
          boolean("admin_device_bound_only").opt().desc("Privileged admins may use device-bound passkeys only (no synced "
                                                        "ones); implies admin_webauthn_only. Needs auth.webauthn.rp_id."),
          uinteger("recovery_cooldown_hours").min(1).max(168).opt().desc(
-             "After a recovery-code sign-in or an MFA reset, keys, device.trust, identity.admin, secrets and settings "
-             "are refused (recovery_cooldown) for this long."),
+             "After a recovery-code sign-in or an MFA reset, keys, device.trust, identity.admin, secrets, settings and "
+             "connector.trust are refused (recovery_cooldown) for this long."),
          uinteger("step_up_ttl_seconds").min(60).max(900).desc(
             "How long a step-up grant lasts, and how recent an aal 2 sign-in must be to stand in for a family-wide one.")}));
     out.push_back(model("WebAuthnConfig",

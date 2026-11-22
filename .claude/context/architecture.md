@@ -241,6 +241,13 @@ grant (`connector::mayGrant`), widest scope `write` unless `connector_settings.m
   `auth::Manager::revokeSessions` (`sessions_revoked`: sign out everywhere, deactivation, deletion, MFA reset), a
   recovery-code sign-in (`mfa_recovery`), the Janitor. Tokens: `vh_rt_`/`vh_at_`/`vh_ac_` + base64url(32 random
   bytes). Tests: `ConnectorGrantsDb.*`, `SqlDeployerHistoryDb.ConnectorGrantsMigration151*`.
+- **`ops::connector`** (`ops/Connector.hpp`; `vh connector …`, ws `connector.*`, models `ConnectorStatus`,
+  `ConnectorGrant`, `ConnectorClient`): super admins only, except listing and revoking one's own grants. Switching on
+  (`--url`, `connector::urls::canonicalOrigin`: https, a DNS name, port 443), widening the policy and registering a
+  client take step-up `connector.trust` (target-bound; targets `connector.enable:<origin>`, `connector.policy:…`,
+  `connector.client.add:<digest>`); the CLI is Host (exempt); Channel Agent is refused, and `connector` is an MCP
+  exclusion. Off revokes every grant (`switch_off`); a lower `max_scope` ends the grants above it. Audited
+  `connector.enable|disable|policy.change|client.add|client.remove`. Tests: `ConnectorOpsDb.*`, `ConnectorUrls.*`.
 
 ### WebSocket flow
 
@@ -619,11 +626,12 @@ Tests: `WsAuthRouting.PasskeySignInIsForAnonymousWebSocketsOnly`, `PasskeyRateLi
 
 **Step-up (#359; MFA design note §5.4, D3, D6).** `auth::stepup` (`core/{include,src}/auth/stepup/`):
 `require(family, target?)` is called in the ops layer (and the MFA factor handlers) after validation and typed
-confirmations, right before the mutation. Families: `keys`, `device.trust`, `data.destroy` (target-bound, single use;
+confirmations, right before the mutation. Families: `keys`, `device.trust`, `data.destroy`, `connector.trust` (target-bound, single use;
 targets name the action and object: `vault.keys.export:<id>|all`, `vault.keys.import:<id>`,
 `device.pairing.approve:<request>:<spki>:<sha256(code)[:16]>`, `device.remote.enable`,
 `storage.vault.remove:<id>[:now][:upstream]`, `recovery.point.delete:<id>`, `vault.recovery.suspend:<id>`,
-`upstream.bucket.{cleanup,unprotect,lifecycle.set}:<bucket row>`), and `account.credentials`, `identity.admin`,
+`upstream.bucket.{cleanup,unprotect,lifecycle.set}:<bucket row>`, `connector.enable:<origin>`, `connector.policy:…`,
+`connector.client.add:<digest>`), and `account.credentials`, `identity.admin`,
 `secrets`, `settings` (family-wide). The command → family table is `contract::stepUpTable()`
 (`core/usage/src/contract/ws/stepup.cpp`), exported as `step_up` on annotated commands and as `WS_CONTRACT_STEP_UP`.
 Who asks is a thread-local `stepup::Scope`: the ws router sets it per routed command (Web, or Device on the device

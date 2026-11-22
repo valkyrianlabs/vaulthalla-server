@@ -169,7 +169,7 @@ TEST(MfaRecoveryCooldown, ItsFamiliesAndItsRefusal) {
     using stepup::Family;
     for (const auto f : stepup::kFamilies) {
         const bool expected = f == Family::Keys || f == Family::DeviceTrust || f == Family::IdentityAdmin ||
-                              f == Family::Secrets || f == Family::Settings;
+                              f == Family::Secrets || f == Family::Settings || f == Family::ConnectorTrust;
         EXPECT_EQ(stepup::cooldownFamily(f), expected) << stepup::to_string(f);
     }
     try {
@@ -195,7 +195,7 @@ TEST(MfaPolicyContract, AdminCommandsAreSteppedUpAndCooldownFamiliesSayTheyRefus
     for (const auto& c : contract::ws::commands()) {
         if (!c.step_up) continue;
         const bool cooldown = *c.step_up == "keys" || *c.step_up == "device.trust" || *c.step_up == "identity.admin" ||
-                              *c.step_up == "secrets" || *c.step_up == "settings";
+                              *c.step_up == "secrets" || *c.step_up == "settings" || *c.step_up == "connector.trust";
         const bool listed =
             std::ranges::find(c.refusal_codes, "recovery_cooldown") != c.refusal_codes.end();
         EXPECT_EQ(listed, cooldown) << c.command;

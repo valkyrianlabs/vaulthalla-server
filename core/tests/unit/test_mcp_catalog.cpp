@@ -161,7 +161,8 @@ TEST(McpCatalog, ExclusionListIsExactlyTheAgreedOne) {
                                             "cloud key confirm", "cloud key forget", "cloud storage enable",
                                             "cloud storage disable", "cloud storage accept", "cloud storage decline",
                                             "cloud storage confirm-ended", "cloud storage rotate", "cloud storage new-vaults",
-                                            "cloud storage billing", "cloud relay enable", "cloud relay disable"};
+                                            "cloud storage billing", "cloud relay enable", "cloud relay disable",
+                                            "connector"};
     EXPECT_EQ(paths, expected);
 }
 
@@ -179,7 +180,10 @@ TEST(McpCatalog, ExcludedCommandsAreNeitherListedNorRunnable) {
                           "device remote disable", "cloud link", "cloud unlink", "cloud recovery enroll",
                           "cloud recovery unenroll", "cloud key confirm", "cloud key forget", "cloud storage enable",
                           "cloud storage disable", "cloud storage accept", "cloud storage decline", "cloud storage rotate",
-                          "cloud storage new-vaults", "cloud storage billing", "cloud storage confirm-ended"})
+                          "cloud storage new-vaults", "cloud storage billing", "cloud storage confirm-ended",
+                          "connector status", "connector enable", "connector disable", "connector set",
+                          "connector list", "connector revoke", "connector revoke-all", "connector client list",
+                          "connector client add", "connector client remove"})
         EXPECT_TRUE(excluded.contains(c)) << c;
 
     // No typed tool binds one, and nothing in a tool definition offers it.
@@ -198,7 +202,10 @@ TEST(McpCatalog, ExcludedCommandsAreNeitherListedNorRunnable) {
                                 "setup super-admin-password", "fs get 3 /a", "files download 3 /a", "fs put 3 a /a",
                                 "fs upload 3 a /a", "mcp", "skills install --agent claude", "device pair",
                                 "device approve 7f3a9c1d2e4b6a80 --code 482913", "device deny 7f3a9c1d2e4b6a80",
-                                "device remote enable", "device remote on", "devices remote disable"})
+                                "device remote enable", "device remote on", "devices remote disable",
+                                "connector enable --url https://vh.example.com", "connectors", "connector list --all",
+                                "CONNECTOR revoke-all", "connector client add --name x --redirect https://a.example/cb",
+                                "connector set --max-scope destructive"})
         for (const auto* tool : {"vh_run", "vh_read"})
             EXPECT_NE(refusal(tool, {{"command", command}}).find("not available to agents"), std::string::npos)
                 << tool << ": " << command;
@@ -207,7 +214,7 @@ TEST(McpCatalog, ExcludedCommandsAreNeitherListedNorRunnable) {
     // Help never lists them either.
     const auto top = json::parse(text(std::get<json>(catalog().prepare("vh_help", json::object()))));
     for (const auto& c : top.at("commands"))
-        for (const auto* hidden : {"setup", "teardown", "mcp", "skill"}) EXPECT_NE(c.at("name"), hidden);
+        for (const auto* hidden : {"setup", "teardown", "mcp", "skill", "connector"}) EXPECT_NE(c.at("name"), hidden);
     const auto keys = json::parse(text(std::get<json>(catalog().prepare("vh_help", {{"path", "vault keys"}}))));
     for (const auto& sc : keys.at("subcommands")) EXPECT_NE(sc.at("name"), "export");
 

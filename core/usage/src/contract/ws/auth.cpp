@@ -113,7 +113,7 @@ constexpr const char* kMfaPendingShape =
 // #359: the step-up families (auth/stepup/StepUp.hpp).
 const std::vector<std::string> kStepUpFamilies{"keys",           "device.trust", "account.credentials",
                                                "identity.admin", "secrets",      "settings",
-                                               "data.destroy"};
+                                               "data.destroy",   "connector.trust"};
 
 // A device's approval request (auth::approval::toJson), as the console and the device see it (#361).
 std::vector<WsField> authApprovalFields() {
@@ -383,7 +383,7 @@ std::vector<WsCommandUsage> authCommands() {
                              boolean("pending").desc("A generated batch waits for its acknowledgement.")}),
                      integer("cooldown_until").nullable().desc(
                          "Unix seconds: the recovery cooldown while it runs (keys, device.trust, identity.admin, "
-                         "secrets and settings answer recovery_cooldown until then), else null."),
+                         "secrets, settings and connector.trust answer recovery_cooldown until then), else null."),
                      boolean("recovery_restricted").desc("This session signed in with a recovery code."),
                      objectArray("step_up", "",
                                  {str("family").oneOf(kStepUpFamilies),
@@ -477,16 +477,16 @@ std::vector<WsCommandUsage> authCommands() {
     out.push_back({
         .command = "auth.stepup.begin",
         .description = "Start confirming a sensitive change that answered step_up_required: name its family and, "
-                       "for keys, device.trust and data.destroy, the target the refusal named. Answers the methods "
+                       "for keys, device.trust, data.destroy and connector.trust, the target the refusal named. Answers the methods "
                        "the account can use (webauthn: pass webauthn.publicKey to navigator.credentials.get(); "
                        "password_totp: the password and an authenticator code together; password: only for an "
-                       "account that need not have MFA and has no factor, never for keys, device.trust or "
-                       "data.destroy) and a ceremony id valid for 120 s. A new begin replaces the open ceremony. "
+                       "account that need not have MFA and has no factor, never for a target-bound family: keys, "
+                       "device.trust, data.destroy, connector.trust) and a ceremony id valid for 120 s. A new begin replaces the open ceremony. "
                        "step_up_unavailable: the account has nothing that can confirm this family (add a passkey or "
                        "an authenticator app). Web sessions only: a paired device is denied.",
         .payload = {str("family").oneOf(kStepUpFamilies),
                     str("target").opt().nullable().desc(
-                        "The refusal's target (keys, device.trust, data.destroy); ignored for the others.")},
+                        "The refusal's target (keys, device.trust, data.destroy, connector.trust); ignored for the others.")},
         .response = {str("stepup_id"), str("family").oneOf(kStepUpFamilies), str("target").nullable(),
                      strArray("methods").desc("webauthn, password_totp, password: in this order of preference."),
                      object("webauthn", "", {mfaRequestOptions()}).opt().desc("Present when webauthn is offered."),

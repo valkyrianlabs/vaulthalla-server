@@ -103,6 +103,9 @@ const std::vector<Exclusion>& exclusions() {
         {{"cloud", "storage", "billing"}, "billing opens in a browser, for the account holder"},
         {{"cloud", "relay", "enable"}, "whether browsers may reach this server through Vaulthalla Cloud is decided by a human"},
         {{"cloud", "relay", "disable"}, "whether browsers may reach this server through Vaulthalla Cloud is decided by a human"},
+        // Remote connectors: which AI apps may act as the account from elsewhere, and how far, is a person's decision
+        // (design/core/mcp-remote-signin.md); an agent can neither widen its own grant nor see or end anyone's.
+        {{"connector"}, "which AI apps may connect to this server remotely, and with what access, is decided by a human"},
     };
     return list;
 }

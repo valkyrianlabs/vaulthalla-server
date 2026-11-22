@@ -5,6 +5,7 @@
 #include "device/Device.hpp"
 #include "ops/BackupGrants.hpp"
 #include "ops/CloudRelay.hpp"
+#include "ops/Connector.hpp"
 
 #include <string>
 
@@ -101,6 +102,41 @@ void checkDeviceModels(Checker& c) {
     connected.streams_refused = 1;
     c.check(ops::cloud_relay::toJson(connected), "CloudRelayStatus", "cloud.relay.status (connected)");
     c.check(ops::cloud_relay::toJson(::vh::cloud::RelayStatus{}), "CloudRelayStatus", "cloud.relay.status (off)");
+
+    // Remote connectors (design/core/mcp-remote-signin.md): every member set, then the defaults.
+    ops::connector::Status on;
+    on.settings = {.enabled = true, .public_origin = "https://vault.example.com", .max_scope = "write",
+                   .dcr_enabled = false, .client_hosts = {"claude.ai"}, .changed_by = 1, .changed_at = 1760000000};
+    on.live_grants = 2;
+    on.clients = 3;
+    c.check(ops::connector::toJson(on), "ConnectorStatus", "connector.status (on)");
+    c.check(ops::connector::toJson(ops::connector::Status{}), "ConnectorStatus", "connector.status (off, never set)");
+
+    ::vh::connector::Grant ended;
+    ended.row = {.id = "0b3a8d2e-5d1f-4e8a-9c0b-5a1d2e3f4a5b", .user_id = 1, .client_row = "c", .client_id =
+                     "https://claude.ai/oauth/mcp-oauth-client-metadata", .client_name = "Claude",
+                 .redirect_uri = "https://claude.ai/api/mcp/auth_callback", .scope = "read", .resource =
+                     "https://vault.example.com/mcp", .label = "phone", .approved_via = "webauthn",
+                 .created_at = 1760000000, .expires_at = 1767776000, .last_used_at = 1760000600,
+                 .last_ip = "160.79.104.10", .revoked_at = 1760001200, .revoked_reason = "manual", .revoked_by = 1};
+    c.check(ops::connector::toJson(ended), "ConnectorGrant", "connector.grants.list grants[] (revoked)");
+    ::vh::connector::Grant fresh;
+    fresh.row = {.id = "1b3a8d2e-5d1f-4e8a-9c0b-5a1d2e3f4a5b", .user_id = 1, .client_row = "c", .client_id = "vhc_x",
+                 .client_name = "Codex", .redirect_uri = "http://127.0.0.1/callback", .scope = "write",
+                 .resource = "https://vault.example.com/mcp", .approved_via = "password_totp", .created_at = 1760000000,
+                 .expires_at = 1767776000};
+    c.check(ops::connector::toJson(fresh), "ConnectorGrant", "connector.grants.list grants[] (live)");
+
+    db::query::connector::ClientRow registered{.id = "2b3a8d2e-5d1f-4e8a-9c0b-5a1d2e3f4a5b", .client_id = "vhc_abc",
+                                               .kind = "registered", .name = "Codex on laptop",
+                                               .redirect_uris = {"http://127.0.0.1/callback"}, .created_by = 1,
+                                               .created_at = 1760000000, .last_used_at = 1760000100,
+                                               .disabled_at = 1760000200};
+    c.check(ops::connector::toJson(registered), "ConnectorClient", "connector.clients.add");
+    c.check(ops::connector::toJson(db::query::connector::ClientRow{.id = "x", .client_id = "https://a.example/c.json",
+                                                                   .kind = "cimd", .name = "A",
+                                                                   .redirect_uris = {"https://a.example/cb"}}),
+            "ConnectorClient", "connector.clients.list clients[] (fetched, never used)");
 }
 
 }

@@ -413,7 +413,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
                    std::ranges::any_of(stepUp, [&](const contract::WsStepUp& r) {
                        return r.command == command && (r.family == "keys" || r.family == "device.trust" ||
                                                        r.family == "identity.admin" || r.family == "secrets" ||
-                                                       r.family == "settings");
+                                                       r.family == "settings" || r.family == "connector.trust");
                    });
         const auto it = kRefusedCodes.find(code);
         if (it == kRefusedCodes.end()) return false;

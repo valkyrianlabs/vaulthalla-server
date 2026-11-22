@@ -378,3 +378,34 @@ shared node's operator decides first; a destructive call's per-call confirmation
 prompt injection can supply; a forgotten connection should end by itself; DCR adds no identity, only an
 unauthenticated write path; a default vendor allowlist would break every other client. If step 10 shows that Codex or
 Claude Code can use neither CIMD nor a pre-registered id, the operator turns DCR on for that node.
+
+## As built: steps 1 to 3 (2026-11-22)
+
+What landed, and where it differs from the text above (compatibility policy rule 5: the simplest secure option):
+
+1. **The ceiling** is `vh::mcp::withinCeiling(effect, ceiling)` in the usage module, applied by `Catalog::tools(ceiling)`,
+   `Catalog::prepare(tool, args, ceiling)` (before any confirmation is asked for) and `mcp::Server`, and again by the
+   transport's executor. `Destructive` means "no ceiling" exactly (an unknown effect passes only there), so `vh mcp`
+   and paired devices are unchanged. The shared transport is `protocols/mcp/HttpTransport` with
+   `Principal {user, origin, ceiling, ended()}`; the device's `/mcp` is a thin wrapper (the existing
+   `DeviceHttpTest.*` pass unchanged).
+2. **Codes and access tokens** (in memory) and the consent commands (`connector.authorization.get|approve|deny`) move
+   to step 5, with the pending-request store and the token endpoint they belong to. Step 2 built what they stand on:
+   the first refresh token is issued once per grant (a second code redemption gets nothing, and the caller then
+   revokes the grant as `code_reuse`), and grants never redeemed end after 10 minutes.
+3. **No CIMD switch:** client-id metadata documents are always accepted; `connector_settings.client_hosts` (empty =
+   any) is the operator allowlist's place. The grantor policy is a function (`connector::mayGrant`), not a setting.
+4. **Ending grants:** deactivating or deleting a user through `ops::users` revokes the account's sessions first, so its
+   grants end as `sessions_revoked`; `user_inactive` is what the reconciliation finds for an out-of-band change.
+   Lowering `max_scope` ends the live grants above it (`grantor_policy`). Status is for super admins only.
+5. **Commands:** `vh connector status | enable --url | disable | set [--max-scope] [--dcr on|off] [--client-hosts
+   any|h1,h2] | list [--all] | revoke <grant> | revoke-all [--user] | client list | client add --name --redirect |
+   client remove <client>` (one redirect URI from the CLI; the ws command takes up to 16) and ws `connector.status`,
+   `.enable`, `.disable`, `.policy.update`, `.grants.list`, `.grants.revoke`, `.clients.list`, `.clients.add`,
+   `.clients.remove`, typed in the console's command map (no console page yet: step 8).
+6. **Step-up targets** (`connector.trust`: target-bound, never the password alone, a recovery-cooldown family, no
+   device approval key): `connector.enable:<origin>`, `connector.policy:<max_scope>:<dcr 0|1>:<16 hex of the host
+   list's digest>` (only when the change widens something), `connector.client.add:<16 hex of the name and URIs>`.
+7. **Audit actions:** `connector.enable`, `connector.disable`, `connector.policy.change`, `connector.client.add`,
+   `connector.client.remove`, `connector.grant.create`, `connector.token.issue {from: code|refresh}`,
+   `connector.grant.revoke {reason}`; a reuse also notifies the user (`connector.grant.reuse`).

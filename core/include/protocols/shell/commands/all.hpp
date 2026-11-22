@@ -26,6 +26,7 @@ void registerSnapshotCommands(const std::shared_ptr<Router>& r);
 void registerAuditCommands(const std::shared_ptr<Router>& r);
 void registerDeviceCommands(const std::shared_ptr<Router>& r);
 void registerCloudCommands(const std::shared_ptr<Router>& r);
+void registerConnectorCommands(const std::shared_ptr<Router>& r);
 // `vh mcp`, `vh skill`: client-side commands (commands/client.cpp).
 void registerClientCommands(const std::shared_ptr<Router>& r);
 
