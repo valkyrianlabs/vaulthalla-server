@@ -611,7 +611,7 @@ Two hard rules, enforced by `tests/helpers/live_bucket.hpp` (the only way a test
   `RunB2BucketEnvironment` deletes every version and the bucket after the last test, also on failure.
   `TheAdminAdapterAdministersTheRunBucket` (2026-11-23): the real `B2Admin` lists the account, heads a present and
   an absent test name, gets the collision code for the run bucket's own name, inspects it (versioning, object lock),
-  lists both versions of an overwritten key and probes. One
+  lists both versions of an overwritten key and probes. **Passes live** (us-west-004, 2026-11-23, Mac). One
   consolidated manifest test, `TheManifestPublishesAsVersionsOfItsRoot` (probe says version_log; four publishes through the
   real `storage::s3::ManifestStore` with their request counts; a blind reload; a sibling landed after our PUT and repaired; GC of every
   version of a collected segment; an envelope written and read back). `LiveB2Guard.*` runs in CI. **Passes live**

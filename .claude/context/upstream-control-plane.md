@@ -165,6 +165,15 @@ plain storage, but protection locks still apply.
 
 ## Provider facts (verified live 2026-10-15)
 
+- Backblaze B2 bucket administration over the S3-compatible API (2026-11-23, us-west-004, account-wide test key,
+  `LiveB2.TheAdminAdapterAdministersTheRunBucket` on the Mac): CreateBucket with `x-amz-acl: private` and
+  `<LocationConstraint>us-west-004</LocationConstraint>` → 200 and the bucket shows in `b2_list_buckets`; the same
+  name again → `409 BucketAlreadyOwnedByYou`; ListBuckets (no paging parameters) lists it; HeadBucket 200 for it and
+  404 for a free name; GetBucketVersioning → `Enabled` on a fresh bucket; Get Object Lock Configuration is readable
+  and says not enabled (`object_lock = false`, no warning); ListObjectVersions returns both versions of a key PUT
+  twice, one `IsLatest`, each with a version id. Not exercised live: a name held by ANOTHER account (HeadBucket
+  403/404 and CreateBucket `BucketAlreadyExists` are handled, from the docs and the fake), DeleteBucket through the
+  adapter (the helper deletes natively), a bucket-restricted key.
 - Backblaze B2 (2026-11-12, `s3.us-west-004.backblazeb2.com`, coordinator's probe): PutObject with `If-None-Match: *`
   or `If-Match` → `501 NotImplemented`, nothing written. Versions always on: every PUT returns `x-amz-version-id`;
   ListObjectVersions newest first with id/ETag/IsLatest, pages with max-keys; GET/DELETE by version id; deleting the
