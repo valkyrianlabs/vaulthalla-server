@@ -11,4 +11,3 @@ Parallel changes: add a file per change to .release/notes.d/ (and .release/chang
 instead of editing this file; `vlr prepare` appends them below this body. The title here
 is still required; the body may then be empty.
 -->
-# Backblaze B2 support, and remotes you can attach, detach and limit
