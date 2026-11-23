@@ -1,5 +1,39 @@
 # Vaulthalla release notes
 
+<!-- vl-release:entry version=1.24.0 -->
+## 1.24.0 — Scoped devices, and S3 gateway keys from Desktop
+
+_Released 2026-11-23_
+
+### S3 gateway
+
+- **Vaulthalla Desktop can create, rotate and delete S3 gateway keys.** A paired Mac with full access no longer gets
+  "approve it on this device or in the web console" for gateway keys: its device key already proves who it is, so
+  your account's permissions are the only check, as for any other action you take in Desktop. The same applies to
+  the other `secrets` operations (provider credentials). Scoped devices, devices reached through the relay and AI
+  apps still can't do these, and the web console still asks for a step-up. Each one is recorded in the audit trail.
+- **HEAD errors no longer carry a body.** A `HEAD` that failed (a missing key, for example) answered with an XML
+  error body, which clients that keep the connection open (rclone, Go's HTTP client) read as the answer to their
+  next request. It now answers with the status and `x-amz-request-id` only, as S3 does.
+
+### AI apps
+
+- **The MCP server shows its logo.** AI apps on the newest MCP revision now see Vaulthalla's icon, a short
+  description and the website when they connect (`vh mcp` and paired devices).
+
+### Devices
+
+- **Paired devices can have limited access.** When you approve a pairing (in the console's pairing dialog or with
+  `vh device approve --scope read|write`), you can now limit the device to reading, or to reading and changing, within
+  your account's rights; a device can also ask for less when it pairs. `vh device list` and the console's device list
+  show each device's access, and `vh device scope <device> <scope>` changes it (giving more access asks for
+  confirmation). A limited device can't pair or approve other devices, back up or import vault keys, or manage remote
+  connectors. Every existing pairing keeps full access. Vaulthalla Desktop support for choosing a scope for the AI apps
+  it pairs comes in its own release.
+- **Every scoped device is accountable in the audit trail.** The trail records the access a device asked for and was
+  given, every change to it, the scope each of its actions ran under and every request its scope refused.
+  `vh audit list --device <n>` shows one device's history, and `vh device scopes` lists exactly what each scope allows.
+
 <!-- vl-release:entry version=1.23.0 -->
 ## 1.23.0 — Backblaze B2 support, and remotes you can attach, detach and limit
 
