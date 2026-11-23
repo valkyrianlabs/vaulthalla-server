@@ -958,10 +958,15 @@ Router::Response Router::route(Request&& request, BodyPayload payload) const {
 }
 
 Router::Response Router::errorResponse(const Request& request, const S3Error& error, const std::string& rid) {
+    // A response to HEAD carries no body (RFC 9110 9.3.2), errors included: the client reads the status and headers
+    // only, so an XML body would be left on the kept-alive connection and read as the answer to its next request
+    // (Go's net/http, i.e. rclone: "Unsolicited response received on idle HTTP channel"). S3 answers a HEAD error
+    // with the status and x-amz-request-id alone.
+    const auto head = request.method() == http::verb::head;
     auto response = makeResponse(
         request,
         error.status,
-        xml::error(error.code, error.what(), error.resource, rid));
+        head ? std::string{} : xml::error(error.code, error.what(), error.resource, rid));
     response.set("x-amz-request-id", rid);
     return response;
 }

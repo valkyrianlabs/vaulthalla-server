@@ -35,7 +35,8 @@
 // (methods device_approval and/or console_approval) until a grant on that device session covers it: one made by the
 // device's approval key (keys and device.trust only, D6) or by a person's passkey in the web console (#361,
 // auth/approval/Approvals.hpp). A key export inside the device's key-backup grant (#362, ops/BackupGrants.hpp) never
-// asks at all. No Scope at all means no request: the daemon's own callers and tests, which call ops:: directly and are
+// asks at all, and neither does a secrets operation (S3 gateway keys, provider credentials): a full-access paired
+// device is trusted for those by its mTLS identity (deviceSessionSatisfies). No Scope at all means no request: the daemon's own callers and tests, which call ops:: directly and are
 // trusted like the host (ops/Actor.hpp).
 //
 // How it is satisfied (web sessions only): a grant, made by auth.stepup.finish after
@@ -44,7 +45,7 @@
 //   - D3: the password alone, only for an account that need not have MFA and has no usable factor, and never for
 //     keys, device.trust or data.destroy;
 // or, for the family-wide families only, a sign-in at aal 2 within the step-up window (not a recovery-code one).
-// Recovery codes, a refresh token, an open session and Desktop mTLS never satisfy it.
+// Recovery codes, a refresh token and an open session never satisfy it; Desktop mTLS only for secrets (above).
 //
 // Grants live in memory on the ws session they were made on (never visible to another), bound to its user and refresh
 // token jti, for auth.mfa.step_up_ttl_seconds (default 300, 60..900). Target-bound families' grants are single use.
@@ -83,6 +84,12 @@ inline constexpr std::array<Family, 8> kFamilies{Family::Keys,          Family::
 // D6 (#361's extension point): a registered Secure Enclave approval key may satisfy only keys and device.trust (the
 // key-backup grant commands are device.trust).
 [[nodiscard]] bool deviceApprovalMaySatisfy(Family family) noexcept;
+// The families a full-access paired device's own session satisfies by itself, with no approval: secrets (S3 gateway
+// keys and provider credentials). The device already proves who it is with its pinned mTLS key, the account is the
+// one that paired it, and RBAC alone decides what it may do with them (Cooper, 2026-11-23: no approval, no recovery
+// cooldown). Scoped devices and agents are Channel::Agent and never get here, nor does a device reached through the
+// relay (read-only); every use is audited (auth.stepup.grant, method device_session).
+[[nodiscard]] bool deviceSessionSatisfies(Family family) noexcept;
 
 // The recovery cooldown's families (#360; design 7.4, D4): keys, device.trust, identity.admin, secrets, settings (and
 // connector.trust: a remote connector hands the account to a third party). While

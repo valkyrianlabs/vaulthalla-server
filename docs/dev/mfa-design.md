@@ -388,7 +388,7 @@ satisfy it with an approval-key signature after local user verification (section
 | Surface | Why it's exempt | What still applies |
 | --- | --- | --- |
 | CLI over the unix socket | Authenticated by kernel peer credentials (UID in the `vaulthalla` group, UID-to-user mapping); the host account is the trust anchor, and anyone with it can already read local state | RBAC, audit, typed confirmations; `vh user mfa reset` is the documented host-level recovery |
-| Desktop device sessions | Authenticated by the paired Secure Enclave key over TLS 1.3 at every connection; routine sync must never prompt | Sensitive families need a device approval or a console approval (section 6) |
+| Desktop device sessions | Authenticated by the paired Secure Enclave key over TLS 1.3 at every connection; routine sync must never prompt | Sensitive families need a device approval or a console approval (section 6), except `secrets` (S3 gateway keys, provider credentials): a full-access, directly connected device's session satisfies it itself and RBAC alone decides (Cooper, 2026-11-23) |
 | Share sessions | Not accounts; their own grants and email challenge (#336) | Share rate limits |
 | S3 gateway | SigV4 credentials, not people | Minting credentials is `secrets` step-up |
 

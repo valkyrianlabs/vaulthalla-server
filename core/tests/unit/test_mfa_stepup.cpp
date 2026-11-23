@@ -48,6 +48,9 @@ TEST(StepUpFamilies, NamesTargetsAndWhatMaySatisfyThem) {
         EXPECT_TRUE(passwordMaySatisfy(f)) << to_string(f);
         EXPECT_FALSE(deviceApprovalMaySatisfy(f)) << "D6: other families need console WebAuthn: " << to_string(f);
     }
+    for (const auto f : kFamilies)
+        EXPECT_EQ(deviceSessionSatisfies(f), f == Family::Secrets)
+            << "a paired device's own session confirms secrets only: " << to_string(f);
     EXPECT_TRUE(deviceApprovalMaySatisfy(Family::Keys));
     EXPECT_TRUE(deviceApprovalMaySatisfy(Family::DeviceTrust));
     EXPECT_FALSE(deviceApprovalMaySatisfy(Family::DataDestroy));

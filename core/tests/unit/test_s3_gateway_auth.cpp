@@ -15,6 +15,7 @@
 #include "crypto/ScratchFile.hpp"
 #include "fs/PlaintextSource.hpp"
 #include "protocols/s3/Auth.hpp"
+#include "protocols/s3/Error.hpp"
 #include "protocols/s3/RequestBody.hpp"
 #include "protocols/s3/Router.hpp"
 #include "protocols/s3/SigV4.hpp"
@@ -337,6 +338,28 @@ TEST(S3GatewayAuth, EveryVerifierFailureMapsToAnS3ErrorAndStatus) {
     EXPECT_EQ(covered.size(), static_cast<std::size_t>(vl::sigv4::ErrorCode::ChunkSignatureMismatch));
     for (int c = 1; c <= static_cast<int>(vl::sigv4::ErrorCode::ChunkSignatureMismatch); ++c)
         EXPECT_TRUE(covered.contains(c)) << c;
+}
+
+// A HEAD error has a status and headers but no body: a body would stay on the kept-alive connection and be read as
+// the answer to the client's next request (rclone over Go's net/http logged "Unsolicited response received on idle
+// HTTP channel" for a HEAD of a missing key).
+TEST(S3GatewayAuth, AHeadErrorCarriesNoBody) {
+    using namespace s3gatewayauth;
+    const s3::S3Error missing{"NoSuchKey", "The specified key does not exist", http::status::not_found, "nested"};
+    for (const auto* method : {"HEAD", "GET"}) {
+        auto request = makeRequest(method, "/bucket/nested", {{"Host", kHost}});
+        request.keep_alive(true);
+        const auto response = s3::Router::errorResponse(request, missing, "rid-1");
+        EXPECT_EQ(response.result(), http::status::not_found) << method;
+        EXPECT_EQ(response["x-amz-request-id"], "rid-1") << method;
+        EXPECT_TRUE(response.keep_alive()) << method;
+        if (std::string_view{method} == "HEAD") {
+            EXPECT_TRUE(response.body().empty());
+            EXPECT_EQ(response[http::field::content_length], "0");
+        } else {
+            EXPECT_NE(response.body().find("<Code>NoSuchKey</Code>"), std::string::npos);
+        }
+    }
 }
 
 TEST(S3GatewayAuth, GatewayOptionsAreS3AnyRegionNoSessionTokens) {

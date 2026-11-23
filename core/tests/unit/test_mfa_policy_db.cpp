@@ -393,19 +393,26 @@ TEST_F(MfaPolicyDb, ARecoveryCodeSignInRevokesSessionsAndGrantsStartsTheCooldown
               "recovery_cooldown");
 
     // The paired device (still paired, D4) can't get around it: neither its approval key nor a console approval makes
-    // a grant for a cooldown family, and one it already holds doesn't count (#361's methods).
+    // a grant for a cooldown family, and one it already holds doesn't count (#361's methods); secrets, which its own
+    // session confirms, is the one exception.
     {
         auto peer = std::make_shared<vh::device::Peer>();
         peer->spkiHex = mac.spki_sha256;
         peer->deviceRowId = mac.id;
         const auto device = protocols::ws::Session::devicePrincipal(peer, admin, [] {});
-        device->stepUp().addGrant({.user_id = admin->id, .family = stepup::Family::Secrets,
+        device->stepUp().addGrant({.user_id = admin->id, .family = stepup::Family::Settings,
                                    .method = std::string(stepup::kConsoleApprovalMethod),
                                    .expires_at = std::chrono::system_clock::now() + std::chrono::minutes(5)});
         {
             const stepup::Scope scope(device);
-            EXPECT_THROW(stepup::require(stepup::Family::Secrets), ops::RecoveryCooldown);
+            EXPECT_THROW(stepup::require(stepup::Family::Settings), ops::RecoveryCooldown);
             EXPECT_FALSE(ops::backup_grants::covering({1})) << "its key-backup grant was revoked";
+        }
+        {
+            // The exception: secrets on the paired device's own session is RBAC alone, cooldown or not (a device paired
+            // before the recovery; pairing a new one is device.trust, held back above).
+            const stepup::Scope scope(device);
+            EXPECT_NO_THROW(stepup::require(stepup::Family::Secrets));
         }
         EXPECT_EQ(call([&] {
                       (void)auth::approval::request(device, stepup::Family::Settings, std::nullopt, "change settings");

@@ -104,6 +104,8 @@ bool deviceApprovalMaySatisfy(const Family family) noexcept {
     return family == Family::Keys || family == Family::DeviceTrust;
 }
 
+bool deviceSessionSatisfies(const Family family) noexcept { return family == Family::Secrets; }
+
 bool cooldownFamily(const Family family) noexcept {
     return family == Family::Keys || family == Family::DeviceTrust || family == Family::IdentityAdmin ||
            family == Family::Secrets || family == Family::Settings || family == Family::ConnectorTrust;
@@ -225,6 +227,18 @@ void require(const Family family, const std::optional<std::string>& target) {
         case Channel::Device: {
             const auto& session = scope->session();
             const auto userId = session && session->user ? std::optional<uint32_t>(session->user->id) : std::nullopt;
+            // A full-access paired device is trusted for secrets by its mTLS identity (deviceSessionSatisfies): RBAC is
+            // the only check left, the recovery cooldown included (it holds back sessions a recovery-code sign-in could
+            // have made, and pairing a new device is itself a cooldown family). Not a device reached through the relay,
+            // which is read-only.
+            if (userId && deviceSessionSatisfies(family) && session->devicePeer() && !session->devicePeer()->readOnly()) {
+                audit::record({.action = "auth.stepup.grant", .actor_id = userId, .actor = session->user->name(),
+                               .details = {{"family", familyName}, {"target", stepUpTargetJson(bound)},
+                                           {"channel", "device"}, {"method", "device_session"}}},
+                              "[auth::stepup] a paired device's session confirmed a " + familyName + " operation");
+                scope->markSatisfied(family, bound);
+                return;
+            }
             // #360: the recovery cooldown holds its families back before any grant, device or console approvals
             // included.
             if (userId) stepUpCooldownGate(*userId, session->user->name(), family, bound, "device");
