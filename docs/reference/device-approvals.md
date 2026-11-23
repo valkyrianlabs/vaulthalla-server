@@ -19,8 +19,11 @@ never counts as a person's approval. Routine traffic (sync, the file provider, t
 device's [key-backup grant](#key-backup-grants)) never asks for one.
 
 A few actions need a fresh approval by a person: the step-up families (their contract entries carry `step_up`,
-see [WebSocket Protocol](/reference/ws-protocol)). On a paired device's session such a command answers
-`step_up_required` with `methods` saying how this device can get it approved:
+see [WebSocket Protocol](/reference/ws-protocol)). The one exception on a paired device is `secrets` (S3 gateway
+keys, provider credentials): a full-access device connected directly (not scoped, not through the relay) is trusted
+for it by its device key, so only the account's permissions decide, with no approval and no recovery cooldown. Each
+such operation is audited as `auth.stepup.grant` with `method: device_session`. For every other family a command on a
+paired device's session answers `step_up_required` with `methods` saying how this device can get it approved:
 
 | Method | What it is | Families |
 | --- | --- | --- |

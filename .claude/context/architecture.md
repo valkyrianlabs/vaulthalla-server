@@ -682,7 +682,10 @@ listener), the CLI server Host (exempt: peer credentials, design 5.6) or Agent (
 no scope = the daemon's own callers and tests (exempt, like `ops::Actor`'s internal callers). Agent always refuses
 (`methods: []`). Device refuses (`methods: [device_approval?, console_approval]`) unless a grant on that device session
 covers it: method `device_approval` (its approval key, keys/device.trust only, D6) or `console_approval` (a person's
-passkey in the console, any family); any other grant method never counts on a device (#361, below). A device's
+passkey in the console, any family); any other grant method never counts on a device (#361, below). Exception:
+`secrets` on a full-access, directly connected device's session is satisfied by the session itself, before the
+recovery cooldown (`stepup::deviceSessionSatisfies`, audited `auth.stepup.grant` method `device_session`): Desktop
+creates S3 gateway keys on RBAC alone (Cooper, 2026-11-23). A device's
 `vault.keys.export` needs no step-up for a vault its live, unsuspended key-backup grant names (`ops::backup_grants::covering`,
 #362, below); anything else is the keys step-up. Web: a grant on
 `ws::Session::stepUp()` bound to user + refresh jti + family (+ target), `auth.mfa.step_up_ttl_seconds` (default 300,

@@ -227,6 +227,10 @@ The server can't verify that the approval key really asks for Touch ID. It trust
 it through an approved action, it can't be exported, and every signature is bound to one action; so an approval key
 approves only `keys` and `device.trust`.
 
+Creating, rotating or deleting S3 gateway keys (and other `secrets` operations) from a full-access paired device such
+as Vaulthalla Desktop needs no approval at all: the paired device's key is the proof, and the account's permissions
+decide. In the web console the same operations still ask for a step-up.
+
 ## HIPAA And Other Frameworks
 
 45 CFR §164.312(d) (person or entity authentication) requires procedures to verify that a person seeking access to

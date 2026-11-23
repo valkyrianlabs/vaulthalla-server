@@ -218,6 +218,10 @@ TEST(DeviceApprovalGrants, AnApprovalKeyOnlyForD6FamiliesAConsoleApprovalForAnyT
         EXPECT_EQ(e.methods, std::vector<std::string>{"console_approval"});
     }
 
+    // secrets (S3 gateway keys, provider credentials): the paired device's own session confirms it, no grant, no
+    // prompt (deviceSessionSatisfies) ...
+    EXPECT_NO_THROW(stepup::require(stepup::Family::Secrets));
+
     // An approval-key grant serves keys and device.trust (D6) ...
     grant(stepup::Family::DeviceTrust, stepup::kDeviceApprovalMethod, "device.pairing.approve:r:k:c");
     EXPECT_NO_THROW(stepup::require(stepup::Family::DeviceTrust, std::string("device.pairing.approve:r:k:c")));
@@ -238,6 +242,51 @@ TEST(DeviceApprovalGrants, AnApprovalKeyOnlyForD6FamiliesAConsoleApprovalForAnyT
     grant(stepup::Family::Keys, "webauthn", "vault.keys.import:4");
     EXPECT_THROW(stepup::require(stepup::Family::Keys, std::string("vault.keys.import:4")), ops::StepUpRequired);
     device->close();
+}
+
+// Desktop issues S3 gateway keys on its own session (Cooper, 2026-11-23): a full-access, directly connected paired
+// device confirms secrets by its mTLS identity, and only secrets; a scoped device steps up like an agent (never), and a
+// device reached through the relay (read-only) doesn't get it either.
+TEST(DeviceApprovalGrants, OnlyAFullAccessDirectDeviceConfirmsSecretsItself) {
+    const auth::mfa::recovery::CooldownSourceForTesting noCooldown([](uint32_t) { return std::nullopt; });
+    const auto session = [](const uint8_t fill, const std::string& scope, const bool relayed) {
+        auto peer = std::make_shared<vh::device::Peer>();
+        peer->spki.fill(fill);
+        peer->spkiHex = crypto::toHex(peer->spki);
+        peer->address = "127.0.0.1";
+        peer->deviceRowId = fill;
+        peer->scope = scope;
+        peer->relayed = relayed;
+        return protocols::ws::Session::devicePrincipal(std::move(peer), detachedAdmin(5110 + fill), [] {});
+    };
+    {
+        const auto full = session(1, "destructive", false);
+        {
+            const stepup::Scope scope(full);
+            ASSERT_EQ(scope.channel(), stepup::Channel::Device);
+            EXPECT_NO_THROW(stepup::require(stepup::Family::Secrets));
+        }
+        for (const auto f : {stepup::Family::AccountCredentials, stepup::Family::IdentityAdmin, stepup::Family::Settings}) {
+            const stepup::Scope scope(full);
+            EXPECT_THROW(stepup::require(f), ops::StepUpRequired) << "secrets only, not " << stepup::to_string(f);
+        }
+        {
+            const stepup::Scope scope(full);
+            EXPECT_THROW(stepup::require(stepup::Family::Keys, std::string("vault.keys.export:1")), ops::StepUpRequired);
+            EXPECT_THROW(stepup::require(stepup::Family::DataDestroy, std::string("storage.vault.remove:1")),
+                         ops::StepUpRequired);
+        }
+        EXPECT_TRUE(full->stepUp().grants().empty()) << "no grant is made: the session itself is the confirmation";
+        full->close();
+    }
+    for (const auto& [scopeName, relayed] : {std::pair{std::string("write"), false}, std::pair{std::string("read"), false},
+                                             std::pair{std::string("destructive"), true}}) {
+        const auto device = session(relayed ? 9 : scopeName == "write" ? 7 : 8, scopeName, relayed);
+        const stepup::Scope scope(device);
+        EXPECT_THROW(stepup::require(stepup::Family::Secrets), ops::StepUpRequired)
+            << scopeName << (relayed ? " over the relay" : "");
+        device->close();
+    }
 }
 
 // ── the contract ───────────────────────────────────────────────────────────────────────────────────────────────────

@@ -2376,16 +2376,24 @@ TEST_F(S3GatewayDbTest, SignedRouteScopeDeniedReturnsS3XmlAccessDenied) {
         .vault_scopes = {}
     });
 
-    vh::protocols::s3::Router::Request request{http::verb::head, "/" + bucketName, 11};
-    request.set(http::field::host, "localhost:39000");
-    s3gw::signRequest(request, secret.credential.access_key, secret.secret_access_key);
-
     const vh::protocols::s3::Router router;
-    const auto response = router.route(std::move(request));
+    const auto routed = [&](const http::verb verb) {
+        vh::protocols::s3::Router::Request request{verb, "/" + bucketName, 11};
+        request.set(http::field::host, "localhost:39000");
+        s3gw::signRequest(request, secret.credential.access_key, secret.secret_access_key);
+        return router.route(std::move(request));
+    };
 
-    EXPECT_EQ(response.result(), http::status::forbidden);
-    EXPECT_NE(response.body().find("<Code>AccessDenied</Code>"), std::string::npos);
-    EXPECT_NE(response.body().find("<RequestId>"), std::string::npos);
+    // GET (ListObjects) answers S3's XML error ...
+    const auto listed = routed(http::verb::get);
+    EXPECT_EQ(listed.result(), http::status::forbidden);
+    EXPECT_NE(listed.body().find("<Code>AccessDenied</Code>"), std::string::npos);
+    EXPECT_NE(listed.body().find("<RequestId>"), std::string::npos);
+    // ... and HEAD the same status with no body (a body would be read as the client's next response).
+    const auto headed = routed(http::verb::head);
+    EXPECT_EQ(headed.result(), http::status::forbidden);
+    EXPECT_TRUE(headed.body().empty());
+    EXPECT_FALSE(headed["x-amz-request-id"].empty());
 }
 
 TEST_F(S3GatewayDbTest, MultipartUploadUsesOpaquePartDirAndCompleteKeepsRoot) {
