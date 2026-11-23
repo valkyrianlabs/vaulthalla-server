@@ -38,7 +38,10 @@ std::vector<WsModel> deviceModels() {
          boolean("revoked").desc("Revoked devices stay listed; their key never pairs again."),
          str("paired_via").oneOf({"listener", "relay"}).desc(
              "listener: paired on the device listener (Desktop); relay: a web browser paired through the cloud "
-             "relay, held to the read-only capability set (migration 144).")}));
+             "relay, held to the read-only capability set (migration 144)."),
+         str("scope").oneOf({"read", "write", "destructive"}).desc(
+             "Scoped devices (migration 152): what the device may do at most, within its user's rights. destructive: "
+             "no limit beyond the account's own (every pairing before scopes).")}));
 
     out.push_back(model("CloudRelayStatus",
         "The cloud relay (design/cloud/relay.md): ops::cloud_relay::toJson(RelayStatus).",

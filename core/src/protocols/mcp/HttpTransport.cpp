@@ -168,6 +168,7 @@ http::model::preview::Response handle(http::request&& req, const Principal& prin
 
     vh::mcp::Server server(d::catalog(), [&principal](const vh::mcp::Invocation& call) { return d::execute(call, principal); },
                            VH_VERSION, principal.ceiling);
+    if (principal.refused) server.onCeilingRefusal(principal.refused);
     const auto answer = server.handle(message);
     if (!answer) return d::reply(req, bhttp::status::accepted, {});  // a notification or a response: nothing to say
     return d::reply(req, bhttp::status::ok, answer->dump(-1, ' ', false, Json::error_handler_t::replace));

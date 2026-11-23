@@ -99,7 +99,11 @@ std::vector<WsCommandUsage> deviceCommands() {
                         "#361: the device's approval key (a second P-256 key, never the connection's): its "
                         "SubjectPublicKeyInfo, 91 bytes of DER (uncompressed point), in standard base64. Shown with "
                         "the request (approval_key_present) and registered with the device when it is approved. "
-                        "invalid for any other key; conflict for a key this node knows.")},
+                        "invalid for any other key; conflict for a key this node knows."),
+                    str("scope").oneOf({"read", "write", "destructive"}).opt().nullable().desc(
+                        "Scoped devices: the access this pairing asks for (an app pairing an AI tool asks read). "
+                        "The approver decides, equal or narrower; absent: no limit beyond the account's own "
+                        "(destructive), as before.")},
         .response = {str("request_id"), hex64("nonce_server"), uinteger("expires_at")},
         .refusal_codes = {"invalid", "conflict", "no_pairing_window", "rate_limited", "device_unknown", "unauthorized"},
         .client_timeout = kDefaultTimeout,
@@ -226,6 +230,8 @@ std::vector<WsCommandUsage> deviceCommands() {
                                   str("via").oneOf({"listener", "relay"}).desc(
                                       "relay: a web browser asking through the cloud relay (from the connection, never "
                                       "the platform it names); it is paired read-only."),
+                                  str("requested_scope").oneOf({"read", "write", "destructive"}).opt().desc(
+                                      "Scoped devices: the scope the request asked for; absent when it asked none."),
                                   uinteger("created_at"), uinteger("expires_at")}),
                      uinteger("server_time").desc("The node's clock (Unix seconds), to count down by.")},
         .refusal_codes = opsRefusals(),
@@ -239,9 +245,12 @@ std::vector<WsCommandUsage> deviceCommands() {
                        "request carried. A device.trust step-up bound to the request, its key and the chosen code: in "
                        "the console a passkey or password + TOTP; on an already-paired device its approval key "
                        "(device.approval.challenge/submit) or a console approval; `vh device pair` on the node needs "
-                       "none.",
+                       "none. scope: what the device may do (default: what the request asked, else destructive); "
+                       "never wider than the request asked (invalid). A scope narrower than destructive is part of the "
+                       "step-up target, so an approval for one scope never pairs another.",
         .payload = {requestIdField(),
-                    str("code").gen(gen::ref("device.pairing_request", {"code"})).desc("Six digits (spaces allowed).")},
+                    str("code").gen(gen::ref("device.pairing_request", {"code"})).desc("Six digits (spaces allowed)."),
+                    str("scope").oneOf({"read", "write", "destructive"}).opt().nullable()},
         .response = {deviceObject()},
         .refusal_codes = opsRefusals(),
         .client_timeout = kDefaultTimeout,
@@ -355,6 +364,19 @@ std::vector<WsCommandUsage> deviceCommands() {
     });
 
     out.push_back({
+        .command = "device.scope.set",
+        .description = "Change a device's scope (read, write or destructive). Narrowing: the device's user or a super "
+                       "admin, no step-up. Widening: the device's user only, with a device.trust step-up bound to the "
+                       "device and the new scope. Never from a scoped device, and never by the device for itself "
+                       "(device_scope). Its live sessions close, so it reconnects under the new scope. Audited "
+                       "device.scope.set.",
+        .payload = {deviceIdField(), str("scope").oneOf({"read", "write", "destructive"})},
+        .response = {deviceObject()},
+        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "device_scope"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
         .command = "device.rename",
         .description = "Rename a device (its user, or a super admin).",
         .payload = {deviceIdField(), str("name").gen(gen::pattern("Mac {a}{a}{a}")).desc("1-64 characters.")},
@@ -366,10 +388,11 @@ std::vector<WsCommandUsage> deviceCommands() {
     out.push_back({
         .command = "device.revoke",
         .description = "Unpair a device (its user, a super admin, or the device itself). Final: its live sessions "
-                       "close at once and its key only ever gets pairing-only connections again.",
+                       "close at once and its key only ever gets pairing-only connections again. A scoped device may "
+                       "unpair only itself (device_scope).",
         .payload = {deviceIdField()},
         .response = {deviceObject()},
-        .refusal_codes = opsRefusals(),
+        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "device_scope"},
         .client_timeout = kDefaultTimeout,
     });
 

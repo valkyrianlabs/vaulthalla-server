@@ -44,6 +44,11 @@ const std::vector<Exclusion>& exclusions();
 // The plain tool error for a call above the ceiling (`what` names the command or tool).
 [[nodiscard]] std::string ceilingRefusal(const std::string& what, protocols::shell::CommandEffect effect,
                                          protocols::shell::CommandEffect ceiling);
+// The CallToolResult of that refusal: an isError text result whose _meta[kCeilingRefusalMeta] is {command, effect,
+// ceiling}, so a transport can record the refusal (scoped devices, connector grants) without parsing text.
+inline constexpr std::string_view kCeilingRefusalMeta = "vaulthalla/ceiling_refused";
+[[nodiscard]] Json ceilingRefused(const std::string& what, protocols::shell::CommandEffect effect,
+                                  protocols::shell::CommandEffect ceiling);
 
 // One command line the transport runs for the agent: never interactive, never with a confirmation flag the agent did
 // not pass in `confirm`.
@@ -131,6 +136,9 @@ public:
     [[nodiscard]] static Json parseError();
 
     [[nodiscard]] const std::string& protocolVersion() const { return protocolVersion_; }
+    // Called for every tools/call the ceiling refused: the command (or tool) asked for and its effect ("" unknown).
+    using CeilingRefusalSink = std::function<void(const std::string& command, const std::string& effect)>;
+    void onCeilingRefusal(CeilingRefusalSink sink) { onCeilingRefusal_ = std::move(sink); }
 
 private:
     const Catalog& catalog_;
@@ -138,10 +146,24 @@ private:
     std::string version_;
     std::string protocolVersion_{kProtocolVersions.front()};
     protocols::shell::CommandEffect ceiling_;
+    CeilingRefusalSink onCeilingRefusal_{};
 };
 
 // What initialize tells the agent before it sees any tool.
 std::string instructions();
+
+// serverInfo's icons, description and websiteUrl: sent only to clients on MCP 2025-11-25 or later (they joined the
+// schema then), never to one that asked for an older revision.
+struct Icon {
+    std::string_view png_base64{};  // the PNG's bytes, base64
+    int size = 0;                   // square, in pixels
+};
+// Vaulthalla's logo at 64 and 128 pixels (core/usage/assets, generated into src/mcp/Icons.cpp by tools/dev/mcp_icons.py).
+const std::vector<Icon>& icons();
+inline constexpr std::string_view kIconsSince = "2025-11-25";
+inline constexpr std::string_view kWebsiteUrl = "https://vaulthalla.io";
+inline constexpr std::string_view kServerDescription =
+    "Your self-hosted Vaulthalla server: vaults, files, users, groups, sync and recovery, used as your own account.";
 
 // ---------------------------------------------------------------------------------------------------------------
 // Agent skill (vh skill install): the hand-written SKILL.md and where each agent looks for it.

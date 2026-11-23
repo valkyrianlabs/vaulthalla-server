@@ -51,6 +51,11 @@ WsEnvelope envelope() {
         .error_codes = {
             {.code = "conflict", .description = "The request collides with existing state."},
             {.code = "denied", .description = "RBAC or a business rule refused the actor."},
+            {.code = "device_scope",
+             .description = "A scoped device (paired with read or write access only) asked for a command above its "
+                            "scope, or one a scoped device never runs (pairing, approvals, key-backup grants, key "
+                            "export and import, remote connectors, another device's revocation). data: {scope, "
+                            "effect}."},
             {.code = "device_unknown",
              .description = "The device listener: this connection's key is not a paired device; it may only pair "
                             "(device.pair.*) and say hello (meta.hello, meta.contract.get)."},

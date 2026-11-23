@@ -72,6 +72,17 @@ CommandResult list(const CommandCall& call) {
     return runOp("audit list", [&] {
         ops::audit::Filter filter;
         filter.action_prefix = optVal(call, "action");
+        const auto device = optVal(call, "device");
+        const auto grant = optVal(call, "grant");
+        if (device && grant) throw ops::Invalid("--device and --grant can't be combined");
+        if (device) {
+            uint32_t row = 0;
+            const auto [p, ec] = std::from_chars(device->data(), device->data() + device->size(), row);
+            if (ec != std::errc{} || p != device->data() + device->size() || row == 0)
+                throw ops::Invalid("--device takes the device's number from `vh device list --all`");
+            ops::audit::forDevice(filter, row);
+        }
+        if (grant) ops::audit::forGrant(filter, *grant);
         filter.since_us = timeArg(call, "since");
         filter.until_us = timeArg(call, "until");
         std::size_t limit = 50;

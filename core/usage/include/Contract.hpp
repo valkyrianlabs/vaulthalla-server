@@ -8,6 +8,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // The server-owned contract: the CLI books (CommandUsage), the ws command book (WsCommandUsage) and the operation
@@ -120,7 +121,20 @@ struct WsCommandUsage {
     // may answer ERROR step_up_required {family, target, methods, max_age_seconds} until the session holds a grant.
     // Set from stepUpTable() by commands(), never by hand. Exported as `step_up` on annotated commands only.
     std::optional<std::string> step_up{};
+    // What the command does: "read" | "write" | "destructive" (the CLI leaves' CommandEffect rule). Set from
+    // effectTable() by commands(), never by hand; every command has one. A scoped device runs only commands within its
+    // scope (design/core/mcp-remote-signin.md, "Scoped devices"). Exported as `effect`.
+    std::string effect{};
 };
+
+// One row of the ws effect table.
+struct WsEffect {
+    std::string command{};
+    std::string effect{};  // read | write | destructive
+};
+
+// Every ws command's effect, by command (core/usage/src/contract/ws/effects.cpp).
+std::vector<WsEffect> effectTable();
 
 // One row of the step-up family table (#359): which command asks for which family, and when (empty: always).
 struct WsStepUp {
@@ -228,6 +242,8 @@ struct OperationSpec {
 
 namespace ws {
 std::vector<WsCommandUsage> commands();
+// A command's effect (effectTable(), looked up once): nullopt for a command the book doesn't have.
+[[nodiscard]] std::optional<std::string> effectOf(std::string_view command);
 // Every model the book refers to, sorted by name.
 std::vector<WsModel> models();
 // The declared fields of one model (throws std::out_of_range for an unknown name).

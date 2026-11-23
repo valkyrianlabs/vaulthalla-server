@@ -156,6 +156,33 @@ TEST(UsageContract, EveryRegisteredWsCommandHasABookEntry) {
     }
 }
 
+// Scoped devices: every ws command says what it does, from the one table, and the router reads the same.
+TEST(UsageContract, EveryWsCommandDeclaresAnEffect) {
+    const auto table = contract::effectTable();
+    std::set<std::string> named;
+    for (const auto& row : table) EXPECT_TRUE(named.insert(row.command).second) << row.command << " twice";
+    std::size_t reads = 0, destructive = 0;
+    for (const auto& c : contract::ws::commands()) {
+        EXPECT_TRUE(c.effect == "read" || c.effect == "write" || c.effect == "destructive")
+            << c.command << " declares no effect (core/usage/src/contract/ws/effects.cpp)";
+        EXPECT_EQ(contract::ws::effectOf(c.command), c.effect) << c.command;
+        reads += c.effect == "read";
+        destructive += c.effect == "destructive";
+    }
+    EXPECT_EQ(named.size(), contract::ws::commands().size()) << "the table names a command the book lacks, or misses one";
+    EXPECT_GT(reads, 100u);
+    EXPECT_GT(destructive, 10u);
+    EXPECT_FALSE(contract::ws::effectOf("no.such.command"));
+    // A few the scope rule leans on.
+    EXPECT_EQ(contract::ws::effectOf("fs.dir.list"), "read");
+    EXPECT_EQ(contract::ws::effectOf("fs.download.chunk"), "read");
+    EXPECT_EQ(contract::ws::effectOf("fs.upload.start"), "write");
+    EXPECT_EQ(contract::ws::effectOf("fs.entry.delete"), "destructive");
+    EXPECT_EQ(contract::ws::effectOf("storage.vault.remove"), "destructive");
+    EXPECT_EQ(contract::ws::effectOf("device.revoke"), "destructive");
+    EXPECT_EQ(contract::ws::effectOf("stats.vault"), "read");
+}
+
 TEST(UsageContract, WsBookCoversTheEngineAndConsoleCommands) {
     const auto book = contract::ws::commands();
     for (const auto* name : {"auth.login", "auth.logout", "auth.refresh", "auth.isAuthenticated", "auth.register",
@@ -398,7 +425,9 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         {"mfa_last_factor", {"auth.mfa.factor.remove"}},
         // #361: device approvals (the device's side: device.*) and the console's answer.
         {"console_approval_required", {}}, {"approval_key_unavailable", {}},
-        {"passkey_required", {"auth.approval.approve"}}, {"approval_failed", {"auth.approval.approve"}}};
+        {"passkey_required", {"auth.approval.approve"}}, {"approval_failed", {"auth.approval.approve"}},
+        // Scoped devices: a scoped device unpairing another, or anyone's scope changed from a device.
+        {"device_scope", {"device.revoke", "device.scope.set"}}};
     const auto stepUp = contract::stepUpTable();
     const auto refusedCodeAllowed = [&](const std::string& code, const std::string& command) {
         if (code == "step_up_required")
@@ -473,8 +502,8 @@ TEST(UsageContract, EnvelopeDescribesTheFramesTheDaemonSends) {
         codes.push_back(c.code);
     }
     EXPECT_TRUE(std::ranges::is_sorted(codes));
-    EXPECT_EQ(codes, (std::vector<std::string>{"conflict", "denied", "device_unknown", "invalid", "not_found",
-                                               "relay_read_only", "unknown_command"}));
+    EXPECT_EQ(codes, (std::vector<std::string>{"conflict", "denied", "device_scope", "device_unknown", "invalid",
+                                               "not_found", "relay_read_only", "unknown_command"}));
     EXPECT_EQ(document().at("envelope").at("error_codes").size(), codes.size());
 }
 

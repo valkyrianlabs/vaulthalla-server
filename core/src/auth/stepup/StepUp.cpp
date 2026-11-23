@@ -141,8 +141,17 @@ std::string_view to_string(const Channel channel) noexcept {
 
 // ---- Scope -----------------------------------------------------------------------------------------------------------
 
+// Scoped devices: a device with limited access steps up like an agent: never (it can neither answer nor satisfy one).
+namespace stepup_scope_detail {
+Channel channelOf(const std::shared_ptr<protocols::ws::Session>& session) {
+    if (!session || !session->onDeviceListener()) return Channel::Web;
+    if (const auto& peer = session->devicePeer(); peer && peer->scoped()) return Channel::Agent;
+    return Channel::Device;
+}
+}
+
 Scope::Scope(std::shared_ptr<protocols::ws::Session> session)
-    : channel_(session && session->onDeviceListener() ? Channel::Device : Channel::Web),
+    : channel_(stepup_scope_detail::channelOf(session)),
       session_(std::move(session)),
       previous_(std::exchange(tlsStepUpScope, this)) {}
 

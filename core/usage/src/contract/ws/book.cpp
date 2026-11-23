@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <iterator>
+#include <map>
 #include <stdexcept>
 
 namespace vh::contract::ws {
@@ -33,9 +34,26 @@ std::vector<WsCommandUsage> commands() {
             std::ranges::find(it->refusal_codes, "recovery_cooldown") == it->refusal_codes.end())
             it->refusal_codes.emplace_back("recovery_cooldown");
     }
+    // Scoped devices: every command's effect, from its one table.
+    for (const auto& row : effectTable()) {
+        const auto it = std::ranges::find(all, row.command, &WsCommandUsage::command);
+        if (it == all.end()) throw std::logic_error("effect table names " + row.command + ", which the book lacks");
+        it->effect = row.effect;
+    }
     if (const auto dup = std::ranges::adjacent_find(all, {}, &WsCommandUsage::command); dup != all.end())
         throw std::logic_error("ws command book declares " + dup->command + " twice");
     return all;
+}
+
+std::optional<std::string> effectOf(const std::string_view command) {
+    static const auto table = [] {
+        std::map<std::string, std::string, std::less<>> m;
+        for (auto& row : effectTable()) m.emplace(std::move(row.command), std::move(row.effect));
+        return m;
+    }();
+    const auto it = table.find(command);
+    if (it == table.end()) return std::nullopt;
+    return it->second;
 }
 
 }

@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'b0dd7e85344094952cbf1c6cb022a7b914d40165851493e2befce91ef6604222'
+export const WS_CONTRACT_HASH = '1f51b7b7f54eb58af8b8e8946500a850d05cecf5bf28c78b4f00581cceef8038'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'eedd8719497ec0e5851ab019bdcfa45771cbce05fe4417badcb20c3490178a32'
+export const WS_MODELS_HASH = 'c57d7e5de2e83617ae11ec95f742862de76f1fb52ba7c46baf711d2af31ee939'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -27,6 +27,7 @@ export const WS_CAPABILITIES: readonly string[] = [
   'device.lanes.transfer',
   'device.lanes.upload',
   'device.mcp',
+  'device.scope',
   'device.server.identity',
   'errors.unknown_command_code',
   'fs.entry.content_version',
@@ -606,6 +607,7 @@ export interface WsModels {
     revoked_at: number | null
     revoked: boolean
     paired_via: 'listener' | 'relay'
+    scope: 'read' | 'write' | 'destructive'
   }
   /**
    * device_server.advertise.* (Config.cpp to_json(DeviceAdvertiseConfig); docs/reference/transfer-protocol.md
@@ -3622,6 +3624,8 @@ export interface WsContract {
       actor_id?: number | null
       vault_id?: number | null
       outcome?: 'success' | 'failure' | 'denied' | 'info' | null
+      device_id?: number | null
+      grant_id?: string | null
       limit?: number
     }
     response: { events: WsModels['AuditEvent'][]; next_before: number | null }
@@ -4869,7 +4873,14 @@ export interface WsContract {
    * knows. One live request per key: a new one replaces it.
    */
   'device.pair.request': {
-    payload: { name: string; platform: string; app_version?: string; commitment: string; approval_key?: string | null }
+    payload: {
+      name: string
+      platform: string
+      app_version?: string
+      commitment: string
+      approval_key?: string | null
+      scope?: 'read' | 'write' | 'destructive' | null
+    }
     response: { request_id: string; nonce_server: string; expires_at: number }
   }
   /**
@@ -4891,10 +4902,12 @@ export interface WsContract {
    * (invalid). Creates the device for the caller's account, with the approval key the request carried. A
    * device.trust step-up bound to the request, its key and the chosen code: in the console a passkey or
    * password + TOTP; on an already-paired device its approval key (device.approval.challenge/submit) or a
-   * console approval; `vh device pair` on the node needs none.
+   * console approval; `vh device pair` on the node needs none. scope: what the device may do (default: what
+   * the request asked, else destructive); never wider than the request asked (invalid). A scope narrower than
+   * destructive is part of the step-up target, so an approval for one scope never pairs another.
    */
   'device.pairing.approve': {
-    payload: { request_id: string; code: string }
+    payload: { request_id: string; code: string; scope?: 'read' | 'write' | 'destructive' | null }
     response: { device: WsModels['Device'] }
   }
   /**
@@ -4962,6 +4975,7 @@ export interface WsContract {
         code_choices: string[]
         approval_key_present: boolean
         via: 'listener' | 'relay'
+        requested_scope?: 'read' | 'write' | 'destructive'
         created_at: number
         expires_at: number
       }[]
@@ -5052,10 +5066,21 @@ export interface WsContract {
   }
   /**
    * Unpair a device (its user, a super admin, or the device itself). Final: its live sessions close at once
-   * and its key only ever gets pairing-only connections again.
+   * and its key only ever gets pairing-only connections again. A scoped device may unpair only itself
+   * (device_scope).
    */
   'device.revoke': {
     payload: { device_id: string }
+    response: { device: WsModels['Device'] }
+  }
+  /**
+   * Change a device's scope (read, write or destructive). Narrowing: the device's user or a super admin, no
+   * step-up. Widening: the device's user only, with a device.trust step-up bound to the device and the new
+   * scope. Never from a scoped device, and never by the device for itself (device_scope). Its live sessions
+   * close, so it reconnects under the new scope. Audited device.scope.set.
+   */
+  'device.scope.set': {
+    payload: { device_id: string; scope: 'read' | 'write' | 'destructive' }
     response: { device: WsModels['Device'] }
   }
   /**
@@ -7952,6 +7977,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'device.remote.status',
   'device.rename',
   'device.revoke',
+  'device.scope.set',
   'device.server.identity',
   'email.config.get',
   'email.config.update',
@@ -8232,6 +8258,7 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'device.backup.grant.extend': 'device.trust',
   'device.pairing.approve': 'device.trust',
   'device.remote.enable': 'device.trust',
+  'device.scope.set': 'device.trust',
   'email.config.update': 'settings',
   'email.provider.secret.set': 'secrets',
   'group.member.add': 'identity.admin',
@@ -8375,6 +8402,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'device.remote.status': 15000,
   'device.rename': 15000,
   'device.revoke': 15000,
+  'device.scope.set': 15000,
   'device.server.identity': 15000,
   'email.config.get': 15000,
   'email.config.update': 15000,

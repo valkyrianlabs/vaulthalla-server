@@ -18,10 +18,15 @@ std::vector<WsCommandUsage> auditCommands() {
                     uinteger("actor_id").opt().nullable(),
                     uinteger("vault_id").opt().nullable(),
                     str("outcome").oneOf({"success", "failure", "denied", "info"}).opt().nullable(),
+                    uinteger("device_id").opt().nullable().desc(
+                        "Only one paired device (its row id): what it did, under whatever scope, and what was done to "
+                        "it."),
+                    str("grant_id").opt().nullable().desc(
+                        "Only one connector grant (its uuid): its tool calls and its own events."),
                     uinteger("limit").opt().desc("1..1000 (default 100).")},
         .response = {objectArray("events", "AuditEvent"),
                      uinteger("next_before").nullable().desc("Pass as before_seq for older events; null at the end.")},
-        .refusal_codes = {"unauthorized", "denied", "invalid"},
+        .refusal_codes = {"unauthorized", "denied", "invalid", "not_found"},
         .client_timeout = kDefaultTimeout,
     });
 

@@ -1,5 +1,9 @@
 #include "protocols/shell/commands/all.hpp"
 
+#include "protocols/ws/Router.hpp"
+#include "protocols/device/Scope.hpp"
+#include "Mcp.hpp"
+#include "Contract.hpp"
 #include "device/Crypto.hpp"
 #include "identities/User.hpp"
 #include "ops/Devices.hpp"
@@ -64,8 +68,10 @@ std::string choicesLine(const std::array<std::string, 3>& choices) {
 }
 
 std::string describeRequest(const vh::device::PendingRequest& r) {
-    return fmt::format("Pairing request {} from \"{}\" ({}{}) at {}\n  device id {}\n", r.request_id, r.name,
-                       r.platform, r.app_version.empty() ? "" : " " + r.app_version, r.source_ip, r.device_id);
+    return fmt::format("Pairing request {} from \"{}\" ({}{}) at {}\n  device id {}\n{}", r.request_id, r.name,
+                       r.platform, r.app_version.empty() ? "" : " " + r.app_version, r.source_ip, r.device_id,
+                       r.requested_scope ? "  asks for " + *r.requested_scope + " access (--scope can narrow it)\n"
+                                         : std::string());
 }
 
 std::string describeDevice(const Device& d) {
@@ -255,7 +261,8 @@ CommandResult handleApprove(const CommandCall& call) {
                          [] { return std::string("Denied.\n"); });
         code = choice.code;
     }
-    return runOp("device approve", [&] { return devices::approve(call.user, requestId, *code); },
+    const auto scope = optVal(call, "scope");
+    return runOp("device approve", [&] { return devices::approve(call.user, requestId, *code, scope); },
                  [](const Device& d) { return fmt::format("Approved: {} is paired.\n", describeDevice(d)); });
 }
 
@@ -273,14 +280,15 @@ CommandResult handleList(const CommandCall& call) {
         if (json) return jsonText(nlohmann::json(list));
         if (list.empty()) return std::string("No paired devices.\n");
         std::vector<Column> cols{{.header = "#", .align = Align::Right}, {.header = "Device id"}, {.header = "Name"},
-                                 {.header = "Platform"}};
+                                 {.header = "Platform"}, {.header = "Scope"}};
         if (all) cols.push_back({.header = "User"});
         cols.push_back({.header = "Last seen"});
         cols.push_back({.header = "Status"});
         Table table(cols);
         for (const auto& d : list) {
             std::vector<std::string> row{std::to_string(d.id), d.spki_sha256.substr(0, 16), d.name,
-                                         d.platform + (d.app_version.empty() ? "" : " " + d.app_version)};
+                                         d.platform + (d.app_version.empty() ? "" : " " + d.app_version),
+                                         d.scope == "destructive" ? std::string("full") : d.scope};
             if (all) row.push_back(d.user_name);
             row.push_back(d.last_seen_at ? utc(*d.last_seen_at) + (d.last_ip ? " from " + *d.last_ip : "") : "never");
             row.push_back(d.revoked_at ? "revoked " + utc(*d.revoked_at) : "paired");
@@ -294,6 +302,61 @@ CommandResult handleRename(const CommandCall& call) {
     validatePositionals(call, resolveUsage({"device", "rename"}));
     return runOp("device rename", [&] { return devices::rename(call.user, call.positionals.at(0), call.positionals.at(1)); },
                  [](const Device& d) { return fmt::format("Renamed: {}.\n", describeDevice(d)); });
+}
+
+CommandResult handleScope(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"device", "scope"}));
+    return runOp("device scope",
+                 [&] { return devices::setScope(call.user, call.positionals.at(0), call.positionals.at(1)); },
+                 [](const Device& d) { return fmt::format("Scope set: {} ({}).\n", describeDevice(d), d.scope); });
+}
+
+// `vh device scopes`: what each scope allows, read from the same sources the enforcement uses (the ws book's effects
+// and Router::scopedDeviceMayRun, the MCP catalog's ceiling, the lane table), so an auditor's answer can't drift.
+nlohmann::json scopeAllowance(const std::string& scope) {
+    static const vh::mcp::Catalog catalog;
+    const auto ceiling = vh::mcp::parseCeiling(scope).value_or(protocols::shell::CommandEffect::Read);
+    nlohmann::json ws = nlohmann::json::array(), tools = nlohmann::json::array(), cli = nlohmann::json::array();
+    for (const auto& c : ::vh::contract::ws::commands())
+        if (::vh::protocols::ws::Router::scopedDeviceMayRun(c.command, scope)) ws.push_back(c.command);
+    for (const auto& t : catalog.tools(ceiling)) tools.push_back(t.at("name"));
+    for (const auto& l : catalog.leaves())
+        if (!l.excluded && vh::mcp::withinCeiling(l.effect, ceiling)) cli.push_back("vh " + l.command);
+    nlohmann::json lanes = nlohmann::json::array();
+    for (const auto& lane : protocols::device::scope::laneClasses())
+        if (protocols::device::scope::allows(scope, lane.effect))
+            lanes.push_back({{"methods", lane.methods}, {"lanes", lane.lanes}, {"effect", lane.effect}});
+    return {{"scope", scope}, {"ws_commands", ws}, {"mcp_tools", tools}, {"mcp_commands", cli}, {"http", lanes}};
+}
+
+CommandResult handleScopes(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"device", "scopes"}));
+    const auto only = optVal(call, "scope");
+    if (only && *only != "read" && *only != "write")
+        return invalid("device scopes: --scope is read or write (destructive is no limit beyond the account's own)");
+    nlohmann::json out{{"rule", "A scope only narrows: every request still runs as the device's user, with that "
+                                "user's permissions in full; the scope then refuses whatever is above its effect "
+                                "(read < write < destructive) and, for any scoped device, pairing, approvals, "
+                                "key-backup grants, vault key export and import, remote connectors and scope "
+                                "changes."},
+                       {"scopes", nlohmann::json::array()}};
+    for (const auto* s : {"read", "write"})
+        if (!only || *only == s) out["scopes"].push_back(scopeAllowance(s));
+    if (hasFlag(call, "json")) return ok(jsonText(out));
+    std::string text = out.at("rule").get<std::string>() + "\n";
+    for (const auto& s : out.at("scopes")) {
+        text += "\nScope " + s.at("scope").get<std::string>() + ": " + std::to_string(s.at("ws_commands").size()) +
+                " ws commands, " + std::to_string(s.at("mcp_tools").size()) + " MCP tools, " +
+                std::to_string(s.at("mcp_commands").size()) + " vh commands over MCP\n  HTTP lanes:";
+        for (const auto& l : s.at("http"))
+            text += " " + l.at("methods").get<std::string>() + " " + l.at("lanes").get<std::string>() + ";";
+        text += "\n  ws:";
+        for (const auto& c : s.at("ws_commands")) text += " " + c.get<std::string>();
+        text += "\n  vh over MCP:";
+        for (const auto& c : s.at("mcp_commands")) text += " " + c.get<std::string>().substr(3) + ",";
+        text += "\n";
+    }
+    return ok(text);
 }
 
 CommandResult handleRevoke(const CommandCall& call) {
@@ -336,6 +399,8 @@ CommandResult handleDevice(const CommandCall& call) {
     if (is("list")) return handleList(subcall);
     if (is("rename")) return handleRename(subcall);
     if (is("revoke")) return handleRevoke(subcall);
+    if (is("scope")) return handleScope(subcall);
+    if (is("scopes")) return handleScopes(subcall);
     if (is("remote")) return handleRemote(subcall);
     return invalid(call.constructFullArgs(), "Unknown device subcommand: '" + std::string(sub) + "'");
 }

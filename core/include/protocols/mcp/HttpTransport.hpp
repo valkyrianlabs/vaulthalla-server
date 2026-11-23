@@ -29,6 +29,9 @@ struct Principal {
     shell::CommandEffect ceiling = shell::CommandEffect::Destructive;
     // Asked before every call: a message when the principal can no longer act (session closed, grant revoked).
     std::function<std::optional<std::string>()> ended;
+    // Told about every tools/call the ceiling refused (the command and its effect, "" when unknown): the principal's
+    // audit of refusals (a scoped device's, later a connector grant's).
+    std::function<void(const std::string& command, const std::string& effect)> refused;
 };
 
 [[nodiscard]] http::model::preview::Response handle(http::request&& req, const Principal& principal);

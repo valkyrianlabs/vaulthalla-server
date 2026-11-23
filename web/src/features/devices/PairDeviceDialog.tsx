@@ -14,8 +14,11 @@ import { IconButton } from '@/components/ui/IconButton'
 import { notify } from '@/components/ui/Toast'
 import { ArrowUpRightFromSquareIcon, CheckIcon, CircleCheckIcon, CircleInfoIcon, ClockIcon, CopyIcon, TriangleExclamationIcon, XmarkIcon } from '@/components/ui/icons'
 import { cn } from '@/util/cn'
-import type { Device } from '@/models/device'
+import type { Device, DeviceScope } from '@/models/device'
+import { Select } from '@/components/ui/Field'
 import {
+  SCOPE_LABELS,
+  scopesUpTo,
   DEVICE_READS,
   deviceLabel,
   formatCode,
@@ -156,11 +159,18 @@ export default function PairDeviceDialog({ open, onOpenChange }: { open: boolean
   )
   const hide = (request: PendingRequest) => setHandled(current => new Set(current).add(request.request_id))
 
-  const approve = async (request: PendingRequest, code: string) => {
+  const approve = async (request: PendingRequest, code: string, scope: DeviceScope) => {
     setBusy(request.request_id)
     setNotice(null)
     try {
-      const { device } = await api.send('device.pairing.approve', { request_id: request.request_id, code })
+      // Scoped devices: sent only when it narrows what was asked (or limits a request that asked nothing), so an
+      // unscoped approval is exactly what it was before scopes.
+      const narrowed = scope !== (request.requested_scope ?? 'destructive')
+      const { device } = await api.send('device.pairing.approve', {
+        request_id: request.request_id,
+        code,
+        ...(narrowed ? { scope } : {}),
+      })
       hide(request)
       setPaired(device)
       void invalidate(...DEVICE_READS)
@@ -274,7 +284,7 @@ export default function PairDeviceDialog({ open, onOpenChange }: { open: boolean
                     request={request}
                     busy={busy === request.request_id}
                     disabled={busy !== null}
-                    onPick={code => void approve(request, code)}
+                    onPick={(code, scope) => void approve(request, code, scope)}
                     onDeny={() => void deny(request)}
                   />
                 ))}
@@ -406,9 +416,11 @@ const RequestCard = ({
   request: PendingRequest
   busy: boolean
   disabled: boolean
-  onPick: (code: string) => void
+  onPick: (code: string, scope: DeviceScope) => void
   onDeny: () => void
-}) => (
+}) => {
+  const [scope, setScope] = useState<DeviceScope>(request.requested_scope ?? 'destructive')
+  return (
   <li className="rounded-card border border-line bg-surface-1 p-4" data-testid="pair-request" data-request-id={request.request_id}>
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
@@ -433,6 +445,23 @@ const RequestCard = ({
         Deny
       </Button>
     </div>
+    {requestViaRelay(request) ? null : (
+      <label className="mt-4 flex items-center gap-2 text-sm text-fg-muted">
+        Access
+        <Select
+          value={scope}
+          onChange={e => setScope(e.target.value as DeviceScope)}
+          disabled={disabled}
+          className="w-auto"
+          data-testid="pair-scope">
+          {scopesUpTo(request.requested_scope).map(s => (
+            <option key={s} value={s}>
+              {SCOPE_LABELS[s]}
+            </option>
+          ))}
+        </Select>
+      </label>
+    )}
     <p className="mt-4 mb-2 text-sm text-fg-muted">Which code does the {requestViaRelay(request) ? 'browser' : 'Mac'} show?</p>
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="group" aria-label={`Codes for ${request.name}`}>
       {request.code_choices.map(code => (
@@ -442,7 +471,7 @@ const RequestCard = ({
           size="lg"
           className="h-16 font-mono text-2xl tracking-wider tabular hover:border-accent"
           disabled={disabled}
-          onClick={() => onPick(code)}
+          onClick={() => onPick(code, scope)}
           data-testid="pair-code">
           {formatCode(code)}
         </Button>
@@ -454,7 +483,8 @@ const RequestCard = ({
       </p>
     ) : null}
   </li>
-)
+  )
+}
 
 const Conflict = ({ detail, onRetry }: { detail: string; onRetry: () => void }) => (
   <div className="flex flex-col items-center py-10 text-center" data-testid="pair-conflict">

@@ -28,6 +28,7 @@ std::vector<WsStepUp> stepUpTable() {
         // device.trust: target-bound (request id + new key + chosen code), single use
         {"device.pairing.approve", "device.trust", kTarget, ""},
         {"device.remote.enable", "device.trust", kTarget, "when remote device connections are off"},
+        {"device.scope.set", "device.trust", kTarget, "when it widens the scope"},
         {"cloud.relay.enable", "device.trust", kTarget, "when the relay is off"},
         {"device.approval.key.register", "device.trust", kTarget,
          "always: a person approves it in the web console (device.approval.request)"},

@@ -1,6 +1,7 @@
 #include "protocols/device/Mcp.hpp"
 
 #include "device/Peer.hpp"
+#include "device/ScopeAudit.hpp"
 #include "identities/User.hpp"
 #include "protocols/ws/Session.hpp"
 
@@ -31,13 +32,21 @@ protocols::http::model::preview::Response handle(protocols::http::request&& req,
     const auto& peer = principal->devicePeer();
     protocols::mcp::Principal who{
         .user = principal->user,
-        .origin = "device " + (peer ? peer->shortId() : std::string{"?"}) + " mcp",
-        // A paired device acts with every effect its user may (the ceiling a scoped device will carry goes here).
-        .ceiling = protocols::shell::CommandEffect::Destructive,
+        // "device <id16> mcp", and " scope <scope>" for a scoped device (vh::device::auditOrigin).
+        .origin = peer ? ::vh::device::auditOrigin(*peer, "mcp") : std::string("device ? mcp"),
+        // The device's scope (migration 152): destructive for every unscoped pairing, exactly as before; a scope the
+        // catalog doesn't know reads as the narrowest (fail closed).
+        .ceiling = peer ? vh::mcp::parseCeiling(peer->scope).value_or(protocols::shell::CommandEffect::Read)
+                        : protocols::shell::CommandEffect::Read,
         .ended = [principal]() -> std::optional<std::string> {
             if (principal->closing() || !principal->user || !principal->user->authorizing())
                 return std::string("this device session has ended");
             return std::nullopt;
+        },
+        .refused = [principal](const std::string& command, const std::string& effect) {
+            if (const auto& p = principal->devicePeer())
+                ::vh::device::scope_audit::refused(*p, principal->user, "mcp", command,
+                                                   effect.empty() ? std::nullopt : std::optional<std::string_view>(effect));
         }};
     return protocols::mcp::handle(std::move(req), who);
 }

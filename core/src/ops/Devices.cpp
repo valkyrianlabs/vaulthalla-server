@@ -68,6 +68,19 @@ std::string nodeName() {
 
 std::string shortId(const std::string& deviceId) { return deviceId.substr(0, 16); }
 
+// Scoped devices: read < write < destructive (no limit beyond the account's own).
+int deviceScopeRank(const std::string& scope) {
+    if (scope == "read") return 1;
+    if (scope == "write") return 2;
+    if (scope == "destructive") return 3;
+    return 0;
+}
+
+std::string validDeviceScope(const std::string& scope) {
+    if (deviceScopeRank(scope) == 0) throw Invalid("a device scope is read, write or destructive");
+    return scope;
+}
+
 // The row a caller names, visible to them: their own devices, or any for a super admin. Anything else is
 // "not found" (no oracle for other users' devices).
 Device resolve(const Actor& actor, const Ref& ref) {
@@ -159,24 +172,33 @@ PendingList pending(const Actor& actor) {
     return out;
 }
 
-Device approve(const Actor& actor, const std::string& requestId, const std::string& code) {
+Device approve(const Actor& actor, const std::string& requestId, const std::string& code,
+               const std::optional<std::string>& scope) {
     requireUser(actor);
+    if (scope) (void)validDeviceScope(*scope);
     // #359: device.trust, bound to this request, the key it pairs and the code the person chose (digested: the audit
     // trail never holds codes). Checked (a wrong code still denies) before the request is held for the approval.
-    const auto spki = pairing().checkApproval(actor->id, requestId, code, PairingClock::now());
+    const auto check = pairing().checkApproval(actor->id, requestId, code, PairingClock::now());
+    // Scoped devices: the approver decides, never wider than the request asked; by default what it asked.
+    const auto granted = scope.value_or(check.requested_scope.value_or("destructive"));
+    if (check.requested_scope && deviceScopeRank(granted) > deviceScopeRank(*check.requested_scope))
+        throw Invalid("the device asked for " + *check.requested_scope + " access; approve it with that or less");
     const auto chosen = vh::device::crypto::normalizeCode(code).value_or("");
     const auto codeDigest = vh::device::crypto::sha256(
         std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(chosen.data()), chosen.size()));
+    // A scope narrower than destructive is part of the target, so an approval for one scope never pairs another (and
+    // an unscoped approval's target is exactly what it was before scopes).
     auth::stepup::require(auth::stepup::Family::DeviceTrust,
-                          "device.pairing.approve:" + requestId + ":" + spki + ":" +
-                              vh::device::crypto::toHex(codeDigest).substr(0, 16));
+                          "device.pairing.approve:" + requestId + ":" + check.device_id + ":" +
+                              vh::device::crypto::toHex(codeDigest).substr(0, 16) +
+                              (granted == "destructive" ? std::string() : ":" + granted));
     const auto claim = pairing().beginApproval(actor->id, requestId, code, PairingClock::now());
     Device device;
     try {
         db::query::device::NewDevice row{.user_id = claim.owner_id, .approved_by = actor->id, .name = claim.name,
                                          .platform = claim.platform, .app_version = claim.app_version,
                                          .spki_sha256 = claim.device_id, .last_ip = claim.source_ip,
-                                         .relayed = claim.relayed};
+                                         .relayed = claim.relayed, .scope = granted};
         if (claim.approval_key) {
             row.approval_key_spki = claim.approval_key->spkiDer;
             row.approval_key_sha256 = vh::device::crypto::toHex(claim.approval_key->spkiSha256);
@@ -189,10 +211,14 @@ Device approve(const Actor& actor, const std::string& requestId, const std::stri
     pairing().finishApproval(requestId, device.id, PairingClock::now());
     vh::audit::record({.action = "device.pairing.approve", .actor_id = actor->id, .actor = actor->name(),
                        .details = {{"device", device.id}, {"via", device.paired_via},
-                                   {"key", shortId(device.spki_sha256)}, {"source_ip", claim.source_ip}}},
+                                   {"key", shortId(device.spki_sha256)}, {"source_ip", claim.source_ip},
+                                   {"scope", device.scope},
+                                   {"requested_scope", check.requested_scope ? nlohmann::json(*check.requested_scope)
+                                                                             : nlohmann::json(nullptr)}}},
                       "[ops::devices] " + actor->name() + " approved device " + shortId(device.spki_sha256) + " ('" +
                           device.name + "', " + device.platform + ") from " + claim.source_ip +
-                          (claim.relayed ? " via Vaulthalla Cloud" : ""));
+                          (claim.relayed ? " via Vaulthalla Cloud" : "") + " with " + device.scope + " access" +
+                          (check.requested_scope ? " (it asked for " + *check.requested_scope + ")" : std::string()));
     if (claim.approval_key)
         vh::audit::record({.action = "device.approval.key.register", .actor_id = actor->id, .actor = actor->name(),
                        .details = {{"device", device.id}, {"via", "pairing"},
@@ -222,6 +248,7 @@ vh::device::PairRequestReceipt pairRequest(const vh::device::Peer& peer, const P
         if (!der || der->empty()) throw Invalid("approval_key must be standard base64 (with padding)");
         input.approval_key = validApprovalKey(*der, peer);
     }
+    if (req.scope) input.requested_scope = validDeviceScope(*req.scope);
     // A key that is (or was) a device here never pairs again: pairing always uses a fresh key (spec §6).
     if (Devices::spkiKnown(peer.spkiHex))
         throw Conflict("this device key is already known to this node; pair with a new key");
@@ -276,6 +303,9 @@ Device revoke(const Actor& actor, const Ref& device, const vh::device::Peer* sel
     // The device itself ("Unpair this Mac") acts as its user, so the visibility rule in resolve() already admits it.
     requireUser(actor);
     const auto row = resolve(actor, device);
+    // Scoped devices: one may unpair itself ("remove this app"), never another device.
+    if (self && self->scoped() && self->deviceRowId != row.id)
+        throw Refused("device_scope", "a device with limited access can unpair only itself");
     // #362: the device's key-backup grant ends with it, in the revocation's transaction; audited here.
     const auto grant = db::query::device::BackupGrants::liveForDevice(row.id);
     auto revoked = Devices::revoke(row.id);
@@ -289,6 +319,35 @@ Device revoke(const Actor& actor, const Ref& device, const vh::device::Peer* sel
                                  actor->name(), shortId(row.spki_sha256), row.name, row.user_name,
                                  self && self->deviceRowId == row.id ? " from the device itself" : "", closed);
     return *revoked;
+}
+
+Device setScope(const Actor& actor, const Ref& device, const std::string& scope, const vh::device::Peer* self) {
+    requireUser(actor);
+    (void)validDeviceScope(scope);
+    // Never from a scoped device, and never by a device for itself: an agent can't widen its own access.
+    if (self && self->scoped())
+        throw Refused("device_scope", "a device with limited access can't change any device's scope");
+    const auto row = resolve(actor, device);
+    if (self && self->deviceRowId == row.id)
+        throw Refused("device_scope", "a device's scope is changed from another session, never by the device itself");
+    if (row.revoked()) throw Conflict("that device was unpaired");
+    if (row.scope == scope) return row;
+    const bool widens = deviceScopeRank(scope) > deviceScopeRank(row.scope);
+    if (widens) {
+        if (row.user_id != actor->id) throw Denied("only the device's own user can give it more access");
+        auth::stepup::require(auth::stepup::Family::DeviceTrust,
+                              "device.scope.set:" + std::to_string(row.id) + ":" + scope);
+    }
+    auto changed = Devices::setScope(row.id, scope);
+    if (!changed) throw Conflict("that device was unpaired");
+    // Its live sessions run under the scope read at their handshake: they end, and the device reconnects under this one.
+    const auto closed = protocols::device::closeDeviceSessions(row.id, nullptr);
+    vh::audit::record({.action = "device.scope.set", .actor_id = actor->id, .actor = actor->name(),
+                       .details = {{"device", row.id}, {"from", row.scope}, {"to", scope}, {"widened", widens},
+                                   {"sessions_closed", static_cast<int64_t>(closed)}}},
+                      "[ops::devices] " + actor->name() + " set the scope of device " + shortId(row.spki_sha256) +
+                          " from " + row.scope + " to " + scope);
+    return *changed;
 }
 
 std::string rotateIdentity(const Actor& actor, const vh::device::Peer& peer, const std::vector<uint8_t>& certificate,

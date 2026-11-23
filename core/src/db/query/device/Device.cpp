@@ -17,7 +17,7 @@ constexpr const char* kColumns = R"SQL(
     d.id, d.user_id, COALESCE(u.name, '') AS user_name, d.name, d.platform, d.app_version, d.spki_sha256,
     d.previous_spki_sha256, d.approved_by, EXTRACT(EPOCH FROM d.created_at)::BIGINT AS created_at,
     EXTRACT(EPOCH FROM d.last_seen_at)::BIGINT AS last_seen_at, d.last_ip,
-    EXTRACT(EPOCH FROM d.revoked_at)::BIGINT AS revoked_at, d.paired_via
+    EXTRACT(EPOCH FROM d.revoked_at)::BIGINT AS revoked_at, d.paired_via, d.scope
 )SQL";
 
 std::string select(const std::string& where) {
@@ -46,6 +46,7 @@ Device fromRow(const pqxx::row_ref row) {
     d.last_ip = opt<std::string>(row["last_ip"]);
     if (const auto t = opt<int64_t>(row["revoked_at"])) d.revoked_at = static_cast<std::time_t>(*t);
     d.paired_via = row["paired_via"].as<std::string>();
+    d.scope = row["scope"].as<std::string>();
     return d;
 }
 
@@ -109,10 +110,10 @@ Device Devices::insert(const NewDevice& d) {
             if (!txn.exec("SELECT 1 FROM devices WHERE previous_spki_sha256 = $1", pqxx::params{d.spki_sha256}).empty())
                 throw ops::Conflict("this device key is already known to this node");
             const auto res = txn.exec(
-                "INSERT INTO devices (user_id, approved_by, name, platform, app_version, spki_sha256, last_ip, paired_via) "
-                "VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8) RETURNING id",
+                "INSERT INTO devices (user_id, approved_by, name, platform, app_version, spki_sha256, last_ip, paired_via, "
+                "scope) VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), $8, $9) RETURNING id",
                 pqxx::params{d.user_id, d.approved_by, d.name, d.platform, d.app_version, d.spki_sha256, d.last_ip,
-                             std::string(d.relayed ? "relay" : "listener")});
+                             std::string(d.relayed ? "relay" : "listener"), d.scope});
             const auto id = res.one_field_ref().as<uint32_t>();
             if (d.approval_key_spki) {
                 // A key no device has as its own (an approval key is a second key, never the mTLS one).
@@ -135,6 +136,16 @@ Device Devices::insert(const NewDevice& d) {
 std::optional<Device> Devices::rename(const uint32_t id, const std::string& name) {
     return Transactions::exec("Devices::rename", [&](pqxx::work& txn) -> std::optional<Device> {
         if (txn.exec("UPDATE devices SET name = $2 WHERE id = $1", pqxx::params{id, name}).affected_rows() == 0)
+            return std::nullopt;
+        const auto res = txn.exec(select("WHERE d.id = $1"), pqxx::params{id});
+        return one(res);
+    });
+}
+
+std::optional<Device> Devices::setScope(const uint32_t id, const std::string& scope) {
+    return Transactions::exec("Devices::setScope", [&](pqxx::work& txn) -> std::optional<Device> {
+        if (txn.exec("UPDATE devices SET scope = $2 WHERE id = $1 AND revoked_at IS NULL", pqxx::params{id, scope})
+                .affected_rows() == 0)
             return std::nullopt;
         const auto res = txn.exec(select("WHERE d.id = $1"), pqxx::params{id});
         return one(res);

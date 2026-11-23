@@ -84,6 +84,7 @@ const std::vector<Exclusion>& exclusions() {
         {{"device", "pair"}, kPairingReason},
         {{"device", "approve"}, kPairingReason},
         {{"device", "deny"}, kPairingReason},
+        {{"device", "scope"}, "how much a paired device (an AI app's included) may do is decided by a human"},
         {{"device", "remote", "enable"}, kExposureReason},
         {{"device", "remote", "disable"}, kExposureReason},
         // Which vaulthalla.cloud account this server belongs to: never an agent's decision.
@@ -588,6 +589,16 @@ std::string ceilingRefusal(const std::string& what, const CommandEffect effect, 
            ": nothing was run. Whoever connected this app can reconnect it with wider access.";
 }
 
+Json ceilingRefused(const std::string& what, const CommandEffect effect, const CommandEffect ceiling) {
+    auto result = errorResult(ceilingRefusal(what, effect, ceiling));
+    // Machine-readable, for the transport's audit of refusals (MCP lets a result carry _meta).
+    result["_meta"][std::string(kCeilingRefusalMeta)] = {
+        {"command", what.starts_with("vh ") ? what.substr(3) : what},
+        {"effect", effect == CommandEffect::Unset ? Json(nullptr) : Json(std::string(protocols::shell::effectName(effect)))},
+        {"ceiling", std::string(protocols::shell::effectName(ceiling))}};
+    return result;
+}
+
 // ---- Impl -------------------------------------------------------------------------------------------------------
 
 struct Catalog::Impl {
@@ -762,7 +773,7 @@ struct Catalog::Impl {
         std::string spelled = "vh";
         for (const auto& t : toks) spelled += " " + renderToken(t);
         // The principal's limit comes first: a command above it is refused before any confirmation is asked for.
-        if (!withinCeiling(inv.effect, ceiling)) return errorResult(ceilingRefusal("vh " + leaf.command, inv.effect, ceiling));
+        if (!withinCeiling(inv.effect, ceiling)) return ceilingRefused("vh " + leaf.command, inv.effect, ceiling);
         bool destructiveAck = false;
         if (!confirm.is_null()) {
             if (!confirm.is_object()) return errorResult("confirm must be an object, e.g. {\"yes\": true}");
@@ -887,7 +898,7 @@ struct Catalog::Impl {
     }
 
     std::variant<Invocation, Json> prepareTyped(const Typed& t, const Json& args, const CommandEffect ceiling) const {
-        if (!withinCeiling(t.effect, ceiling)) return errorResult(ceilingRefusal("vh " + t.leaf->command, t.effect, ceiling));
+        if (!withinCeiling(t.effect, ceiling)) return ceilingRefused("vh " + t.leaf->command, t.effect, ceiling);
         if (!args.is_object()) return errorResult("arguments must be an object");
         const auto& cli = *t.op.cli;
         const auto& node = *t.leaf->node;
@@ -1119,7 +1130,7 @@ std::variant<Invocation, Json> Catalog::prepare(const std::string& tool, const J
     const Json args = arguments.is_null() ? Json::object() : arguments;
     if (tool == "vh_help") return impl_->help(args);
     if (tool == "vh_run" && !withinCeiling(CommandEffect::Write, ceiling))
-        return errorResult(ceilingRefusal("vh_run", CommandEffect::Write, ceiling));
+        return ceilingRefused("vh_run", CommandEffect::Write, ceiling);
     if (tool == "vh_read" || tool == "vh_run") return impl_->prepareCommand(tool, args, ceiling);
     for (const auto& t : impl_->typed)
         if (t.name == tool) return impl_->prepareTyped(t, args, ceiling);

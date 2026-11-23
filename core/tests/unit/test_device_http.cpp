@@ -9,6 +9,8 @@
 #include "../helpers/db_suite.hpp"
 #include "../helpers/device_client.hpp"
 #include "../helpers/identities.hpp"
+#include "audit/Trail.hpp"
+#include "db/Transactions.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/rbac/role/Admin.hpp"
 #include "device/Pairing.hpp"
@@ -43,13 +45,17 @@
 
 #include <boost/asio/io_context.hpp>
 #include <gtest/gtest.h>
+#include <pqxx/pqxx>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <map>
 #include <random>
+#include <set>
+#include <string>
 #include <thread>
 
 namespace vh::test_device_http {
@@ -486,6 +492,66 @@ TEST_F(DeviceHttpTest, VaultKeyExportOnlyOnAPairedDevice) {
         EXPECT_NE(toolText(refused).get<std::string>().find("not available to agents"), std::string::npos) << command;
         EXPECT_EQ(refused->dump().find(exported->at("data").at("key").get<std::string>()), std::string::npos);
     }
+}
+
+// Scoped devices (migration 152): a read-only device reads on every lane, uploads on none, and its /mcp lists and runs
+// only read tools; the same device unscoped is unchanged (the other tests here).
+TEST_F(DeviceHttpTest, AScopedDeviceIsHeldToItsScopeOnEveryLane) {
+    const ClientIdentity device;
+    const auto row = paired(device, owner);
+    ASSERT_TRUE(db::query::device::Devices::setScope(row.id, "read"));
+
+    HttpClient http(port, device);
+    ASSERT_TRUE(http.connect());
+    const auto full = http.request(bhttp::verb::get, blobUrl());
+    ASSERT_TRUE(full);
+    EXPECT_EQ(full->result_int(), 200) << full->body();
+    const auto upload = http.request(
+        bhttp::verb::post, "/upload/session",
+        json{{"vault_id", engine->vault->id}, {"files", {{{"file_id", "f1"}, {"path", "/no.txt"}, {"size", 1}}}}}.dump(),
+        {{"Content-Type", "application/json"}});
+    ASSERT_TRUE(upload);
+    EXPECT_EQ(upload->result_int(), 403);
+    EXPECT_NE(upload->body().find("device_scope"), std::string::npos) << upload->body();
+
+    HttpClient mcp(port, device);
+    ASSERT_TRUE(mcp.connect());
+    ASSERT_TRUE(mcp.mcp({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "initialize"},
+                        {"params", {{"protocolVersion", "2025-11-25"}, {"capabilities", json::object()}}}}));
+    const std::vector<std::pair<std::string, std::string>> v{{"MCP-Protocol-Version", "2025-11-25"}};
+    const auto tools = mcp.mcp({{"jsonrpc", "2.0"}, {"id", 2}, {"method", "tools/list"}}, v);
+    ASSERT_TRUE(tools);
+    std::set<std::string> names;
+    for (const auto& t : tools->at("result").at("tools")) names.insert(t.at("name").get<std::string>());
+    EXPECT_TRUE(names.contains("vh_read"));
+    EXPECT_FALSE(names.contains("vh_run")) << "a read-only device is offered no tool that changes anything";
+    const auto refused = mcp.mcp({{"jsonrpc", "2.0"}, {"id", 3}, {"method", "tools/call"},
+                                  {"params", {{"name", "vh_run"}, {"arguments", {{"command", "group create nope"}}}}}},
+                                 v);
+    ASSERT_TRUE(refused);
+    EXPECT_TRUE(refused->at("result").at("isError").get<bool>());
+    EXPECT_NE(toolText(refused).get<std::string>().find("read-only"), std::string::npos) << refused->dump();
+    const auto read = mcp.mcp({{"jsonrpc", "2.0"}, {"id", 4}, {"method", "tools/call"},
+                               {"params", {{"name", "vh_read"}, {"arguments", {{"command", "device list"}}}}}},
+                              v);
+    ASSERT_TRUE(read);
+    EXPECT_FALSE(read->at("result").at("isError").get<bool>()) << read->dump();
+
+    // Both refusals are in the trail, with the surface, what was asked, its effect and the scope.
+    ASSERT_TRUE(audit::Trail::instance()->flushNow());
+    const auto refusals = db::Transactions::exec("scoped lane refusals", [&](pqxx::work& txn) {
+        std::map<std::string, std::string> out;
+        for (const auto& r : txn.exec("SELECT details::jsonb->>'surface', details::jsonb->>'command', origin FROM "
+                                      "audit_event WHERE action = 'device.scope.refused' AND "
+                                      "(details::jsonb->>'device')::BIGINT = $1",
+                                      pqxx::params{row.id}))
+            out[r[0].as<std::string>()] = r[1].as<std::string>() + " | " + r[2].as<std::string>();
+        return out;
+    });
+    ASSERT_TRUE(refusals.contains("http"));
+    EXPECT_EQ(refusals.at("http"), "POST /upload/session | device " + device.deviceId().substr(0, 16) + " scope read");
+    ASSERT_TRUE(refusals.contains("mcp"));
+    EXPECT_EQ(refusals.at("mcp"), "vh_run | device " + device.deviceId().substr(0, 16) + " mcp scope read");
 }
 
 TEST_F(DeviceHttpTest, McpTransportChecks) {
