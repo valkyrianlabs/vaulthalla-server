@@ -1,3 +1,444 @@
+vaulthalla (1.23.0-1) unstable; urgency=high
+
+  * The WebAuthn relying-party verifier is now vl-webauthn 0.1.0 (Valkyrian
+    Labs, MIT; shared with Vaulthalla Cloud), statically linked from the
+    release pinned in `subprojects/vl-webauthn.wrap` and listed in
+    `debian/copyright`. Passkey behaviour is unchanged; the verifier also
+    builds against OpenSSL 4. Its tests, vectors and fuzzing moved with it.
+  * Groundwork for Vaulthalla Cloud, which isn't open yet:
+    `vh cloud link|status|unlink` (super admins, CLI only, excluded from
+    `vh mcp`) link a server to a vaulthalla.cloud account. Adds migration 134
+    (`cloud_link`), a sealed `cloud_identity` key, VHC1-Ed25519 request signing
+    (`core/{include,src}/cloud/`) and a read-only `cloud.endpoint` in
+    config.yaml (default `https://api.vaulthalla.cloud`; https, or http to
+    localhost). Nothing contacts the cloud unless asked. Operator docs are held
+    in `design/cloud/server-link.md` until the service opens.
+  * `vh cloud recovery enroll|status|unenroll` (Tier B,
+    customer-key-controlled, approved 2026-11-10; spec 05 §3.2): a linked
+    server sends a vault's existing KEV1 envelopes, byte for byte from its
+    bucket, with key checks, attestations, attestation public keys and the
+    checkpoint, to its vaulthalla.cloud account; explicit per vault, revocable,
+    never a key. Migration 135 (`cloud_recovery_vault`);
+    `vault/RecoveryEnvelopes.hpp`'s bucket-only rule names this exception.
+  * `vh vault recover --from-cloud --vault-uid <uid>`: a restore whose keys a
+    device relays through the linked vaulthalla.cloud account to a temporary
+    X25519 key held only in the daemon's memory (`ops::cloud_restore`); the
+    delivered keys are proven and imported as a key export, unchanged rules
+    (D1, the bucket's records).
+  * The vault format (VHF1 files, the object keys of opaque_v1 buckets, the
+    encrypted manifest with its publish, read, reconcile and session logic) is
+    now vl-vaultfmt 0.1.0 (Valkyrian Labs, AGPL-3.0-or-later; shared with the
+    Desktop-only engine and the portal's reader), statically linked from the
+    commit pinned in `subprojects/vl-vaultfmt.wrap` (its tarball committed for
+    the offline build) and listed in `debian/copyright`. No behaviour change:
+    every golden vector is unchanged, and the library's copy of the vectors is
+    checked identical to the server's. Its format tests, vectors and the VHF1
+    fuzz target moved with it.
+  * Attach a remote to a local vault (design/storage/attach-remote.md, BYOS):
+    `vault::remote` (`vault/RemoteAttach.hpp`) run by
+    `vault::RemoteAttachService`, states preparing, uploading, catching_up,
+    verifying, cutover, done, failed, aborted. The vault stays local until one
+    cutover transaction (vault.type, the s3 row with the probed publish mode,
+    fsync to rsync, remote index and baselines at the sent generation, manifest
+    chain position, gateway binding local to remote_cache); then the engine
+    swap, orphan cleanup and the first sync pass.
+  * Migration 138: `vault_remote_attach`, `vault_remote_attach_item`
+    (everything the attach wrote, the only list an abort deletes from) and
+    `vault_key_envelope.envelope` (a local vault's KEV1 envelopes, cleared at
+    the cutover). Additive and idempotent.
+  * New `vh vault remote attach|status|abort` and ws
+    `vault.remote.attach|status|abort` (`ops::vault_remote`): attach and abort
+    need the vault's admin Edit and sync config Edit permissions, the API key's
+    Consume permission and the encryption-key Rotate permission, with a `keys`
+    step-up bound to the vault; status needs the vault's admin View permission.
+    Audited (`vault.remote.attach`, `vault.remote.abort`,
+    `vault.remote.cutover`, `vault.remote.failed`, `vault.remote.aborted`).
+    `vault remote attach` is excluded from MCP.
+  * `storage.vault.get` adds `remote` (none, attaching:<state>, attached);
+    system health adds `remote_attach_failed` (degraded) and
+    `remote_attaches_unfinished` (informational).
+  * Recovery recipients are accepted on local vaults; their envelopes are
+    stored in the database (`vault::envelopes::storeFor` returns a
+    database-backed store for a local vault).
+  * A key rotation requested during an attach is queued and started when it
+    ends; a key salvage is refused meanwhile.
+  * New config key `vaults.remote_attach.max_passes` (1 to 20, default 3), read
+    from `config.yaml` only.
+  * Price estimates and budget reservations accept a provider, key and tier
+    without a cloud engine (`pricing::PriceSubject`); new budget operation
+    `remote_attach`.
+  * Backblaze B2 orders a key's versions by when their upload started, not when
+    it finished (measured live on 2026-11-16; spec 06 §4, A4 false). One writer
+    per `version_log` bucket is safe under that order: a manifest root PUT
+    whose reply was lost and that the provider completed after the retry won
+    used to land below the recorded root and refuse the vault
+    (`order_violation`); it is now recognised as this server's own superseded
+    attempt and deleted (vl-vaultfmt 0.4.0, `windowIntruders`). For 15 minutes
+    after a failed root PUT a pass lists the root's versions instead of one
+    HEAD, so such a root is removed before a restore could take it.
+  * Several writers on a `version_log` bucket are refused: `vh vault join` (by
+    kit and `--from-cloud`) refuses `join_version_log` when the root or the
+    binding's probe says `version_log`, and the library refuses any root naming
+    more than one writer there (`WritersRefused`, before any PUT). Replicated
+    vaults need a bucket with conditional PUT (AWS S3, Cloudflare R2).
+  * The manifest root PUT has a deadline of 60 s for the whole request
+    (`storage::s3::kManifestRootPutDeadline`), and every buffer PUT a 30 s
+    connect bound and a stall bound (below 1 byte/s for 60 s); before, a
+    stalled provider could hold a sync pass forever. Past either, curl closes
+    the connection and the publish treats the outcome as unknown.
+  * vl-vaultfmt 0.4.0 (the wrap and its committed tarball): the above, the
+    engine's `join` refused on `version_log` (status 632 `writers_refused`),
+    and test doubles that model Backblaze's order.
+  * Groundwork for Vaulthalla Cloud's account recovery key, which isn't open
+    yet (design/cloud/key-manager.md, "As built"): `vh cloud link` sends link
+    proof v2 with this server's node id and records the deployment and the
+    account's public id (migration 141 adds `cloud_link.deployment_id`,
+    `.account_public_id`). A linked server fetches the account key's statement
+    chain and signed recovery policy, verifies them with vl-keykit 0.2.0 (now
+    pinned), and pins the key only after a super admin confirms its fingerprint
+    (`vh cloud key status|confirm|refresh|forget`; ws `cloud.key.status`,
+    `.confirm`, `.refresh` and `cloud.link.status` behind the
+    `cloud.account_key` capability). Pinned rows (`cloud_account_key`) carry an
+    HMAC under the new sealed slot `cloud_account_pin`; signed rotations are
+    followed, an unsigned replacement waits for a confirmation (health
+    `cloud_account_key_change_pending`), a failing row stops every wrap
+    (`cloud_account_key_tampered`). A daily `CloudKeyService` check runs only
+    while linked.
+  * The pinned key as a recovery recipient:
+    `vh vault keys recipient add <vault> --account-key`
+    (`vault_recovery_grant.account_key_generation`) and
+    `vh cloud recovery enroll <vault> --account-key`, by a person with today's
+    permission, channels and step-up. The account's signed recovery policy
+    keeps such vaults' other account-managed grants
+    (`.account_policy_sequence`) equal to it; revoking one by hand is refused
+    `recovery_policy_account_managed`. Local vaults can now be enrolled with
+    the envelopes their database holds. `vh cloud key confirm` and `forget` are
+    excluded from `vh mcp`.
+  * Groundwork for reaching a linked server through Vaulthalla Cloud, which
+    isn't offered yet (design/cloud/relay.md, "As built"). Migration 144 adds
+    `devices.paired_via` (`listener` for every existing device) and
+    `cloud_relay` (the local switch, off). `CloudRelayService` contacts nobody
+    unless the server is linked, a super admin switched the relay on
+    (`vh cloud relay status|enable|disable`; ws `cloud.relay.*` behind the
+    `cloud.relay` capability; enabling is a device.trust step-up; both switches
+    are excluded from `vh mcp`) and the device listener is enabled.
+  * The device listener accepts relayed streams from that service only: a TLS
+    context without a client certificate and a key proof bound to the TLS
+    exporter before any request; the network listener still requires a
+    certificate. A relayed or relay-paired device is held to a read-only set
+    (ws ERROR `relay_read_only`; GET/HEAD `/preview` and `/download` only).
+    `device.pairing.pending` requests carry `via`, `Device` carries
+    `paired_via`; approvals are audited `device.pairing.approve` with `via`.
+  * Console: the cloud page (`/managed-storage`) gains the relay switch for web
+    browsers (`cloud.relay.status|enable| disable`, shown with the
+    `cloud.relay` capability to super admins and the admin cloud View
+    permission; only super admins switch it, enabling through the device.trust
+    step-up): the state in words, the last error, who switched it on and when,
+    relayed connections, and what switching it on does and what the relay can
+    see. The cloud features aren't offered yet, so there is no release note and
+    the console doesn't name the service. The nav item now also shows on a
+    linked server without a storage plan.
+  * Console: pairing requests with `via: relay` read "Web browser (relay)" and
+    say the browser will be read-only, and the pairing instructions say a
+    browser is paired from the account's web page; devices with
+    `paired_via: relay` are marked Read-only in the device lists and revoke
+    like any device.
+  * Console: panel header actions wrap inside the panel on narrow screens
+    instead of running past its edge (the managed storage plan panel's "Leave
+    managed storage" did at 390 px).
+  * vl-keykit 0.5.0 (its feat/desktop-attestation at bfeff025, a `git archive`
+    tarball committed for the offline build) replaces 0.2.0, and the key check
+    and key attestations are now vl-keykit's (`attestation.hpp`), the code
+    Vaulthalla Desktop signs with: the same bytes as before (the documented
+    vectors, now in `design/encryption/vectors/key_provenance.json` and checked
+    against an independent reference). A vault a Mac created and attested (spec
+    03 §6.5) is restored from Vaulthalla Cloud canonically, its key versions
+    proven by the Mac's attestation exactly as a server's are; a version
+    without a valid attestation under a pinned key is still unproven
+    (`salvage_required`).
+  * Groundwork for managed storage on a linked server, which isn't offered yet
+    (design/cloud/managed-remotes.md, "As built"). Migration 142 adds
+    `api_keys.origin` and `.cloud_access`, `vault_cloud_storage`,
+    `cloud_storage_account`, `admin_role.cloud_permissions` (the admin module
+    `cloud`: view, storage, billing; built-in roles that see stats get view,
+    super_admin everything) and an in-place mode for `vault_remote_detach`
+    (`mode`, `lost`, item state `lost`). Every existing key stays `customer`,
+    every existing detach `hydrate`.
+  * `CloudStorageService` replaces `CloudKeyService` (it still runs the account
+    recovery key check, daily while linked). It contacts nobody unless the
+    server is linked and a super admin confirmed the account recovery key.
+    `vh cloud storage status|enable|disable|accept|decline|rotate|new-vaults|billing`
+    and ws `cloud.storage.*` (capability `cloud.storage.managed_remotes`);
+    everything but `status` is excluded from `vh mcp`.
+  * A bucket key managed storage issued is read-only to people:
+    `vh api-key update|remove` refuse it (Conflict), and the `APIKey` model
+    gains `origin` and `editable`. `Vault` and `AccessibleVault` gain
+    `vault_uid`.
+  * `vh vault remote attach|detach|abort|access` refuse a vault in managed
+    storage (`managed_storage`); revoking its account-key recovery grant by
+    hand is refused (`managed_vault_account_key`); `vh cloud unlink` refuses
+    while vaults are in managed storage unless `--force` (`managed_vaults`).
+    `vh cloud recovery status --verify` compares the cloud's account-key
+    envelopes with this server's records. New health entries under
+    `cloud_storage`.
+  * `cloud.storage.poll_minutes` and `cloud.storage.default_retention_days` in
+    config.yaml (defaults 15 and 30).
+  * Managed storage follow-ups (migration 143 adds
+    `cloud_storage_account.ended_seen_at`, `.ended_confirmed_at`,
+    `.ended_confirmed_by`): an ended plan converts vaults only after
+    `vh cloud storage confirm-ended` (ws `cloud.storage.ended.confirm`) or
+    `cloud.storage.ended_grace_hours` (default 24) of continuous `ended`; an
+    attach to a bucket that holds the vault's own earlier copy is refused
+    `bucket_holds_this_vault` instead of `bucket_not_empty`; manifest roots
+    carry the account's signed recovery policy
+    (`recovery_policy.account_policy`), which a restore verifies and accepts
+    when newer; root grants carry `account_key_generation`.
+  * Console: a managed storage page and a new-vault switch, both hidden unless
+    the server reports the capability and storage is available. Route budgets
+    for `/account`, `/users/[name]` (242 KB) and `/files` (232 KB) were raised:
+    the generated ws contract the client ships grew with the managed-storage
+    commands.
+  * Managed storage groundwork, from its first end-to-end drill against the
+    account service (not offered yet):
+    `vh vault recover --from-cloud --vault-uid <uid>` without `--api-key`
+    restores a vault kept in managed storage with a bucket key of this server's
+    own, adopted only after the restore succeeds; the service asks for a new
+    bucket key when access returns after a suspension; a vault whose bucket the
+    account service is deleting while the plan is active (paid again after it
+    ended) becomes local in place instead of staying without access; the client
+    reads the account service's contract under one name each
+    (`account_key_offline_copy_confirmed`, `ejection_portal_url`, base64url
+    envelopes, `moved_to {deployment_id, name}`); an address the account
+    service gives to open (billing, leaving managed storage) is https, or http
+    only to this host.
+  * `vh vault recover --from-cloud` proves each key version under the origin
+    (node and vault id) the account service recorded it under, so a vault
+    restored onto another server, rotated there and enrolled again restores
+    canonically onto a third; an export entry or historical key may carry its
+    own `origin`.
+  * Encrypted manifest (opaque_v1 vaults): a root another server published is
+    now applied to this server's database, view and change journal
+    (`sync::vault_manifest::Applier`) instead of being recorded without its
+    content, and a publish that meets such a root applies it and publishes
+    again instead of merging in memory. A vault's recorded root advances only
+    by an apply or by its own publish. A solo vault's pass still costs one HEAD
+    of the root when nothing moved. Replicated vaults remain unsupported.
+  * A root this server published but did not record (a crash or a database
+    failure between the two) is recognized as its own at the next pass and
+    recorded, never applied as another server's: local changes made since are
+    kept.
+  * Migration 146: `remote_manifest_state.publishing_roots` (the roots this
+    server sent since its last recorded one) and `manifest_apply_deferred`
+    (changes waiting for an open file to close). Additive and idempotent.
+  * New audit event `manifest.applied`.
+  * Encrypted manifest: snapshot records are named by a random per-snapshot uid
+    (`recovery_snapshot.uid`, given by the manifest collector at the vault's
+    next publish and kept by `vh vault recover`) instead of the server's own
+    snapshot id. Roots written before still read: their snapshot records (id
+    only) are replaced by the same snapshots under their uids on the first
+    publish after the upgrade. Older packages cannot read the new snapshot
+    records in a restore (the tree and files still restore; the snapshot list
+    is reported as unreadable).
+  * The server keeps a local copy of the last recorded manifest root and its
+    sealed segments, written in the transaction that records the root, and a
+    publish after a daemon restart merges on it instead of on the bucket's
+    newest root.
+  * Migration 145: `recovery_snapshot.uid`, `remote_manifest_state.base_root`,
+    `applying_epoch`, `applying_root_sha256`, table `remote_manifest_base`.
+    Additive and idempotent; existing vaults get their local copy at their next
+    recorded root.
+  * Encrypted manifest (opaque_v1 vaults): another server's key checks are
+    verified over that server's vault id (a key check is bound to the vault id
+    it was computed for), so a root another server published is no longer
+    refused as a key mismatch.
+  * With another server named in the vault's root and a bucket that keeps no
+    versions, a content change on both sides is never decided by the conflict
+    policy: it stays an open conflict with both generations kept (the local
+    copy and the bucket's object) until it is resolved.
+  * The manifest entry of a file describes the object it names (size and
+    content hash from the remote index), never a local edit that is not
+    uploaded yet.
+  * A pass no longer republishes another server's root that already says what
+    this server holds (two writers no longer alternate roots on every pass).
+  * A file's modification time survives what used to restamp it: an applied
+    root, a sync download, the fs_entry trigger (migration 149) and the apply's
+    cache refresh. An mtime one writer changed (a rename, a chmod there)
+    reaches the other.
+  * A provider version another writer knows became noncurrent is recorded as
+    such.
+  * `vh vault recover` keeps the vault's creation time and counts the restored
+    files in the filesystem root's totals (a restored node's first deletes no
+    longer fail with EIO).
+  * An empty folder a restore created (no backing directory yet) can be moved
+    through FUSE.
+  * An attribute change applies to a file without a group.
+  * Objects of such a vault's trash that this server purged locally are deleted
+    from the bucket after 7 days, and only while no recorded, deferred or
+    pending root names them.
+  * Migrations 148 (`manifest_shared_purge`, additive) and 149 (the fs_entry
+    `updated_at` trigger keeps an explicit time). Both idempotent.
+  * Encrypted manifest (opaque_v1 vaults): the last apply of another server's
+    root is recorded (epoch, producing node, counts, conflicts) and shown by
+    `vh vault sync info` and `storage.vault.get` (`manifest`). An apply that
+    has to stop (a key version this server doesn't hold or holds with another
+    key check, a root that didn't load completely, a shared root on a vault
+    syncing with the mirror strategy) alerts the operator once per root
+    (`manifest_apply_stopped`).
+  * Roots this server writes keep other servers' recovery envelope references
+    for the recipients this vault's grants have, and a root another server
+    built on one of this server's unrecorded roots is applied on that root.
+  * With another server named in the vault's root, a trashed file is purged
+    locally without deleting its object from the bucket.
+  * Migration 147: `manifest_foreign_envelope`, `remote_manifest_pending`,
+    `remote_manifest_state.writers`, `manifest_apply_report`. Additive and
+    idempotent.
+  * MCP: one Streamable HTTP transport (`protocols/mcp/HttpTransport`) serves
+    the device listener's `/mcp` and, later, remote connectors; a principal
+    carries an effect ceiling (read, write or destructive) that limits the
+    tools it is shown and the calls it may run, enforced by the catalog and
+    again by the executor. Paired devices keep every effect, exactly as before.
+  * Remote connectors, groundwork (nothing listens yet): migration 151 adds
+    `connector_settings`, `connector_clients`, `connector_grants` and
+    `connector_refresh_tokens` (refresh tokens stored as digests only, rotated
+    on every use, a reused one ends its grant). Grants end with their user's
+    rights: deactivation, deletion, sign out everywhere, an MFA reset or
+    recovery-code sign-in, and after 90 days (30 without a refresh).
+  * Probe each upstream bucket's write capability
+    (design/encryption/06-publish-without-preconditions.md §7): conditional PUT
+    honoured, rejected (501 / 400 NotImplemented, now
+    `s3::PreconditionsUnsupported`) or ignored, object versions, GET If-Match.
+    Stored per vault by migration 136 (`s3.manifest_publish`,
+    `s3.bucket_probe`), probed at vault creation, bucket or key change,
+    `vh vault recover`, layout migration start and lazily for older rows;
+    cleared when a key's provider or endpoint changes.
+  * New `vh vault storage probe <vault>` and ws `vault.storage.probe`
+    (`ops::vault_storage`; the vault's admin Edit permission; audited
+    `vault.storage.probe`; agent-available).
+  * On buckets without conditional writes: manifest segments, the layout hint,
+    KEV1 envelopes and the path_v0 index are PUT without conditions.
+  * `version_log` manifest publish (spec 06 §5) on buckets that keep versions
+    (Backblaze B2): the root is PUT plainly, settled by one ListObjectVersions
+    under rule C1 (the earliest successor of the base wins; a loser deletes its
+    version by id and merges), versions above the head repaired, a 5xx or
+    transport error on the root PUT treated as an unknown outcome (found by
+    hash); readers follow C1 from the settled anchor, also without a probe when
+    the root declares `publish: version_log`. GC deletes every version of a
+    segment unreferenced for 24 h; a daily root janitor keeps the head, two
+    predecessors and seven days. Migration 137:
+    `remote_manifest_state.root_version_id`, `base_version_id`,
+    `settle_window`, `own_epoch`, refused reasons `order_violation` /
+    `superseded` / `publish_mode_mismatch`, table `remote_manifest_gc`.
+  * The manifest root gains `publish` and `writers` in both modes; a server
+    excluded by a newer root stops (`manifest_superseded`), a head of another
+    node in the other mode is refused (`manifest_publish_mode_mismatch`).
+  * Lifted the interim refusals of the capability probe: opaque_v1 vaults are
+    created on, moved to and layout-migrated onto version_log buckets; only an
+    insufficient bucket refuses (`bucket_capability_insufficient`), and health
+    lists only insufficient or changed buckets
+    (`vaults_manifest_unpublishable`).
+  * A bucket stored as conditional that refuses a condition is marked changed,
+    alerted once (`bucket_capability_changed`) and stalls until probed again;
+    nothing falls back to an unconditional write.
+  * The per-vault remote access gate (design/cloud/managed-remotes.md,
+    "Entitlement states and the access gate"; `storage/RemoteAccess.hpp`):
+    `full`, `read_only` or `none`, held in memory (read when a CloudEngine is
+    built, set by `storage::remote_access::set`), so no check touches the
+    database. Enforced by skipping the sync pass (`sync::Cloud`, stalled with
+    `skipped: remote read-only|unavailable`), in `CloudEngine` upload,
+    purge/delete, manifest publish, recovery envelopes and hydrate (a
+    remote-only file fails `remote_unavailable` before any request), and as the
+    last line in `s3::Controller::recordRequest` for every controller tagged
+    with the vault (PUT/COPY/DELETE need full, LIST/HEAD/GET anything but
+    none). Back to full starts the skipped pass. Key rotation from
+    `vh vault keys rotate` waits while restricted.
+  * Migration 140: `vault_remote_access` (no row = full). Additive and
+    idempotent. A detach deletes the row.
+  * New `vh vault remote access <vault> --set <mode> [--reason]`
+    (`ops::vault_remote::setAccess`: the detach's permissions, no step-up;
+    MCP-excluded); audited `vault.remote.access` (from, to, cause).
+    `vault.remote.status` adds `access` (model `VaultRemoteAccess`); system
+    health adds `vault_remote_restricted` and `vault_remote_unavailable`
+    (degraded). The console's remote storage panel shows a restricted vault's
+    access.
+  * Detach a remote from a vault (design/storage/attach-remote.md, "The
+    reverse"): `vault::remote::detach` (`vault/RemoteDetach.hpp`) run by
+    `vault::RemoteAttachService`, states preparing, hydrating, verifying,
+    cutover, done, failed, aborted. Remote-only files are fetched through
+    `CloudEngine::hydrate`, every live file's local copy is authenticated end
+    to end, and every `vault_key_envelope` row gets its bytes from the bucket
+    (checked with `kev1::inspect` against the vault, key version and grant)
+    before one cutover transaction under the vault's pass lease: vault.type
+    local, the s3 row, remote index, sync baselines and manifest rows deleted,
+    rsync to fsync, gateway binding to local, the `upstream_bucket` row
+    unbound, pending upstream backlog skipped, provider_versioning to
+    local_snapshots, the attach row deleted; then the engine swap under the
+    same lease. The bucket is never written to or deleted from. The cutover
+    refuses while a live file lacks a verified item at its current generation
+    or an envelope row has no bytes.
+  * Migration 139: `vault_remote_detach`, `vault_remote_detach_item`. Additive
+    and idempotent.
+  * New `vh vault remote detach` and ws `vault.remote.detach` (same permissions
+    as attach without the API key's, `keys` step-up bound to the vault,
+    excluded from MCP); `vh vault remote abort` / `vault.remote.abort` also
+    abort a detach before its cutover; `vault.remote.status` adds `detach`
+    (model `VaultRemoteDetach`) and the progress phase `hydrating`. Audited
+    (`vault.remote.detach`, `vault.remote.detach.cutover`,
+    `vault.remote.detach.failed`, `vault.remote.detach.aborted`).
+  * `storage.vault.get` `remote` adds `detaching:<state>`; system health adds
+    `remote_detach_failed` (degraded) and `remote_detaches_unfinished`
+    (informational).
+  * Web console: Vault → Settings → Remote storage (`RemoteStoragePanel`, lazy)
+    for attach, status, abort, resume and detach.
+  * Experimental replicated vaults: `vh vault join --from-cloud` refuses (flag
+    off, an agent, a browser session, not a super admin) before its restore
+    request reaches Vaulthalla Cloud, so the cloud never adds a replica this
+    server then refuses.
+  * `vh vault replica remove` on a linked server reports the removed writer to
+    Vaulthalla Cloud and says whether the cloud still lists that server (the
+    account holder removes it there); `vh vault sync info` and
+    `storage.vault.get` show each writer's standing at the cloud
+    (`manifest.replicas[].cloud`) and the servers the cloud lists that aren't
+    writers (`manifest.cloud_only`). Former replicas are matched to the
+    manifest's writers by the node id the cloud now sends.
+  * A server the account holder removed from a replicated vault leaves it
+    locally (`vh vault leave` no longer tries to publish with its revoked key),
+    and joining it again isn't undone by the managed-storage pass's overview
+    from before the join.
+  * A join never places objects the vault's manifest doesn't name under
+    `/Recovered` (they are the other writers'); a restore still recovers them.
+  * Experimental, off by default (`sync.replicas.experimental`): replicated
+    vaults. `vh vault join` (with a recovery kit, or `--from-cloud` through the
+    linked account's restore relay with `intent: join`) makes this server one
+    more writer of a vault another server keeps in a bucket; `vh vault leave`
+    and `vh vault replica remove` take a server out. At most three writers,
+    buckets with conditional PUT only.
+  * A replicated vault refuses key rotation (and every path that mints a key
+    version), key salvage, layout migration, the mirror strategy and adding or
+    revoking a recovery recipient on one replica; a second copy of a vault's
+    uid on one server is refused for joins and restores alike.
+  * The replica set in `vh vault sync info` and `storage.vault.get`
+    (`manifest.replicas`, `writers_change`, `behind`).
+  * Managed storage: a joining server gets its own bucket key; a vault the
+    account holder removed from this server stops syncing; former replicas the
+    cloud lists are dropped from the manifest's writers.
+  * Migration 150: `remote_manifest_state.writers_change`,
+    `manifest_writer_root`. Additive and idempotent.
+  * vl-vaultfmt 0.3.0 (its main at 54742cb, a `git archive` tarball committed
+    for the offline build) replaces 0.1.0. It adds a database-free engine and a
+    WebAssembly reader the server doesn't use, and the manifest root's writer
+    floor, which the server now honours: a manifest root written by a newer
+    Vaulthalla (a `writer_floor` above this server's writer revision, 1) is
+    neither applied nor published over. The vault's sync stalls with the stop
+    reason `manifest_writer_floor` (shown as `last_apply.stopped` in
+    `storage.vault.get` and `vh vault sync info`), the operators are alerted
+    once per root (`manifest_apply_stopped`) telling them to upgrade this
+    server, and nothing is changed; the next successful apply or publish clears
+    it. Roots without a floor (every root written so far) behave as before;
+    this server writes none. The writer floor vectors are copied to
+    `design/encryption/vectors/` and checked identical to the library's.
+
+ -- Cooper Larson <cooper@valkyrianlabs.com>  Sun, 22 Nov 2026 23:39:51 +0000
+
 vaulthalla (1.22.2-1) unstable; urgency=high
 
   * Release pipeline: the macOS cask smoke enables

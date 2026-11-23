@@ -1,5 +1,129 @@
 # Vaulthalla release notes
 
+<!-- vl-release:entry version=1.23.0 -->
+## 1.23.0 — Backblaze B2 support, and remotes you can attach, detach and limit
+
+_Released 2026-11-22_
+
+### Cloud storage
+
+- **Give a local vault a bucket.** A vault created as a local vault can now become an S3/R2 vault in place:
+  `vh vault remote attach <vault> --api-key <key> --bucket <name>`. The vault keeps its ID, keys, permissions, shares
+  and files; its content is uploaded as encrypted objects under opaque names, and it then syncs like any S3/R2 vault.
+  - The vault stays local and in use while the upload runs in the background, and the upload continues after a
+    restart. Files that change meanwhile are sent again. Every object is verified, the vault's encrypted manifest is
+    published and read back from the bucket, and only then does the vault switch to its bucket in one step. It starts
+    in the `cache` sync strategy with every file still on disk.
+  - The attach is refused, with the vault unchanged, unless the bucket is empty (every object version and delete
+    marker counts) and unused by another vault, the bucket can hold the manifest (it is probed first), the vault holds
+    no content in the legacy format (`vh vault format status`), no key rotation or salvage is running, and the vault
+    has recovery material that doesn't depend on this server: a recovery recipient or an export of its current key.
+  - `vh vault remote status <vault>` shows the state, the progress with the rate and the time left, the cost estimate
+    and the last error; `vh status` shows a failed attach as degraded. The cost is checked against the price budget
+    first (`--accept-unpriced` when the provider can't be priced).
+  - If anything fails before the switch, the vault is still local and nothing of it changed: run the command again
+    with the same API key and bucket to resume, or `vh vault remote abort <vault> --confirm <vault name>` to delete
+    what was uploaded (only what the attach wrote, each object by its recorded version) and free the bucket.
+  - A key rotation asked for during an attach waits until it has ended. Snapshots and local versions from before the
+    attach stay local recovery points; the bucket's history starts with the attach. A gateway bucket bound to the
+    vault serves it as a cached remote afterwards.
+  - Attaching a bucket is decided by a person: agents can read the status but can't start an attach. From the web
+    console and paired devices, attach and abort ask for a fresh sign-in confirmation (step-up).
+  - `vaults.remote_attach.max_passes` (default 3) in `config.yaml` bounds how often changed files are sent again
+    before the switch.
+- **Recovery recipients on local vaults.** `vh vault keys recipient add` now works on a local vault. A local vault
+  has no bucket, so its key envelopes are kept in the server's database; they restore its keys on the same host
+  (`vh vault keys import --recovery-kit`) and are copied into the bucket when one is attached. They don't replace a
+  backup of a local vault, whose files exist only on this server's disk.
+
+- **Backblaze B2: a late manifest upload no longer stops sync.** Backblaze orders the versions of an object by when
+  their upload started, not when it finished. A manifest upload whose answer was lost and that Backblaze completed
+  late used to stop the vault's sync with `order_violation`; the server now recognises it as its own earlier attempt
+  and removes it. If you restore a vault on Backblaze to another server, stop the old server first: one server
+  writes a vault on such a bucket.
+- **Uploads that hang no longer hold a sync pass.** Small uploads (the encrypted manifest, envelopes, files sent in
+  one request) give up after 30 s without a connection or 60 s without progress, and the manifest's root after 60 s
+  in all.
+
+- **Backblaze B2 and other buckets without conditional writes.** Some writes must never overwrite another writer's
+  object, and Vaulthalla sends them with `If-None-Match` / `If-Match`. Backblaze B2 refuses those headers
+  (`501 NotImplemented`), so until now every sync pass of a vault on B2 that changed anything ended in an error,
+  enrolling a recovery recipient there failed, and encrypting vaults with opaque storage couldn't keep their encrypted
+  manifest (file names and folders) on B2 at all. Vaulthalla now probes each bucket once, when a vault is created on
+  it or moved to it (existing vaults the first time they need it after the upgrade), and records what it supports.
+  `vh vault storage probe <vault>` probes it again and shows the result; the probe writes a few bytes under
+  `.vaulthalla/probe/` and deletes them.
+  - On a bucket that keeps object versions (B2 keeps every version by default) every kind of vault works: without
+    upstream encryption, encrypting from before release 1.22, and encrypting with opaque storage. An opaque vault's
+    encrypted manifest root is written as a new version of `.vaulthalla/root`, and the server lists the root's versions
+    once per publish to confirm that its version is the one that counts. That is one listing request more per publish
+    than on AWS S3 or Cloudflare R2; a pass that changes nothing still costs one HEAD. Restarts, `vh vault recover`,
+    recovery recipients, key rotation and `vh vault migrate-layout` work there.
+  - Keep every version under `.vaulthalla/` on such a bucket: Vaulthalla removes the root and segment versions it no
+    longer needs itself. A lifecycle rule that deletes old versions there can make the vault refuse its manifest.
+  - A bucket with neither conditional writes nor versions can't hold an opaque vault's manifest: creating or moving
+    an encrypting vault there is refused (`bucket_capability_insufficient`); an existing one keeps uploading files, its
+    sync stops with `manifest_publish_unsupported`, and `vh status` shows it as degraded.
+  - AWS S3 and Cloudflare R2 support conditional writes: nothing changes for them beyond the one probe.
+  - A bucket probed as supporting conditional writes that later refuses one is never written without the condition:
+    its vault's sync stops with `bucket_capability_changed`, operators are notified once, and it resumes after
+    `vh vault storage probe`.
+- **Who may publish a vault's manifest.** The encrypted manifest's root now names the servers that may publish it.
+  After `vh vault recover` on another server, the restored server takes the vault over; if the old server still runs,
+  it stops publishing that vault's manifest and alerts its operators (`manifest_superseded`) instead of merging its
+  older view into the restored vault. Two more alerts protect manifests on buckets without conditional writes:
+  `manifest_order_violation` (the provider reordered the root's versions after the fact) and
+  `manifest_publish_mode_mismatch` (another server published the root in the other mode). Each stops the vault's
+  manifest publishing until an operator looks.
+
+- **Limit what an S3/R2 vault may do with its bucket.** `vh vault remote access <vault> --set read-only|none|full`
+  [--reason <text>]:
+  - `read-only`: files are read and fetched from the bucket as before, but nothing is uploaded, deleted or published
+    there. Sync passes are skipped (`skipped: remote read-only` in the sync history), changes made on the server are
+    kept and go up with the first pass once access is full again, and key rotations wait.
+  - `none`: no request goes to the bucket at all. Files with a local copy keep working; files without one fail as
+    unavailable.
+  - `vh vault remote status` shows the access, why and who set it; `vh status` and the health page report a
+    read-only or unavailable remote as degraded. The setting survives restarts and is removed when the vault is
+    detached. Agents can't change it.
+
+- **Make an S3/R2 vault local again.** `vh vault remote detach <vault> --confirm <vault name>` turns an S3/R2 vault
+  into a local vault in place, keeping its ID, keys, permissions, shares and files, with a full copy on this server.
+  - In the background, every file without a local copy is fetched from the bucket (checked against the price
+    budget), every local copy is verified, and the vault's recovery envelopes are copied from the bucket into the
+    server's database. Only then does the vault switch, in one step; until then it stays an S3/R2 vault and syncs as
+    before. Files that change meanwhile are checked again.
+  - The bucket and every object in it are left as they are: a detach never writes to or deletes from the bucket.
+    Earlier versions whose contents only the bucket holds, and trashed files without a local copy, stay in the
+    bucket; the status counts them before the switch.
+  - Refused, with the vault unchanged, while an attach, a layout migration, a key rotation or a salvage runs, while
+    legacy content remains, while event-driven sync is on, or while sync conflicts are open.
+  - If anything fails before the switch, run the command again to resume, or abort it with
+    `vh vault remote abort <vault> --confirm <vault name>`. `vh vault remote status` follows it; `vh status` shows a
+    failed detach as degraded.
+  - Provider versioning as the recovery mode becomes local snapshots, and a gateway bucket bound to the vault serves
+    it as a local bucket afterwards. Detaching is decided by a person: agents can't start it.
+- **Remote storage in the web console.** Vault → Settings → Remote storage attaches a bucket to a local vault (choose
+  a credential and an empty bucket), shows the progress, aborts or resumes it, and detaches the bucket from an S3/R2
+  vault. Attaching, detaching and aborting ask for a step-up confirmation.
+
+### Fixes
+
+- **Restored vaults.** After `vh vault recover`, deleting files no longer fails with an I/O error (the restored files
+  are counted in the filesystem's totals), empty folders the restore created can be moved, and the vault keeps its
+  original creation time.
+- **Modification times.** A file keeps its modification time when its content is fetched from the bucket.
+
+### AI apps
+
+- **Groundwork for remote AI connectors (`vh connector`).** A super admin can now set up how hosted AI apps (Claude,
+  ChatGPT) and AI tools on other computers will be allowed to connect to this server: the switch and the public
+  https address (`vh connector enable --url https://<host>`), the widest access a connection may get (read and change
+  by default, `vh connector set --max-scope`), and clients registered by hand. Connected apps are listed and
+  disconnected with `vh connector list` and `vh connector revoke`. Nothing answers remote sign-ins yet: the sign-in
+  endpoints come in a later release, so switching it on today exposes nothing. Off by default; agents can never use
+  these commands.
+
 <!-- vl-release:entry version=1.22.2 -->
 ## 1.22.2 — macOS package for 1.22
 
