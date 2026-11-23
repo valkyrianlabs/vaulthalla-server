@@ -84,7 +84,7 @@ std::vector<WsModel> upstreamModels() {
     out.push_back(model("UpstreamAdminStatus",
         "Provider administration status of an API key (ops::upstream::to_json(AdminStatus)).",
         {object("api_key", "APIKey").nullable(),
-         boolean("supported").desc("The provider has an admin adapter (AWS S3, Cloudflare R2)."),
+         boolean("supported").desc("The provider has an admin adapter (AWS S3, Cloudflare R2, Backblaze B2)."),
          boolean("enabled"),
          boolean("has_provider_token").desc("A Cloudflare API token is stored (the token itself is never sent)."),
          str("account_ref").nullable(),

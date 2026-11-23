@@ -75,7 +75,9 @@ Context contextFor(const uint32_t vaultId) {
     Context ctx;
     ctx.vault = vault;
     ctx.key = deps.apiKeyManager->getAPIKey(vault->api_key_id);
-    if (!sadmin::supportsAdmin(*ctx.key))
+    if (ctx.key->provider == vault::model::S3Provider::BackblazeB2)
+        throw std::invalid_argument(sadmin::kB2EventsUnsupported);
+    if (!sadmin::supportsEvents(*ctx.key))
         throw std::invalid_argument("event-driven sync supports AWS S3 and Cloudflare R2 vaults only");
     if (!ctx.key->admin_enabled)
         throw std::invalid_argument("API key '" + ctx.key->name + "' is not an administrative credential: enable "

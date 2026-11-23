@@ -11,7 +11,7 @@ import { Field, Input, Select } from '@/components/ui/Field'
 import { Segmented } from '@/components/ui/Tabs'
 import { InlineError } from '@/components/ui/State'
 import { isBound } from '@/features/credentials/upstream/hooks'
-import type { AdmissionReport, BucketMode, Provision } from '@/models/upstream'
+import { adminFeatures, type AdmissionReport, type BucketMode, type Provision } from '@/models/upstream'
 
 const AdmissionReportView = dynamic(() => import('@/features/credentials/upstream/AdmissionReportView'), { ssr: false })
 
@@ -30,6 +30,8 @@ export interface ProvisionFormValues {
 
 // S3 bucket naming (the strict, cross-provider subset: AWS rules minus dotted names, which R2 also refuses).
 export const BUCKET_NAME_PATTERN = /^(?!xn--)(?!.*-s3alias$)[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/
+// Backblaze B2 on top of that: at least 6 characters, and Backblaze reserves names that start with "b2-".
+export const B2_BUCKET_NAME_PATTERN = /^(?!xn--)(?!b2-)(?!.*-s3alias$)[a-z0-9][a-z0-9-]{4,61}[a-z0-9]$/
 
 export const provisionDefaults = {
   generate_name: false,
@@ -41,10 +43,16 @@ export const provisionDefaults = {
 }
 
 // The storage.vault.add `provision` object for the chosen mode (undefined = today's behaviour).
-export const provisionPayload = (values: ProvisionFormValues, accepted: boolean): Provision | undefined => {
+export const provisionPayload = (
+  values: ProvisionFormValues,
+  accepted: boolean,
+  provider?: string,
+): Provision | undefined => {
   if (values.bucket_mode === 'existing') return undefined
+  // What the provider's adapter can't do is never asked for (core refuses it): no lifecycle rule, events or region.
+  const features = adminFeatures(provider)
   const events =
-    values.events ?
+    features.events && values.events ?
       { events: true, ...(values.events_prefix.trim() ? { events_prefix: values.events_prefix.trim() } : {}) }
     : {}
   if (values.bucket_mode === 'adopt')
@@ -53,8 +61,8 @@ export const provisionPayload = (values: ProvisionFormValues, accepted: boolean)
   return {
     mode: 'create',
     ...(values.generate_name ? { generate_name: true } : {}),
-    ...(values.region.trim() ? { region: values.region.trim() } : {}),
-    ...(values.abort_multipart_days.trim() && Number.isInteger(days) && days > 0 ?
+    ...(features.region && values.region.trim() ? { region: values.region.trim() } : {}),
+    ...(features.lifecycle && values.abort_multipart_days.trim() && Number.isInteger(days) && days > 0 ?
       { lifecycle: { abort_incomplete_multipart_days: days } }
     : {}),
     ...events,
@@ -83,11 +91,17 @@ export const BucketModeSelector = ({
     />
   : null
 
-export const CreateBucketFields = ({ regionHint }: { regionHint?: string }) => {
+export const CreateBucketFields = ({ regionHint, provider }: { regionHint?: string; provider?: string }) => {
   const ids = useId()
   const { register, control, setValue, formState } = useFormContext<ProvisionFormValues>()
   const generate = useWatch({ control, name: 'generate_name' })
   const events = useWatch({ control, name: 'events' })
+  const features = adminFeatures(provider)
+  const namePattern = features.b2 ? B2_BUCKET_NAME_PATTERN : BUCKET_NAME_PATTERN
+  const nameRule =
+    features.b2 ?
+      '6–63 lowercase letters, digits or hyphens, not starting with b2-'
+    : '3–63 lowercase letters, digits or hyphens'
   return (
     <div className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2">
@@ -97,9 +111,10 @@ export const CreateBucketFields = ({ regionHint }: { regionHint?: string }) => {
           required={!generate}
           error={formState.errors.bucket?.message}
           hint={
-            generate ?
-              'Vaulthalla picks an available name from the vault name.'
-            : '3–63 lowercase letters, digits or hyphens. An existing bucket is never taken over: adopt it instead.'
+            generate ? 'Vaulthalla picks an available name from the vault name.'
+            : features.b2 ?
+              `${nameRule}. Backblaze bucket names are shared by every Backblaze account, so a common name may be taken.`
+            : `${nameRule}. An existing bucket is never taken over: adopt it instead.`
           }>
           <Input
             id={`${ids}-bucket`}
@@ -111,54 +126,60 @@ export const CreateBucketFields = ({ regionHint }: { regionHint?: string }) => {
             aria-invalid={Boolean(formState.errors.bucket)}
             {...register('bucket', {
               validate: (v, all) =>
-                all.bucket_mode !== 'create'
-                || all.generate_name
-                || BUCKET_NAME_PATTERN.test(v.trim())
-                || 'Use 3–63 lowercase letters, digits or hyphens',
+                all.bucket_mode !== 'create' || all.generate_name || namePattern.test(v.trim()) || `Use ${nameRule}`,
             })}
           />
         </Field>
-        <Field
-          label="Region"
-          htmlFor={`${ids}-region`}
-          hint="Empty uses the credential’s region (R2: a location hint such as wnam).">
-          <Input
-            id={`${ids}-region`}
-            className="font-mono"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder={regionHint || 'credential default'}
-            {...register('region')}
-          />
-        </Field>
+        {features.region ?
+          <Field
+            label="Region"
+            htmlFor={`${ids}-region`}
+            hint="Empty uses the credential’s region (R2: a location hint such as wnam).">
+            <Input
+              id={`${ids}-region`}
+              className="font-mono"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={regionHint || 'credential default'}
+              {...register('region')}
+            />
+          </Field>
+        : null}
       </div>
       <label className="text-fg-muted flex items-center gap-2 text-sm">
         <Checkbox checked={generate} onCheckedChange={v => setValue('generate_name', v)} />
         Generate a bucket name
       </label>
-      <details className="group rounded-card border-line border">
-        <summary className="text-fg-muted hover:text-fg cursor-pointer list-none px-4 py-2.5 text-sm select-none">
-          <span className="mr-1.5 inline-block transition-transform group-open:rotate-90">›</span>
-          Bucket options
-        </summary>
-        <div className="border-line space-y-4 border-t px-4 py-4">
-          <Field
-            label="Abort incomplete uploads after (days)"
-            htmlFor={`${ids}-abort`}
-            hint="A Vaulthalla-owned lifecycle rule that frees storage held by abandoned multipart uploads. Empty for none."
-            error={formState.errors.abort_multipart_days?.message}>
-            <Input
-              id={`${ids}-abort`}
-              inputMode="numeric"
-              className="tabular w-32"
-              {...register('abort_multipart_days', {
-                validate: v => !v.trim() || (/^\d+$/.test(v.trim()) && Number(v) <= 36500) || 'Whole days, up to 36500',
-              })}
-            />
-          </Field>
-          <EventsFields events={events} onEvents={v => setValue('events', v)} />
-        </div>
-      </details>
+      {!features.lifecycle && !features.events ?
+        <p className="text-fg-subtle text-xs">
+          The bucket is created private in this account’s region. Lifecycle rules and event notifications stay in the
+          Backblaze console; Vaulthalla doesn’t set them.
+        </p>
+      : <details className="group rounded-card border-line border">
+          <summary className="text-fg-muted hover:text-fg cursor-pointer list-none px-4 py-2.5 text-sm select-none">
+            <span className="mr-1.5 inline-block transition-transform group-open:rotate-90">›</span>
+            Bucket options
+          </summary>
+          <div className="border-line space-y-4 border-t px-4 py-4">
+            <Field
+              label="Abort incomplete uploads after (days)"
+              htmlFor={`${ids}-abort`}
+              hint="A Vaulthalla-owned lifecycle rule that frees storage held by abandoned multipart uploads. Empty for none."
+              error={formState.errors.abort_multipart_days?.message}>
+              <Input
+                id={`${ids}-abort`}
+                inputMode="numeric"
+                className="tabular w-32"
+                {...register('abort_multipart_days', {
+                  validate: v =>
+                    !v.trim() || (/^\d+$/.test(v.trim()) && Number(v) <= 36500) || 'Whole days, up to 36500',
+                })}
+              />
+            </Field>
+            <EventsFields events={events} onEvents={v => setValue('events', v)} />
+          </div>
+        </details>
+      }
     </div>
   )
 }
@@ -190,7 +211,7 @@ const EventsFields = ({ events, onEvents }: { events: boolean; onEvents: (v: boo
   )
 }
 
-export const AdoptBucketFields = ({ apiKeyId }: { apiKeyId: number }) => {
+export const AdoptBucketFields = ({ apiKeyId, provider }: { apiKeyId: number; provider?: string }) => {
   const ids = useId()
   const { register, control, setValue, formState } = useFormContext<ProvisionFormValues>()
   const bucket = useWatch({ control, name: 'bucket' })
@@ -280,7 +301,9 @@ export const AdoptBucketFields = ({ apiKeyId }: { apiKeyId: number }) => {
           Check the bucket before creating the vault. Nothing is changed by the check.
         </p>
       : null}
-      <EventsFields events={events} onEvents={v => setValue('events', v)} />
+      {adminFeatures(provider).events ?
+        <EventsFields events={events} onEvents={v => setValue('events', v)} />
+      : null}
     </div>
   )
 }

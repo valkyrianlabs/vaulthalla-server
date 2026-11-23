@@ -45,6 +45,13 @@ bool isCollision(const padmin::ProviderError& e) {
     return e.code == "BucketAlreadyExists" || e.code == "BucketAlreadyOwnedByYou" || e.http_status == 409;
 }
 
+// A name this credential can't reach because someone else holds it (bucket names are shared by every account of AWS
+// and of Backblaze B2): there is nothing to adopt, only another name helps.
+std::string takenElsewhere(const std::string& bucket) {
+    return "the bucket name '" + bucket + "' is already taken (bucket names are shared across accounts, and this "
+           "credential has no access to that bucket); choose another name";
+}
+
 // HeadBucket: absent → nullopt; present (any region answer) → the region; 403 means it exists in another account.
 std::optional<std::string> probeExisting(padmin::AdminClient& admin, const std::string& bucket, bool& exists) {
     try {
@@ -93,8 +100,7 @@ std::string generateBucketName(const std::string& vaultName, padmin::AdminClient
 Lease createManaged(padmin::AdminClient& admin, const BucketIdentity& id, const std::optional<std::string>& region,
                     const std::optional<uint32_t> apiKeyId) {
     guard::require(id);
-    std::string why;
-    if (!validBucketName(id.bucket, why)) throw std::invalid_argument("invalid bucket name '" + id.bucket + "': " + why);
+    requireValidBucketNameFor(id.provider, id.bucket);
 
     const auto token = newOperationToken();
     const auto claim = BucketQuery::claimForCreate(id, region, apiKeyId, token);
@@ -124,7 +130,11 @@ Lease createManaged(padmin::AdminClient& admin, const BucketIdentity& id, const 
 
     try {
         bool exists = false;
-        (void)probeExisting(admin, id.bucket, exists);
+        const auto existingRegion = probeExisting(admin, id.bucket, exists);
+        if (exists && !existingRegion && !ourEarlierBucket) {
+            giveUp("bucket name taken: no access to the existing bucket");
+            throw ProvisionConflict(takenElsewhere(id.bucket));
+        }
         if (exists) {
             if (ourEarlierBucket && listsEmpty(admin, id.bucket)) {
                 lease.created = true;   // our own bucket from a failed attempt, still empty: resume it
@@ -142,6 +152,8 @@ Lease createManaged(padmin::AdminClient& admin, const BucketIdentity& id, const 
             } catch (const padmin::ProviderError& e) {
                 if (!isCollision(e)) throw;
                 giveUp("bucket name taken: " + std::string(e.what()));
+                // BucketAlreadyExists is someone else's bucket; BucketAlreadyOwnedByYou (and a bare 409) is this account's.
+                if (e.code == "BucketAlreadyExists") throw ProvisionConflict(takenElsewhere(id.bucket));
                 throw ProvisionConflict("bucket '" + id.bucket + "' already exists (" + e.code + "); adopt it instead");
             }
             // AWS us-east-1 answers 200 to CreateBucket on a bucket the account already owns: a bucket that lists

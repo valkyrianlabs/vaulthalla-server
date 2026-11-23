@@ -41,6 +41,8 @@ struct FakeCloud {
     std::mutex mutex;
     std::map<std::string, Bucket> buckets;
     std::set<std::string> otherAccount;   // HeadBucket 403
+    std::set<std::string> takenElsewhere; // HeadBucket says absent, CreateBucket answers BucketAlreadyExists: another
+                                          // account holds the name and this credential can't see its bucket
     std::set<std::string> hiddenFromHead; // HeadBucket says absent although it exists (race / us-east-1 create)
     bool silentCreate = false;            // CreateBucket on an existing bucket answers 200 (AWS us-east-1)
     std::set<std::string> headFails;      // HeadBucket fails transiently (503 SlowDown)
@@ -114,6 +116,7 @@ public:
         guard(request.name);
         std::scoped_lock lock(c_->mutex);
         c_->touch(request.name);
+        if (c_->takenElsewhere.contains(request.name)) throw padmin::ProviderError("taken", "BucketAlreadyExists", 409);
         if (c_->buckets.contains(request.name)) {
             if (c_->silentCreate) return;
             throw padmin::ProviderError("exists", "BucketAlreadyOwnedByYou", 409);

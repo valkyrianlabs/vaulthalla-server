@@ -14,21 +14,23 @@ import { confirm } from '@/components/ui/Confirm'
 import { notify } from '@/components/ui/Toast'
 import { ArrowsRotateIcon, BucketIcon, CircleCheckIcon, CircleExclamationIcon } from '@/components/ui/icons'
 import type { ProviderCredential } from '@/features/credentials/types'
-import { supportsAdmin, type AdminStatus, type Capability } from '@/models/upstream'
+import { adminFeatures, supportsAdmin, type AdminStatus, type Capability } from '@/models/upstream'
 import { useAdminStatus, useUpstreamPerms } from '@/features/credentials/upstream/hooks'
 
 const CAPABILITY_LABELS: Record<string, string> = {
   'buckets.list': 'List buckets',
   'buckets.create': 'Create buckets',
   lifecycle: 'Lifecycle rules',
+  versioning: 'Provider versioning',
   'events.notifications': 'Event notifications',
   'events.queues': 'Event queues',
 }
 
 const refresh = () => invalidate('upstream.admin.status', 'storage.apiKey.get', 'storage.apiKey.list')
 
-// Provider administration (#237) on one AWS / Cloudflare R2 credential: enable it, see what the provider lets it do,
-// and (R2) store the Cloudflare account API token the event infrastructure needs. Lazy-loaded by the credential page.
+// Provider administration (#237) on one AWS / Cloudflare R2 / Backblaze B2 credential: enable it, see what the provider
+// lets it do, and (R2) store the Cloudflare account API token the event infrastructure needs. Lazy-loaded by the
+// credential page.
 const AdminPanel = ({ credential }: { credential: ProviderCredential }) => {
   const perms = useUpstreamPerms()
   const canRead = perms.view || perms.configure
@@ -39,8 +41,8 @@ const AdminPanel = ({ credential }: { credential: ProviderCredential }) => {
     return (
       <Panel title="Provider administration">
         <p className="text-fg-subtle text-sm">
-          Not supported for this provider. Vaulthalla can create, adopt and watch buckets for AWS S3 and Cloudflare R2
-          credentials; this one keeps working as plain vault storage.
+          Not supported for this provider. Vaulthalla can create and adopt buckets for AWS S3, Cloudflare R2 and
+          Backblaze B2 credentials; this one keeps working as plain vault storage.
         </p>
       </Panel>
     )
@@ -147,7 +149,11 @@ const AdminBody = ({ credential, status }: { credential: ProviderCredential; sta
   return (
     <Panel
       title="Provider administration"
-      description="Let Vaulthalla list, create, adopt and configure buckets in this account, and run event-driven sync. Who may do what is decided by admin.upstream permissions."
+      description={
+        adminFeatures(credential.provider).events ?
+          'Let Vaulthalla list, create, adopt and configure buckets in this account, and run event-driven sync. Who may do what is decided by admin.upstream permissions.'
+        : 'Let Vaulthalla list, create and adopt buckets in this account. Backblaze keeps lifecycle rules and event notifications in its own console. Who may do what is decided by admin.upstream permissions.'
+      }
       actions={
         status.enabled ?
           <Badge tone="ok" dot>

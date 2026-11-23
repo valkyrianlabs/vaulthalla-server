@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '1f51b7b7f54eb58af8b8e8946500a850d05cecf5bf28c78b4f00581cceef8038'
+export const WS_CONTRACT_HASH = '466cd1b8c26eb04ca683132e1d7fd289e56a4cf536caf6fde6a17e08ec52d1ea'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'c57d7e5de2e83617ae11ec95f742862de76f1fb52ba7c46baf711d2af31ee939'
+export const WS_MODELS_HASH = '7a68c3ca1641638a1dcdf0d7062b9d0edf93754e0a5c0cedae20ecd06260f766'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -7214,9 +7214,9 @@ export interface WsContract {
     response: { admin: WsModels['UpstreamAdminStatus'] }
   }
   /**
-   * Turn on provider administration (AWS S3, Cloudflare R2) for an upstream API key after probing it, or
-   * store / clear the Cloudflare API token R2 events need. Idempotent. Needs admin.upstream.configure + key
-   * edit.
+   * Turn on provider administration (AWS S3, Cloudflare R2, Backblaze B2) for an upstream API key after
+   * probing it, or store / clear the Cloudflare API token R2 events need. Idempotent. Needs
+   * admin.upstream.configure + key edit.
    */
   'upstream.admin.enable': {
     payload: { api_key_id: number; provider_token?: string | null; clear_provider_token?: boolean | null }

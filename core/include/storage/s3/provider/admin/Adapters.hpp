@@ -12,11 +12,12 @@
 #include <string>
 #include <vector>
 
-// The AWS S3 and Cloudflare R2 admin/events adapters (#237, #96). Construct them through admin::adminFor/eventsFor.
+// The AWS S3, Cloudflare R2 and Backblaze B2 admin adapters and the AWS/R2 events adapters (#237, #96). Construct them
+// through admin::adminFor/eventsFor.
 // Every bucket-scoped call checks storage::upstream::guard before anything is sent.
 namespace vh::storage::s3::provider::admin {
 
-// The S3 API both providers share: listings, bucket create/delete, lifecycle, batch delete.
+// The S3 API the providers share: listings, bucket create/delete, lifecycle, batch delete.
 class S3ApiAdmin : public AdminClient {
 public:
     explicit S3ApiAdmin(std::shared_ptr<vault::model::APIKey> key);
@@ -43,7 +44,8 @@ public:
     // The protection identity of a bucket in this account.
     [[nodiscard]] storage::upstream::BucketIdentity bucketIdentity(const std::string& bucket);
 
-    // Bucket name validation + protection guard, nothing sent. Every bucket-scoped call runs it first.
+    // Bucket name validation (the provider's own rules, storage::upstream::validBucketNameFor) + protection guard,
+    // nothing sent. Every bucket-scoped call runs it first.
     void requireBucket(const std::string& bucket);
 
     // A signed S3 call against the bucket's endpoint (guarded, metered). Public for the events adapter.
@@ -59,6 +61,8 @@ protected:
     [[nodiscard]] virtual std::optional<std::string> accountForGuard() = 0;
     // ListBuckets max-buckets/continuation-token (AWS); providers without it get one unpaged listing.
     [[nodiscard]] virtual bool pagedListBuckets() const { return true; }
+    // Extra CreateBucket headers (B2: x-amz-acl: private, said rather than left to the default).
+    [[nodiscard]] virtual std::map<std::string, std::string> createBucketHeaders() const { return {}; }
 
     curl::http::Response call(const detail::Endpoint& endpoint, const detail::SignedCall& call, const char* kind);
     void count(const char* kind);
@@ -66,6 +70,8 @@ protected:
     [[nodiscard]] std::optional<std::vector<LifecycleRule>> getLifecycle(const std::string& bucket);
     // GET ?versioning for inspect: NotImplemented → Unversioned; other failures → Unknown + a warning.
     [[nodiscard]] VersioningState getVersioning(const std::string& bucket, std::vector<std::string>& warnings);
+    // GET ?object-lock: whether object lock is enabled; nullopt when this credential can't read it.
+    [[nodiscard]] std::optional<bool> getObjectLock(const std::string& bucket);
     // The account that must own a bucket for a mutating call (x-amz-expected-bucket-owner); nullopt = not sent.
     [[nodiscard]] virtual std::optional<std::string> expectedBucketOwner() const { return std::nullopt; }
 
@@ -129,6 +135,43 @@ protected:
     [[nodiscard]] std::optional<std::string> locationConstraint(const CreateBucketRequest& request) const override;
     [[nodiscard]] std::optional<std::string> accountForGuard() override;
     [[nodiscard]] bool pagedListBuckets() const override { return false; }
+};
+
+// Backblaze B2 through its S3-compatible API (https://s3.<region>.backblazeb2.com): buckets, their versions and
+// object lock. What that API lacks stays with the Backblaze console and native API and is reported, not attempted:
+// lifecycle rules (supportsLifecycle() == false), event notifications (no events adapter), and switching versioning
+// (every B2 bucket is versioned). An account lives in one region, the endpoint's; ListBuckets is not paged.
+class B2Admin final : public S3ApiAdmin {
+public:
+    // std::invalid_argument unless the key's endpoint is https://s3.<region>.backblazeb2.com.
+    explicit B2Admin(std::shared_ptr<vault::model::APIKey> key);
+
+    [[nodiscard]] std::string providerId() const override { return "backblaze-b2"; }
+    [[nodiscard]] AccountIdentity identity() override;
+    [[nodiscard]] Capabilities probe() override;
+    // 404 → nullopt; 200 → the endpoint's region; 403 → ProviderError (the name belongs to another account, or the
+    // application key is restricted to other buckets).
+    [[nodiscard]] std::optional<std::string> headBucket(const std::string& bucket) override;
+    [[nodiscard]] BucketConfiguration inspect(const std::string& bucket) override;
+    [[nodiscard]] bool supportsLifecycle() const override { return false; }
+    // Name + guard checked, then CapabilityMissing("lifecycle"); nothing is sent.
+    void putLifecycle(const std::string& bucket, const std::vector<LifecycleRule>& rules) override;
+    // Enabled: one GetBucketVersioning that must say Enabled (nothing is written: B2 buckets are always versioned).
+    // Suspended: target, name and guard checked, then CapabilityMissing("versioning"); nothing is sent.
+    void putVersioning(const std::string& bucket, Versioning target) override;
+
+protected:
+    [[nodiscard]] detail::Endpoint serviceEndpoint() override;
+    [[nodiscard]] detail::Endpoint bucketEndpoint(const std::string& bucket) override;
+    [[nodiscard]] bool allowNoncurrent() const override { return true; }
+    // The endpoint's region, the only one a bucket of this account can live in; another one is std::invalid_argument.
+    [[nodiscard]] std::optional<std::string> locationConstraint(const CreateBucketRequest& request) const override;
+    [[nodiscard]] std::optional<std::string> accountForGuard() override;
+    [[nodiscard]] bool pagedListBuckets() const override { return false; }
+    [[nodiscard]] std::map<std::string, std::string> createBucketHeaders() const override;
+
+private:
+    std::string region_;
 };
 
 // S3 → SQS Standard. One queue (+ DLQ) per account and region.

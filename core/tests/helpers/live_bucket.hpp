@@ -7,8 +7,9 @@
 //    the R2 admin key VH_R2_ADMIN_{ACCESS_KEY,SECRET_KEY,ENDPOINT} (+ optional VH_R2_ADMIN_REGION); events also need a
 //    Cloudflare API token, VH_CF_API_TOKEN. Backblaze: an application key VH_B2_TEST_{KEY_ID,APP_KEY} (buckets
 //    created and deleted, files listed, written and deleted); the S3 endpoint and region come from
-//    b2_authorize_account (apiInfo.storageApi.s3ApiUrl). Bucket administration and version cleanup go through B2's
-//    native API (GuardedB2): the product has no B2 admin adapter.
+//    b2_authorize_account (apiInfo.storageApi.s3ApiUrl). The run bucket is created through the product's B2 admin
+//    adapter (B2Admin behind GuardedAdmin); the orphan sweep and version cleanup go through B2's native API
+//    (GuardedB2), which also cancels unfinished large files.
 //  - Rule 1, names: every bucket a test creates is vh-test-<host>-<pid>-<run start> (kRunBucketPattern), or one of the
 //    fixed tooling buckets (fixedTestBuckets(): vh-test-gateway-smoke). GuardedAdmin refuses to create, delete, empty,
 //    inspect or reconfigure any other bucket, and GuardedEvents any other bucket or queue; production buckets are
@@ -229,6 +230,7 @@ public:
     [[nodiscard]] std::string providerId() const override { return in_->providerId(); }
     [[nodiscard]] padmin::AccountIdentity identity() override { return in_->identity(); }
     [[nodiscard]] padmin::Capabilities probe() override { return in_->probe(); }
+    [[nodiscard]] bool supportsLifecycle() const override { return in_->supportsLifecycle(); }
     [[nodiscard]] padmin::BucketPage listBuckets(const std::string& token, const unsigned int max) override {
         return in_->listBuckets(token, max);
     }
@@ -472,6 +474,11 @@ private:
 
 inline std::unique_ptr<GuardedAdmin> guardedAdmin(const std::shared_ptr<vault::model::APIKey>& key) {
     return std::make_unique<GuardedAdmin>(std::make_unique<padmin::R2Admin>(key));
+}
+
+// The product's Backblaze B2 admin adapter (S3-compatible API), behind the same name guard.
+inline std::unique_ptr<GuardedAdmin> guardedB2Admin(const std::shared_ptr<vault::model::APIKey>& key) {
+    return std::make_unique<GuardedAdmin>(std::make_unique<padmin::B2Admin>(key));
 }
 
 // Throws CapabilityMissing without VH_CF_API_TOKEN (R2Events needs the Cloudflare REST API).
@@ -963,6 +970,7 @@ public:
         if (created_) return runBucketName();
         try {
             b2_ = std::make_unique<GuardedB2>(b2Target());
+            admin_ = guardedB2Admin(b2_->s3Key());
             const auto now = std::time(nullptr);
             std::size_t swept = 0;
             for (const auto& name : b2_->listBucketNames())
@@ -974,7 +982,9 @@ public:
             std::cout << "[live] orphan sweep: " << swept << " bucket(s) removed" << std::endl;
             if (b2_->bucketId(runBucketName())) throw std::runtime_error(runBucketName() + " already exists");
             attempted_ = true;
-            b2_->createBucket(runBucketName());
+            // Through the product's adapter (S3-compatible CreateBucket, private), as the R2 run bucket is through
+            // R2Admin; the native listing must then show it.
+            admin_->createBucket({.name = runBucketName(), .region = std::nullopt});
             if (!b2_->bucketId(runBucketName())) throw std::runtime_error("b2_list_buckets can't see the new bucket");
             created_ = true;
             std::cout << "[live] created " << runBucketName() << " (" << b2_->account().region << ")" << std::endl;
@@ -986,6 +996,8 @@ public:
     }
 
     [[nodiscard]] GuardedB2& b2() { return *b2_; }
+    // The product's B2Admin for the same application key, name-guarded.
+    [[nodiscard]] GuardedAdmin& admin() { return *admin_; }
 
     std::string finish() {
         std::scoped_lock lock(mutex_);
@@ -1003,6 +1015,7 @@ public:
 private:
     std::mutex mutex_;
     std::unique_ptr<GuardedB2> b2_;
+    std::unique_ptr<GuardedAdmin> admin_;
     std::string error_;
     bool attempted_ = false, created_ = false, finished_ = false;
 };
@@ -1056,6 +1069,7 @@ protected:
     [[nodiscard]] storage::s3::Controller& controller() { return *data_; }
     [[nodiscard]] const std::shared_ptr<storage::s3::Controller>& sharedController() const { return data_; }
     [[nodiscard]] GuardedB2& b2() { return RunB2Bucket::get().b2(); }
+    [[nodiscard]] GuardedAdmin& admin() { return RunB2Bucket::get().admin(); }
 
 private:
     std::string bucket_, prefix_;

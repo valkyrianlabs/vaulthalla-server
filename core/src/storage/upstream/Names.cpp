@@ -50,6 +50,34 @@ void requireValidBucketName(const std::string& name) {
     if (!validBucketName(name, why)) throw std::invalid_argument("invalid bucket name '" + name + "': " + why);
 }
 
+bool validB2BucketName(const std::string& name, std::string& why) {
+    if (!validBucketName(name, why)) return false;
+    if (name.size() < 6) {
+        why = "a Backblaze B2 bucket name has 6 to 63 characters";
+        return false;
+    }
+    if (name.starts_with("b2-")) {
+        why = "Backblaze reserves bucket names that start with 'b2-'";
+        return false;
+    }
+    return true;
+}
+
+bool validBucketNameFor(const std::string& provider, const std::string& name, std::string& why) {
+    return provider == "backblaze-b2" ? validB2BucketName(name, why) : validBucketName(name, why);
+}
+
+void requireValidBucketNameFor(const std::string& provider, const std::string& name) {
+    std::string why;
+    if (!validBucketNameFor(provider, name, why))
+        throw std::invalid_argument("invalid bucket name '" + name + "': " + why);
+}
+
+bool validB2Region(const std::string& region) {
+    static const std::regex re(R"(^[a-z]{2}-[a-z]+-[0-9]{3}$)");
+    return region.size() <= 32 && std::regex_match(region, re);
+}
+
 bool validAwsRegion(const std::string& region) {
     // <partition-ish prefix>-<direction>-<n>: us-east-2, eu-central-1, ap-southeast-4, me-central-1, us-gov-west-1,
     // cn-northwest-1, eusc-de-east-1. Lower-case letters and digits only, so nothing can leave the host label.

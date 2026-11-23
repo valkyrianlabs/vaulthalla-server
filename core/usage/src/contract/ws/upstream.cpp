@@ -39,7 +39,7 @@ std::vector<WsCommandUsage> upstreamCommands() {
 
     // ---- administrative credentials ----
     out.push_back(command("upstream.admin.enable",
-        "Turn on provider administration (AWS S3, Cloudflare R2) for an upstream API key after probing it, or store / "
+        "Turn on provider administration (AWS S3, Cloudflare R2, Backblaze B2) for an upstream API key after probing it, or store / "
         "clear the Cloudflare API token R2 events need. Idempotent. Needs admin.upstream.configure + key edit.",
         {apiKeyId(),
          str("provider_token").opt().nullable().desc(

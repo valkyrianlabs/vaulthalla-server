@@ -1,5 +1,6 @@
-// Provider-contract tests for the AWS S3 / Cloudflare R2 admin and events adapters (#237, #96), DB-free: every
-// request goes through curl::http's test transport, which answers like the provider would and records what was sent.
+// Provider-contract tests for the AWS S3 / Cloudflare R2 admin and events adapters (#237, #96) and the Backblaze B2
+// admin adapter, DB-free: every request goes through curl::http's test transport, which answers like the provider
+// would and records what was sent.
 
 #include "storage/s3/provider/admin/Adapters.hpp"
 #include "storage/s3/curl/Http.hpp"
@@ -30,6 +31,8 @@ constexpr const char* kUpAwsSecret = "AwsSecretKeyValueForTests0123456789abcdef"
 constexpr const char* kUpR2Secret = "r2secret0123456789abcdef0123456789abcdef0123456789abcdef01234567";
 constexpr const char* kUpCfToken = "cfToken_SECRET_value_0123456789";
 constexpr const char* kUpR2Account = "0123456789abcdef0123456789abcdef";
+constexpr const char* kUpB2Secret = "K004b2ApplicationKeySecretForTests01";
+constexpr const char* kUpB2Host = "s3.us-west-004.backblazeb2.com";
 
 std::shared_ptr<APIKey> upAwsKey() {
     auto key = std::make_shared<APIKey>(1, "aws-admin", S3Provider::AWS, "AKIAEXAMPLEEXAMPLE00", kUpAwsSecret, "us-east-2",
@@ -44,6 +47,12 @@ std::shared_ptr<APIKey> upR2Key(const bool withToken = true) {
                                         std::string("https://") + kUpR2Account + ".r2.cloudflarestorage.com");
     if (withToken) key->provider_token = kUpCfToken;
     return key;
+}
+
+std::shared_ptr<APIKey> upB2Key(const S3Provider label = S3Provider::BackblazeB2,
+                                const std::string& endpoint = std::string("https://") + kUpB2Host) {
+    return std::make_shared<APIKey>(1, "b2-admin", label, "0041234567890ab0000000001", kUpB2Secret, "us-west-004",
+                                    endpoint);
 }
 
 std::string upHeader(const http::Request& r, const std::string& name) {
@@ -889,18 +898,20 @@ TEST_F(UpstreamProviderTest, R2LocationHintAndUnsupportedProviders) {
 
 TEST_F(UpstreamProviderTest, ProtectedBucketRefusesEveryBucketCallWithoutSending) {
     guard::setForTesting({{.provider = "aws-s3", .account_ref = std::string("111122223333"), .bucket = "locked"},
-                          {.provider = "cloudflare-r2", .account_ref = std::string(kUpR2Account), .bucket = "locked"}});
+                          {.provider = "cloudflare-r2", .account_ref = std::string(kUpR2Account), .bucket = "locked"},
+                          {.provider = "backblaze-b2", .account_ref = std::string(kUpB2Host), .bucket = "locked"}});
     handler = [](const http::Request&) {
         return upRespond(200, R"(<ListAllMyBucketsResult><Buckets><Bucket><Name>locked</Name></Bucket></Buckets></ListAllMyBucketsResult>)");
     };
 
     admin::AwsAdmin aws(upAwsKey());
     admin::R2Admin r2(upR2Key());
+    admin::B2Admin b2(upB2Key());
     admin::AwsEvents awsEvents(upAwsKey());
     admin::R2Events r2Events(upR2Key());
     const admin::SubscriptionSpec spec{.bucket = "locked", .rule_id = "vaulthalla-1", .prefix = ""};
 
-    for (admin::AdminClient* client : std::initializer_list<admin::AdminClient*>{&aws, &r2}) {
+    for (admin::AdminClient* client : std::initializer_list<admin::AdminClient*>{&aws, &r2, &b2}) {
         EXPECT_THROW((void)client->headBucket("locked"), vh::storage::upstream::BucketProtected);
         EXPECT_THROW(client->createBucket({.name = "locked", .region = std::nullopt}), vh::storage::upstream::BucketProtected);
         EXPECT_THROW(client->deleteBucket("locked"), vh::storage::upstream::BucketProtected);
@@ -1404,4 +1415,354 @@ TEST_F(UpstreamProviderTest, OwnedNoncurrentRuleKeepsForeignNoncurrentRulesVerba
     // Lengthening ours is not destructive; R2 can't carry it at all.
     EXPECT_FALSE(lc::mergeOwnedRule(written, {.expire_noncurrent_days = 60}, true).destructive);
     EXPECT_THROW((void)lc::mergeOwnedRule(current, {.expire_noncurrent_days = 30}, false), std::invalid_argument);
+}
+
+// ---- Backblaze B2 (S3-compatible API) -------------------------------------------------------------------------------
+//
+// What the adapter may assume is what Backblaze documents for that API: ListBuckets (not paged), HeadBucket,
+// CreateBucket (canned ACL private or public-read), DeleteBucket, GetBucketVersioning, Get Object Lock Configuration,
+// ListObjectsV2, ListObjectVersions, DeleteObjects. Lifecycle rules and event notifications exist only in its
+// console and native API, and every bucket is versioned.
+
+namespace {
+
+const char* const kUpB2Buckets =
+    R"(<ListAllMyBucketsResult><Owner><ID>1234567890ab</ID></Owner><Buckets>
+       <Bucket><Name>art-by-liam</Name><CreationDate>2026-11-20T10:00:00.000Z</CreationDate></Bucket>
+       <Bucket><Name>cooper-operator-dr</Name><CreationDate>2026-11-21T10:00:00.000Z</CreationDate></Bucket>
+       </Buckets></ListAllMyBucketsResult>)";
+
+std::optional<admin::Capability> upCapability(const admin::Capabilities& caps, const std::string& name) {
+    for (const auto& c : caps.items)
+        if (c.name == name) return c;
+    return std::nullopt;
+}
+
+}  // namespace
+
+TEST_F(UpstreamProviderTest, B2ListsBucketsUnpagedAndSignsForTheEndpointRegion) {
+    handler = [](const http::Request&) { return upRespond(200, kUpB2Buckets); };
+    admin::B2Admin b2(upB2Key());
+    const auto page = b2.listBuckets("ignored-token", 1);
+    ASSERT_EQ(page.buckets.size(), 2u);
+    EXPECT_EQ(page.buckets[0].name, "art-by-liam");
+    EXPECT_TRUE(page.next_token.empty());
+    ASSERT_EQ(sent.size(), 1u);
+    EXPECT_EQ(sent[0].method, "GET");
+    EXPECT_EQ(sent[0].url, std::string("https://") + kUpB2Host + "/") << "no max-buckets / continuation-token: B2 "
+                                                                         "documents no paging for ListBuckets";
+    EXPECT_NE(upHeader(sent[0], "authorization").find("/us-west-004/s3/aws4_request"), std::string::npos);
+
+    EXPECT_EQ(b2.providerId(), "backblaze-b2");
+    const auto identity = b2.identity();
+    EXPECT_EQ(identity.provider, "backblaze-b2");
+    EXPECT_EQ(identity.account_ref, kUpB2Host);
+    EXPECT_EQ(identity.principal, "b2-application-key");
+    EXPECT_EQ(sent.size(), 1u) << "the identity costs no request";
+}
+
+TEST_F(UpstreamProviderTest, B2HostComesFromTheRegionNotTheStoredEndpointText) {
+    handler = [](const http::Request&) { return upRespond(200, kUpB2Buckets); };
+    admin::B2Admin b2(upB2Key(S3Provider::BackblazeB2, "https://S3.US-West-004.BackblazeB2.com:443/some/path"));
+    (void)b2.listBuckets({}, 100);
+    ASSERT_EQ(sent.size(), 1u);
+    EXPECT_EQ(sent[0].url, std::string("https://") + kUpB2Host + "/");
+
+    for (const std::string notB2 : {"https://s3.us-west-004.backblazeb2.com.evil.example", "https://f004.backblazeb2.com",
+                                    "https://bucket.s3.us-west-004.backblazeb2.com", "https://s3.backblazeb2.com",
+                                    "https://s3.us-west-004.backblazeb2.com@evil.example", "https://minio.lan:9000"}) {
+        const auto key = upB2Key(S3Provider::BackblazeB2, notB2);
+        EXPECT_FALSE(admin::b2EndpointRegion(*key).has_value()) << notB2;
+        EXPECT_THROW(admin::B2Admin{key}, std::invalid_argument) << notB2;
+        EXPECT_FALSE(admin::supportsAdmin(*key)) << notB2;
+        EXPECT_EQ(admin::adminFor(key), nullptr) << notB2;
+        EXPECT_NE(admin::adminUnsupportedReason(*key).find("s3.<region>.backblazeb2.com"), std::string::npos) << notB2;
+    }
+    EXPECT_EQ(admin::b2EndpointRegion(*upB2Key(S3Provider::BackblazeB2, "https://s3.eu-central-003.backblazeb2.com")),
+              std::optional<std::string>("eu-central-003"));
+    EXPECT_TRUE(sent.size() == 1u);
+}
+
+TEST_F(UpstreamProviderTest, B2CreatesAPrivateBucketInTheKeysRegionOnly) {
+    handler = [](const http::Request&) { return upRespond(200); };
+    admin::B2Admin b2(upB2Key());
+    b2.createBucket({.name = "cooper-portfolio", .region = std::nullopt});
+    b2.createBucket({.name = "valkyrian-labs", .region = std::string("us-west-004")});
+    ASSERT_EQ(sent.size(), 2u);
+    for (const auto& r : sent) {
+        EXPECT_EQ(r.method, "PUT");
+        EXPECT_EQ(upHeader(r, "x-amz-acl"), "private");
+        EXPECT_NE(r.body.find("<LocationConstraint>us-west-004</LocationConstraint>"), std::string::npos);
+        EXPECT_NE(upHeader(r, "authorization").find("x-amz-acl"), std::string::npos) << "the ACL header is signed";
+    }
+    EXPECT_EQ(sent[0].url, std::string("https://") + kUpB2Host + "/cooper-portfolio");
+
+    // A B2 account lives in one region: another one is refused before anything is sent.
+    sent.clear();
+    for (const std::string other : {"us-east-005", "eu-central-003", "us-east-2", "evil.example/#"})
+        EXPECT_THROW(b2.createBucket({.name = "vaulthalla-io", .region = other}), std::invalid_argument) << other;
+    EXPECT_TRUE(sent.empty());
+
+    // A name someone holds comes back with the provider's own code, for the provisioner to tell apart.
+    for (const auto* code : {"BucketAlreadyOwnedByYou", "BucketAlreadyExists"}) {
+        handler = [code](const http::Request&) {
+            return upRespond(409, std::string("<Error><Code>") + code + "</Code><Message>taken</Message></Error>");
+        };
+        try {
+            b2.createBucket({.name = "unforeseen-travels", .region = std::nullopt});
+            FAIL() << "expected a collision";
+        } catch (const admin::ProviderError& e) {
+            EXPECT_EQ(e.code, code);
+            EXPECT_EQ(e.http_status, 409);
+        }
+    }
+}
+
+TEST_F(UpstreamProviderTest, B2BucketNamesFollowBackblazesRulesBeforeAnyRequest) {
+    handler = [](const http::Request&) { return upRespond(200); };
+    admin::B2Admin b2(upB2Key());
+    // Fine on AWS and R2, not on B2: under 6 characters, or the b2- prefix Backblaze reserves.
+    for (const std::string bad : {"abc", "short", "b2-backups", "b2-", "x/../prod", "Upper-Case-Name", "ab"}) {
+        EXPECT_THROW((void)b2.headBucket(bad), std::invalid_argument) << bad;
+        EXPECT_THROW(b2.createBucket({.name = bad, .region = std::nullopt}), std::invalid_argument) << bad;
+        EXPECT_THROW((void)b2.inspect(bad), std::invalid_argument) << bad;
+        EXPECT_THROW((void)b2.listObjects(bad, {}, 10), std::invalid_argument) << bad;
+        EXPECT_THROW((void)b2.listObjectVersions(bad, {}, 10), std::invalid_argument) << bad;
+        EXPECT_THROW(b2.deleteBucket(bad), std::invalid_argument) << bad;
+        EXPECT_THROW(b2.putLifecycle(bad, {}), std::invalid_argument) << bad;
+        EXPECT_THROW(b2.putVersioning(bad, admin::Versioning::Enabled), std::invalid_argument) << bad;
+    }
+    EXPECT_TRUE(sent.empty()) << "a refused name must not cost a single request";
+
+    std::string why;
+    using vh::storage::upstream::validB2BucketName;
+    using vh::storage::upstream::validBucketNameFor;
+    for (const auto& good : std::vector<std::string>{
+             "art-by-liam", "cooper-portfolio", "mollie-jayne-hair-co", "ultimate-restoration", "unforeseen-travels",
+             "valkyrian-labs", "vaulthalla-io", "lifeboat-drill-24ab1c", "cooper-operator-dr", "sixsix", "ab2-fine",
+             std::string(63, 'a')})
+        EXPECT_TRUE(validB2BucketName(good, why)) << good << ": " << why;
+    EXPECT_FALSE(validB2BucketName("fives", why));
+    EXPECT_NE(why.find("6 to 63"), std::string::npos);
+    EXPECT_FALSE(validB2BucketName("b2-reserved", why));
+    EXPECT_NE(why.find("b2-"), std::string::npos);
+    EXPECT_FALSE(validB2BucketName(std::string(64, 'a'), why));
+    EXPECT_TRUE(validBucketNameFor("aws-s3", "abc", why)) << "the B2 rules are B2's alone";
+    EXPECT_TRUE(validBucketNameFor("cloudflare-r2", "b2-backups", why));
+    EXPECT_FALSE(validBucketNameFor("backblaze-b2", "abc", why));
+    EXPECT_TRUE(vh::storage::upstream::validB2Region("us-west-004"));
+    EXPECT_TRUE(vh::storage::upstream::validB2Region("eu-central-003"));
+    for (const std::string bad : {"us-east-2", "us-west-004.evil.example", "US-WEST-004", "auto", ""})
+        EXPECT_FALSE(vh::storage::upstream::validB2Region(bad)) << bad;
+}
+
+TEST_F(UpstreamProviderTest, B2HeadBucketOutcomes) {
+    admin::B2Admin b2(upB2Key());
+    handler = [](const http::Request&) { return upRespond(404); };
+    EXPECT_EQ(b2.headBucket("vaulthalla-io"), std::nullopt);
+
+    handler = [](const http::Request&) { return upRespond(200); };
+    EXPECT_EQ(b2.headBucket("vaulthalla-io"), std::optional<std::string>("us-west-004"));
+    EXPECT_EQ(sent.back().method, "HEAD");
+    EXPECT_EQ(sent.back().url, std::string("https://") + kUpB2Host + "/vaulthalla-io");
+
+    handler = [](const http::Request&) { return upRespond(403); };
+    try {
+        (void)b2.headBucket("someone-elses");
+        FAIL() << "403 must throw";
+    } catch (const admin::ProviderError& e) {
+        EXPECT_TRUE(e.accessDenied());
+    }
+}
+
+TEST_F(UpstreamProviderTest, B2InspectReadsVersioningAndObjectLockAndLeavesLifecycleAndEventsToBackblaze) {
+    handler = [](const http::Request& r) {
+        if (r.url.find("?versioning") != std::string::npos)
+            return upRespond(200, "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>");
+        if (r.url.find("?object-lock") != std::string::npos)
+            return upRespond(404, "<Error><Code>ObjectLockConfigurationNotFoundError</Code></Error>");
+        return upRespond(200);
+    };
+    admin::B2Admin b2(upB2Key());
+    const auto config = b2.inspect("ultimate-restoration");
+    EXPECT_EQ(config.region, std::optional<std::string>("us-west-004"));
+    EXPECT_EQ(config.versioning, admin::Versioning::Enabled);
+    EXPECT_EQ(config.object_lock, std::optional<bool>(false));
+    EXPECT_FALSE(config.lifecycle_readable);
+    EXPECT_FALSE(config.notifications_readable);
+    EXPECT_TRUE(config.lifecycle.empty());
+    ASSERT_EQ(config.warnings.size(), 1u);
+    EXPECT_NE(config.warnings[0].find("Backblaze"), std::string::npos);
+    EXPECT_TRUE(matching("GET", "?lifecycle").empty()) << "B2's S3-compatible API has no lifecycle call";
+    EXPECT_TRUE(matching("GET", "?notification").empty()) << "nor an event-notification call";
+    EXPECT_EQ(sent.size(), 3u) << "HEAD, ?versioning, ?object-lock";
+
+    // Object lock on, and an application key that can't read it (cleanup then treats it as unknown).
+    handler = [](const http::Request& r) {
+        if (r.url.find("?versioning") != std::string::npos)
+            return upRespond(200, "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>");
+        if (r.url.find("?object-lock") != std::string::npos)
+            return upRespond(200, "<ObjectLockConfiguration><ObjectLockEnabled>Enabled</ObjectLockEnabled>"
+                                  "</ObjectLockConfiguration>");
+        return upRespond(200);
+    };
+    EXPECT_EQ(b2.inspect("ultimate-restoration").object_lock, std::optional<bool>(true));
+    handler = [](const http::Request& r) {
+        if (r.url.find("?versioning") != std::string::npos)
+            return upRespond(200, "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>");
+        if (r.url.find("?object-lock") != std::string::npos)
+            return upRespond(403, "<Error><Code>AccessDenied</Code></Error>");
+        return upRespond(200);
+    };
+    const auto unreadable = b2.inspect("ultimate-restoration");
+    EXPECT_EQ(unreadable.object_lock, std::nullopt);
+    EXPECT_EQ(unreadable.warnings.size(), 2u);
+
+    handler = [](const http::Request&) { return upRespond(404); };
+    EXPECT_THROW((void)b2.inspect("not-there-at-all"), admin::ProviderError);
+}
+
+TEST_F(UpstreamProviderTest, B2LifecycleAndSuspendingVersionsAreMissingCapabilitiesAndSendNothing) {
+    handler = [](const http::Request& r) {
+        if (r.url.find("?versioning") != std::string::npos)
+            return upRespond(200, "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>");
+        return upRespond(200);
+    };
+    admin::B2Admin b2(upB2Key());
+    EXPECT_FALSE(b2.supportsLifecycle());
+    EXPECT_TRUE(b2.supportsVersioning()) << "versions exist (the emptiness check and cleanup list them)";
+    EXPECT_TRUE(admin::AwsAdmin(upAwsKey()).supportsLifecycle());
+    EXPECT_TRUE(admin::R2Admin(upR2Key()).supportsLifecycle());
+
+    admin::LifecycleRule rule;
+    rule.id = "vaulthalla-managed";
+    rule.abort_incomplete_multipart_days = 7;
+    for (const auto& rules : {std::vector<admin::LifecycleRule>{rule}, std::vector<admin::LifecycleRule>{}}) {
+        try {
+            b2.putLifecycle("valkyrian-labs", rules);
+            FAIL() << "B2 lifecycle must be refused";
+        } catch (const admin::CapabilityMissing& e) {
+            EXPECT_EQ(e.capability, "lifecycle");
+            EXPECT_STREQ(e.what(), admin::kB2LifecycleUnsupported);
+        }
+    }
+    try {
+        b2.putVersioning("valkyrian-labs", admin::Versioning::Suspended);
+        FAIL() << "B2 versioning can't be suspended";
+    } catch (const admin::CapabilityMissing& e) {
+        EXPECT_EQ(e.capability, "versioning");
+    }
+    EXPECT_THROW(b2.putVersioning("valkyrian-labs", admin::Versioning::Unversioned), std::invalid_argument);
+    EXPECT_TRUE(sent.empty());
+
+    // Enabled is what a B2 bucket already is: one read confirms it, nothing is written.
+    b2.putVersioning("valkyrian-labs", admin::Versioning::Enabled);
+    ASSERT_EQ(sent.size(), 1u);
+    EXPECT_EQ(sent[0].method, "GET");
+    EXPECT_TRUE(matching("PUT", "?versioning").empty());
+    EXPECT_EQ(b2.versioning("valkyrian-labs").status, admin::Versioning::Enabled);
+}
+
+TEST_F(UpstreamProviderTest, B2ListsEveryVersionForTheEmptinessCheckAndCleanup) {
+    handler = [](const http::Request&) {
+        return upRespond(200, R"(<ListVersionsResult><Version><Key>o/a</Key><VersionId>4_z1_f1</VersionId>
+            <IsLatest>true</IsLatest><Size>3</Size></Version><DeleteMarker><Key>o/b</Key><VersionId>4_z1_f2</VersionId>
+            <IsLatest>true</IsLatest></DeleteMarker></ListVersionsResult>)");
+    };
+    admin::B2Admin b2(upB2Key());
+    const auto page = b2.listObjectVersions("lifeboat-drill-24ab1c", {}, 1000);
+    EXPECT_EQ(page.objects.size(), 2u);
+    ASSERT_EQ(sent.size(), 1u);
+    EXPECT_NE(sent[0].url.find("versions="), std::string::npos)
+        << sent[0].url << ": ListObjectVersions, because a bucket with only old versions isn't empty";
+}
+
+TEST_F(UpstreamProviderTest, B2ProbeReportsWhatItsS3ApiLacksAsMissingInsteadOfFailing) {
+    handler = [](const http::Request&) { return upRespond(200, kUpB2Buckets); };
+    admin::B2Admin b2(upB2Key());
+    const auto caps = b2.probe();
+    EXPECT_EQ(caps.identity.provider, "backblaze-b2");
+    EXPECT_EQ(caps.identity.account_ref, kUpB2Host);
+    EXPECT_TRUE(caps.has("buckets.list"));
+    EXPECT_TRUE(upCapability(caps, "buckets.list")->probed);
+    EXPECT_TRUE(caps.has("buckets.create"));
+    EXPECT_FALSE(upCapability(caps, "buckets.create")->probed) << "checking it would create a bucket";
+    for (const auto& [name, detail] : std::vector<std::pair<std::string, std::string>>{
+             {"lifecycle", admin::kB2LifecycleUnsupported},
+             {"versioning", admin::kB2VersioningFixed},
+             {"events.queues", admin::kB2EventsUnsupported},
+             {"events.notifications", admin::kB2EventsUnsupported}}) {
+        const auto cap = upCapability(caps, name);
+        ASSERT_TRUE(cap.has_value()) << name;
+        EXPECT_FALSE(cap->ok) << name;
+        EXPECT_TRUE(cap->probed) << name << ": known, not a guess";
+        EXPECT_EQ(cap->detail, detail) << name;
+    }
+    ASSERT_EQ(sent.size(), 1u) << "one ListBuckets and nothing that changes anything";
+    EXPECT_EQ(sent[0].method, "GET");
+
+    // A key restricted to one bucket can't list the account: reported, never thrown.
+    handler = [](const http::Request&) {
+        return upRespond(403, "<Error><Code>AccessDenied</Code><Message>not entitled</Message></Error>");
+    };
+    const auto restricted = b2.probe();
+    const auto list = upCapability(restricted, "buckets.list");
+    ASSERT_TRUE(list.has_value());
+    EXPECT_FALSE(list->ok);
+    EXPECT_NE(list->detail.find("list all bucket names"), std::string::npos);
+    EXPECT_EQ(list->detail.find(kUpB2Secret), std::string::npos);
+}
+
+TEST_F(UpstreamProviderTest, B2IdentityFollowsTheEndpointAndOnlyAB2KeyAdministers) {
+    const auto b2 = upB2Key();
+    EXPECT_TRUE(admin::supportsAdmin(*b2));
+    EXPECT_TRUE(admin::adminUnsupportedReason(*b2).empty());
+    EXPECT_FALSE(admin::supportsEvents(*b2)) << "event-driven sync stays AWS S3 / Cloudflare R2";
+    EXPECT_TRUE(admin::supportsEvents(*upAwsKey()));
+    EXPECT_TRUE(admin::supportsEvents(*upR2Key()));
+    EXPECT_FALSE(admin::providerEndpointMismatch(*b2).has_value());
+    const auto client = admin::adminFor(b2);
+    ASSERT_NE(client, nullptr);
+    EXPECT_EQ(client->providerId(), "backblaze-b2");
+    EXPECT_EQ(admin::eventsFor(b2), nullptr);
+
+    const auto id = vh::storage::upstream::identityFor(*b2, "cooper-operator-dr");
+    EXPECT_EQ(id.provider, "backblaze-b2");
+    EXPECT_EQ(id.account_ref.value_or(""), kUpB2Host);
+    EXPECT_EQ(admin::providerIdentity(S3Provider::BackblazeB2), "backblaze-b2");
+
+    // The same endpoint saved under another label reaches the same buckets: same identity, same locks. The label is
+    // refused for new keys, and such a key doesn't administer anything until it is corrected.
+    const auto asOther = upB2Key(S3Provider::Other);
+    const auto otherId = vh::storage::upstream::identityFor(*asOther, "cooper-operator-dr");
+    EXPECT_EQ(otherId.provider, "backblaze-b2");
+    EXPECT_EQ(otherId.account_ref.value_or(""), kUpB2Host);
+    guard::setForTesting({{.provider = "backblaze-b2", .account_ref = std::string(kUpB2Host), .bucket = "cooper-operator-dr"}});
+    EXPECT_TRUE(guard::isProtected(otherId)) << "a backblaze-b2 lock covers the bucket however the key is labelled";
+    EXPECT_TRUE(guard::isProtected(id));
+    const auto mismatch = admin::providerEndpointMismatch(*asOther);
+    ASSERT_TRUE(mismatch.has_value());
+    EXPECT_NE(mismatch->find("backblaze-b2"), std::string::npos);
+    EXPECT_FALSE(admin::supportsAdmin(*asOther));
+    EXPECT_EQ(admin::adminUnsupportedReason(*asOther), *mismatch);
+    EXPECT_EQ(admin::adminFor(asOther), nullptr);
+
+    // A bucket of another B2 region is another bucket.
+    const auto eu = upB2Key(S3Provider::BackblazeB2, "https://s3.eu-central-003.backblazeb2.com");
+    EXPECT_FALSE(guard::isProtected(vh::storage::upstream::identityFor(*eu, "cooper-operator-dr")));
+
+    // A key managed storage issued belongs to the service's account, whatever its provider.
+    for (const auto& key : {upB2Key(), upAwsKey(), upR2Key()}) {
+        key->origin = "cloud";
+        EXPECT_FALSE(admin::supportsAdmin(*key));
+        EXPECT_FALSE(admin::supportsEvents(*key));
+        EXPECT_NE(admin::adminUnsupportedReason(*key).find("managed storage"), std::string::npos);
+    }
+    const auto cloudB2 = upB2Key();
+    cloudB2->origin = "cloud";
+    EXPECT_EQ(admin::adminFor(cloudB2), nullptr);
+
+    const auto wasabi = std::make_shared<APIKey>(1, "wasabi", S3Provider::Wasabi, "wasabiaccesskey0000", "wasabisecret000000000",
+                                                "us-east-1", "https://s3.wasabisys.com");
+    EXPECT_NE(admin::adminUnsupportedReason(*wasabi).find("AWS S3, Cloudflare R2 and Backblaze B2"), std::string::npos);
 }

@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace vh_sql_deployer_history_test {
@@ -1436,6 +1437,78 @@ TEST_F(SqlDeployerHistoryDb, DeviceScopeMigration152KeepsEveryDeviceUnscoped) {
         ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "152_device_scope.sql")));
         EXPECT_EQ(txn.exec("SELECT scope FROM devices WHERE id = $1", pqxx::params{device}).one_field_ref().as<std::string>(),
                   "read") << "re-running keeps a set scope";
+    });
+}
+
+// 153 (Backblaze B2 identity) on a 152-era database: B2 buckets recorded as 's3:backblaze-b2', or under another
+// generic label with a B2 S3 endpoint as their account, become 'backblaze-b2' with everything else unchanged, so their
+// protection locks and bindings still match what a B2 key resolves to. Other providers' rows and the audit history
+// are left alone, a lock is never lost to a collision, and running it again changes nothing.
+TEST_F(SqlDeployerHistoryDb, BackblazeIdentityMigration153KeepsEveryLockAndRecord) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '153_backblaze_b2_identity.sql'");
+        const std::string host = "s3.us-west-004.backblazeb2.com";
+        const auto add = [&](const std::string& provider, const std::string& account, const std::string& bucket,
+                             const bool locked, const std::string& ownership = "unmanaged") {
+            return txn.exec("INSERT INTO upstream_bucket (provider, account_ref, bucket, ownership, is_protected, "
+                            "protected_by_name, protection_reason) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+                            pqxx::params{provider, account, bucket, ownership, locked,
+                                         locked ? std::optional<std::string>("claude_test_153") : std::nullopt,
+                                         locked ? std::optional<std::string>("keep out") : std::nullopt})
+                .one_field_ref().as<long>();
+        };
+        const auto row = [&](const long id) {
+            const auto res = txn.exec("SELECT provider, account_ref, bucket, ownership, is_protected, "
+                                      "COALESCE(protection_reason, '') FROM upstream_bucket WHERE id = $1",
+                                      pqxx::params{id});
+            const auto r = res.one_row();
+            return std::tuple{r[0].as<std::string>(), r[1].as<std::string>(), r[2].as<std::string>(),
+                              r[3].as<std::string>(), r[4].as<bool>(), r[5].as<std::string>()};
+        };
+
+        const auto locked = add("s3:backblaze-b2", host, "claude-test-153-locked", true);
+        const auto managed = add("s3:backblaze-b2", host, "claude-test-153-managed", false, "managed");
+        const auto otherLabel = add("s3:other", host, "claude-test-153-other-label", true);
+        const auto minio = add("s3:minio", "minio.lan", "claude-test-153-minio", true);
+        const auto lookalike = add("s3:other", "s3.us-west-004.backblazeb2.com.evil.example", "claude-test-153-lookalike", true);
+        const auto aws = add("aws-s3", "111122223333", "claude-test-153-aws", true);
+        // The same bucket recorded twice: unlocked as Backblaze B2, locked through a key saved as "Other".
+        const auto twiceB2 = add("s3:backblaze-b2", host, "claude-test-153-twice", false, "adopted");
+        const auto twiceOther = add("s3:other", host, "claude-test-153-twice", true);
+        txn.exec("INSERT INTO upstream_audit (action, provider, account_ref, bucket, outcome) VALUES "
+                 "('protect', 's3:backblaze-b2', $1, 'claude-test-153-locked', 'ok')", pqxx::params{host});
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "153_backblaze_b2_identity.sql"));
+        EXPECT_EQ(recordedHash(txn, "153_backblaze_b2_identity.sql"), currentHash("153_backblaze_b2_identity.sql"));
+
+        const auto check = [&] {
+            EXPECT_EQ(row(locked), (std::tuple{std::string("backblaze-b2"), host, std::string("claude-test-153-locked"),
+                                               std::string("unmanaged"), true, std::string("keep out")}));
+            EXPECT_EQ(row(managed), (std::tuple{std::string("backblaze-b2"), host, std::string("claude-test-153-managed"),
+                                                std::string("managed"), false, std::string()}));
+            EXPECT_EQ(std::get<0>(row(otherLabel)), "backblaze-b2") << "the identity follows the endpoint, not the label";
+            EXPECT_TRUE(std::get<4>(row(otherLabel)));
+            EXPECT_EQ(std::get<0>(row(minio)), "s3:minio");
+            EXPECT_EQ(std::get<0>(row(lookalike)), "s3:other") << "only a real B2 S3 endpoint host";
+            EXPECT_EQ(std::get<0>(row(aws)), "aws-s3");
+            // The collision: the row that now carries the identity took the lock over and kept its own record.
+            EXPECT_EQ(row(twiceB2), (std::tuple{std::string("backblaze-b2"), host, std::string("claude-test-153-twice"),
+                                                std::string("adopted"), true, std::string("keep out")}));
+            EXPECT_EQ(std::get<0>(row(twiceOther)), "s3:other") << "left as it was";
+            EXPECT_EQ(txn.exec("SELECT count(*) FROM upstream_bucket WHERE provider = 'backblaze-b2' AND is_protected "
+                               "AND bucket LIKE 'claude-test-153-%'").one_field_ref().as<int>(), 3);
+            EXPECT_EQ(txn.exec("SELECT provider FROM upstream_audit WHERE bucket = 'claude-test-153-locked'")
+                          .one_field_ref().as<std::string>(), "s3:backblaze-b2") << "history is not rewritten";
+        };
+        check();
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "153_backblaze_b2_identity.sql")));
+        check();
     });
 }
 

@@ -24,6 +24,7 @@ import {
 } from '@/features/credentials/upstream/hooks'
 import { AdmissionReportView } from '@/features/credentials/upstream/AdmissionReportView'
 import {
+  adminFeatures,
   UPSTREAM_CODES,
   type BucketRow,
   type CleanupPlan,
@@ -224,7 +225,7 @@ const versioningLabel: Record<string, string> = {
 const useInspection = (apiKeyId: number, bucket: string) =>
   useWs('upstream.bucket.inspect', { api_key_id: apiKeyId, bucket }, { retry: false, select: d => d.inspection })
 
-const InspectSheet = ({ apiKeyId, row, onClose, onLifecycle }: ActionProps & { onLifecycle: () => void }) => {
+const InspectSheet = ({ apiKeyId, provider, row, onClose, onLifecycle }: ActionProps & { onLifecycle: () => void }) => {
   const perms = useUpstreamPerms()
   const inspection = useInspection(apiKeyId, row.name)
   const owned = row.ownership === 'managed' || row.ownership === 'adopted'
@@ -235,20 +236,22 @@ const InspectSheet = ({ apiKeyId, row, onClose, onLifecycle }: ActionProps & { o
         description="Bucket-level configuration only; no objects are read."
         width="max-w-xl"
         footer={
-          perms.configure && owned && !row.is_protected ?
+          perms.configure && owned && !row.is_protected && adminFeatures(provider).lifecycle ?
             <Button size="sm" onClick={onLifecycle}>
               Edit lifecycle…
             </Button>
           : undefined
         }>
-        <QueryState query={inspection}>{data => <InspectionView inspection={data} />}</QueryState>
+        <QueryState query={inspection}>{data => <InspectionView inspection={data} provider={provider} />}</QueryState>
       </SheetContent>
     </Dialog>
   )
 }
 
-const InspectionView = ({ inspection }: { inspection: Inspection }) => {
+const InspectionView = ({ inspection, provider }: { inspection: Inspection; provider: string }) => {
   const { config, bucket } = inspection
+  const features = adminFeatures(provider)
+  const atProvider = 'Managed in the provider’s own console; Vaulthalla doesn’t read or change them.'
   return (
     <div className="space-y-5 text-sm">
       <DefinitionList
@@ -293,7 +296,9 @@ const InspectionView = ({ inspection }: { inspection: Inspection }) => {
       : null}
       <section>
         <h3 className="text-fg mb-2 text-[13px] font-semibold">Lifecycle rules</h3>
-        {!config.lifecycle_readable ?
+        {!features.lifecycle ?
+          <p className="text-fg-subtle">{atProvider}</p>
+        : !config.lifecycle_readable ?
           <p className="text-fg-subtle">Not readable with this credential.</p>
         : config.lifecycle.length === 0 ?
           <p className="text-fg-subtle">None.</p>
@@ -306,7 +311,9 @@ const InspectionView = ({ inspection }: { inspection: Inspection }) => {
       </section>
       <section>
         <h3 className="text-fg mb-2 text-[13px] font-semibold">Event notifications</h3>
-        {!config.notifications_readable ?
+        {!features.events ?
+          <p className="text-fg-subtle">{atProvider}</p>
+        : !config.notifications_readable ?
           <p className="text-fg-subtle">Not readable with this credential.</p>
         : config.notifications.length === 0 ?
           <p className="text-fg-subtle">None.</p>

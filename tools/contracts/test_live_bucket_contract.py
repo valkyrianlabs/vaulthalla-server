@@ -70,14 +70,15 @@ LIVE_CREDENTIAL_READERS = {
 FIXED_TEST_BUCKETS = ["vh-test-gateway-smoke", "vh-test-recover-drill"]
 TOOL = TESTS / "helpers" / "live_bucket_tool.cpp"
 
-REAL_ADAPTER = re.compile(r"\b(AwsAdmin|R2Admin|AwsEvents|R2Events)\s*[(>{]")
+REAL_ADAPTER = re.compile(r"\b(AwsAdmin|R2Admin|B2Admin|AwsEvents|R2Events)\s*[(>{]")
 
 GUARDED_ADMIN_METHODS = ("headBucket", "createBucket", "deleteBucket", "inspect", "putLifecycle", "versioning",
                          "putVersioning", "listObjects", "listObjectVersions", "deleteObjects", "objectsUnder",
                          "uploadsUnder")
 GUARDED_EVENTS_METHODS = ("ensureChannel", "subscribe", "unsubscribe", "rules", "removeChannel", "poll", "ack",
                           "retry", "backlog")
-# Backblaze B2 through its native API (the product has no B2 admin adapter): every bucket-scoped call name-checked.
+# Backblaze B2 through its native API (version cleanup, the orphan sweep; the run bucket itself is created by the
+# product's B2Admin behind GuardedAdmin): every bucket-scoped call name-checked.
 GUARDED_B2_METHODS = ("bucketId", "createBucket", "versionsUnder", "deleteVersion", "removeBucket")
 
 # What a file using the helper may not do itself.
@@ -96,7 +97,8 @@ LIVE_FILE_EXCEPTIONS: dict[tuple[str, str], tuple[int, str]] = {
     ("core/tests/unit/test_live_r2.cpp", "createBucket"): (
         6, "RecordingAdmin's override; guard self-tests; the 409 collision check on the run's existing bucket"),
     ("core/tests/unit/test_live_b2.cpp", "createBucket"): (
-        2, "LiveB2Guard over a recording transport: a refused name, and a forwarded run bucket name (nothing sent)"),
+        3, "LiveB2Guard over a recording transport: a refused name, and a forwarded run bucket name (nothing sent); "
+           "the 409 collision check on the run's existing bucket through the guarded B2Admin"),
     ("core/tests/helpers/live_bucket_tool.cpp", "createBucket"): (
         1, "vh_live_bucket creates a fixed tooling bucket after isFixedTestBucket() accepted the name"),
 }

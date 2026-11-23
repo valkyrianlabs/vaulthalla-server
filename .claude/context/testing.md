@@ -603,12 +603,16 @@ Two hard rules, enforced by `tests/helpers/live_bucket.hpp` (the only way a test
   `RecoveryProviderTest`), listing edge cases (`S3ListObjects*`, `S3VersionedOps*`).
 - **Backblaze B2** (`test_live_b2.cpp`, `LiveB2.*`; spec 06 §8.3): credential `VH_B2_TEST_KEY_ID` /
   `VH_B2_TEST_APP_KEY` (an account-wide application key: buckets created and deleted, files listed, written,
-  deleted); the S3 endpoint and region come from `b2_authorize_account` (`apiInfo.storageApi.s3ApiUrl`). The product
-  has no B2 admin adapter, so `GuardedB2` (same helper) drives B2's native API for the run bucket (`b2_create_bucket`,
-  `b2_list_file_versions`, `b2_delete_file_version`, `b2_cancel_large_file`, `b2_delete_bucket`), name-checked
-  before any request; `RunB2Bucket` sweeps orphans, creates one `vh-test-<host>-<pid>-<start>` bucket and
-  `RunB2BucketEnvironment` deletes every version and the bucket after the last test, also on failure. One
-  consolidated test, `TheManifestPublishesAsVersionsOfItsRoot` (probe says version_log; four publishes through the
+  deleted); the S3 endpoint and region come from `b2_authorize_account` (`apiInfo.storageApi.s3ApiUrl`). The run
+  bucket is created through the product's `B2Admin` behind `GuardedAdmin` (`guardedB2Admin`, S3-compatible
+  CreateBucket); `GuardedB2` (same helper) drives B2's native API for the orphan sweep and the cleanup
+  (`b2_list_buckets`, `b2_list_file_versions`, `b2_delete_file_version`, `b2_cancel_large_file`, `b2_delete_bucket`),
+  name-checked before any request; `RunB2Bucket` sweeps orphans, creates one `vh-test-<host>-<pid>-<start>` bucket and
+  `RunB2BucketEnvironment` deletes every version and the bucket after the last test, also on failure.
+  `TheAdminAdapterAdministersTheRunBucket` (2026-11-23): the real `B2Admin` lists the account, heads a present and
+  an absent test name, gets the collision code for the run bucket's own name, inspects it (versioning, object lock),
+  lists both versions of an overwritten key and probes. One
+  consolidated manifest test, `TheManifestPublishesAsVersionsOfItsRoot` (probe says version_log; four publishes through the
   real `storage::s3::ManifestStore` with their request counts; a blind reload; a sibling landed after our PUT and repaired; GC of every
   version of a collected segment; an envelope written and read back). `LiveB2Guard.*` runs in CI. **Passes live**
   (us-west-004, 2026-11-14, on the code as pushed; a first run on 2026-11-12 failed on one wrong test assertion: GC

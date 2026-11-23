@@ -161,6 +161,7 @@ enum class BucketMode { Existing, Create, Adopt };
 struct Provision {
     BucketMode mode = BucketMode::Existing;
     std::optional<std::string> region{};           // AWS region / R2 location hint; default: the key's region
+                                                   // (Backblaze B2: only the key's own region, or nothing)
     bool generate_name = false;                    // Create: pick an available "vh-<vault>-<random>" name
     std::optional<LifecyclePatch> lifecycle{};     // Create/Adopt: our lifecycle rule
     bool events = false;                           // subscribe for event-driven sync

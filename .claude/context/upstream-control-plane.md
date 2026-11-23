@@ -1,20 +1,22 @@
 # Upstream control plane and event-driven sync (#237, #96)
 
-Built 2026-10-15 on `feat/upstream-control-plane`. Operator docs: `docs/vaults/upstream-buckets.md`,
+Built 2026-10-15 on `feat/upstream-control-plane`; Backblaze B2 bucket administration added 2026-11-23
+(`feat/b2-provider-admin`, migration 153). Operator docs: `docs/vaults/upstream-buckets.md`,
 `docs/vaults/event-sync.md`. Migration 110.
 
 ## What it is
 
-An upstream API key (AWS S3 or Cloudflare R2) can be marked an administrative credential (`api_keys.admin_enabled`).
-Then Vaulthalla lists the account's buckets, creates/adopts buckets for vaults, owns one lifecycle rule
-(`vaulthalla-managed`), runs event subscriptions (S3 → SQS Standard, R2 → Cloudflare Queues HTTP pull) and cleans up
-buckets it created. Other providers: plain storage, but protection locks still apply.
+An upstream API key (AWS S3, Cloudflare R2 or Backblaze B2) can be marked an administrative credential
+(`api_keys.admin_enabled`). Then Vaulthalla lists the account's buckets, creates/adopts buckets for vaults, owns one
+lifecycle rule (`vaulthalla-managed`), runs event subscriptions (S3 → SQS Standard, R2 → Cloudflare Queues HTTP pull)
+and cleans up buckets it created. Backblaze B2 gets the bucket half only (see "Backblaze B2" below). Other providers:
+plain storage, but protection locks still apply.
 
 ## Code map
 
 | Layer | Where |
 |---|---|
-| Provider adapters (trusted, no RBAC) | `storage/s3/provider/admin/` — `Admin.hpp` interfaces (`AdminClient`, `EventsClient`), `AwsAdmin`, `AwsEvents` (SQS JSON protocol, queue policy, notification GET-merge-PUT), `R2Admin`, `R2Events` (Cloudflare REST), `S3Api`/`Xml`/`Internal` (merges, redaction), `Registry` (`adminFor`/`eventsFor`, `setFactoryForTesting` test-mode only) |
+| Provider adapters (trusted, no RBAC) | `storage/s3/provider/admin/` — `Admin.hpp` interfaces (`AdminClient`, `EventsClient`), `AwsAdmin`, `AwsEvents` (SQS JSON protocol, queue policy, notification GET-merge-PUT), `R2Admin`, `R2Events` (Cloudflare REST), `B2Admin` (no events adapter), `S3Api`/`Xml`/`Internal` (merges, redaction), `Registry` (`adminFor`/`eventsFor`, `setFactoryForTesting` test-mode only) |
 | Signing/HTTP | `vl::sigv4::sign` from vl-sigv4 (`subprojects/vl-sigv4.wrap`, any service/region; called in `provider/admin/Internal.cpp` `detail::send` and `Controller::signObjectRequest`; the in-tree `storage/s3/sigv4/Signer` is kept only as the goldens' reference until a verified release),  `storage/s3/curl/Http` (timeouts, size cap, `ScopedCancellation`, transport seam) |
 | Identity + lock | `storage/upstream/{Identity,Guard}` — identity = (providerIdentity, account_ref, bucket); `guard::require` in `s3::Controller::recordRequest` and every bucket-scoped adapter call; set loaded at startup (`main.cpp wireStorage`, fail closed) |
 | Control plane primitives | `storage/upstream/{Inventory,Lifecycle,Provisioner,Cleanup}`, models `storage/upstream/model/*`, queries `db/query/upstream/{Bucket,Audit,Binding,Channel,Subscription,Inbox,WriteIntent}` |
@@ -33,7 +35,8 @@ buckets it created. Other providers: plain storage, but protection locks still a
 
 - Protection belongs to the bucket identity, never the key; unknown account ⇒ any lock on (provider, bucket) applies.
   Identity follows the endpoint host, not the key's provider label (`*.r2.cloudflarestorage.com` ⇒ cloudflare-r2,
-  `*.amazonaws.com` ⇒ aws-s3; `providerIdentity(const APIKey&)`); keys whose label contradicts the endpoint are refused.
+  `*.amazonaws.com` ⇒ aws-s3, `s3.<region>.backblazeb2.com` ⇒ backblaze-b2; `providerIdentity(const APIKey&)`); keys
+  whose label contradicts the endpoint are refused.
   Bucket names/regions are validated (`storage/upstream/Names`) before any request; Cloudflare REST segments are
   percent-encoded (no signature covers those paths).
   AWS HeadBucket (#247) goes straight to a known region: the adapter's cache, `AdminClient::setKnownRegion`
@@ -122,6 +125,44 @@ buckets it created. Other providers: plain storage, but protection locks still a
   `noteChanged` marks `changed_at`, alerts once (`bucket_capability_changed`, operator notification), and
   `CloudEngine::writeCapability()` stalls every later use until a re-probe. Unknown: logged, the next use probes.
 
+## Backblaze B2 (bucket administration only)
+
+- **Adapter:** `B2Admin` (`provider/admin/B2Admin.cpp`) over B2's S3-compatible API, for a key labelled
+  `S3Provider::BackblazeB2` whose endpoint is `https://s3.<region>.backblazeb2.com` (`admin::b2EndpointRegion`; the
+  request host is rebuilt from that region, SigV4 is signed for it). `admin::supportsAdmin` /
+  `adminUnsupportedReason` are the gate (a B2 label over another endpoint, or another label over a B2 endpoint, is
+  not administrative; neither is any key managed storage issued, `origin = 'cloud'`).
+- **What it calls** (Backblaze's documented "supported calls"): ListBuckets (no paging: `pagedListBuckets() == false`),
+  HeadBucket, CreateBucket (`x-amz-acl: private`, `LocationConstraint` = the endpoint's region), DeleteBucket,
+  GetBucketVersioning, Get Object Lock Configuration, ListObjectsV2, ListObjectVersions, DeleteObjects.
+- **What it never calls**, because that API has no such operation (lifecycle rules: "available only through the
+  Backblaze web console and the Native API"; event notifications: native only): `supportsLifecycle() == false`,
+  `inspect` answers `lifecycle_readable = notifications_readable = false` with one warning, `putLifecycle` and
+  `putVersioning(Suspended)` throw `CapabilityMissing` after the name and guard checks with nothing sent,
+  `putVersioning(Enabled)` only reads (B2 buckets are always versioned), and `probe()` lists `lifecycle`,
+  `versioning`, `events.queues` and `events.notifications` as `ok = false, probed = true`
+  (`kB2LifecycleUnsupported` / `kB2VersioningFixed` / `kB2EventsUnsupported`). `admin::supportsEvents` (AWS, R2)
+  gates event-driven sync in `ops::upstream` (`supportGap`, `beginProvision`) and `sync::events::subscriptions`.
+  Provider versioning as a recovery mode stays AWS only (`polProviderGap` in `ops/RecoveryPolicy.cpp`).
+- **Ops** (`ops/Upstream.cpp`): `lifecycleGap(key)` refuses `setLifecycle` and a provisioning `lifecycle` before any
+  request, skips the lifecycle step of `detach`, and empties `supported_lifecycle_fields`; `requireValidRegion` /
+  `defaultRegion` allow only the key's own region (an account lives in one); `identityOf` applies B2's name rules.
+- **Names** (`storage/upstream/Names`): `validB2BucketName` = the S3 rules + at least 6 characters + no `b2-`
+  prefix; `validBucketNameFor(providerIdentity, …)` picks the rules, used by `S3ApiAdmin::requireBucket`,
+  `provision::createManaged` and `identityOf`. B2 names are unique across every B2 account.
+- **Identity:** `(backblaze-b2, s3.<region>.backblazeb2.com, bucket)`. The account part is the region endpoint host,
+  which is what plain B2 vaults and managed (cloud) buckets were already recorded with: names are global on B2, so
+  the host is enough, and no network call or re-keying is needed. Two B2 accounts in one region therefore share an
+  inventory scope (`listForAccount`): a bucket Vaulthalla knows from one shows as "not listed" under the other's key.
+  Migration 153 renames `upstream_bucket.provider` from `s3:backblaze-b2` (and other `s3:*` labels over a B2 host),
+  carrying a lock over on a collision; `upstream_audit` keeps what it recorded.
+- **A taken name:** `provision::createManaged` reports a HeadBucket 403 without a region, and a CreateBucket
+  `BucketAlreadyExists`, as "already taken … choose another name" (`ops::Conflict`); `BucketAlreadyOwnedByYou` still
+  says "adopt it instead". Applies to AWS too.
+- **Web:** `models/upstream.ts` `supportsAdmin` / `adminFeatures(provider)`; `BucketProvisionFields` hides region,
+  lifecycle and events for B2 and applies the 6-character / `b2-` rule; `provisionPayload(values, accepted,
+  provider)` never sends what core would refuse; the buckets page hides the lifecycle action.
+
 ## Provider facts (verified live 2026-10-15)
 
 - Backblaze B2 (2026-11-12, `s3.us-west-004.backblazeb2.com`, coordinator's probe): PutObject with `If-None-Match: *`
@@ -166,8 +207,11 @@ buckets it created. Other providers: plain storage, but protection locks still a
 
 ## Tests
 
-DB-free: `SigV4Goldens.*` (incl. `VlSigv4*`: vl-sigv4 against the upstream, SES, gateway and legacy data-path goldens), `S3DataPathWire.*`, `UpstreamProvider*`, `UpstreamEventDecode*`, `UpstreamPassLease*`, `ShellLogRedaction*`.
-Live (opt-in, one `vh-test-*` bucket per run): `LiveR2.*`; guard self-tests `LiveBucketGuard.*` (testing.md).
+DB-free: `SigV4Goldens.*` (incl. `VlSigv4*`: vl-sigv4 against the upstream, SES, gateway and legacy data-path goldens), `S3DataPathWire.*`, `UpstreamProvider*` (`UpstreamProviderTest.B2*`: the B2 adapter over the transport seam), `UpstreamEventDecode*`, `UpstreamPassLease*`, `ShellLogRedaction*`.
+Live (opt-in, one `vh-test-*` bucket per run): `LiveR2.*`, `LiveB2.*` (`TheAdminAdapterAdministersTheRunBucket`: the
+real `B2Admin`, which also creates the run bucket); guard self-tests `LiveBucketGuard.*`, `LiveB2Guard.*` (testing.md).
+B2 ops (DB-backed, fake account): `UpstreamOpsTest.ABackblazeB2*`, `OnlyABackblazeEndpoint…`,
+`ANameAnotherAccountHolds…`; migration: `SqlDeployerHistoryDb.BackblazeIdentityMigration153…`.
 DB-backed (`bin/tests/run_unit.sh`): `UpstreamStore*`, `UpstreamOps*`, `UpstreamEventOps*`, `UpstreamEvents*`,
 `UpstreamSubscriptions*`, `UpstreamScopedSync*`, `UpstreamParity*`, `SqlDeployerHistoryDb.*` (migration 110),
 `RoleParity*` (upstream bits). Fakes: `tests/helpers/upstream_admin_fakes.hpp`, `upstream_event_fakes.hpp`.

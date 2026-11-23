@@ -36,7 +36,7 @@ import {
   isBound,
   useUpstreamPerms,
 } from '@/features/credentials/upstream/hooks'
-import { BUCKET_STATES, type BucketRow, type BucketState } from '@/models/upstream'
+import { adminFeatures, BUCKET_STATES, type BucketRow, type BucketState } from '@/models/upstream'
 import type { BucketActionKind } from '@/features/credentials/upstream/BucketActions'
 
 // Every dialog and the inspect sheet live in one lazy chunk, loaded on the first action.
@@ -90,7 +90,7 @@ export const BucketsPage = ({ apiKeyId }: { apiKeyId: number }) => {
     const entries: MenuEntry[] = []
     if (perms.view)
       entries.push({ key: 'inspect', label: 'Inspect', icon: EyeIcon, onSelect: () => open('inspect', row) })
-    if (perms.configure && owned)
+    if (perms.configure && owned && adminFeatures(credential.data?.provider).lifecycle)
       entries.push({ key: 'lifecycle', label: 'Lifecycle…', icon: SlidersIcon, onSelect: () => open('lifecycle', row) })
     if (perms.provision && !owned && !bound)
       entries.push({ key: 'adopt', label: 'Adoption check…', icon: RouteIcon, onSelect: () => open('adopt', row) })

@@ -151,6 +151,62 @@ vh api-key create r2-main \
 
 The endpoint is required. The default region is `auto`.
 
+Backblaze B2 example (the endpoint is the account's S3 endpoint, and the region the one it names):
+
+```bash
+vh api-key create b2-main \
+  --access <keyID> \
+  --secret <applicationKey> \
+  --provider backblaze-b2 \
+  --endpoint https://s3.us-west-004.backblazeb2.com \
+  --region us-west-004
+```
+
+A credential whose provider contradicts its endpoint (an AWS, Cloudflare R2 or Backblaze B2 endpoint saved under
+another provider) is refused.
+
+## Upstream Buckets
+
+An AWS S3, Cloudflare R2 or Backblaze B2 credential can also administer its account's buckets. See
+[Managed Upstream Buckets](/vaults/upstream-buckets) for what each provider supports and the permissions involved.
+
+```bash
+vh upstream admin enable <api-key> [--provider-token | --clear-provider-token]
+vh upstream admin disable <api-key>
+vh upstream admin status <api-key> [--probe]
+vh upstream buckets <api-key> [--state managed|adopted|unmanaged|protected] [--filter <text>] [--limit <n>] [--page-token <token>]
+vh upstream inspect <api-key> <bucket>
+vh upstream adopt-check <api-key> <bucket> [--max-objects <n>] [--sample <n>]
+vh upstream protect <api-key> <bucket> --reason <text>
+vh upstream unprotect <api-key> <bucket> [--yes]
+vh upstream lifecycle <api-key> <bucket> [--abort-multipart-days <n>] [--expire-days <n>] [--expire-noncurrent-days <n>] [--prefix <p>] [--clear] [--yes]
+vh upstream detach <api-key> <bucket>
+vh upstream cleanup <api-key> <bucket> [--preflight] [--confirm-token <token>] [--keep-bucket]
+vh upstream events enable|disable|repair <vault>
+vh upstream events status [<vault>]
+vh upstream audit [--bucket <bucket>] [--limit <n>]
+```
+
+`admin status --probe` checks what the credential can do without changing anything and marks each capability
+available or missing. For a Backblaze B2 key, `lifecycle`, `versioning` and the two `events` capabilities are always
+missing: B2's S3-compatible API has no lifecycle or event-notification calls and its buckets are always versioned, so
+`upstream lifecycle` and event-driven sync are refused for B2 with that reason. `--provider-token` is for Cloudflare
+R2 only.
+
+Create a vault together with a new bucket, or adopt an existing one, with a credential that has provider
+administration enabled:
+
+```bash
+vh vault create media --s3 --api-key aws-admin --bucket-mode create --generate-bucket --region us-east-2
+vh vault create media --s3 --api-key b2-admin --bucket-mode create --bucket acme-media-vault
+vh vault create archive --s3 --api-key b2-admin --bucket legacy-photos --bucket-mode adopt
+```
+
+`--bucket-mode` is `existing` (the default: bind `--bucket` as named), `create` or `adopt`. With `create`, `--region`
+takes an AWS region or an R2 location hint; Backblaze B2 buckets are always created in the key's own region. B2
+bucket names have 6 to 63 characters, can't start with `b2-`, and are shared by every Backblaze account: a name
+someone else holds is refused as taken. `--events` and `--abort-multipart-days` are for AWS S3 and Cloudflare R2.
+
 ## Vaults
 
 ```bash
