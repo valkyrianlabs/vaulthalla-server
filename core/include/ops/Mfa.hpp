@@ -3,7 +3,7 @@
 #include "auth/mfa/Recovery.hpp"
 #include "ops/Actor.hpp"
 
-#include <nlohmann/json_fwd.hpp>
+#include <nlohmann/json.hpp>  // Status holds a json by value: it needs the complete type
 
 #include <cstdint>
 #include <optional>
