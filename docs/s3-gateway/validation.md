@@ -29,6 +29,17 @@ The wrapper sources known local environment files, starts the web dev server whe
 
 The browser suite creates a fresh `e2e_s3gw_*` admin user during global setup for local/dev validation and stores the generated password under `test-results/s3-gateway-e2e/e2e.env` with private permissions.
 
+## Listing And Paging
+
+`tools/smoke/s3_gateway_list_paging.py` lists a bucket with boto3's paginators and checks the result against S3's rules. It only reads:
+
+```bash
+S3_GATEWAY_ENDPOINT=http://127.0.0.1:39000 AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
+  tools/smoke/s3_gateway_list_paging.py --bucket archive --page-size 100
+```
+
+It requires that ListObjectsV2 lists every key once in UTF-8 byte order, that ListObjects (v1), paging by `StartAfter` and a smaller page size give the same listing, and that a `Delimiter=/` listing is what the flat one folds into. Point it at a bucket with more than 1,000 keys so the default page size crosses a page boundary; `--expect-keys N` asserts the count. The DB-backed unit suite runs it against an in-process gateway holding 2,500 keys (`S3GatewayDbTest.Boto3PaginatorsListABucketLargerThanOnePage`, skipped where python3 has no boto3).
+
 ## Remote R2/S3 Smoke
 
 Remote-backed smoke runs when remote env is present or required explicitly:

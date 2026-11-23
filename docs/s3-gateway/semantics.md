@@ -23,6 +23,29 @@ LIST is metadata-only. It uses gateway object metadata, Vaulthalla filesystem me
 
 LIST does not decrypt object bodies, read plaintext to calculate ETags, refresh manifests, or call upstream S3/R2 LIST/HEAD/GET APIs.
 
+Both listing calls are served, for local and remote-backed buckets alike:
+
+| Call | Request | Resumes from |
+| --- | --- | --- |
+| ListObjectsV2 | `GET /bucket?list-type=2` | `continuation-token` (the `NextContinuationToken` of the page before), or `start-after` for a first page |
+| ListObjects | `GET /bucket` without `list-type=2` | `marker` (`NextMarker`, or the last key of the page before) |
+
+### Order And Paging
+
+Keys are listed in ascending UTF-8 byte order, as S3 lists them: `big-single.bin` comes before `big.bin`, and uppercase before lowercase. The order does not depend on the locale of the PostgreSQL cluster. `start-after`, `marker` and continuation tokens resume with the same comparison, so paging never skips or repeats a key, and a client may merge or diff listings by comparing keys as bytes.
+
+A page holds up to `max-keys` items, 1000 at most. With a `delimiter`, each common prefix counts as one item and is listed once, even when its keys span a page boundary. `KeyCount` (ListObjectsV2) counts keys and common prefixes together.
+
+`start-after` and `marker` name a key, which need not exist. Keys after it are listed, and with a delimiter they still roll up into their common prefix, including the prefix the named key lies in. A position that is itself a common prefix of the listing (for example a `NextMarker` of `photos/` with the delimiter `/`) skips every key under it.
+
+### Continuation Tokens
+
+`NextContinuationToken` is opaque. Send it back exactly as received: it is never percent-encoded, whatever `encoding-type` the request asked for, and it needs no encoding of its own in a query string beyond what every SDK already does. A token the gateway did not issue is refused with `InvalidArgument`. When a request carries both a token and `start-after`, the token wins.
+
+`encoding-type=url` percent-encodes the fields that hold key text and nothing else: `Key`, `Prefix`, `Delimiter`, `CommonPrefixes`, and `StartAfter` (ListObjectsV2) or `Marker` and `NextMarker` (ListObjects). SDKs decode exactly those fields.
+
+`prefix`, `delimiter`, `start-after` and `marker` must be valid UTF-8; anything else is refused with `InvalidArgument`.
+
 ## HEAD
 
 HEAD returns client-visible gateway metadata when available. Remote-backed buckets can answer metadata-backed HEAD requests from known Vaulthalla state or the remote object index without downloading object bodies.

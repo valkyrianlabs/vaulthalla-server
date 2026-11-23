@@ -1,5 +1,7 @@
 #include "protocols/s3/Xml.hpp"
 
+#include "protocols/s3/Listing.hpp"
+
 #include <cctype>
 #include <iomanip>
 #include <sstream>
@@ -88,27 +90,8 @@ std::string listBuckets(const std::vector<Bucket>& buckets, const std::string& o
     return out.str();
 }
 
-std::string listObjectsV2(
-    const std::string& bucketName,
-    const db::query::s3::ObjectListResult& result,
-    const std::string& prefix,
-    const std::optional<std::string>& delimiter,
-    const uint32_t maxKeys,
-    const std::optional<std::string>& encodingType) {
-    const bool encodeUrl = encodingType == "url";
-    std::ostringstream out;
-    out << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
-        << "<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
-        << "<Name>" << escape(bucketName) << "</Name>"
-        << "<Prefix>" << escape(maybeEncode(prefix, encodeUrl)) << "</Prefix>"
-        << "<KeyCount>" << (result.objects.size() + result.common_prefixes.size()) << "</KeyCount>"
-        << "<MaxKeys>" << maxKeys << "</MaxKeys>"
-        << "<IsTruncated>" << (result.is_truncated ? "true" : "false") << "</IsTruncated>";
-    if (encodingType) out << "<EncodingType>" << escape(*encodingType) << "</EncodingType>";
-    if (delimiter) out << "<Delimiter>" << escape(maybeEncode(*delimiter, encodeUrl)) << "</Delimiter>";
-    if (result.next_continuation_token)
-        out << "<NextContinuationToken>" << escape(maybeEncode(*result.next_continuation_token, encodeUrl))
-            << "</NextContinuationToken>";
+namespace {
+void writeListedItems(std::ostringstream& out, const db::query::s3::ObjectListResult& result, const bool encodeUrl) {
     for (const auto& object : result.objects)
         out << "<Contents>"
             << "<Key>" << escape(maybeEncode(object.object_key, encodeUrl)) << "</Key>"
@@ -119,6 +102,57 @@ std::string listObjectsV2(
             << "</Contents>";
     for (const auto& commonPrefix : result.common_prefixes)
         out << "<CommonPrefixes><Prefix>" << escape(maybeEncode(commonPrefix, encodeUrl)) << "</Prefix></CommonPrefixes>";
+}
+}
+
+std::string listObjects(
+    const std::string& bucketName,
+    const db::query::s3::ObjectListResult& result,
+    const ListObjectsRequest& request) {
+    const bool encodeUrl = request.encoding_type == "url";
+    std::ostringstream out;
+    out << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        << "<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
+        << "<Name>" << escape(bucketName) << "</Name>"
+        << "<Prefix>" << escape(maybeEncode(request.prefix, encodeUrl)) << "</Prefix>"
+        << "<Marker>" << escape(maybeEncode(request.marker.value_or(""), encodeUrl)) << "</Marker>";
+    // S3 sends NextMarker only with a delimiter and leaves the client to use the last key otherwise. Always sending
+    // it is the same position, and the only one there is when the page ended on a common prefix.
+    if (result.next_after)
+        out << "<NextMarker>" << escape(maybeEncode(*result.next_after, encodeUrl)) << "</NextMarker>";
+    out << "<MaxKeys>" << request.max_keys << "</MaxKeys>";
+    if (request.delimiter) out << "<Delimiter>" << escape(maybeEncode(*request.delimiter, encodeUrl)) << "</Delimiter>";
+    if (request.encoding_type) out << "<EncodingType>" << escape(*request.encoding_type) << "</EncodingType>";
+    out << "<IsTruncated>" << (result.is_truncated ? "true" : "false") << "</IsTruncated>";
+    writeListedItems(out, result, encodeUrl);
+    out << "</ListBucketResult>";
+    return out.str();
+}
+
+std::string listObjectsV2(
+    const std::string& bucketName,
+    const db::query::s3::ObjectListResult& result,
+    const ListObjectsRequest& request) {
+    const bool encodeUrl = request.encoding_type == "url";
+    std::ostringstream out;
+    out << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        << "<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
+        << "<Name>" << escape(bucketName) << "</Name>"
+        << "<Prefix>" << escape(maybeEncode(request.prefix, encodeUrl)) << "</Prefix>"
+        << "<KeyCount>" << (result.objects.size() + result.common_prefixes.size()) << "</KeyCount>"
+        << "<MaxKeys>" << request.max_keys << "</MaxKeys>"
+        << "<IsTruncated>" << (result.is_truncated ? "true" : "false") << "</IsTruncated>";
+    if (request.encoding_type) out << "<EncodingType>" << escape(*request.encoding_type) << "</EncodingType>";
+    if (request.delimiter) out << "<Delimiter>" << escape(maybeEncode(*request.delimiter, encodeUrl)) << "</Delimiter>";
+    if (request.start_after)
+        out << "<StartAfter>" << escape(maybeEncode(*request.start_after, encodeUrl)) << "</StartAfter>";
+    // Tokens are never percent-encoded (see Xml.hpp): what the client sent, and what it sends next, verbatim.
+    if (request.continuation_token)
+        out << "<ContinuationToken>" << escape(*request.continuation_token) << "</ContinuationToken>";
+    if (result.next_after)
+        out << "<NextContinuationToken>" << escape(listing::encodeContinuationToken(*result.next_after))
+            << "</NextContinuationToken>";
+    writeListedItems(out, result, encodeUrl);
     out << "</ListBucketResult>";
     return out.str();
 }

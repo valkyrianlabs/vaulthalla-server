@@ -5,6 +5,7 @@
 #include "fs/PlaintextSource.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "protocols/s3/Listing.hpp"
 #include "protocols/s3/RequestBody.hpp"
 #include "protocols/s3/Xml.hpp"
 #include "storage/ScopedS3RequestUsageCapture.hpp"
@@ -385,6 +386,30 @@ std::optional<std::string> parseEncodingType(const std::map<std::string, std::st
     if (it == query.end() || it->second.empty()) return std::nullopt;
     if (it->second == "url") return it->second;
     throw invalidArgument("encoding-type must be url when specified", it->second);
+}
+
+// The listing parameters of a bucket GET. Prefix, delimiter and the position parameters are key text: one that is
+// not (bytes that aren't UTF-8, a NUL) can't name a key, and is refused here instead of failing in the database.
+xml::ListObjectsRequest parseListObjectsRequest(const std::map<std::string, std::string>& query, const bool v2) {
+    const auto keyText = [&](const std::string& name) -> std::optional<std::string> {
+        const auto it = query.find(name);
+        if (it == query.end()) return std::nullopt;
+        if (!listing::isKeyText(it->second)) throw invalidArgument(name + " must be valid UTF-8", name);
+        return it->second;
+    };
+
+    xml::ListObjectsRequest asked;
+    asked.prefix = keyText("prefix").value_or("");
+    asked.delimiter = keyText("delimiter");
+    asked.max_keys = parseMaxKeys(query);
+    asked.encoding_type = parseEncodingType(query);
+    if (v2) {
+        asked.start_after = keyText("start-after");
+        if (const auto it = query.find("continuation-token"); it != query.end()) asked.continuation_token = it->second;
+    } else {
+        asked.marker = keyText("marker");
+    }
+    return asked;
 }
 
 std::vector<std::string> parseDeleteObjects(const std::string& body, bool& quiet) {
@@ -1054,13 +1079,24 @@ Router::Response Router::routeAuthenticated(
         }
 
         if (request.method() == http::verb::get) {
+            // ListObjectsV2 with list-type=2, ListObjects (v1) without. Both list the same keys in the same order
+            // and differ in how a client names the place to resume: v2 by an opaque continuation token (or
+            // StartAfter for the first page), v1 by Marker.
+            const bool v2 = parsed.query.contains("list-type") && parsed.query.at("list-type") == "2";
+            const auto asked = parseListObjectsRequest(parsed.query, v2);
             db::query::s3::ObjectListParams params;
-            params.prefix = parsed.query.contains("prefix") ? parsed.query.at("prefix") : "";
-            if (parsed.query.contains("delimiter")) params.delimiter = parsed.query.at("delimiter");
-            if (parsed.query.contains("start-after")) params.start_after = parsed.query.at("start-after");
-            if (parsed.query.contains("continuation-token")) params.continuation_token = parsed.query.at("continuation-token");
-            params.max_keys = parseMaxKeys(parsed.query);
-            const auto encodingType = parseEncodingType(parsed.query);
+            params.prefix = asked.prefix;
+            params.delimiter = asked.delimiter;
+            params.max_keys = asked.max_keys;
+            if (asked.continuation_token) {
+                params.after = listing::decodeContinuationToken(*asked.continuation_token);
+                if (!params.after)
+                    throw invalidArgument("The continuation token provided is incorrect", *asked.continuation_token);
+            } else if (asked.start_after) {
+                params.after = asked.start_after;
+            } else if (asked.marker) {
+                params.after = asked.marker;
+            }
             auto budget = preflightSyntheticGatewayBudget(
                 bucket,
                 auth,
@@ -1077,7 +1113,7 @@ Router::Response Router::routeAuthenticated(
                 auto response = makeResponse(
                     request,
                     http::status::ok,
-                    xml::listObjectsV2(parsed.bucket, result, params.prefix, params.delimiter, params.max_keys, encodingType));
+                    v2 ? xml::listObjectsV2(parsed.bucket, result, asked) : xml::listObjects(parsed.bucket, result, asked));
                 if (objects_.remoteIndexStale(bucket))
                     response.set("x-vaulthalla-index-stale", "true");
                 commitGatewayBudget(budget);

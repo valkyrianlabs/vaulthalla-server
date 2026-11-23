@@ -338,23 +338,29 @@ TEST(S3GatewayXmlTest, ListObjectsV2UrlEncodesKeyFieldsWhenRequested) {
         .part_count = std::nullopt
     });
     result.common_prefixes.push_back("folder/sub dir/");
-    result.next_continuation_token = "folder/next key&.txt";
+    result.next_after = "folder/next key&.txt";
     result.is_truncated = true;
 
-    const auto xml = vh::protocols::s3::xml::listObjectsV2(
-        "bucket",
-        result,
-        "folder/",
-        std::make_optional<std::string>("/"),
-        1000,
-        std::make_optional<std::string>("url"));
+    const vh::protocols::s3::xml::ListObjectsRequest request{
+        .prefix = "folder/",
+        .delimiter = "/",
+        .max_keys = 1000,
+        .encoding_type = "url",
+        .marker = std::nullopt,
+        .start_after = "folder/a b",
+        .continuation_token = "vh1.Zm9sZGVyL2E"
+    };
+    const auto xml = vh::protocols::s3::xml::listObjectsV2("bucket", result, request);
 
     EXPECT_NE(xml.find("<EncodingType>url</EncodingType>"), std::string::npos);
     EXPECT_NE(xml.find("<Prefix>folder%2F</Prefix>"), std::string::npos);
     EXPECT_NE(xml.find("<Delimiter>%2F</Delimiter>"), std::string::npos);
     EXPECT_NE(xml.find("<Key>folder%2Fa%20b%26%3C.txt</Key>"), std::string::npos);
     EXPECT_NE(xml.find("<CommonPrefixes><Prefix>folder%2Fsub%20dir%2F</Prefix></CommonPrefixes>"), std::string::npos);
-    EXPECT_NE(xml.find("<NextContinuationToken>folder%2Fnext%20key%26.txt</NextContinuationToken>"), std::string::npos);
+    EXPECT_NE(xml.find("<StartAfter>folder%2Fa%20b</StartAfter>"), std::string::npos);
+    // Tokens are opaque: never percent-encoded, whatever the encoding type (test_s3_gateway_listing.cpp).
+    EXPECT_NE(xml.find("<ContinuationToken>vh1.Zm9sZGVyL2E</ContinuationToken>"), std::string::npos);
+    EXPECT_NE(xml.find("<NextContinuationToken>vh1.Zm9sZGVyL25leHQga2V5Ji50eHQ</NextContinuationToken>"), std::string::npos);
 }
 
 TEST(S3GatewayObjectStoreTest, ComputesS3StyleEtags) {
@@ -915,12 +921,12 @@ TEST_F(S3GatewayDbTest, ListObjectsContinuationTokenDoesNotSkipFirstObjectOnNext
 
     ASSERT_TRUE(first.is_truncated);
     ASSERT_EQ(first.objects.size(), 2u);
-    ASSERT_TRUE(first.next_continuation_token);
-    EXPECT_EQ(*first.next_continuation_token, "b.txt");
+    ASSERT_TRUE(first.next_after);
+    EXPECT_EQ(*first.next_after, "b.txt");
 
     vh::db::query::s3::ObjectListParams secondParams;
     secondParams.max_keys = 2;
-    secondParams.continuation_token = first.next_continuation_token;
+    secondParams.after = first.next_after;
     const auto second = vh::db::query::s3::Gateway::listObjectStates(vaultId, secondParams);
 
     ASSERT_FALSE(second.is_truncated);
@@ -936,7 +942,7 @@ TEST_F(S3GatewayDbTest, ListObjectsMaxKeysZeroReturnsNoObjects) {
     const auto result = vh::db::query::s3::Gateway::listObjectStates(vaultId, params);
 
     EXPECT_FALSE(result.is_truncated);
-    EXPECT_FALSE(result.next_continuation_token);
+    EXPECT_FALSE(result.next_after);
     EXPECT_TRUE(result.objects.empty());
     EXPECT_TRUE(result.common_prefixes.empty());
 }
@@ -3059,13 +3065,13 @@ TEST_F(S3GatewayDbTest, ListObjectsDelimiterPaginatesCommonPrefixesOnce) {
     ASSERT_TRUE(first.objects.empty());
     ASSERT_EQ(first.common_prefixes.size(), 1u);
     EXPECT_EQ(first.common_prefixes[0], "a/");
-    ASSERT_TRUE(first.next_continuation_token);
-    EXPECT_EQ(*first.next_continuation_token, "a/");
+    ASSERT_TRUE(first.next_after);
+    EXPECT_EQ(*first.next_after, "a/");
 
     vh::db::query::s3::ObjectListParams secondParams;
     secondParams.max_keys = 1;
     secondParams.delimiter = "/";
-    secondParams.continuation_token = first.next_continuation_token;
+    secondParams.after = first.next_after;
     const auto second = vh::db::query::s3::Gateway::listObjectStates(vaultId, secondParams);
 
     ASSERT_FALSE(second.is_truncated);
@@ -3461,6 +3467,95 @@ TEST_F(S3GatewayDbTest, RealMcUploadsOverPlainHttpWhenMcIsInstalled) {
     EXPECT_TRUE(largeState->multipart);
     EXPECT_EQ(largeState->size_bytes, large.size());
     EXPECT_TRUE(largeState->etag.ends_with("-2\"")) << largeState->etag;
+
+    std::filesystem::remove_all(work);
+    service.stop();
+}
+
+// Real boto3 paginators against the running gateway (tools/smoke/s3_gateway_list_paging.py): a bucket of 2,500 keys,
+// more than two pages, listed by ListObjectsV2 (boto3 always asks for EncodingType=url), ListObjects, StartAfter and
+// with a delimiter. Before the continuation token was opaque, the first of these stopped at page two with
+// "PaginationError: The same next token was received twice". Skipped where python3 has no boto3 (CI); dev has it.
+TEST_F(S3GatewayDbTest, Boto3PaginatorsListABucketLargerThanOnePage) {
+    if (std::system("python3 -c 'import boto3' >/dev/null 2>&1") != 0) GTEST_SKIP() << "python3 has no boto3";
+
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
+    auto cfg = vh::config::Registry::get();
+    cfg.s3_gateway.enabled = true;
+    cfg.s3_gateway.host = "127.0.0.1";
+    cfg.s3_gateway.port = freeLoopbackPort();
+    cfg.s3_gateway.require_sigv4 = true;
+    cfg.s3_gateway.allow_path_style = true;
+    vh::config::Registry::set(cfg);
+
+    const auto admin = vh::identities::manager().userByName("admin");
+    ASSERT_TRUE(admin);
+    const std::string bucketName = "boto3-" + std::to_string(vaultId);
+    vh::db::query::s3::Gateway::bindBucket({
+        .vault_id = vaultId,
+        .bucket_name = bucketName,
+        .api_exclusive = true,
+        .mode = "local",
+        .created_by = admin->id
+    });
+    const vh::protocols::s3::CredentialManager manager;
+    const auto secret = manager.createCredential({
+        .created_by = admin->id,
+        .principal_user_id = admin->id,
+        .name = "boto3-" + s3gw::uniqueSuffix("credential"),
+        .scope_mode = "vault_allowlist",
+        .description = std::nullopt,
+        .expires_at = std::nullopt,
+        .vault_scopes = {{
+            .credential_id = 0,
+            .vault_id = vaultId,
+            .can_list = true,
+            .can_read = true,
+            .can_write = false,
+            .can_delete = false,
+            .can_admin = false
+        }}
+    });
+    // Keys that a locale collation and a byte comparison order differently, and that need encoding in XML and URLs.
+    vh::db::Transactions::exec("S3GatewayDbTest::boto3Keys", [&](pqxx::work& txn) {
+        txn.exec(
+            R"SQL(
+                INSERT INTO s3_gateway_object (vault_id, object_key, etag, size_bytes)
+                SELECT $1,
+                       'paging/' || (i % 9)::text
+                           || (ARRAY['-', '.', '/', ' ', '%', '+', '_', 'A', 'a', 'é'])[1 + i % 10]
+                           || lpad(i::text, 5, '0'),
+                       '"etag"', 1
+                FROM generate_series(1, 2500) AS i
+            )SQL",
+            pqxx::params{vaultId});
+    });
+
+    vh::concurrency::ThreadPoolManager::instance().init();
+    ThreadPoolShutdown shutdownPools{true};
+    vh::protocols::s3::GatewayService service;
+    service.start();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!service.gatewayStatus().ready && service.isRunning() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    ASSERT_TRUE(service.gatewayStatus().ready);
+
+    const auto work = std::filesystem::temp_directory_path() / s3gw::uniqueSuffix("vh_boto3");
+    std::filesystem::create_directories(work);
+    const auto script = std::filesystem::path(VH_TEST_ASSETS_DIR) / ".." / ".." / "tools" / "smoke" /
+                        "s3_gateway_list_paging.py";
+    // The credential (of this run's test database) only in the client's environment; no shared AWS config is read.
+    const auto command =
+        "AWS_ACCESS_KEY_ID='" + secret.credential.access_key + "' AWS_SECRET_ACCESS_KEY='" + secret.secret_access_key +
+        "' AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true " +
+        (std::system("command -v timeout >/dev/null 2>&1") == 0 ? "timeout 120 " : "") + "python3 '" + script.string() +
+        "' --endpoint http://127.0.0.1:" + std::to_string(cfg.s3_gateway.port) + " --bucket " + bucketName +
+        " --prefix paging/ --page-size 333 --expect-keys 2500 >'" + (work / "boto3.log").string() + "' 2>&1";
+    const auto status = std::system(command.c_str());
+    std::ifstream in(work / "boto3.log");
+    const std::string log{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    EXPECT_EQ(status, 0) << log;
+    EXPECT_NE(log.find("ok: 2500 keys in byte order over 3 pages"), std::string::npos) << log;
 
     std::filesystem::remove_all(work);
     service.stop();
