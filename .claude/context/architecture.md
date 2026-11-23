@@ -116,6 +116,24 @@ reference until a release is verified. Tests: `S3GatewayAuth*`, `S3GatewayStream
 unfinished bodies store nothing), `S3GatewayDbTest.RealMcUploadsOverPlainHttpWhenMcIsInstalled` (skips without mc),
 `SigV4Goldens.{VlSigv4Verifier,GatewayVerifier}*`.
 
+**S3 gateway object listing** (`Router` bucket GET → `ObjectStore::listObjects` → `db::query::s3::Gateway::
+listObjectStates`): one query for local, `remote_cache` and `remote_proxy` buckets (each LIST first backfills
+`s3_gateway_object` from fs entries or `remote_object_index`). Order is S3's, ascending UTF-8 bytes, never the database
+collation (en_US on stock Linux clusters, C on macOS): the sort and the page start use PostgreSQL's byte-wise operators
+(`ORDER BY … USING ~<~`, `~>~`, `~>=~`), which `idx_s3_gateway_object_vault_key` (`text_pattern_ops`) serves as an ordered
+index scan; `COLLATE "C"` would sort the vault's keys on every page. A page starts strictly after
+`ObjectListParams::after`: a key (StartAfter, v1 Marker) or the last item of the page before (`next_after`); with a
+delimiter, a position that is a common prefix of the listing skips everything under it, any other position is a key
+and keys after it still roll up into its prefix. `list-type=2` is ListObjectsV2, anything else ListObjects v1
+(`xml::listObjectsV2` / `xml::listObjects`). The v2 continuation token is opaque (`protocols/s3/Listing.hpp`: `vh1.` +
+unpadded base64url of the position) and never percent-encoded: `EncodingType=url` covers key fields only, and clients
+send tokens back verbatim (boto3 always asks for `url`; an encoded token made page two page one again, v1.23). Unknown
+tokens and listing parameters that aren't UTF-8 answer `InvalidArgument`. Not served: ListObjectVersions and the other
+bucket subresource GETs (`?versions`, `?location`, `?versioning`, …) still fall into the ListObjects handler. Tests:
+`S3GatewayListing*` (`test_s3_gateway_listing.cpp`: an SDK-style paginator over the router, every page size, both
+encodings, delimiters, all three modes), `S3GatewayDbTest.Boto3PaginatorsListABucketLargerThanOnePage` (real boto3,
+2,500 keys, skips without boto3).
+
 > `core/include/config/Config.hpp` compiled-in defaults are **33369/33370**, but the shipped config,
 > web fallbacks, and Caddyfile all use **36969/36970**. Trust the config file, and treat that
 > header/config mismatch as a known wart. Every listener's compiled-in host is `127.0.0.1` (#324): a config without

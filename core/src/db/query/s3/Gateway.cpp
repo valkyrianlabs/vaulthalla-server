@@ -1129,12 +1129,24 @@ void Gateway::deleteObjectStateAndRemoteIndex(const uint32_t vaultId, const std:
 ObjectListResult Gateway::listObjectStates(const uint32_t vaultId, const ObjectListParams& params) {
     return Transactions::exec("S3Gateway::listObjectStates", [&](pqxx::work& txn) {
         const auto prefix = normalizeKey(params.prefix);
-        auto after = params.continuation_token.value_or(params.start_after.value_or(""));
+        const auto after = params.after.value_or("");
         const uint32_t maxKeys = std::min(params.max_keys, 1000u);
 
         if (maxKeys == 0) return ObjectListResult{};
 
+        // Key order is S3's: ascending UTF-8 bytes. `ORDER BY object_key` and `>` would use the database's collation
+        // (en_US on a stock cluster sorts "big.bin" before "big-single.bin"), so the sort and the page start both
+        // use the byte-wise operators (~<~, ~>~, ~>=~), which idx_s3_gateway_object_vault_key (text_pattern_ops)
+        // serves. The prefix is matched twice: exactly (LEFT … =), and as a lower bound the index can seek to (no
+        // key under a prefix sorts before the prefix itself).
         if (params.delimiter && !params.delimiter->empty()) {
+            // A page that ended on a common prefix resumes after everything under it; the position is one when it
+            // is what a key of this listing rolls up to (its first delimiter past the prefix is its end).
+            const auto delimiterAt = after.starts_with(prefix) ? after.find(*params.delimiter, prefix.size())
+                                                                : std::string::npos;
+            const bool afterIsCommonPrefix =
+                delimiterAt != std::string::npos && delimiterAt + params.delimiter->size() == after.size();
+
             const auto res = txn.exec(
                 R"SQL(
                     WITH source AS (
@@ -1143,7 +1155,10 @@ ObjectListResult Gateway::listObjectStates(const uint32_t vaultId, const ObjectL
                             SUBSTRING(object_key FROM CHAR_LENGTH($2) + 1) AS rest
                         FROM s3_gateway_object
                         WHERE vault_id = $1
+                          AND object_key ~>=~ $2
                           AND LEFT(object_key, CHAR_LENGTH($2)) = $2
+                          AND object_key ~>~ $4
+                          AND NOT ($6 AND LEFT(object_key, CHAR_LENGTH($4)) = $4)
                           AND )SQL" + notHiddenByActiveTrashSql("s3_gateway_object.vault_id", "object_key") + R"SQL(
                     ),
                     items AS (
@@ -1181,11 +1196,10 @@ ObjectListResult Gateway::listObjectStates(const uint32_t vaultId, const ObjectL
                     )
                     SELECT *
                     FROM items
-                    WHERE item_key > $4
-                    ORDER BY item_key
+                    ORDER BY item_key USING ~<~
                     LIMIT $5
                 )SQL",
-                pqxx::params{vaultId, prefix, *params.delimiter, after, maxKeys + 1});
+                pqxx::params{vaultId, prefix, *params.delimiter, after, maxKeys + 1, afterIsCommonPrefix});
 
             ObjectListResult out;
             uint32_t emitted = 0;
@@ -1193,7 +1207,7 @@ ObjectListResult Gateway::listObjectStates(const uint32_t vaultId, const ObjectL
             for (const auto& row : res) {
                 if (emitted >= maxKeys) {
                     out.is_truncated = true;
-                    out.next_continuation_token = lastEmittedItemKey;
+                    out.next_after = lastEmittedItemKey;
                     break;
                 }
 
@@ -1212,10 +1226,11 @@ ObjectListResult Gateway::listObjectStates(const uint32_t vaultId, const ObjectL
                 R"SQL(
                 SELECT * FROM s3_gateway_object
                 WHERE vault_id = $1
+                  AND object_key ~>=~ $2
                   AND LEFT(object_key, CHAR_LENGTH($2)) = $2
-                  AND object_key > $3
+                  AND object_key ~>~ $3
                   AND )SQL" + notHiddenByActiveTrashSql("s3_gateway_object.vault_id", "object_key") + R"SQL(
-                ORDER BY object_key
+                ORDER BY object_key USING ~<~
                 LIMIT $4
             )SQL",
             pqxx::params{vaultId, prefix, after, maxKeys + 1});
@@ -1227,7 +1242,7 @@ ObjectListResult Gateway::listObjectStates(const uint32_t vaultId, const ObjectL
         for (const auto& row : res) {
             if (emitted >= maxKeys) {
                 out.is_truncated = true;
-                out.next_continuation_token = lastEmittedObjectKey;
+                out.next_after = lastEmittedObjectKey;
                 break;
             }
 
@@ -1316,7 +1331,7 @@ std::vector<MultipartUpload> Gateway::listMultipartUploads(const uint32_t vaultI
             R"SQL(
                 SELECT * FROM s3_gateway_multipart_upload
                 WHERE vault_id = $1 AND LEFT(object_key, CHAR_LENGTH($2)) = $2 AND aborted = FALSE AND completed = FALSE
-                ORDER BY object_key, initiated_at
+                ORDER BY object_key USING ~<~, initiated_at
             )SQL",
             pqxx::params{vaultId, normalizeKey(prefix)});
         return db::mapRows(res, uploadFromRow);
