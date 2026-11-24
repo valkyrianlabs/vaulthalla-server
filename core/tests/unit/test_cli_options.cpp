@@ -2,6 +2,7 @@
 // definitions, so the definitions must cover what the commands read and what the help documents.
 
 #include "CommandUsage.hpp"
+#include "protocols/shell/ClientInput.hpp"
 #include "UsageManager.hpp"
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/commands/all.hpp"
@@ -211,6 +212,15 @@ TEST(CliOptions, EveryHandlerDispatchNameIsADefinedSubcommand) {
         {"vault", "keys", "inspect"},
         {"vault", "keys", "rotate"},
         {"vault", "list"},
+        {"vault", "read-grant"},
+        {"vault", "read-grant", "issue"},
+        {"vault", "read-grant", "list"},
+        {"vault", "read-grant", "recipient"},
+        {"vault", "read-grant", "recipient", "add"},
+        {"vault", "read-grant", "recipient", "list"},
+        {"vault", "read-grant", "recipient", "remove"},
+        {"vault", "read-grant", "revoke"},
+        {"vault", "read-grant", "show"},
         {"vault", "recovery"},
         {"vault", "recovery", "disclosure"},
         {"vault", "recovery", "set"},
@@ -245,6 +255,26 @@ TEST(CliOptions, EveryHandlerDispatchNameIsADefinedSubcommand) {
         EXPECT_TRUE(std::ranges::find(node->aliases, path.back()) != node->aliases.end())
             << "'vh " << joined << "' is dispatched by a handler but not defined (resolves to '" << node->primary() << "')";
     }
+}
+
+}
+
+namespace vh::test_cli_options {
+
+// `vh vault read-grant recipient add --key-file <path|->`: the public key is read by vh and attached, never opened by
+// the daemon; --keyserver needs nothing from the client.
+TEST(CliOptions, AReadGrantRecipientKeyFileIsReadByTheClient) {
+    namespace ci = protocols::shell::client_input;
+    const auto file = ci::plan({"vault", "read-grant", "recipient", "add", "--fingerprint", "A6A1", "--key-file", "k.asc"});
+    EXPECT_TRUE(file.active);
+    EXPECT_EQ(file.path, "k.asc");
+    EXPECT_TRUE(file.error.empty());
+    const auto stdinPlan = ci::plan({"vault", "read-grant", "recipient", "pin", "--key-file", "-"});
+    EXPECT_TRUE(stdinPlan.active);
+    EXPECT_EQ(stdinPlan.path, "-");
+    EXPECT_FALSE(ci::plan({"vault", "read-grant", "recipient", "add", "--keyserver", "https://k.example"}).active);
+    EXPECT_FALSE(ci::plan({"vault", "read-grant", "issue", "12", "--recipient", "A6A1"}).active);
+    EXPECT_FALSE(ci::plan({"vault", "read-grant", "recipient", "add", "--key-file"}).error.empty()) << "a file name is required";
 }
 
 }

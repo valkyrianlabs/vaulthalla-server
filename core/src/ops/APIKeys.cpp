@@ -1,4 +1,5 @@
 #include "ops/APIKeys.hpp"
+#include "db/query/vault/ReadGrants.hpp"
 #include "auth/stepup/StepUp.hpp"
 
 #include "db/query/identities/User.hpp"
@@ -215,6 +216,11 @@ APIKeyPtr remove(const Actor& actor, const Ref& ref) {
                        (profiles.size() == 1 ? " " : "s ") + names + "; delete or repoint " +
                        (profiles.size() == 1 ? "it" : "them") + " first (vh s3-gateway upstream)");
     }
+
+    // Vault read grants (migration 155) minted provider keys with it: without it they could never be deleted.
+    if (const auto n = db::query::vault::ReadGrants::liveCountForApiKey(key->id); n > 0)
+        throw Conflict("API key '" + key->name + "' created the upstream keys of " + std::to_string(n) +
+                       " vault read grant(s) that are not revoked; revoke them first (vh vault read-grant list)");
 
     auth::stepup::require(auth::stepup::Family::Secrets);
     try {

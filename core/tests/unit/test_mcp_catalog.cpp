@@ -151,7 +151,8 @@ TEST(McpCatalog, ExclusionListIsExactlyTheAgreedOne) {
     }
     const std::vector<std::string> expected{"vault key export", "vault key import", "vault recover", "vault join", "vault leave", "vault replica remove",
                                             "vault key recipient add",
-                                            "vault key recipient revoke", "vault remote attach",
+                                            "vault key recipient revoke", "vault read-grant recipient add",
+                                            "vault read-grant recipient remove", "vault remote attach",
                                             "vault remote detach", "vault remote access", "secrets export",
                                             "secrets update",
                                             "secrets master rotate", "secrets master finalize",

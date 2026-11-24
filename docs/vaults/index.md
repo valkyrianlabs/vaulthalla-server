@@ -37,7 +37,7 @@ File bodies are stored according to the vault type:
 - Local vault file bodies live under Vaulthalla-managed local state.
 - S3/R2 vault file bodies live in the configured upstream provider bucket, with optional local cache state depending on sync strategy.
 
-This split matters for backup. A usable disaster recovery plan needs PostgreSQL data, Vaulthalla config/state, and exported recovery material. See [Backup And Recovery](/vaults/backup-and-recovery).
+This split matters for backup. A usable disaster recovery plan needs PostgreSQL data, Vaulthalla config/state, and exported recovery material. See [Backup And Recovery](/vaults/backup-and-recovery). To hand an external backup tool read-only credentials for one vault, see [Vault Read Grants](/vaults/read-grants).
 
 ## File Recovery
 
