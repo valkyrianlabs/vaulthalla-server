@@ -375,9 +375,25 @@ TEST_F(GatewayUpstreamTest, ABucketThatHoldsObjectsIsRefusedAndLeftAlone) {
     EXPECT_FALSE(db::query::s3::Gateway::resolveBucket(name));
     const auto row = upstreamRow(name);
     EXPECT_FALSE(row && (row->vault_id || row->created_by_vaulthalla || row->ownership != umodel::Ownership::Unmanaged));
-    std::scoped_lock lock(cloud->mutex);
-    EXPECT_EQ(cloud->buckets.at(name).objects.size(), 1u);
-    EXPECT_EQ(cloud->deleteBucketCalls, 0u);
+    {
+        std::scoped_lock lock(cloud->mutex);
+        EXPECT_EQ(cloud->buckets.at(name).objects.size(), 1u);
+        EXPECT_EQ(cloud->deleteBucketCalls, 0u);
+    }
+
+    // Empty means no object version at all: a bucket whose objects are all hidden or non-current (Backblaze keeps
+    // every version) lists nothing, and is still not empty.
+    const auto hidden = bucketName();
+    seedBucket(hidden);
+    {
+        std::scoped_lock lock(cloud->mutex);
+        cloud->buckets.at(hidden).history.push_back({.key = "old.tar.gpg", .size = 1, .etag = "e", .last_modified = {},
+                                                     .version_id = std::string("v1"), .delete_marker = false,
+                                                     .latest = false});
+    }
+    EXPECT_EQ(refusal(hidden, authFor(credential)).first, "BucketAlreadyExists");
+    EXPECT_FALSE(db::query::s3::Gateway::resolveBucket(hidden));
+    EXPECT_EQ(vaultCount(), vaults);
 }
 
 TEST_F(GatewayUpstreamTest, ANameAnotherAccountHoldsIsRefused) {

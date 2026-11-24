@@ -194,7 +194,8 @@ day through the Sentinel session: "Yes I like your idea of an allowlist"). Opera
   `upstream::BucketMode::CreateOrAdoptEmpty` (no surface spells it; `bucketModeFromString` doesn't accept it).
   `beginProvision` runs `provision::createManaged`; on `provision::BucketExists` (this account's bucket, or a row
   Vaulthalla already knows; a name another account holds stays a plain `ProvisionConflict`) it adopts only if
-  `provision::listsEmpty`, else Conflict. `ops::vaults::create` refuses again if the data plane sees objects
+  `provision::listsEmpty` (version-aware: `listObjectVersions`, so hidden and non-current versions count), else
+  Conflict. `ops::vaults::create` refuses again if the data plane sees objects
   (`bucketHoldsData`; skipped in test mode). The ticket's `mode` is what happened (Create or Adopt). Vault name =
   gateway bucket, upstream bucket = `<prefix><name>`, bound `remote_cache`, `api_exclusive` =
   `s3_gateway.default_api_exclusive`, `max_remote_index_age` 24 h and budget preset `balanced` as create-remote-cache.

@@ -136,8 +136,8 @@ An upstream bucket that already exists is never taken over:
 | The upstream name | Result |
 | --- | --- |
 | Free | Created, and recorded as created by Vaulthalla. |
-| Your own bucket, empty | Adopted and used. |
-| Your own bucket, holding objects | `409 BucketAlreadyExists`. Nothing is created or changed. |
+| Your own bucket, empty | Adopted and used. Empty means no object version at all: hidden and non-current versions count. |
+| Your own bucket, holding objects or old versions | `409 BucketAlreadyExists`. Nothing is created or changed. |
 | Held by another account | `409 BucketAlreadyExists`. Nothing is created. |
 | The provider is unreachable or fails | `503 ServiceUnavailable`. Nothing is created; the client can retry. |
 
