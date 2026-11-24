@@ -55,6 +55,16 @@ struct FakeCloud {
     std::map<std::string, unsigned> bucketCalls;
     unsigned calls = 0, deleteBucketCalls = 0;
 
+    // Read-only keys for vault read grants (B2's b2_create_key / b2_delete_key in the real adapter).
+    bool readKeysSupported = true;
+    bool writeKeysMissing = false;           // the account key may not create keys (CapabilityMissing("writeKeys"))
+    bool createReadKeyFails = false;         // b2_create_key answers 503
+    bool deleteReadKeyFails = false;         // b2_delete_key answers 500
+    std::map<std::string, padmin::ReadKeyRequest> readKeys;   // key id -> what it was created for (live keys)
+    std::vector<padmin::ReadKeyRequest> readKeyRequests;      // every createReadKey, accepted or not
+    std::vector<std::string> deleteReadKeyCalls;
+    unsigned readKeySeq = 0;
+
     // Provider versioning. false = an R2-like provider (Unversioned, PutBucketVersioning refused locally).
     bool versioningSupported = true;
     std::set<std::string> putVersioningDenied;   // PutBucketVersioning answers 403 AccessDenied
@@ -243,6 +253,36 @@ public:
         return failed;
     }
     padmin::Metrics metrics() const override { return {}; }
+
+    bool supportsReadKeys() const override { return c_->readKeysSupported; }
+    padmin::ReadKey createReadKey(const padmin::ReadKeyRequest& request) override {
+        if (!c_->readKeysSupported) return AdminClient::createReadKey(request);
+        guard(request.bucket);
+        std::scoped_lock lock(c_->mutex);
+        c_->touch(request.bucket);
+        c_->readKeyRequests.push_back(request);
+        if (c_->writeKeysMissing) throw padmin::CapabilityMissing("writeKeys", "the key may not create keys: it needs writeKeys");
+        if (c_->createReadKeyFails) throw padmin::ProviderError("b2_create_key failed (HTTP 503)", "service_unavailable", 503);
+        if (!c_->buckets.contains(request.bucket)) throw padmin::ProviderError("no such bucket", "NoSuchBucket", 404);
+        const auto n = ++c_->readKeySeq;
+        padmin::ReadKey key{.key_id = "004fakereadkey" + std::to_string(n),
+                            .secret = "K004FakeReadSecret" + std::to_string(n) + "xyzzy",
+                            .key_name = request.key_name,
+                            .bucket = request.bucket,
+                            .bucket_id = "bucketid-" + request.bucket,
+                            .capabilities = padmin::kReadKeyCapabilities(),
+                            .endpoint = "https://s3.us-west-004.backblazeb2.com",
+                            .region = "us-west-004"};
+        c_->readKeys[key.key_id] = request;
+        return key;
+    }
+    void deleteReadKey(const std::string& keyId) override {
+        if (!c_->readKeysSupported) return AdminClient::deleteReadKey(keyId);
+        std::scoped_lock lock(c_->mutex);
+        c_->deleteReadKeyCalls.push_back(keyId);
+        if (c_->deleteReadKeyFails) throw padmin::ProviderError("b2_delete_key failed (HTTP 500)", "internal_error", 500);
+        c_->readKeys.erase(keyId);
+    }
 
 private:
     // The real adapters check the guard before every bucket-scoped request; so does the fake.

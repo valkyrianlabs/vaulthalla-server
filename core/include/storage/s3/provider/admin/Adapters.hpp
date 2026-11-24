@@ -160,6 +160,17 @@ public:
     // Suspended: target, name and guard checked, then CapabilityMissing("versioning"); nothing is sent.
     void putVersioning(const std::string& bucket, Versioning target) override;
 
+    // Read keys through B2's native API (the S3-compatible API has no key calls): b2_authorize_account with this
+    // application key (it must hold writeKeys), b2_list_buckets for the bucket's id, then b2_create_key with
+    // kReadKeyCapabilities and bucketIds = [that id]; b2_delete_key to revoke. Every request goes through
+    // curl::http (test transport in tests); secrets never reach a message.
+    [[nodiscard]] bool supportsReadKeys() const override { return true; }
+    [[nodiscard]] ReadKey createReadKey(const ReadKeyRequest& request) override;
+    void deleteReadKey(const std::string& keyId) override;
+
+    // Where b2_authorize_account is (https://api.backblazeb2.com/b2api/v4/b2_authorize_account).
+    static constexpr const char* kAuthorizeUrl = "https://api.backblazeb2.com/b2api/v4/b2_authorize_account";
+
 protected:
     [[nodiscard]] detail::Endpoint serviceEndpoint() override;
     [[nodiscard]] detail::Endpoint bucketEndpoint(const std::string& bucket) override;
@@ -171,6 +182,15 @@ protected:
     [[nodiscard]] std::map<std::string, std::string> createBucketHeaders() const override;
 
 private:
+    struct NativeSession {
+        std::string api_url;
+        std::string token;
+        std::string account_id;
+        std::optional<std::vector<std::string>> capabilities;   // what the key may do, when the answer says
+    };
+    [[nodiscard]] NativeSession authorizeNative();
+    [[nodiscard]] nlohmann::json nativeCall(const NativeSession& session, const std::string& api, const nlohmann::json& body);
+
     std::string region_;
 };
 

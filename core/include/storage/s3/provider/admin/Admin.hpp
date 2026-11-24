@@ -169,6 +169,34 @@ struct CreateBucketRequest {
                                                 // B2: the key's own region or nothing (an account lives in one region)
 };
 
+// A read-only provider key limited to one bucket, for a vault read grant (ops/ReadGrants.hpp). Backblaze B2 only so
+// far: the native b2_create_key with bucketIds = [the bucket] and kReadKeyCapabilities.
+struct ReadKeyRequest {
+    std::string bucket{};
+    std::string key_name{};          // [A-Za-z0-9-], at most 100 characters
+};
+
+struct ReadKey {
+    std::string key_id;              // the provider's id for the key (the S3 access key id)
+    std::string secret;              // shown once by the provider; the caller encrypts it and never stores it
+    std::string key_name;
+    std::string bucket;
+    std::string bucket_id;           // B2's id of the bucket the key is restricted to
+    std::vector<std::string> capabilities;
+    std::string endpoint;            // the S3-compatible endpoint the key works with (https://s3.<region>.backblazeb2.com)
+    std::string region;
+};
+
+// What a read key may do on Backblaze B2: list the bucket it is restricted to, list and read its files. Never
+// listAllBucketNames, write, delete, share, retention or key capabilities.
+inline const std::vector<std::string>& kReadKeyCapabilities() {
+    static const std::vector<std::string> caps{"listBuckets", "listFiles", "readFiles"};
+    return caps;
+}
+
+inline constexpr const char* kReadKeysUnsupported =
+    "read grants with an upstream key are supported for Backblaze B2 so far; not supported for this provider yet";
+
 // How many requests/bytes admin + queue calls cost, for diagnostics and budgets.
 struct Metrics {
     uint64_t requests{};
@@ -229,6 +257,18 @@ public:
         const std::string& bucket, const std::vector<ObjectSummary>& objects) = 0;
 
     [[nodiscard]] virtual Metrics metrics() const = 0;
+
+    // Read-only keys limited to one bucket (vault read grants). Providers without them answer false, and
+    // createReadKey/deleteReadKey throw CapabilityMissing("read_keys", kReadKeysUnsupported) with nothing sent.
+    [[nodiscard]] virtual bool supportsReadKeys() const { return false; }
+    // Name and guard checked first. Throws CapabilityMissing("writeKeys", …) when the account key may not create keys,
+    // ProviderError when the provider refuses.
+    [[nodiscard]] virtual ReadKey createReadKey(const ReadKeyRequest& /*request*/) {
+        throw CapabilityMissing("read_keys", kReadKeysUnsupported);
+    }
+    // Deletes a key createReadKey made. Throws ProviderError when the provider refuses or fails (the caller keeps the
+    // grant "revocation incomplete" and retries).
+    virtual void deleteReadKey(const std::string& /*keyId*/) { throw CapabilityMissing("read_keys", kReadKeysUnsupported); }
 };
 
 // ---- events -------------------------------------------------------------------------------------------------------

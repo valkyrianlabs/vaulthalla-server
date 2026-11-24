@@ -2,6 +2,11 @@
 
 #include "vault/model/APIKey.hpp"
 
+#include <vl/keykit/kit.hpp>
+
+#include <algorithm>
+#include <cctype>
+#include <span>
 #include <stdexcept>
 
 namespace vh::storage::s3::provider::admin {
@@ -94,6 +99,172 @@ Capabilities B2Admin::probe() {
     caps.items.push_back({"events.queues", false, true, kB2EventsUnsupported});
     caps.items.push_back({"events.notifications", false, true, kB2EventsUnsupported});
     return caps;
+}
+
+// ---- read keys (vault read grants), through B2's native API ------------------------------------------------------
+
+namespace {
+
+// B2's native errors: {"status": 401, "code": "unauthorized", "message": "…"}.
+detail::ErrorInfo b2NativeError(const curl::http::Response& response) {
+    try {
+        const auto j = nlohmann::json::parse(response.body);
+        if (j.is_object()) return {.code = j.value("code", ""), .message = j.value("message", "")};
+    } catch (const nlohmann::json::exception&) {
+    }
+    return {};
+}
+
+bool b2ValidKeyName(const std::string& name) {
+    return !name.empty() && name.size() <= 100 &&
+           std::ranges::all_of(name, [](const unsigned char c) { return std::isalnum(c) != 0 || c == '-'; });
+}
+
+std::vector<std::string> b2StringArray(const nlohmann::json& j) {
+    std::vector<std::string> out;
+    if (!j.is_array()) return out;
+    for (const auto& v : j)
+        if (v.is_string()) out.push_back(v.get<std::string>());
+    return out;
+}
+
+}  // namespace
+
+B2Admin::NativeSession B2Admin::authorizeNative() {
+    const std::string pair = key_->access_key + ":" + key_->secret_access_key;
+    curl::http::Request request;
+    request.method = "GET";
+    request.url = kAuthorizeUrl;
+    request.timeout = std::chrono::seconds{30};
+    request.max_response_bytes = 1024 * 1024;
+    request.headers.emplace_back(
+        "Authorization",
+        "Basic " + vl::keykit::base64Encode(std::span(reinterpret_cast<const uint8_t*>(pair.data()), pair.size())));
+    count("get");
+    const auto response = curl::http::perform(request);
+    if (!response.ok()) {
+        const auto info = b2NativeError(response);
+        auto error = detail::makeError("b2_authorize_account", response, info, secrets());
+        if (response.status == 401)
+            throw ProviderError(std::string(error.what()) + " (the vault's Backblaze B2 application key was refused)",
+                                error.code, error.http_status);
+        throw error;
+    }
+    NativeSession session;
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(response.body);
+    } catch (const nlohmann::json::exception&) {
+        throw ProviderError("b2_authorize_account: the answer is not JSON", {}, response.status);
+    }
+    session.token = j.value("authorizationToken", "");
+    session.account_id = j.value("accountId", "");
+    // v4: apiInfo.storageApi.{apiUrl, allowed.capabilities}; v3 kept capabilities on storageApi itself; v2 had
+    // apiUrl and allowed at the top level.
+    const nlohmann::json* allowed = nullptr;
+    if (j.contains("apiInfo") && j["apiInfo"].is_object() && j["apiInfo"].contains("storageApi") &&
+        j["apiInfo"]["storageApi"].is_object()) {
+        const auto& storage = j["apiInfo"]["storageApi"];
+        session.api_url = storage.value("apiUrl", "");
+        if (storage.contains("allowed") && storage["allowed"].is_object()) allowed = &storage["allowed"];
+        else if (storage.contains("capabilities")) session.capabilities = b2StringArray(storage["capabilities"]);
+    } else {
+        session.api_url = j.value("apiUrl", "");
+        if (j.contains("allowed") && j["allowed"].is_object()) allowed = &j["allowed"];
+    }
+    if (allowed && allowed->contains("capabilities")) session.capabilities = b2StringArray((*allowed)["capabilities"]);
+    if (session.token.empty() || session.account_id.empty() || !session.api_url.starts_with("https://"))
+        throw ProviderError("b2_authorize_account: the answer has no authorization token, account id or https API URL",
+                            {}, response.status);
+    return session;
+}
+
+nlohmann::json B2Admin::nativeCall(const NativeSession& session, const std::string& api, const nlohmann::json& body) {
+    curl::http::Request request;
+    request.method = "POST";
+    request.url = session.api_url + "/b2api/v4/" + api;
+    request.timeout = std::chrono::seconds{30};
+    request.max_response_bytes = 1024 * 1024;
+    request.headers.emplace_back("Authorization", session.token);
+    request.headers.emplace_back("Content-Type", "application/json");
+    request.body = body.dump();
+    count(api == "b2_list_buckets" ? "list" : "put");
+    const auto response = curl::http::perform(request);
+    auto secrets = this->secrets();
+    secrets.push_back(session.token);
+    if (!response.ok()) throw detail::makeError(api, response, b2NativeError(response), secrets);
+    try {
+        auto j = nlohmann::json::parse(response.body);
+        if (!j.is_object()) throw ProviderError(api + ": the answer is not a JSON object", {}, response.status);
+        return j;
+    } catch (const nlohmann::json::exception&) {
+        throw ProviderError(api + ": the answer is not JSON", {}, response.status);
+    }
+}
+
+ReadKey B2Admin::createReadKey(const ReadKeyRequest& request) {
+    requireBucket(request.bucket);
+    if (!b2ValidKeyName(request.key_name))
+        throw std::invalid_argument("a Backblaze B2 key name is 1-100 letters, digits and '-'");
+
+    const auto session = authorizeNative();
+    if (session.capabilities && std::ranges::find(*session.capabilities, std::string("writeKeys")) == session.capabilities->end())
+        throw CapabilityMissing("writeKeys",
+                                "the vault's Backblaze B2 application key may not create keys: it needs the writeKeys "
+                                "capability (an account master key, or an application key created with writeKeys) to "
+                                "issue a read-only key for bucket '" + request.bucket + "'");
+
+    const auto listed = nativeCall(session, "b2_list_buckets",
+                                   {{"accountId", session.account_id}, {"bucketName", request.bucket}});
+    std::string bucketId;
+    if (listed.contains("buckets") && listed["buckets"].is_array())
+        for (const auto& b : listed["buckets"])
+            if (b.is_object() && b.value("bucketName", "") == request.bucket) bucketId = b.value("bucketId", "");
+    if (bucketId.empty())
+        throw ProviderError("b2_list_buckets does not list bucket '" + request.bucket + "' for this application key",
+                            "NoSuchBucket", 404);
+
+    const auto& caps = kReadKeyCapabilities();
+    nlohmann::json created;
+    try {
+        created = nativeCall(session, "b2_create_key",
+                             {{"accountId", session.account_id},
+                              {"keyName", request.key_name},
+                              {"capabilities", caps},
+                              {"bucketIds", nlohmann::json::array({bucketId})}});
+    } catch (const ProviderError& e) {
+        if (e.http_status == 401 && !session.capabilities)
+            throw CapabilityMissing("writeKeys", std::string(e.what()) +
+                                                     " (creating a key needs the writeKeys capability on the vault's "
+                                                     "Backblaze B2 application key)");
+        throw;
+    }
+    ReadKey key;
+    key.key_id = created.value("applicationKeyId", "");
+    key.secret = created.value("applicationKey", "");
+    key.key_name = request.key_name;
+    key.bucket = request.bucket;
+    key.bucket_id = bucketId;
+    key.capabilities = caps;
+    key.region = region_;
+    key.endpoint = "https://s3." + region_ + ".backblazeb2.com";
+    if (key.key_id.empty() || key.secret.empty()) {
+        // Created but not handed back whole: take it away again rather than leave a key nobody holds.
+        if (!key.key_id.empty()) {
+            try {
+                (void)nativeCall(session, "b2_delete_key", {{"applicationKeyId", key.key_id}});
+            } catch (const std::exception&) {
+            }
+        }
+        throw ProviderError("b2_create_key: the answer has no application key id or key");
+    }
+    return key;
+}
+
+void B2Admin::deleteReadKey(const std::string& keyId) {
+    if (keyId.empty()) throw std::invalid_argument("a Backblaze B2 key id is required");
+    const auto session = authorizeNative();
+    (void)nativeCall(session, "b2_delete_key", {{"applicationKeyId", keyId}});
 }
 
 }
