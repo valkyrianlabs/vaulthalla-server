@@ -13,6 +13,8 @@ cask "vaulthalla-server" do
 
   depends_on arch: :arm64
   depends_on macos: :sonoma
+  # gpg: vault read grants (and key exports with --recipient) encrypt to OpenPGP keys with the system GnuPG.
+  depends_on formula: "gnupg"
 
   pkg "vaulthalla-#{version}-arm64.pkg"
 

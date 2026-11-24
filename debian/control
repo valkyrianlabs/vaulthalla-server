@@ -53,6 +53,7 @@ Depends:
  nodejs,
  openssl,
  fuse3,
+ gpg,
  python3,
  vaulthalla-archive-keyring,
  ${shlibs:Depends},

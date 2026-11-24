@@ -29,3 +29,4 @@ brew "libpqxx"        # libpqxx >= 8.0.2, wrapped as pkg-config `libpqxx-vh` by 
 brew "googletest"     # gtest for vh_unit_tests
 brew "postgresql@16"  # initdb/pg_ctl/psql for the disposable cluster of tools/macos/test-db.sh (never a brew service)
 brew "python@3.12"    # python3 >= 3.10 for the ws_contract_drift meson test and the zip checks (macOS ships 3.9)
+brew "gnupg"          # gpg for the OpenPGP tests (vault read grants, crypto/openpgp); the server cask depends on it
