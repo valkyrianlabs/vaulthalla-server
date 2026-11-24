@@ -163,7 +163,7 @@ def parse_config_projection_from_text(text: str) -> dict[str, dict[str, Any]]:
         "websocket_server": {"enabled": True, "host": "127.0.0.1", "port": 33369},
         "http_preview_server": {"enabled": True, "host": "127.0.0.1", "port": 33370},
         "s3_gateway": {"enabled": False, "host": "127.0.0.1", "port": 39000},
-        "database": {"host": "localhost", "port": 5432, "name": DB_NAME, "user": DB_USER, "pool_size": 10},
+        "database": {"host": "localhost", "port": 5432, "name": DB_NAME, "user": DB_USER, "pool_size": 24},
     }
     section: str | None = None
     for raw_line in text.splitlines():
@@ -1467,7 +1467,7 @@ def setup_remote_db(args: argparse.Namespace) -> int:
 
     path = config_path()
     projection = load_config_projection(path)
-    existing_pool = int(projection["database"].get("pool_size", 10))
+    existing_pool = int(projection["database"].get("pool_size", 24))
     pool_size = args.pool_size if args.pool_size is not None else existing_pool
 
     updates = {

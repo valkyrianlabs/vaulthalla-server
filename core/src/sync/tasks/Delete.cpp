@@ -3,6 +3,7 @@
 #include "log/Registry.hpp"
 #include "recovery/local/Backlog.hpp"
 #include "storage/CloudEngine.hpp"
+#include "storage/s3/Controller.hpp"
 #include "fs/model/File.hpp"
 #include "fs/model/file/Trashed.hpp"
 #include "sync/model/ScopedOp.hpp"
@@ -116,6 +117,8 @@ void Delete::operator()() {
         else throw std::runtime_error("DeleteTask: unsupported storage engine type");
 
         op->success = true;
+    } catch (const storage::s3::RequestBudgetExceeded& e) {
+        log::Registry::sync()->debug("[DeleteTask] Not deleted (request budget): {} - {}", getPathString(target), e.what());
     } catch (const std::exception& e) {
         log::Registry::sync()->error(
             "[DeleteTask] Failed to delete file: {} - {}",

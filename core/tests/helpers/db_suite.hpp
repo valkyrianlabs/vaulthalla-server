@@ -13,6 +13,7 @@
 
 #include "../helpers/temp_dir.hpp"
 
+#include "audit/Trail.hpp"
 #include "db/Transactions.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
@@ -56,6 +57,10 @@ inline void resetIdKeyedState(const bool seeded = true) {
 // A fresh `public` schema (every migration), prepared statements and, with `seed`, the seeded install; then the
 // id-keyed process state is reset to match it (resetIdKeyedState).
 inline void freshSchema(const bool seed = true) {
+    // Audit events an earlier suite queued but did not write would land in this schema, under vault and user ids the
+    // new schema reuses (VaultRemoteParityTest counted CloudStorageTest's attach events), and the chain tail the trail
+    // remembers belongs to the dropped schema: both go.
+    vh::audit::Trail::instance()->resetForTesting();
     vh::db::Transactions::init();
     vh::db::seed::nuke_and_recreate_schema_public();
     vh::db::Transactions::dbPool_->initPreparedStatements();

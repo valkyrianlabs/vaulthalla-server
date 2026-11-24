@@ -23,7 +23,18 @@ namespace vh::db {
     public:
         static inline std::shared_ptr<DBPool> dbPool_;
 
-        static void init() { dbPool_ = std::make_shared<DBPool>(); }
+        // A pool of `size` connections (tests; DBPool's default of 4). The daemon uses initFromConfig.
+        static void init(const std::size_t size = 4) { dbPool_ = std::make_shared<DBPool>(size); }
+
+        // The daemon's pool: database.pool_size (it used to be ignored: every install got 4), kept within
+        // DBPool::kMinPoolSize..kMaxPoolSize with a warning when it is not.
+        static void initFromConfig(const int configuredPoolSize) {
+            std::string warning;
+            const auto size = DBPool::resolveSize(configuredPoolSize, &warning);
+            if (!warning.empty()) log::Registry::db()->warn("[DBPool] {}", warning);
+            init(size);
+            log::Registry::db()->info("[DBPool] {} pooled database connection(s)", size);
+        }
 
         template <typename Func>
         static decltype(auto) exec(const std::string& ctx, Func&& func) {

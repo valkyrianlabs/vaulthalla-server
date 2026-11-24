@@ -173,21 +173,21 @@ std::vector<Entry::EntryPtr> Entry::listDir(const std::optional<unsigned int>& e
         const auto files = vh::fs::model::files_from_pq_res(
             recursive
                 ? txn.exec(pqxx::prepped{"list_files_in_dir_by_parent_id_recursive"}, entryId)
-                : txn.exec(pqxx::prepped{"list_files_in_dir_by_parent_id"}, entryId)
-            );
+                : txn.exec(pqxx::prepped{"list_files_in_dir_by_parent_id"}, entryId),
+            txn);
 
         log::Registry::db()->info("[Entry::listDir] Executing queries for directories...");
         const auto directories = vh::fs::model::directories_from_pq_res(
             recursive
                 ? txn.exec(pqxx::prepped{"list_dirs_in_dir_by_parent_id_recursive"}, entryId)
-                : txn.exec(pqxx::prepped{"list_dirs_in_dir_by_parent_id"}, entryId)
-            );
+                : txn.exec(pqxx::prepped{"list_dirs_in_dir_by_parent_id"}, entryId),
+            txn);
 
         const auto symlinks = vh::fs::model::symlinks_from_pq_res(
             recursive
                 ? txn.exec(pqxx::prepped{"list_symlinks_in_dir_by_parent_id_recursive"}, entryId)
-                : txn.exec(pqxx::prepped{"list_symlinks_in_dir_by_parent_id"}, entryId)
-            );
+                : txn.exec(pqxx::prepped{"list_symlinks_in_dir_by_parent_id"}, entryId),
+            txn);
 
         return merge_entries(files, symlinks, directories);
     });
@@ -204,9 +204,9 @@ std::vector<Entry::EntryPtr> Entry::listSubtree(const unsigned int dirId) {
     )SQL";
 
     struct Rows { pqxx::result files, symlinks, directories; };
-    const auto rows = Transactions::exec("Entry::listSubtree", [&](pqxx::work& txn) {
+    return Transactions::exec("Entry::listSubtree", [&](pqxx::work& txn) {
         const pqxx::params p{dirId};
-        return Rows{
+        const Rows rows{
             txn.exec(std::string(kTree) +
                      "SELECT fs.*, f.* FROM fs_entry fs JOIN files f ON f.fs_entry_id = fs.id "
                      "WHERE fs.parent_id IN (SELECT id FROM tree)", p),
@@ -215,12 +215,11 @@ std::vector<Entry::EntryPtr> Entry::listSubtree(const unsigned int dirId) {
                      "JOIN symlinks s ON s.fs_entry_id = fs.id WHERE fs.parent_id IN (SELECT id FROM tree)", p),
             txn.exec(pqxx::prepped{"list_dirs_in_dir_by_parent_id_recursive"}, p)
         };
+        // Each entry's parent chain (fuse and backing paths) is read in this transaction, on its connection.
+        return merge_entries(vh::fs::model::files_from_pq_res(rows.files, txn),
+                             vh::fs::model::symlinks_from_pq_res(rows.symlinks, txn),
+                             vh::fs::model::directories_from_pq_res(rows.directories, txn));
     });
-
-    // Built outside the transaction: each entry reads its parent chain (fuse and backing paths) with its own lease.
-    return merge_entries(vh::fs::model::files_from_pq_res(rows.files),
-                         vh::fs::model::symlinks_from_pq_res(rows.symlinks),
-                         vh::fs::model::directories_from_pq_res(rows.directories));
 }
 
 ino_t Entry::getNextInode() {
@@ -233,8 +232,12 @@ ino_t Entry::getNextInode() {
 
 pqxx::result Entry::collectParentChain(unsigned int parentId) {
     return Transactions::exec("Entry::collectParentChain", [&](pqxx::work& txn) {
-        return txn.exec(pqxx::prepped{"collect_parent_chain"}, parentId);
+        return collectParentChain(txn, parentId);
     });
+}
+
+pqxx::result Entry::collectParentChain(pqxx::transaction_base& txn, const unsigned int parentId) {
+    return txn.exec(pqxx::prepped{"collect_parent_chain"}, parentId);
 }
 
 }

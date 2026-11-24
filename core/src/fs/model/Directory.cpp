@@ -4,6 +4,8 @@
 
 #include <nlohmann/json.hpp>
 #include <pqxx/result>
+#include <pqxx/transaction_base>
+#include <unordered_map>
 
 using namespace vh::fs::model;
 using namespace vh::db::encoding;
@@ -26,12 +28,16 @@ void vh::fs::model::from_json(const nlohmann::json& j, Directory& d) {
     d.subdirectory_count = j.at("subdirectory_count").get<unsigned int>();
 }
 
-std::vector<std::shared_ptr<Directory>> vh::fs::model::directories_from_pq_res(const pqxx::result& res) {
+std::vector<std::shared_ptr<Directory>> vh::fs::model::directories_from_pq_res(const pqxx::result& res, pqxx::transaction_base& txn) {
     std::vector<std::shared_ptr<Directory>> directories;
+    directories.reserve(res.size());
+    std::unordered_map<unsigned int, pqxx::result> chains;
     for (const auto& row : res) {
         if (const auto parentId = row["parent_id"].as<std::optional<unsigned int>>()) {
-            const auto parentChain = db::query::fs::Entry::collectParentChain(*parentId);
-            directories.push_back(std::make_shared<Directory>(row, parentChain));
+            auto chain = chains.find(*parentId);
+            if (chain == chains.end())
+                chain = chains.emplace(*parentId, db::query::fs::Entry::collectParentChain(txn, *parentId)).first;
+            directories.push_back(std::make_shared<Directory>(row, chain->second));
         } else directories.push_back(std::make_shared<Directory>(row, pqxx::result{}));
     }
     return directories;

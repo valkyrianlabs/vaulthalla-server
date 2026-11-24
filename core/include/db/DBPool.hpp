@@ -43,6 +43,23 @@ struct PoolStats {
 class DBPool {
   public:
     static constexpr std::chrono::milliseconds DEFAULT_ACQUIRE_TIMEOUT{std::chrono::seconds(30)};
+
+    // database.pool_size bounds. Below kMinPoolSize a sync pass, FUSE and the listeners queue on each other; above
+    // kMaxPoolSize is a typo, not a deployment (PostgreSQL's default max_connections is 100).
+    static constexpr std::size_t kMinPoolSize = 4, kMaxPoolSize = 256;
+    // The pool size for a configured database.pool_size: kept within the bounds above. `warning` says what was
+    // changed and why (empty when the value is used as is).
+    [[nodiscard]] static std::size_t resolveSize(long long configured, std::string* warning = nullptr) {
+        const auto clamped = static_cast<std::size_t>(std::clamp<long long>(
+            configured, static_cast<long long>(kMinPoolSize), static_cast<long long>(kMaxPoolSize)));
+        if (warning) {
+            if (static_cast<long long>(clamped) == configured) warning->clear();
+            else *warning = "database.pool_size " + std::to_string(configured) + " is outside " +
+                            std::to_string(kMinPoolSize) + ".." + std::to_string(kMaxPoolSize) + "; using " +
+                            std::to_string(clamped);
+        }
+        return clamped;
+    }
     static constexpr std::chrono::milliseconds RECONNECT_BACKOFF_BASE{250};
     static constexpr std::chrono::milliseconds RECONNECT_BACKOFF_MAX{std::chrono::seconds(5)};
 

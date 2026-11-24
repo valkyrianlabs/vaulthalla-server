@@ -15,7 +15,9 @@
 #include "db/encoding/interval.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "db/query/fs/File.hpp"
+#include "db/query/sync/Policy.hpp"
 #include "db/query/sync/RemoteObjectIndex.hpp"
+#include "log/Registry.hpp"
 #include "db/query/sync/ManifestApply.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "CommandUsage.hpp"
@@ -676,14 +678,24 @@ static CommandResult handle_vault_sync_info(const CommandCall& call) {
 
     if (!engine->sync) return invalid("vault sync info: vault does not have a sync configuration");
 
+    // The stored policy, with the last sync and last success the passes record in the sync table. The engine's
+    // copy was loaded with the vault and printed 1970-01-01 for both until the next restart.
+    auto policy = engine->sync;
+    try {
+        if (auto stored = db::query::sync::Policy::getSync(engine->vault->id)) policy = std::move(stored);
+    } catch (const std::exception& e) {
+        log::Registry::shell()->warn("[vault sync info] vault {}: stored sync policy unreadable, showing the loaded one: {}",
+                                     engine->vault->id, e.what());
+    }
+
     if (engine->vault->type == VaultType::S3) {
-        const auto rsync = std::static_pointer_cast<RemotePolicy>(engine->sync);
+        const auto rsync = std::static_pointer_cast<RemotePolicy>(policy);
         const auto summary = db::query::sync::RemoteObjectIndex::summaryForVault(engine->vault->id);
         return ok(to_string(rsync) + remoteIndexSummaryString(summary, rsync->max_remote_index_age) +
                   manifestStatusString(engine));
     }
 
-    return ok(to_string(engine->sync));
+    return ok(to_string(policy));
 }
 
 static CommandResult handle_vault_sync_dry_run(const CommandCall& call) {

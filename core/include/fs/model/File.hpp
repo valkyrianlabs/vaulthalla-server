@@ -37,7 +37,10 @@ namespace vh::fs::model {
 
     void to_json(nlohmann::json &j, const std::vector<std::shared_ptr<File> > &files);
 
-    std::vector<std::shared_ptr<File> > files_from_pq_res(const pqxx::result &res);
+    // Rows to entries, each with its parent chain read in `txn` (the caller's transaction, on the connection it
+    // already holds): never a second pooled connection while one is held, which deadlocked concurrent listers once
+    // the pool was in use. Rows sharing a parent read its chain once.
+    std::vector<std::shared_ptr<File> > files_from_pq_res(const pqxx::result &res, pqxx::transaction_base &txn);
 
     std::vector<std::shared_ptr<File> > filesFromS3XML(const std::u8string &xml);
 

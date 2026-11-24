@@ -48,7 +48,7 @@ backends (`pg_terminate_backend`) mid-run.
 in `architecture.md` → Database, and `core/tests/unit/test_db_pool_reconnect.cpp` covers termination of all pool
 backends (repeated, concurrent), mid-transaction loss, exhaustion timeout, and an unreachable DB (via
 `CONNECTION LIMIT 0`). Still open: lab proof (restart `postgresql@16-main` under a running daemon on vh-storage),
-wiring `database.pool_size`, a database line in the watchdog email body, and a statement timeout for a server that
+a database line in the watchdog email body, and a statement timeout for a server that
 hangs mid-query. TCP keepalives + `tcp_user_timeout` landed with the libpqxx 8 migration (2026-10-10), which also
 replaces connections libpqxx reports as poisoned (`DBPoolReconnectTest.PoisonedConnectionsAreReplacedOnTheNextAcquire`).
 

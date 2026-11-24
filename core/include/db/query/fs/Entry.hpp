@@ -41,7 +41,11 @@ public:
 
     [[nodiscard]] static EntryPtr getRootEntry();
 
+    // Opens a transaction of its own: never call it while holding one (each Transactions call leases a pooled
+    // connection, and a caller already holding one can wait on itself once the pool is in use). Inside a
+    // transaction use the overload that takes it.
     [[nodiscard]] static pqxx::result collectParentChain(unsigned int parentId);
+    [[nodiscard]] static pqxx::result collectParentChain(pqxx::transaction_base& txn, unsigned int parentId);
 };
 
 }

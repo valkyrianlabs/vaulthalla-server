@@ -41,6 +41,9 @@ protected:
                 return std::make_unique<FakeAdmin>(c);
             },
             .events = nullptr});
+        // A suite earlier in the same process may have left its own protection set (guard::setForTesting), which
+        // reload() keeps.
+        storage::upstream::guard::clearForTesting();
         storage::upstream::guard::reload();
     }
 

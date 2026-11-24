@@ -301,7 +301,7 @@ std::vector<Key::SealedSample> Key::sampleSealedFiles(const unsigned int vaultId
             "AND f.encryption_iv <> '' ORDER BY f.size_bytes, fs.id LIMIT $3",
             pqxx::params{vaultId, version, limit});
         std::vector<SealedSample> out;
-        for (const auto& file : vh::fs::model::files_from_pq_res(res))
+        for (const auto& file : vh::fs::model::files_from_pq_res(res, txn))
             out.push_back({.path = file->backing_path.string(), .iv = file->encryption_iv,
                            .vault_path = file->path.string(), .plaintext_bytes = file->size_bytes});
         return out;
@@ -557,7 +557,7 @@ std::vector<std::shared_ptr<vh::fs::model::File>> Key::filesSealedUnderVersion(c
             "WHERE fs.vault_id = $1 AND f.encrypted_with_key_version = $2 AND f.encryption_iv IS NOT NULL "
             "AND f.encryption_iv <> '' ORDER BY fs.id",
             pqxx::params{vaultId, version});
-        return vh::fs::model::files_from_pq_res(res);
+        return vh::fs::model::files_from_pq_res(res, txn);
     });
 }
 
