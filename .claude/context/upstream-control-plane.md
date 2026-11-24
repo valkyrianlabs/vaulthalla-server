@@ -126,7 +126,25 @@ plain storage, but protection locks still apply.
   `noteChanged` marks `changed_at`, alerts once (`bucket_capability_changed`, operator notification), and
   `CloudEngine::writeCapability()` stalls every later use until a re-probe. Unknown: logged, the next use probes.
 
-## Backblaze B2 (bucket administration only)
+## Backblaze B2 (bucket administration; lifecycle for file history)
+
+- **Lifecycle (2026-11-24, `feat/b2-provider-versioning`):** `B2Admin::inspect` adds b2_authorize_account (once per
+  client, `nativeSession`) + `b2_list_buckets {accountId, bucketName, bucketTypes:["all"]}` → `b2lifecycle::fromNative`
+  (prefix/daysFromHidingToDeleting/daysFromUploadingToHiding/daysFromStartingToCancelingUnfinishedLargeFiles →
+  prefix/expire_noncurrent/expire_current/abort_multipart, `raw_json` verbatim). A native failure = `lifecycle_readable
+  = false` + warning. B2 rules have no id: Vaulthalla's are recorded in `bucketInfo["vaulthalla-lifecycle"]`
+  (`kB2RuleRecordKey`, JSON `{v:1, rules:[{id, …}]}`) written in the same `b2_update_bucket`; a rule is ours only when
+  it equals a recorded one (claimed once), every other rule is foreign with id `b2:<prefix>` (`b2:(all files)`). An
+  owned rule edited in the console therefore becomes foreign (kept) and ours is re-added on the next write (B2 allows
+  identical prefixes; the smallest value wins). `putLifecycle` validates first (no disabled rule, ≥1 day value, no
+  0), needs `writeBuckets` when the authorization lists capabilities, then `b2_update_bucket {lifecycleRules,
+  bucketInfo (others kept), ifRevisionIs = the revision inspect read}`; a 409 is a ProviderError 409 ("nothing was
+  written"), the cache dropped. `supportsLifecycle() == true`; `probe` reports `lifecycle` from the authorization and
+  `versioning` ok (always on). `ops::upstream` keeps `lifecycleGap` for `setLifecycle`/provisioning `lifecycle`
+  (`vh upstream lifecycle` refused on B2: Vaulthalla writes only the file-history rule), `detach` now removes our B2
+  rules. Docs: https://www.backblaze.com/docs/cloud-storage-lifecycle-rules, .../apidocs/b2-update-bucket,
+  .../apidocs/b2-list-buckets. Backblaze also has S3 lifecycle calls now (2025 pages) but advises not to mix them with
+  the native ones; Vaulthalla uses native only.
 
 - **Adapter:** `B2Admin` (`provider/admin/B2Admin.cpp`) over B2's S3-compatible API, for a key labelled
   `S3Provider::BackblazeB2` whose endpoint is `https://s3.<region>.backblazeb2.com` (`admin::b2EndpointRegion`; the
@@ -136,17 +154,15 @@ plain storage, but protection locks still apply.
 - **What it calls** (Backblaze's documented "supported calls"): ListBuckets (no paging: `pagedListBuckets() == false`),
   HeadBucket, CreateBucket (`x-amz-acl: private`, `LocationConstraint` = the endpoint's region), DeleteBucket,
   GetBucketVersioning, Get Object Lock Configuration, ListObjectsV2, ListObjectVersions, DeleteObjects.
-- **What it never calls**, because that API has no such operation (lifecycle rules: "available only through the
-  Backblaze web console and the Native API"; event notifications: native only): `supportsLifecycle() == false`,
-  `inspect` answers `lifecycle_readable = notifications_readable = false` with one warning, `putLifecycle` and
-  `putVersioning(Suspended)` throw `CapabilityMissing` after the name and guard checks with nothing sent,
-  `putVersioning(Enabled)` only reads (B2 buckets are always versioned), and `probe()` lists `lifecycle`,
-  `versioning`, `events.queues` and `events.notifications` as `ok = false, probed = true`
-  (`kB2LifecycleUnsupported` / `kB2VersioningFixed` / `kB2EventsUnsupported`). `admin::supportsEvents` (AWS, R2)
+- **What it never calls** over the S3 API: lifecycle (read and written natively, above) and event notifications
+  (native only): `inspect` answers `notifications_readable = false` with one warning, `putVersioning(Suspended)`
+  throws `CapabilityMissing` after the name and guard checks with nothing sent, `putVersioning(Enabled)` only reads
+  (B2 buckets are always versioned), and `probe()` lists `events.queues` and `events.notifications` as
+  `ok = false, probed = true` (`kB2EventsUnsupported`), `versioning` as ok (`kB2VersioningFixed`). `admin::supportsEvents` (AWS, R2)
   gates event-driven sync in `ops::upstream` (`supportGap`, `beginProvision`) and `sync::events::subscriptions`.
-  Provider versioning as a recovery mode stays AWS only (`polProviderGap` in `ops/RecoveryPolicy.cpp`).
+  Provider versioning as a recovery mode is AWS S3 and B2 (recovery.md, "Backblaze B2").
 - **Ops** (`ops/Upstream.cpp`): `lifecycleGap(key)` refuses `setLifecycle` and a provisioning `lifecycle` before any
-  request, skips the lifecycle step of `detach`, and empties `supported_lifecycle_fields`; `requireValidRegion` /
+  request and empties `supported_lifecycle_fields` (`detach` follows `supportsLifecycle()` and removes our B2 rules); `requireValidRegion` /
   `defaultRegion` allow only the key's own region (an account lives in one); `identityOf` applies B2's name rules.
 - **Names** (`storage/upstream/Names`): `validB2BucketName` = the S3 rules + at least 6 characters + no `b2-`
   prefix; `validBucketNameFor(providerIdentity, …)` picks the rules, used by `S3ApiAdmin::requireBucket`,
@@ -175,7 +191,9 @@ setter-and-principal permissions; a per-credential allowlist of the profiles a r
 day through the Sentinel session: "Yes I like your idea of an allowlist"). Operator docs: `docs/s3-gateway/buckets.md` "Upstream Profiles".
 
 - **Model:** `s3_gateway_upstream_profile` (name, api_key_id ON DELETE RESTRICT, encrypt_upstream, sync_strategy,
-  conflict_policy, bucket_prefix). `s3_gateway_credentials.upstream_profile_id` / `upstream_server_default` (CHECK:
+  conflict_policy, bucket_prefix; `versioning` off | <N>d | indefinite, NULL = off, migration 156: B2 profiles only for
+  non-off, `PROFILE_VERSIONING` acceptance, applied at bucket creation through `Provision::keep_history`, never
+  re-applied). `s3_gateway_credentials.upstream_profile_id` / `upstream_server_default` (CHECK:
   never both) / `upstream_reapply` (NULL = server). `s3_gateway_bucket.created_by_credential_id` /
   `upstream_profile_id` (set only by a profile CreateBucket; a bucket follows the profile it was created from).
   `s3_gateway_credential_upstream_profile` (credential_id, profile_id; profile ON DELETE RESTRICT): the allowlist.

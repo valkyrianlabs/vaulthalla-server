@@ -15,7 +15,7 @@ first-class, unmissable part of turning provider versioning on.
 |---|---|---|---|
 | Local snapshot (`snap-<id>`, members `lv-<id>`) | explicit named recovery point of a file or directory tree | only by a person (`vh snapshot create`) — never on writes, truncation, rename, delete, sync or key rotation | `recovery_snapshot` + `file_versions` (origin `snapshot`) → `recovery_blob` |
 | Local version (`lv-<id>`) | opt-in harness (`vault_recovery_policy.local_versioning`): the prior sealed generation of a file is kept on every content change (overwrite, truncate, delete, a sync download over local content, restore, conflict resolution); never on rename/move (no content change) or key rotation (same plaintext) | automatically, when enabled | `file_versions` (origin `version`) → `recovery_blob` |
-| Provider version (`pv-<id>`) | native object versions + delete markers in an AWS S3 bucket with versioning enabled | by the provider on every PUT/COPY/DELETE | the bucket; Vaulthalla keeps metadata only in `upstream_object_version` |
+| Provider version (`pv-<id>`) | native object versions + delete markers in an AWS S3 bucket with versioning enabled, or any Backblaze B2 bucket (always versioned) | by the provider on every PUT/COPY/DELETE | the bucket; Vaulthalla keeps metadata only in `upstream_object_version` |
 
 Vault preference `vault_recovery_policy.mode`: `off | local_snapshots | provider_versioning` (no row = off). Local
 versioning is orthogonal to it. Existing snapshots and versions stay recoverable whatever the mode; the mode gates
@@ -184,9 +184,14 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
 - Fixed on the way: `Filesystem::remove` of a folder left its subfolders/symlinks in the FS cache (a restore or mkdir
   at the same path then hung new rows off deleted parents; FK violation).
 
-## Provider versioning (AWS S3 first; capability contract per provider)
+## Provider versioning (AWS S3, Backblaze B2; capability contract per provider)
 
-- Capability: `AdminClient` reports `versioning` support (AWS: yes; R2: no — refused with the documented reason,
+- Capability contract: `recovery/provider/Capabilities.hpp` `capabilitiesOf(providerIdentity)` →
+  `recovery::ProviderCapabilities` (in status as `provider.capabilities`): AWS enable/suspend/retention/copy, 15 min
+  propagation; B2 always_versioned, retention days/indefinite, history_off, list, restore by transfer only (no
+  documented CopyObject from a versionId: `Restore.cpp` `providerCopiesVersions`), no enable, no suspend
+  (`kB2SuspendUnsupported`, Invalid before anything); R2/others nothing (`unsupportedReason`). Backblaze B2 below.
+- `AdminClient` reports `versioning` support (AWS: yes; R2: no — refused with the documented reason,
   local snapshots/versions keep working). Activation needs an admin-enabled key and a managed/adopted, unprotected
   bucket; an existing vault's unmanaged bucket can be adopted in the same flow (`accept_adoption`, admission preflight).
 - Enable flow: inspect (versioning, object lock, MFA delete, lifecycle incl. foreign noncurrent expiration) → cost
@@ -223,6 +228,36 @@ bucket: choosing `off`/`local_snapshots` does not suspend a bucket that is versi
      (the Copy event settles as our own write). The next pass sees L == R: **no second upload**.
 - Directory point-in-time restore = per object the latest version with `last_modified ≤ at` (a delete marker or no
   version = absent). Always labelled a timestamp-based reconstruction, never an atomic snapshot (`Plan.atomic=false`).
+
+### Backblaze B2 (2026-11-24, `feat/b2-provider-versioning`, migration 156)
+
+- Every B2 bucket keeps every version; a lifecycle rule (`daysFromHidingToDeleting`) is the retention. B2Admin reads
+  and writes rules through the native API (upstream-control-plane.md, "Backblaze B2"), so the AWS machinery
+  (`mergeOwnedRule`/`mergeManifestRule`, GET-merge-PUT-GET, foreign rules kept, ours verified) runs unchanged on it.
+- Scope (`ruleScopeFor` / `dataPrefixFor`): opaque_v1 → owned rule on `o/`, never a rule under `.vaulthalla/` (the
+  version_log manifest keeps older roots as versions and GCs them itself), the manifest rule is removed;
+  transparent/path_v0 → whole bucket ("") + `vaulthalla-manifest-versions` (their index is a plain PUT read current
+  only; KEV1 envelopes are content-addressed). AWS: scope `{}` = as before. Status/disclosure read the bucket through
+  `policy::VaultView` (data prefix, `.vaulthalla/` protection warning, foreign current-expiry warning; B2 only).
+- History off: `policy::applyLatestOnly` = owned rule `NoncurrentDays 1` on the scope, recorded
+  `noncurrent_retention_mode = 'latest'` (migration 156 widened the CHECK). `bucketVersioningForVault().keepsHistory()`
+  is false for 'latest' (no backlog replays). `ops::recovery::update` with `req.mode` ≠ provider_versioning on B2
+  (`polPlanHistoryOff`, no request): skipped with a warning when the key isn't admin, the bucket is protected, the
+  actor lacks configure + key Consume, or it is unmanaged without `accept_adoption`; else RETENTION_SHORTEN when the
+  current history (recorded days/indefinite, B2 unset = indefinite) is longer than a day, then step-up data.destroy,
+  then the write (audit `recovery.history.off`). Already 'latest': nothing sent.
+- Provider versioning on B2: same flow (disclosure token, unpriced, shortening, adoption), no PutBucketVersioning
+  (`always_versioned`), `versioning_settles_at = now`, `applyRetention(…, polScope, polView)`.
+- New buckets: `ops::upstream::finishProvision` → `ops::recovery::detail::applyNewBucketHistory(actor, vault,
+  Provision::keep_history)` on B2 for Create and CreateOrAdoptEmpty (nullopt = latest; days/indefinite = policy mode
+  provider_versioning + retention, from an S3 gateway profile's `versioning`). Explicit Adopt: rules untouched, a
+  warning. Failures are warnings (the vault stays; status says the bucket keeps every version).
+- Step-up: `vault.recovery.update` is data.destroy (target `vault.recovery.update:<vault>`) when a provider retention
+  shortens (AWS too, since this branch) or B2 history off deletes history. Agents are refused; the host CLI isn't.
+- Tests: `B2Lifecycle*` (`test_b2_lifecycle.cpp`, transport seam, DB-free), `RecoveryB2Test*` (`test_recovery_b2.cpp`),
+  `GatewayUpstreamTest.AProfilesVersioningDefault…`/`AVersioningDefaultIsValidated…`,
+  `SqlDeployerHistoryDb.B2ProviderVersioningMigration156…`. Not verified live: every native lifecycle call, the
+  bucketInfo record, `ifRevisionIs` conflicts, and B2's behaviour for HEAD/GET `?versionId` metadata.
 
 ### Provider recovery as built (`recovery/provider/*`, `storage/CloudEngineRestore.cpp`)
 

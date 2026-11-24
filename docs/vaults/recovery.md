@@ -1,7 +1,7 @@
 ---
 title: File Recovery
 navTitle: File Recovery
-description: Bring back earlier versions of files and folders with local snapshots, local versioning and AWS S3 provider versioning - how each works, what it costs, how to restore safely, and what the refusals mean.
+description: Bring back earlier versions of files and folders with local snapshots, local versioning and provider versioning on AWS S3 and Backblaze B2 - how each works, what it costs, how to restore safely, and what the refusals mean.
 order: 257
 status: published
 tags:
@@ -34,9 +34,9 @@ The same operations are in the CLI (`vh snapshot`, `vh recovery`, `vh vault reco
 | | Local snapshots | Local versioning | Provider versioning |
 | --- | --- | --- | --- |
 | What it keeps | A named recovery point of a file or a folder tree | The previous contents of a file each time its contents change | Every object version and delete marker in the bucket |
-| Created | Only when a person takes one | Automatically, once you turn it on | By AWS on every write and delete |
-| Stored | Encrypted on this host | Encrypted on this host | In the AWS S3 bucket; Vaulthalla keeps metadata only |
-| Vaults | Any vault | Any vault | S3 vaults on AWS S3 only |
+| Created | Only when a person takes one | Automatically, once you turn it on | By the provider on every write and delete |
+| Stored | Encrypted on this host | Encrypted on this host | In the bucket; Vaulthalla keeps metadata only |
+| Vaults | Any vault | Any vault | S3 vaults on AWS S3 or Backblaze B2 |
 | Recovery ids | `snap-<id>` (its files are `lv-<id>`) | `lv-<id>` | `pv-<id>` |
 | Removed by | You (`vh snapshot delete`) | Its limits (count, age, quota) | The bucket's retention |
 
@@ -46,7 +46,8 @@ Which one to use:
   and are kept until you delete them.
 - **Local versioning** for a safety net on files people edit all the time. It costs host disk, which you cap.
 - **Provider versioning** for long, complete history of an S3 vault without keeping a second copy on the host. It costs
-  money every month, and on AWS it can't be turned off again, only suspended.
+  money every month, and on AWS it can't be turned off again, only suspended. Backblaze B2 buckets always keep
+  versions; there the mode decides how long ([Provider Versioning On Backblaze B2](#provider-versioning-on-backblaze-b2)).
 
 Local versioning can run alongside either mode. On S3 vaults with provider versioning it also queues history while
 AWS is unreachable (see [The Upload Backlog](#the-upload-backlog)).
@@ -67,8 +68,10 @@ In the web console: **Vaults → (vault) → Settings → Recovery**.
 
 - The mode decides what can be *created*: snapshots need `local-snapshots`, and provider versioning is turned on by
   choosing `provider-versioning`. Snapshots and versions that already exist stay recoverable whatever the mode is.
-- Changing the mode away from `provider-versioning` never suspends the bucket's versioning. `vh vault recovery status`
-  says when a bucket keeps versions while the vault's mode is something else.
+- Changing the mode away from `provider-versioning` never suspends an AWS bucket's versioning. `vh vault recovery
+  status` says when a bucket keeps versions while the vault's mode is something else. On Backblaze B2, choosing `off`
+  or `local-snapshots` makes the bucket keep only the latest version
+  ([below](#provider-versioning-on-backblaze-b2)).
 - Changing recovery settings needs the vault's sync settings permission. Anything that changes the bucket (turning on
   provider versioning, a retention, suspending) also needs `admin.upstream.configure` and the right to use the vault's
   API key. Adopting the vault's bucket needs `admin.upstream.provision` as well.
@@ -214,10 +217,21 @@ versions and keeps (and bills) the existing ones until their retention expires t
 
 ### Supported Providers
 
-- **AWS S3**: supported.
+- **AWS S3**: supported, as described in this section.
+- **Backblaze B2**: supported, with differences: see [Provider Versioning On Backblaze B2](#provider-versioning-on-backblaze-b2).
 - **Cloudflare R2**: refused. R2 has no object versioning (no version ids, noncurrent versions or delete markers). Use
   local snapshots or local versioning on R2.
-- **Other S3-compatible providers**: refused. Provider versioning is supported on AWS S3 buckets only.
+- **Other S3-compatible providers**: refused. Provider versioning is supported on AWS S3 and Backblaze B2 buckets only.
+
+| | AWS S3 | Backblaze B2 | Cloudflare R2 |
+| --- | --- | --- | --- |
+| Versions kept | once versioning is turned on | always (can't be turned off) | never |
+| Mode `off` | the bucket stays as it is (unversioned unless turned on) | only the latest version is kept | nothing to keep |
+| Retention N days / indefinite | yes | yes | no |
+| Turn on (PutBucketVersioning), propagation window | yes, 15 minutes | not needed | no |
+| Suspend | yes | no (use mode `off`) | no |
+| Restore by provider copy | yes | no: by transfer (GET, re-seal, PUT) | no |
+| `vh vault recovery status` `capabilities` | `enable`, `suspend`, `retention_*`, `restore_copy` | `always_versioned`, `retention_*`, `history_off`, `restore_transfer` | none |
 
 ### Prerequisites
 
@@ -295,7 +309,8 @@ accepts any whole number of days from 1 to 36,500). There is no default.
   noncurrent versions are listed in the status and the disclosure, and the shortest one that covers the whole vault
   wins. Vaulthalla warns when one is shorter than your choice.
 - Shortening the retention (indefinite to days, or fewer days) makes AWS permanently delete older versions sooner,
-  including history that exists now. It always needs the separate confirmation, from scripts too.
+  including history that exists now. It always needs the separate confirmation, from scripts too, and in the web
+  console a step-up (data.destroy). Agents can't shorten it.
 - The expiry shown for a provider version in recovery history assumes Vaulthalla's retention. Check
   `vh vault recovery status --refresh` for rules from other applications.
 
@@ -337,6 +352,69 @@ vh recovery list <vault> /finance --refresh --provider-only
 
 `--refresh` (the console's **Check provider for versions**) lists the bucket's versions for that path. It reads
 metadata only, downloads no file contents, and counts against the vault's request budget.
+
+## Provider Versioning On Backblaze B2
+
+Every Backblaze B2 bucket keeps every version of every file, and of every deleted file (a delete only adds a hide
+marker), and that can't be switched off. What decides how long they stay is a lifecycle rule. Vaulthalla writes that
+rule from the vault's recovery mode, so the mode means the same on B2 as anywhere else:
+
+| Mode | What the bucket keeps |
+| --- | --- |
+| `off` or `local-snapshots` | Only the latest version. An old version is deleted a day after it is replaced or the file is deleted (B2's "keep only the last version", `daysFromHidingToDeleting: 1`), then the hide marker. |
+| `provider-versioning --retention 30d` | Old versions for 30 days after they stop being current (any 1 to 36,500 days). |
+| `provider-versioning --retention indefinite` | Everything: Vaulthalla removes its rule. |
+
+### New And Existing Buckets
+
+- **A bucket Vaulthalla creates** on B2 starts with only the latest version kept: the owner's default is versioning
+  off, and on B2 that is a rule. An [S3 gateway upstream profile](/s3-gateway/buckets) can set another default for
+  the buckets it creates (`--versioning 30d`).
+- **A bucket Vaulthalla adopted** (with data in it) keeps its rules until you choose a mode for it. So does a bucket
+  created before this release (1.25.0 created them without a rule). For each such vault, choose one:
+
+  ```bash
+  vh vault recovery status <vault> --refresh
+  # keep only the latest version (deletes the history kept so far, a day after the rule is set)
+  vh vault recovery set <vault> --mode off --accept-retention-shortening
+  # or keep 30 days of history
+  vh vault recovery set <vault> --mode provider-versioning --retention 30d --yes --accept-unpriced \
+      --accept-retention-shortening
+  ```
+
+  Both delete history that exists now, so both need `--accept-retention-shortening` (typed `SHORTEN` at a terminal);
+  in the web console they also ask for a step-up, and agents can't run them. Turning on provider versioning also
+  shows the cost disclosure (`--yes` acknowledges it; `--accept-unpriced` when Vaulthalla has no price for B2). Run
+  them on the server as an administrator with `admin.upstream.configure` and the right to use the vault's API key.
+- **An unmanaged bucket** is never changed silently: setting the mode changes only the vault's preference and says
+  so, unless you adopt the bucket in the same step (`--adopt-bucket`).
+- **A protected bucket** is never touched.
+
+### What Is Different On B2
+
+- **Nothing to turn on, nothing to suspend.** There is no propagation window: old versions count as recovery history
+  as soon as the retention is set. `vh vault recovery suspend` is refused; use `--mode off`.
+- **The rule covers the vault's files only.** For an encrypted vault (opaque storage) it applies to `o/`, where every
+  file's content lives, and no rule of Vaulthalla's ever touches `.vaulthalla/`: on B2 the encrypted manifest keeps its
+  older roots there as versions and removes the ones it no longer needs itself. A `--no-encrypt` vault names objects
+  after their paths, so its rule covers the whole bucket, and `vaulthalla-manifest-versions` expires its index's old
+  copies after a day. After moving a B2 vault to opaque storage (`vh vault migrate-layout`), run `vh vault recovery
+  set <vault> --mode <its mode>` once to scope its rule to `o/`.
+- **Other rules stay.** Rules other applications or people set in the Backblaze console are kept exactly as they
+  are. B2 rules overlap freely and the shortest applies, so `vh vault recovery status --refresh` lists them and warns
+  when one deletes sooner than your retention, deletes current files, or reaches `.vaulthalla/` of an encrypted vault.
+- **How Vaulthalla knows its own rule.** B2 rules have no name. Vaulthalla records the rules it wrote in the bucket's
+  own bucket info (`vaulthalla-lifecycle`, next to any other entries, which are kept), and treats a rule as its own
+  only when it matches that record exactly. If you edit Vaulthalla's rule in the console, it becomes yours: Vaulthalla
+  keeps it and writes its own again on the next change, and status says so.
+- **Concurrent changes are refused, not overwritten.** Every write is conditional on the bucket revision Vaulthalla
+  read (`ifRevisionIs`); a change made in between is a conflict, and running the command again reads the bucket anew.
+- **Restores copy nothing on the provider.** Backblaze doesn't document copying from a version id, so every restore of
+  a provider version downloads it, verifies it and uploads it again (`provider_transfer`).
+- **The application key** needs Backblaze's `writeBuckets` capability to set the rule (and `listBuckets` to read it),
+  on top of what [provider administration](/vaults/upstream-buckets#backblaze-b2) already needs. Vaulthalla reads and
+  writes B2 rules through Backblaze's native API, never its S3 lifecycle calls (Backblaze advises against mixing the
+  two).
 
 ## Restore
 
@@ -552,6 +630,10 @@ The web console and the ws API report refusals with a stable code; the CLI print
 | `recovery_plan_expired` | The plan is older than 30 minutes. | Plan again. |
 | `recovery_unverified_version` | The plan restores versions Vaulthalla didn't write. | Check where they came from, then `--accept-unverified`. |
 | "Cloudflare R2 has no object versioning" | Provider versioning on R2. | Use local snapshots or local versioning. |
+| "Backblaze B2 buckets always keep object versions: versioning can't be suspended" | `vh vault recovery suspend` on B2. | `vh vault recovery set <vault> --mode off` keeps only the latest version. |
+| "still keeps every old version (Backblaze B2)" | The mode changed, but Vaulthalla couldn't set the bucket's rule (key not administrative, missing permission, unmanaged or protected bucket). | Follow the reason in the message, then set the mode again. |
+| "changed since Vaulthalla read its lifecycle rules" | Someone changed the B2 bucket between Vaulthalla's read and its write; nothing was written. | Run the command again. |
+| `step_up_required` (web console) | Shortening provider history is data.destroy. | Confirm with your passkey or TOTP, or run `vh` on the server. |
 | "is not enabled for provider administration" | The vault's API key isn't an administrative key. | `vh upstream admin enable <api-key>` |
 | "bucket … is protected" | A protection lock. | Remove the lock (`admin.upstream.unprotect`), or leave the bucket alone. |
 | "choose how long the provider keeps old versions" | No retention given. | Add `--retention`. |

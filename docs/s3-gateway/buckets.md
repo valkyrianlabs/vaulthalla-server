@@ -119,8 +119,30 @@ vh s3-gateway upstream delete vl-b2
 | `--sync-strategy` | `vaults.s3.default_remote_sync_strategy` | `cache`, `sync` or `mirror`. |
 | `--on-sync-conflict` | `vaults.s3.default_remote_conflict_policy` | `keep_local`, `keep_remote`, `keep_newest` or `ask`. |
 | `--bucket-prefix` | none | The upstream bucket is named `<prefix><gateway bucket>`. |
+| `--versioning` | `off` | What every bucket created through the profile keeps on the provider: `off` (only the latest version), `<N>d` (old versions for N days, 1 to 36500) or `indefinite`. Anything but `off` is Backblaze B2 only and needs `--accept-versioning`. See below. |
 
 A profile's name is 1 to 32 lowercase letters, digits and hyphens. It can't be `local`, `server-default` or a real provider region such as `us-east-1`, and it never changes, because clients can [select a profile by name](#selecting-a-profile-per-request).
+
+### Versioning Default
+
+Backblaze B2 buckets keep every version of every object unless a lifecycle rule removes them. A profile decides what
+the buckets it creates keep, and Vaulthalla sets the rule when it creates (or adopts, while empty) the bucket:
+
+```bash
+# The default: only the latest version of each object is kept.
+vh s3-gateway upstream create vl-b2 --api-key b2-main
+# Keep 30 days of old versions: every vault created through the profile gets provider versioning, 30-day retention.
+vh s3-gateway upstream create vl-b2-30d --api-key b2-main --versioning 30d --accept-versioning
+```
+
+- `--accept-versioning` acknowledges that old versions are kept and billed. Vaulthalla can't estimate that cost before
+  the buckets exist; `vh recovery costs <vault>` shows it per vault afterwards.
+- The vault is created with recovery mode `provider-versioning` and that retention, or `off` for `--versioning off`
+  ([File Recovery](/vaults/recovery#provider-versioning-on-backblaze-b2)).
+- Changing the default (`vh s3-gateway upstream update <profile> --versioning ...`) applies to buckets created
+  afterwards. A bucket that exists keeps its own; change it with `vh vault recovery set <vault>`.
+- AWS S3 and Cloudflare R2 profiles accept only `off`: R2 keeps no versions, and on AWS versioning is turned on per
+  vault, after its cost disclosure, never when a bucket is created.
 
 ### What A CreateBucket Does
 
@@ -128,7 +150,7 @@ With a profile, `CreateBucket <name>`:
 
 1. Looks for the upstream bucket `<prefix><name>` in the provider account.
 2. Creates it if it does not exist. New buckets are private.
-3. Creates an S3 vault named `<name>`, owned by the credential's principal, with the profile's encryption and sync settings.
+3. Creates an S3 vault named `<name>`, owned by the credential's principal, with the profile's encryption and sync settings (and, on Backblaze B2, the profile's [versioning](#versioning-default)).
 4. Binds it as the gateway bucket `<name>` and answers the client.
 
 An upstream bucket that already exists is never taken over:

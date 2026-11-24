@@ -24,9 +24,9 @@ Vaulthalla runs the bucket machinery.
 | --- | --- | --- | --- |
 | Bucket inventory, protection locks | yes | yes | yes |
 | Create and adopt buckets, detach, cleanup | yes | yes | yes |
-| Lifecycle rules | yes | yes | no: set them in the Backblaze console |
+| Lifecycle rules | yes | yes | only the rule for a vault's file history (others in the Backblaze console) |
 | [Event-driven sync](/vaults/event-sync) | yes | yes | no |
-| [Provider versioning](/vaults/recovery#provider-versioning-aws-s3) | yes | no | no |
+| [Provider versioning](/vaults/recovery#provider-versioning-aws-s3) | yes | no | [yes](/vaults/recovery#provider-versioning-on-backblaze-b2) |
 
 Other S3-compatible providers (MinIO, Wasabi, ...) keep working as plain vault storage, within what each bucket
 supports. Bucket protection locks apply to them too; the rest of this page is AWS S3, Cloudflare R2 and Backblaze B2
@@ -123,6 +123,8 @@ The application key:
 - needs `listBuckets`, `readBuckets`, `writeBuckets` and `deleteBuckets` for bucket administration and
   `readBucketRetentions` to read object lock, on top of the file capabilities (`listFiles`, `readFiles`, `writeFiles`,
   `deleteFiles`) vault storage needs. A read-write key for all buckets created in the Backblaze console has them.
+  `listBuckets` and `writeBuckets` are also what reading and setting a vault's history rule takes (Backblaze's native
+  API, with the same key).
 
 What is different on B2:
 
@@ -132,14 +134,17 @@ What is different on B2:
 - **Region.** A Backblaze account keeps its buckets in one region, the one in the endpoint. New buckets are created
   there; `--region` is not needed and any other region is refused.
 - **New buckets are private** (`allPrivate`).
-- **Lifecycle rules** are not part of B2's S3-compatible API. Vaulthalla neither reads nor changes them: `vh upstream
-  lifecycle` and `--abort-multipart-days` are refused for a B2 credential, and `status --probe` lists `lifecycle` as
-  missing. Set them in the Backblaze console (bucket → **Lifecycle Settings**). Don't use a rule that removes old
-  versions under `.vaulthalla/`: a vault with opaque storage on B2 publishes its manifest as versions there (see
-  [Providers Without Conditional Writes](/vaults/s3-r2-vaults#providers-without-conditional-writes)).
-- **Versions.** Every B2 bucket keeps object versions and that can't be switched off, so `inspect` always shows
-  versioning enabled, and cleanup deletes every version before it deletes a bucket. Provider versioning as a vault's
-  [recovery mode](/vaults/recovery) stays AWS S3 only; use local snapshots or local versioning on B2.
+- **Versions and lifecycle rules.** Every B2 bucket keeps object versions and that can't be switched off, so
+  `inspect` always shows versioning enabled, and cleanup deletes every version before it deletes a bucket. How long old
+  versions stay is a lifecycle rule, which Vaulthalla reads and writes through Backblaze's native API: `inspect` lists
+  every rule (Vaulthalla's marked), and the vault's [recovery mode](/vaults/recovery#provider-versioning-on-backblaze-b2)
+  sets Vaulthalla's own. A bucket Vaulthalla creates keeps only the latest version; `--mode provider-versioning
+  --retention 30d` keeps 30 days. Other rules stay with you: `vh upstream lifecycle` and `--abort-multipart-days` are
+  refused for a B2 credential, so set them in the Backblaze console (bucket → **Lifecycle Settings**). Every rule
+  Vaulthalla didn't write is kept as it is. Don't add a rule that removes old versions under `.vaulthalla/`: a vault
+  with opaque storage on B2 publishes its manifest as versions there (see
+  [Providers Without Conditional Writes](/vaults/s3-r2-vaults#providers-without-conditional-writes)); status warns
+  when one does.
 - **Event-driven sync** is not available: B2's event notifications aren't reachable through its S3-compatible API.
   B2 vaults sync on their interval.
 - **Account.** Vaulthalla identifies a B2 bucket by the region endpoint and its name (names are unique across
@@ -271,9 +276,9 @@ day, and its retention is the `NoncurrentDays` of `vaulthalla-managed`. For thos
 Expiration rules delete data, so they need explicit confirmation (`--yes`). Value `0` removes a setting. New R2 buckets
 come with Cloudflare's default multipart-abort rule; it is kept as a foreign rule.
 
-Backblaze B2 has no lifecycle calls in its S3-compatible API: `vh upstream lifecycle` is refused for a B2 credential
-and `inspect` shows lifecycle and event rules as not readable. Manage them in the
-[Backblaze console](#backblaze-b2).
+On Backblaze B2, `inspect` lists the bucket's lifecycle rules (read through Backblaze's native API) and shows event
+rules as not readable. Vaulthalla writes only the rule for a vault's file history there (`vh vault recovery set`);
+`vh upstream lifecycle` is refused for a B2 credential. Manage other rules in the [Backblaze console](#backblaze-b2).
 
 ## Vault Deletion, Detach And Cleanup
 
@@ -285,7 +290,8 @@ the purge would delete all of it. Keep the upstream data, detach the bucket, and
 **Detach** gives a bucket that no vault uses back to you: Vaulthalla removes its own event rules and its
 `vaulthalla-managed` lifecycle rule, and the bucket becomes `unmanaged`. Data is untouched. Detach doesn't change the
 bucket's versioning and, today, leaves a `vaulthalla-manifest-versions` rule in place: remove it with the provider if
-you no longer want it. On Backblaze B2 there are no Vaulthalla rules to remove, so detach only changes the record.
+you no longer want it. On Backblaze B2 detach removes Vaulthalla's rules (and their record in the bucket info), so the
+bucket keeps every version again, as B2 buckets do.
 
 ```bash
 vh upstream detach <api-key> <bucket>
