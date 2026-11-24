@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'bb3be7716796cabb23fe60ecb0df6475f489aae21f399a77a64ad2d4dd0b7943'
+export const WS_CONTRACT_HASH = 'f4ac6394093213b0d9fde36ea0729572c2a274889f6563f12573da937046f423'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'a2849dc9f75eed87c29f7e874f222944cd6106a78f44585ef8f446fa356c9d4d'
+export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -1485,11 +1485,28 @@ export interface WsModels {
     skipped: string[]
   }
   /**
+   * What the vault's provider can do for provider versioning (to_json(recovery::ProviderCapabilities)).
+   */
+  'RecoveryProviderCapabilities': {
+    always_versioned: boolean
+    enable: boolean
+    suspend: boolean
+    retention_days: boolean
+    retention_indefinite: boolean
+    history_off: boolean
+    list_versions: boolean
+    restore_copy: boolean
+    restore_transfer: boolean
+    propagation_minutes: number
+    unsupported: string[]
+  }
+  /**
    * The vault bucket's provider versioning state (to_json(recovery::ProviderVersioningState)).
    */
   'RecoveryProviderVersioningState': {
     supported: boolean
     unsupported_reason: string
+    capabilities: WsModels['RecoveryProviderCapabilities']
     provider: string | null
     bucket: string | null
     region: string | null
@@ -1507,6 +1524,7 @@ export interface WsModels {
     retention_days: number | null
     foreign_noncurrent_rules: string[]
     effective_noncurrent_days: number | null
+    vaulthalla_rules: string[]
     warnings: string[]
   }
   /**
@@ -1832,6 +1850,7 @@ export interface WsModels {
     sync_strategy: 'cache' | 'sync' | 'mirror'
     conflict_policy: 'keep_local' | 'keep_remote' | 'keep_newest' | 'ask'
     bucket_prefix: string
+    versioning: string
     description: string | null
     server_default: boolean
     created_by: number | null
@@ -6457,6 +6476,8 @@ export interface WsContract {
       conflict_policy?: 'keep_local' | 'keep_remote' | 'keep_newest' | 'ask'
       bucket_prefix?: string
       description?: string | null
+      versioning?: string
+      accept_versioning?: boolean
     }
     response: { profile: WsModels['S3GatewayUpstreamProfile'] }
   }
@@ -6497,6 +6518,8 @@ export interface WsContract {
       conflict_policy?: 'keep_local' | 'keep_remote' | 'keep_newest' | 'ask'
       bucket_prefix?: string
       description?: string | null
+      versioning?: string
+      accept_versioning?: boolean
     }
     response: {
       profile: WsModels['S3GatewayUpstreamProfile']
@@ -7830,8 +7853,9 @@ export interface WsContract {
     response: { status: WsModels['RecoveryStatus'] }
   }
   /**
-   * Suspend versioning on the vault's bucket; existing versions are kept and nothing is deleted. A refusal
-   * with data.code 'recovery_versioning_suspend' asks for confirmation: resend with confirm.
+   * Suspend versioning on the vault's bucket (AWS S3); existing versions are kept and nothing is deleted. A
+   * refusal with data.code 'recovery_versioning_suspend' asks for confirmation: resend with confirm.
+   * Backblaze B2 can't suspend (invalid): set mode off to keep only the latest version.
    */
   'vault.recovery.suspend': {
     payload: { vault_id: number; confirm?: boolean }
@@ -7841,7 +7865,10 @@ export interface WsContract {
    * Change a vault's recovery settings. mode provider_versioning needs disclosure_token from
    * vault.recovery.disclosure ('recovery_versioning_disclosure'); unpriced costs need accept_unpriced
    * ('recovery_versioning_unpriced'); a shorter retention needs accept_retention_shortening
-   * ('recovery_retention_shorten'); the vault's unmanaged bucket needs accept_adoption ('upstream_adoption').
+   * ('recovery_retention_shorten') and a data.destroy step-up; the vault's unmanaged bucket needs
+   * accept_adoption ('upstream_adoption'). On Backblaze B2, mode off or local_snapshots also makes the bucket
+   * keep only the latest version, asked with 'recovery_retention_shorten' (and the step-up) when that deletes
+   * history that exists now.
    */
   'vault.recovery.update': {
     payload: {
@@ -8332,6 +8359,12 @@ export const WS_CONTRACT_CONFIRMATIONS: Readonly<
   's3.gateway.buckets.createRemoteCache': [
     { code: 'encryption_waiver', accept_field: 'accept_encryption_waiver' },
   ],
+  's3.gateway.upstreamProfiles.create': [
+    { code: 'upstream_profile_versioning', accept_field: 'accept_versioning' },
+  ],
+  's3.gateway.upstreamProfiles.update': [
+    { code: 'upstream_profile_versioning', accept_field: 'accept_versioning' },
+  ],
   'storage.vault.add': [
     { code: 'encryption_waiver', accept_field: 'accept_encryption_waiver' },
     { code: 'upstream_adoption', accept_field: 'provision.accept_adoption' },
@@ -8432,6 +8465,7 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'vault.layout.migrate': 'keys',
   'vault.recover': 'keys',
   'vault.recovery.suspend': 'data.destroy',
+  'vault.recovery.update': 'data.destroy',
   'vault.remote.abort': 'keys',
   'vault.remote.attach': 'keys',
   'vault.remote.detach': 'keys',
