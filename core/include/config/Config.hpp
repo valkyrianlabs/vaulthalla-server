@@ -158,12 +158,14 @@ struct PreviewConfig {
     uint64_t max_render_pixels = 64'000'000;  // source pixels (progressive JPEGs: half)
 };
 
+// database.pool_size: the daemon's pooled PostgreSQL connections, read at startup and kept within
+// DBPool::kMinPoolSize..kMaxPoolSize (a value outside is clamped with a warning; Transactions::initFromConfig).
 struct DatabaseConfig {
     std::string host = "localhost";
     uint16_t port = 5432;
     std::string name = "vaulthalla";
     std::string user = "vaulthalla";
-    int pool_size = 10;
+    int pool_size = 24;
 };
 
 // auth.webauthn.* (#355, docs/dev/mfa-design.md section 4.1): the passkey relying party. Explicit configuration only:
@@ -220,9 +222,13 @@ struct ReplicasConfig {
     bool experimental = false;
 };
 
+// sync.worker_threads and sync.max_concurrent_passes size the sync pools at startup
+// (concurrency::ThreadPoolManager::syncWorkersFor / syncPassesFor): 0 workers means one per CPU core.
 struct SyncConfig {
     uint32_t event_audit_retention_days = 30;
     uint32_t event_audit_max_entries = 10000;
+    uint32_t worker_threads = 0;
+    uint32_t max_concurrent_passes = 4;
     ReplicasConfig replicas{};
 };
 

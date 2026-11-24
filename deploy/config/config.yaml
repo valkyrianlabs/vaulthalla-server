@@ -103,7 +103,8 @@ database:
   port: 5432                   # PostgreSQL port
   name: vaulthalla             # Database name
   user: vaulthalla             # Database user
-  pool_size: 10                # Max DB connection pool size
+  pool_size: 24                # Pooled DB connections (read at startup, kept within 4-256); at least
+                               # sync.worker_threads + sync.max_concurrent_passes plus room for FUSE and the listeners
 
 
 # === 🔐 AUTHENTICATION SETTINGS ===
@@ -150,6 +151,9 @@ auth:
 sync:
   event_audit_retention_days: 30          # Retain database events/conflicts for this many days, minimum 7 days
   event_audit_max_entries: 5000           # Max number of database events/conflicts to retain, minimum 1000
+  worker_threads: 0                       # Threads running sync operations (uploads, downloads, deletes); 0 = one per
+                                          # CPU core (at least 4, at most 64). Read at startup.
+  max_concurrent_passes: 4                # Sync passes running at once, on threads of their own. Read at startup.
   replicas:
     experimental: false                   # Replicated vaults (vh vault join/leave/replica remove): experimental
 

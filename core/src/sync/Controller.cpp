@@ -108,7 +108,7 @@ void Controller::runLoop() {
         }
 
         if (!task || task->isInterrupted()) continue;
-        ThreadPoolManager::instance().syncPool()->submit(task);
+        ThreadPoolManager::instance().syncPassPool()->submit(task);
     }
 }
 
@@ -177,7 +177,7 @@ Controller::ScopedResult Controller::runScoped(const unsigned int vaultId, std::
         // The task owns the lease from here: it releases it when it runs, or when it is destroyed unrun (a pool that
         // drops queued work while stopping).
         task->adoptPassLease();
-        ThreadPoolManager::instance().syncPool()->submit(task);
+        ThreadPoolManager::instance().syncPassPool()->submit(task);
     } catch (...) {
         releasePass(vaultId);
         throw;

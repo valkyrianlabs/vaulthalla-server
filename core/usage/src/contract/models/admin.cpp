@@ -249,7 +249,8 @@ std::vector<WsModel> adminSettingsModels() {
 
     out.push_back(model("DatabaseConfig",
         "database.* (Config.cpp to_json(DatabaseConfig)); the password is never part of it.",
-        {str("host"), uinteger("port").max(65535), str("name"), str("user"), integer("pool_size")}));
+        {str("host"), uinteger("port").max(65535), str("name"), str("user"),
+         integer("pool_size").desc("Pooled connections, read at startup; kept within 4..256.")}));
     out.push_back(model("AuthConfig", "auth.* (Config.cpp to_json(AuthConfig)); the JWT secret is never part of it.",
         {uinteger("access_token_expiry_minutes"), uinteger("refresh_token_expiry_days"),
          object("webauthn", "WebAuthnConfig").opt(), object("mfa", "MfaConfig").opt()}));
@@ -279,6 +280,12 @@ std::vector<WsModel> adminSettingsModels() {
                                   "rp_id; required when rp_id is set, at most 16.")}));
     out.push_back(model("SyncConfig", "sync.* (Config.cpp to_json(SyncConfig)).",
         {uinteger("event_audit_retention_days"), uinteger("event_audit_max_entries"),
+         uinteger("worker_threads").max(256).opt().desc(
+             "Threads that run sync operations (uploads, downloads, deletes); 0: one per CPU core (at least 4, at most "
+             "64). Read at startup. Absent from older clients' settings updates: unchanged."),
+         uinteger("max_concurrent_passes").max(64).opt().desc(
+             "Sync passes that run at once, on threads of their own; 0: 4. Read at startup. Absent from older clients' "
+             "settings updates: unchanged."),
          object("replicas", "ReplicasConfig").opt().desc("Absent from older clients' settings updates: unchanged.")}));
     out.push_back(model("ReplicasConfig", "sync.replicas.* (design/cloud/mirrors.md).",
         {boolean("experimental").desc("Replicated vaults (vh vault join, leave, replica remove): experimental, off by "

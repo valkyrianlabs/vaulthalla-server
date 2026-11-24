@@ -465,7 +465,7 @@ struct convert<DatabaseConfig> {
         rhs.port = node["port"].as<uint16_t>(5432);
         rhs.name = node["name"].as<std::string>("vaulthalla");
         rhs.user = node["user"].as<std::string>("vaulthalla");
-        rhs.pool_size = node["pool_size"].as<int>(10);
+        rhs.pool_size = node["pool_size"].as<int>(DatabaseConfig{}.pool_size);
         return true;
     }
 };
@@ -541,6 +541,8 @@ struct convert<SyncConfig> {
         Node node;
         node["event_audit_retention_days"] = rhs.event_audit_retention_days;
         node["event_audit_max_entries"] = rhs.event_audit_max_entries;
+        node["worker_threads"] = rhs.worker_threads;
+        node["max_concurrent_passes"] = rhs.max_concurrent_passes;
         node["replicas"]["experimental"] = rhs.replicas.experimental;
         return node;
     }
@@ -549,6 +551,8 @@ struct convert<SyncConfig> {
         if (!node.IsMap()) return false;
         rhs.event_audit_retention_days = std::max(static_cast<uint32_t>(7), node["event_audit_retention_days"].as<uint32_t>(30));
         rhs.event_audit_max_entries = std::max(static_cast<uint32_t>(1000), node["event_audit_max_entries"].as<uint32_t>(10000));
+        rhs.worker_threads = node["worker_threads"].as<uint32_t>(SyncConfig{}.worker_threads);
+        rhs.max_concurrent_passes = node["max_concurrent_passes"].as<uint32_t>(SyncConfig{}.max_concurrent_passes);
         if (const auto replicas = node["replicas"]; replicas && replicas.IsMap())
             rhs.replicas.experimental = replicas["experimental"].as<bool>(false);
         return true;

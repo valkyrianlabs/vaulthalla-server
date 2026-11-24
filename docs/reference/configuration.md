@@ -162,8 +162,13 @@ database:
   port: 5432
   name: vaulthalla
   user: vaulthalla
-  pool_size: 10
+  pool_size: 24
 ```
+
+`pool_size` is the number of pooled PostgreSQL connections the server opens at startup. Values outside 4 to 256 are
+clamped, with a warning in the log. Keep it at least `sync.worker_threads` + `sync.max_concurrent_passes` (16 on a
+12-core host with the defaults) plus room for FUSE and the listeners; the server warns at startup when it is lower.
+PostgreSQL's own `max_connections` (100 by default) must cover every pool that connects to it.
 
 Use these setup commands rather than editing secrets directly:
 
@@ -374,6 +379,20 @@ sync:
 ```
 
 Short retention reduces database growth but can remove useful sync troubleshooting context.
+
+## Sync Concurrency
+
+```yaml
+sync:
+  worker_threads: 0          # 0 = one per CPU core (at least 4, at most 64)
+  max_concurrent_passes: 4
+```
+
+A sync pass plans what a vault needs and hands each upload, download and delete to the sync worker threads, then waits
+for them. Passes run on threads of their own (`max_concurrent_passes` of them; further due passes wait their turn), so
+they never take a worker an operation needs. `worker_threads` is how many operations run at once across all vaults;
+they mostly wait on the network, so one per CPU core is the default. Both are read at startup. More workers need more
+database connections: see `database.pool_size`.
 
 ## Vault Deletion
 
