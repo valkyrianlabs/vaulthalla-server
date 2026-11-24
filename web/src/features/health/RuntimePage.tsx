@@ -232,6 +232,7 @@ const ConnectionsBody = ({ stats }: { stats: Raw }) => {
     { label: 'Human', value: num(stats.active_human_sessions) },
     { label: 'Share', value: num(stats.active_share_sessions) },
     { label: 'Share pending', value: num(stats.active_share_pending_sessions) },
+    { label: 'Device', value: num(obj(stats.sessions_by_mode).device) },
     { label: 'Unauthenticated', value: num(stats.active_unauthenticated_sessions) },
   ]
   const total = num(stats.active_ws_sessions_total)

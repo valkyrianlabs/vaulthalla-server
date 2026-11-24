@@ -76,7 +76,7 @@ export class ConnectionStats {
     this.connections_opened_24h = asNullableNumber(data.connections_opened_24h)
     this.connections_closed_24h = asNullableNumber(data.connections_closed_24h)
     this.connection_errors_24h = asNullableNumber(data.connection_errors_24h)
-    this.sessions_by_mode = asCountMap(data.sessions_by_mode, ['unauthenticated', 'human', 'share_pending', 'share'])
+    this.sessions_by_mode = asCountMap(data.sessions_by_mode, ['unauthenticated', 'human', 'share_pending', 'share', 'device', 'device_pairing'])
     this.top_user_agents_available = data.top_user_agents_available === true
     this.top_remote_ips_available = data.top_remote_ips_available === true
     this.checked_at = asNullableDate(data.checked_at)

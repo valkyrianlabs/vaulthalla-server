@@ -426,14 +426,17 @@ DashboardCardSummary dashboardOverviewBuildConnections(const DashboardOverviewCa
     card.checkedAt = stats.checkedAt;
     card.severity = dashboardOverviewSeverityFromStatus(stats.status);
     card.summary = stats.status == "healthy" ? "Connected sessions look normal." : "Connection mix needs attention.";
+    const auto deviceIt = stats.sessionsByMode.find("device");
+    const std::uint64_t deviceSessions = deviceIt == stats.sessionsByMode.end() ? 0 : deviceIt->second;
 
     dashboardOverviewAddMetric(card, "sessions", "Sessions", dashboardOverviewFormatCount(stats.activeWsSessionsTotal), card.severity, static_cast<double>(stats.activeWsSessionsTotal));
     dashboardOverviewAddMetric(card, "human", "Human", dashboardOverviewFormatCount(stats.activeHumanSessions), "info", static_cast<double>(stats.activeHumanSessions));
     dashboardOverviewAddMetric(card, "share", "Share", dashboardOverviewFormatCount(stats.activeShareSessions), "info", static_cast<double>(stats.activeShareSessions));
+    dashboardOverviewAddMetric(card, "device", "Device", dashboardOverviewFormatCount(deviceSessions), "info", static_cast<double>(deviceSessions));
     dashboardOverviewAddMetric(card, "share_pending", "Share Pending", dashboardOverviewFormatCount(stats.activeSharePendingSessions), stats.activeSharePendingSessions == 0 ? "healthy" : "warning", static_cast<double>(stats.activeSharePendingSessions));
-    dashboardOverviewAddMetric(card, "unauthenticated", "Unauth", dashboardOverviewFormatCount(stats.activeUnauthenticatedSessions), stats.activeUnauthenticatedSessions == 0 ? "healthy" : "warning", static_cast<double>(stats.activeUnauthenticatedSessions));
+    dashboardOverviewAddMetric(card, "unauthenticated", "Unauth", dashboardOverviewFormatCount(stats.activeUnauthenticatedSessions), "info", static_cast<double>(stats.activeUnauthenticatedSessions));
     dashboardOverviewAddMetric(card, "oldest_session", "Oldest", dashboardOverviewFormatOptionalDuration(stats.oldestSessionAgeSeconds), "info", dashboardOverviewOptionalDouble(stats.oldestSessionAgeSeconds), "seconds");
-    dashboardOverviewAddMetric(card, "oldest_unauth", "Oldest Unauth", dashboardOverviewFormatOptionalDuration(stats.oldestUnauthenticatedSessionAgeSeconds), stats.oldestUnauthenticatedSessionAgeSeconds ? "warning" : "healthy", dashboardOverviewOptionalDouble(stats.oldestUnauthenticatedSessionAgeSeconds), "seconds");
+    dashboardOverviewAddMetric(card, "oldest_unauth", "Oldest Unauth", dashboardOverviewFormatOptionalDuration(stats.oldestUnauthenticatedSessionAgeSeconds), "info", dashboardOverviewOptionalDouble(stats.oldestUnauthenticatedSessionAgeSeconds), "seconds");
     dashboardOverviewAddMetric(card, "idle_timeout", "Idle Timeout", dashboardOverviewFormatDuration(stats.idleTimeoutMinutes * 60), "info", static_cast<double>(stats.idleTimeoutMinutes * 60), "seconds");
     dashboardOverviewAddMetric(card, "unauth_timeout", "Unauth Timeout", dashboardOverviewFormatDuration(stats.unauthenticatedTimeoutSeconds), "info", static_cast<double>(stats.unauthenticatedTimeoutSeconds), "seconds");
     dashboardOverviewAddMetric(card, "sweep_interval", "Sweep", dashboardOverviewFormatDuration(stats.sweepIntervalSeconds), "info", static_cast<double>(stats.sweepIntervalSeconds), "seconds");
@@ -442,9 +445,9 @@ DashboardCardSummary dashboardOverviewBuildConnections(const DashboardOverviewCa
     dashboardOverviewAddMetric(card, "errors_24h", "Errors 24h", stats.connectionErrors24h ? dashboardOverviewFormatCount(*stats.connectionErrors24h) : "unknown", dashboard_tone::zeroIsHealthy(stats.connectionErrors24h), dashboardOverviewOptionalDouble(stats.connectionErrors24h));
     dashboardOverviewAddMetric(card, "swept_24h", "Swept 24h", stats.sessionsSwept24h ? dashboardOverviewFormatCount(*stats.sessionsSwept24h) : "unknown", "info", dashboardOverviewOptionalDouble(stats.sessionsSwept24h));
 
-    if (stats.status == "warning") {
-        dashboardOverviewAddIssue(card, "system.connections.unauthenticated", "warning", "Unauthenticated websocket sessions are active.", "unauthenticated");
-    } else if (stats.status == "critical") {
+    // No finding for unauthenticated sessions merely being open (every connection starts that way, and the
+    // lifecycle sweep closes the ones that never sign in): only for a pile of them.
+    if (stats.status == "critical") {
         dashboardOverviewAddIssue(card, "system.connections.unauthenticated_critical", "error", "Unauthenticated websocket sessions are accumulating.", "unauthenticated");
     } else if (stats.status == "unknown") {
         dashboardOverviewAddIssue(card, "system.connections.unknown", "warning", "Session manager state is unavailable.");
