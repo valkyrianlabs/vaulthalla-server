@@ -65,7 +65,14 @@ signal whatever main is doing; a second signal exits at once. `stopAll` calls `r
 woken by stop), never `sleep_for` loops. FUSE `onStop()` lazily unmounts, ends the session, and after 1 s aborts the
 fusectl connection (minor from `/proc/self/mountinfo`) if the mount is still referenced. Thread pools never lend
 workers; `ThreadPoolManager::shutdown` requests every pool's stop, then joins all against one 3 s deadline (stragglers
-are detached; workers hold only shared state).
+are detached; workers hold only shared state). Pools: fuse, thumb, http, stats, s3 take max(cores x 3, 8) / 6 each (6
+on 12 cores); `syncPool()` runs a pass's operations (uploads, downloads, deletes, key-rotation ranges) with
+`sync.worker_threads` workers (0: one per core, 4..64); `syncPassPool()` runs the passes themselves
+(`sync.max_concurrent_passes`, default 4). A task must never wait on futures of its own pool (no work stealing): passes
+and their operations shared the sync pool until 1.25.0, and once every worker held a waiting pass, sync hung for good.
+After every run a regular sync task reschedules itself (`Local::finishRun`, a scope guard): SUCCESS and STALLED at the
+interval, anything else with backoff (interval x 2^(n-1), capped at max(interval, 1 h)); scoped, interrupted and
+replaced tasks are not rescheduled. A stage that fails ends the pass (`Local::runStages`).
 
 `core/src/runtime/Manager.cpp` owns the service lifecycle. It runs a watchdog every 2s and restarts
 a service after 500ms. Start order:
@@ -1509,8 +1516,11 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   bricked upgrades (1.5.x→1.6.x crash loop on 060). Reviewed exceptions live in `kHistoricalMigrationChecksums` (accepted, recorded
   hash rewritten to current, not re-run; a forward migration owns the delta). `core/seed/shipped_migrations.lock` pins every hash;
   `tools/contracts/test_migration_checksums_contract.py` enforces it (plus every local v* tag).
-- `core/include/db/DBPool.hpp` is a fixed pool of 4 connections (config `database.pool_size` is **not** wired to it)
-  handed out as RAII `DBPool::Lease`s (FIFO) that always return the slot. A dead connection is replaced on
+- `core/include/db/DBPool.hpp` is a pool of `database.pool_size` connections (default 24, kept within 4..256 by
+  `Transactions::initFromConfig`; tests use 4) handed out as RAII `DBPool::Lease`s (FIFO) that always return the slot.
+  Never acquire a second lease while holding one (a `Transactions` call inside another's lambda): with the pool in
+  use, every holder waits on the others until the 30 s timeout. Row mappers that read more take the caller's
+  transaction (`files_from_pq_res(res, txn)`, `Entry::collectParentChain(txn, id)`). A dead connection is replaced on
   `acquire()` (reconnect + re-prepare, pool-wide backoff 250ms→5s, callers inside the window get
   `DatabaseUnavailable`). "Dead" also covers a session poisoned by a libpqxx error
   (`pqxx::failure::poisons_connection()`: unknown COMMIT outcome, protocol violation), which `Transactions::exec`

@@ -20,11 +20,20 @@ void Executor::run(const std::shared_ptr<Cloud>& ctx, const std::vector<model::A
     for (const auto type : {model::ActionType::EnsureDirectories, model::ActionType::Upload, model::ActionType::Download,
                       model::ActionType::IndexRemoteOnly,
                       model::ActionType::DeleteRemote, model::ActionType::DeleteLocal}) {
+        // The action behind each future this phase pushes, so the ones that succeeded can be recorded on their own.
+        std::vector<const model::Action*> pushed;
         for (const auto& a : plan) {
             if (a.type != type) continue;
+            const auto before = ctx->futures.size();
             dispatch(ctx, a);
+            for (auto i = before; i < ctx->futures.size(); ++i) pushed.push_back(&a);
         }
         ctx->processFutures(); // barrier between phases
+        for (std::size_t i = 0; i < pushed.size() && i < ctx->futureOutcomes.size(); ++i) {
+            if (!ctx->futureOutcomes[i]) continue;
+            if (pushed[i]->type == model::ActionType::Upload || pushed[i]->type == model::ActionType::DeleteRemote)
+                ctx->completedActions.push_back(*pushed[i]);
+        }
         throwIfS3BudgetExceeded(ctx);
     }
 }

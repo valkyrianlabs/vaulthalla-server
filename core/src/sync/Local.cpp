@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <mutex>
+#include <shared_mutex>
 #include <set>
 #include <thread>
 
@@ -58,14 +59,20 @@ Local::Local(const std::shared_ptr<Engine>& engine)
 }
 
 void Local::operator()() {
-    startTask();
+    // Replaced (runNow, a new engine) or stopped while it waited on the pass pool: its successor runs instead.
+    if (isInterrupted()) return;
+    const RunGuard finish(*this);
+    try {
+        startTask();
 
-    const Stage stages[] = {
-        {"shared",   [this]{ processSharedOps(); }}
-    };
+        const Stage stages[] = {
+            {"shared",   [this]{ processSharedOps(); }}
+        };
 
-    runStages(stages);
-    shutdown();
+        runStages(stages);
+    } catch (...) {
+        recordEscapedException(std::current_exception());
+    }
 }
 
 void Local::handleInterrupt() const { if (isInterrupted()) throw std::runtime_error("Sync task interrupted"); }
@@ -76,9 +83,17 @@ void Local::interrupt() { interruptFlag.store(true); }
 
 bool Local::isInterrupted() const { return interruptFlag.load(); }
 
+bool Local::passEnded() const {
+    if (!isRunning()) return true;
+    if (!event) return false;
+    return event->status == Event::Status::ERROR || event->status == Event::Status::STALLED ||
+           event->status == Event::Status::CANCELLED;
+}
+
 void Local::runStages(const std::span<const Stage> stages) const {
     for (const auto& [name, fn] : stages) {
-        if (!isRunning()) break;
+        // A stage that failed without throwing (handleError) ends the pass too: nothing after it runs on top of it.
+        if (passEnded()) break;
         try {
             fn();
             if (markBudgetExceededIfAny()) break;
@@ -103,15 +118,16 @@ void Local::runStages(const std::span<const Stage> stages) const {
 }
 
 void Local::startTask() {
-    if (!engine) {
-        log::Registry::sync()->error("[FSTask] Engine is null, cannot proceed with sync.");
-        return;
-    }
+    // A fresh, unsaved event until this run's own exists: a failure before then is recorded on it, never on the
+    // previous run's event (which finishRun would otherwise save again with this run's error).
+    event = std::make_shared<Event>();
+    if (!engine || !engine->sync) throw std::runtime_error("[FSTask] the vault's storage engine or sync policy is gone");
 
     log::Registry::sync()->debug("[FSTask] Starting sync for vault '{}'", engine->vault->id);
 
     runningFlag = true;
     db::query::sync::Policy::reportSyncStarted(engine->sync->id);
+    noteSyncTimes(false);
 
     newEvent();
     event = engine->latestSyncEvent;
@@ -130,7 +146,7 @@ void Local::processSharedOps() {
       };
 
     for (const auto& [name, op] : ops) {
-        if (!isRunning()) break;
+        if (passEnded()) break;
 
         try {
             op();
@@ -173,26 +189,111 @@ void Local::handleError(const std::string& message) const {
     event->status = Event::Status::ERROR;
 }
 
-void Local::shutdown() {
+// The engine's copy of the policy follows what reportSyncStarted/reportSyncSuccess store (it was loaded with the
+// vault and never refreshed: `vh vault sync info` and the console showed 1970-01-01).
+void Local::noteSyncTimes(const bool success) const {
+    const auto now = std::time(nullptr);
+    std::unique_lock lock(engine->mutex);
+    if (!engine->sync) return;
+    engine->sync->last_sync_at = now;
+    if (success) engine->sync->last_success_at = now;
+}
+
+void Local::recordEscapedException(const std::exception_ptr error) const {
+    std::string what = "unknown exception";
+    try {
+        if (error) std::rethrow_exception(error);
+    } catch (const std::exception& e) {
+        what = e.what();
+    } catch (...) {
+    }
+    const auto id = engine && engine->vault ? engine->vault->id : 0u;
+    log::Registry::sync()->error("[FSTask] Sync pass for vault '{}' stopped by an exception: {}", id, what);
+    if (event) handleError(fmt::format("[FSTask] {}", what));
+}
+
+std::chrono::seconds Local::retryDelay(const uint8_t status, const std::chrono::seconds interval,
+                                       const unsigned int consecutiveFailures) {
+    const auto base = std::max(interval, seconds(1));
+    switch (static_cast<Event::Status>(status)) {
+    case Event::Status::SUCCESS:
+    case Event::Status::STALLED:
+        return base;
+    default:
+        break;
+    }
+    const auto cap = std::max(base, duration_cast<seconds>(kErrorBackoffCap));
+    const unsigned int doublings = std::min(consecutiveFailures > 0 ? consecutiveFailures - 1 : 0u, 30u);
+    // base x 2^doublings without overflowing: stop doubling once the cap is reached.
+    auto delay = base;
+    for (unsigned int i = 0; i < doublings && delay < cap; ++i) delay *= 2;
+    return std::min(delay, cap);
+}
+
+void Local::finishRun() noexcept {
     runningFlag = false;
     futures.clear();
-    event->stop();
-    event->parseCurrentStatus();
-    engine->saveSyncEvent();
-    if (event->status == Event::Status::SUCCESS) {
-        db::query::sync::Policy::reportSyncSuccess(engine->sync->id);
-        if (requeueAfterRun()) {
-            next_run = hasPendingRunNow()
-                ? system_clock::now()
-                : system_clock::now() + seconds(engine->sync->interval.count());
-            requeue();
-            log::Registry::sync()->debug("[FSTask] Sync task requeued for vault '{}'", engine->vault->id);
-        }
-        log::Registry::sync()->info("[FSTask] Sync completed for vault '{}' in {}s",
-                              engine->vault->id, event->durationSeconds());
-    } else {
-        log::Registry::sync()->error("[FSTask] Sync failed for vault '{}': {}", engine->vault->id, event->error_message);
+    const auto id = engine && engine->vault ? engine->vault->id : 0u;
+    try {
+        if (!event) event = std::make_shared<Event>();
+        event->stop();
+        event->parseCurrentStatus();
+        // Only the event this run created is saved (startTask may have failed before it existed).
+        if (engine && event == engine->latestSyncEvent) engine->saveSyncEvent();
+    } catch (const std::exception& e) {
+        log::Registry::sync()->error("[FSTask] Vault '{}': the sync event could not be saved: {}", id, e.what());
+    } catch (...) {
+        log::Registry::sync()->error("[FSTask] Vault '{}': the sync event could not be saved", id);
     }
+
+    try {
+        if (event->status == Event::Status::SUCCESS) {
+            if (engine && engine->sync) {
+                db::query::sync::Policy::reportSyncSuccess(engine->sync->id);
+                noteSyncTimes(true);
+            }
+            log::Registry::sync()->info("[FSTask] Sync completed for vault '{}' in {}s", id, event->durationSeconds());
+        } else if (event->status == Event::Status::STALLED) {
+            log::Registry::sync()->warn("[FSTask] Sync stalled for vault '{}': {}", id, event->stall_reason);
+        } else {
+            log::Registry::sync()->error("[FSTask] Sync failed for vault '{}': {}", id, event->error_message);
+        }
+    } catch (const std::exception& e) {
+        log::Registry::sync()->error("[FSTask] Vault '{}': the sync outcome could not be recorded: {}", id, e.what());
+    } catch (...) {
+        log::Registry::sync()->error("[FSTask] Vault '{}': the sync outcome could not be recorded", id);
+    }
+
+    try {
+        rescheduleAfterRun();
+    } catch (const std::exception& e) {
+        log::Registry::sync()->error("[FSTask] Vault '{}': the next sync pass could not be scheduled: {}", id, e.what());
+    } catch (...) {
+        log::Registry::sync()->error("[FSTask] Vault '{}': the next sync pass could not be scheduled", id);
+    }
+}
+
+// A regular task runs again after every outcome; a scoped pass never does, and neither does a task that was
+// interrupted (stopped, or replaced by runNow or a new engine: its successor is already queued).
+void Local::rescheduleAfterRun() {
+    if (!requeueAfterRun() || isInterrupted() || !engine || !engine->sync || !engine->vault) return;
+
+    const auto status = event ? event->status : Event::Status::ERROR;
+    if (status == Event::Status::SUCCESS) consecutiveFailures = 0;
+    else if (status != Event::Status::STALLED) ++consecutiveFailures;
+
+    const auto delay = retryDelay(static_cast<uint8_t>(status), seconds(engine->sync->interval.count()),
+                                  consecutiveFailures);
+    next_run = hasPendingRunNow() ? system_clock::now() : system_clock::now() + delay;
+    requeue();
+    if (status == Event::Status::SUCCESS)
+        log::Registry::sync()->debug("[FSTask] Sync task requeued for vault '{}'", engine->vault->id);
+    else
+        log::Registry::sync()->info("[FSTask] Vault '{}': next sync pass in {}s{}", engine->vault->id,
+                                    hasPendingRunNow() ? 0 : delay.count(),
+                                    consecutiveFailures > 1 && status != Event::Status::STALLED
+                                        ? fmt::format(" ({} failed passes in a row)", consecutiveFailures)
+                                        : std::string{});
 }
 
 void Local::newEvent() {
@@ -203,13 +304,17 @@ void Local::newEvent() {
 
 void Local::processFutures() {
     std::size_t failed = 0;
-    for (auto& f : futures) {
+    futureOutcomes.assign(futures.size(), false);
+    for (std::size_t i = 0; i < futures.size(); ++i) {
+        auto& f = futures[i];
         try {
             const auto result = f.get();
             const auto* ok = std::get_if<bool>(&result);
             if (ok && !*ok) {
                 ++failed;
                 log::Registry::sync()->error("[FSTask] Future failed");
+            } else {
+                futureOutcomes[i] = true;
             }
         } catch (const std::exception& e) {
             ++failed;
@@ -231,7 +336,7 @@ void Local::processFutures() {
 unsigned int Local::vaultId() const { return engine->vault->id; }
 
 void Local::requeue() {
-    runtime::Deps::get().syncController->requeue(shared_from_this());
+    if (const auto& controller = runtime::Deps::get().syncController) controller->requeue(shared_from_this());
 }
 
 void Local::runNow(const uint8_t trigger) {
@@ -390,11 +495,10 @@ void Local::handleVaultKeyRotation() {
         log::Registry::audit()->warn("[FSTask] {}", message);
         handleError(message);
     } catch (const std::exception& e) {
-        log::Registry::sync()->error("[FSTask] Exception during vault key rotation for vault '{}': {}", engine->vault->id, e.what());
-        runningFlag = false;
+        handleError(fmt::format("[FSTask] Exception during vault key rotation for vault '{}': {}", engine->vault->id,
+                                e.what()));
     } catch (...) {
-        log::Registry::sync()->error("[FSTask] Unknown exception during vault key rotation for vault '{}'", engine->vault->id);
-        runningFlag = false;
+        handleError(fmt::format("[FSTask] Unknown exception during vault key rotation for vault '{}'", engine->vault->id));
     }
 }
 
@@ -489,10 +593,7 @@ void Local::removeTrashedFiles() {
             done.scoped->stop();
         }
 
-        if (failed > 0) {
-            handleError(fmt::format("{} trashed cloud file purge(s) failed", failed));
-            runningFlag = false;
-        }
+        if (failed > 0) handleError(fmt::format("{} trashed cloud file purge(s) failed", failed));
 
         return;
     }

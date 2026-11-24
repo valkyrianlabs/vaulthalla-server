@@ -3,6 +3,7 @@
 void vh::db::Connection::initPreparedSyncThroughput() const {
     // ---------------------------------------
     // UPSERT (overwrite values)
+    // num_ops, failed_ops, size_bytes and duration_ms are BIGINT: the parameters are cast (sync_event.upsert says why).
     // ---------------------------------------
     conn_->prepare("sync_throughput.upsert",
                    R"SQL(
@@ -21,10 +22,10 @@ void vh::db::Connection::initPreparedSyncThroughput() const {
                 $1,
                 $2,
                 $3,
-                COALESCE($4, 0),
-                COALESCE($5, 0),
-                COALESCE($6, 0),
-                COALESCE($7, 0)
+                COALESCE($4::bigint, 0),
+                COALESCE($5::bigint, 0),
+                COALESCE($6::bigint, 0),
+                COALESCE($7::bigint, 0)
             )
             ON CONFLICT (vault_id, run_uuid, metric_type)
             DO UPDATE SET
@@ -56,10 +57,10 @@ void vh::db::Connection::initPreparedSyncThroughput() const {
                 $1,
                 $2,
                 $3,
-                COALESCE($4, 0),
-                COALESCE($5, 0),
-                COALESCE($6, 0),
-                COALESCE($7, 0)
+                COALESCE($4::bigint, 0),
+                COALESCE($5::bigint, 0),
+                COALESCE($6::bigint, 0),
+                COALESCE($7::bigint, 0)
             )
             ON CONFLICT (vault_id, run_uuid, metric_type)
             DO UPDATE SET

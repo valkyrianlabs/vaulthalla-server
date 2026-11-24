@@ -56,7 +56,14 @@ namespace vh::storage {
 
     void Engine::newSyncEvent(const uint8_t trigger) {
         if (latestSyncEvent) {
-            db::query::sync::Event::upsert(latestSyncEvent);
+            // The previous pass saved its event when it ended; this is a last try. A row that can't be written (it
+            // once overflowed an integer) must not keep the vault from ever starting another pass.
+            try {
+                db::query::sync::Event::upsert(latestSyncEvent);
+            } catch (const std::exception& e) {
+                log::Registry::storage()->error("[StorageEngine] Vault {}: the previous sync event could not be saved: {}",
+                                                vault->id, e.what());
+            }
             if (latestSyncEvent->status != sync::model::Event::Status::SUCCESS && latestSyncEvent->status !=
                 sync::model::Event::Status::CANCELLED) {
                 log::Registry::storage()->warn("[StorageEngine] Previous sync event failed with status: {}",
