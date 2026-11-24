@@ -980,8 +980,8 @@ TEST_F(S3GatewayListingDbTest, BucketSubresourcesAnswerWhatS3AnswersForAnUnconfi
     for (const std::string mode : {"local", "remote_cache", "remote_proxy"}) {
         seed(bucket(mode), {"a", "listed/key"});
         for (const auto& expected : s3l::subresourceAnswers()) {
-            for (const std::string target : {"/" + bucket(mode).name + "?" + expected.subresource,
-                                             "/" + bucket(mode).name + "?" + expected.subresource + "="}) {
+            const auto bare = "/" + bucket(mode).name + "?" + expected.subresource;
+            for (const auto& target : std::vector<std::string>{bare, bare + "="}) {
                 SCOPED_TRACE(mode + " GET " + target);
                 const auto a = send(s3l::bhttp::verb::get, target);
                 EXPECT_EQ(a.status, expected.status) << a.body;
@@ -1012,7 +1012,8 @@ TEST_F(S3GatewayListingDbTest, ListingParametersAreNotSubresources) {
         EXPECT_EQ(v2.status, s3l::bhttp::status::ok) << v2.body;
         EXPECT_EQ(v2.keys, (std::vector<std::string>{"a", "b/c"}));
 
-        for (const std::string query : {"?prefix&delimiter=%2F", "?prefix=&delimiter=%2F&marker", "?list-type=2&prefix&start-after"}) {
+        for (const std::string query :
+             {"?prefix&delimiter=%2F", "?prefix=&delimiter=%2F&marker", "?list-type=2&prefix&start-after"}) {
             const auto bare = send(s3l::bhttp::verb::get, "/" + name + query);
             EXPECT_EQ(bare.status, s3l::bhttp::status::ok) << query << ": " << bare.body;
             EXPECT_EQ(bare.root, "ListBucketResult") << query << ": " << bare.body;
