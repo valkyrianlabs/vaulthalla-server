@@ -1,5 +1,112 @@
 # Vaulthalla release notes
 
+<!-- vl-release:entry version=1.25.0 -->
+## 1.25.0 — Upstream profiles for S3 gateway buckets, Backblaze B2 bucket administration, and gateway listing fixes
+
+_Released 2026-11-24_
+
+### Upstream buckets
+
+- **Backblaze B2 accounts can be administered.** Provider administration, until now for AWS S3 and Cloudflare R2
+  credentials, also works for a Backblaze B2 application key whose endpoint is the account's S3 endpoint
+  (`https://s3.<region>.backblazeb2.com`). After `vh upstream admin enable <api-key>`, Vaulthalla lists the account's
+  buckets (`vh upstream buckets`), inspects them, runs the adoption check, and creates or adopts a bucket together
+  with a vault: `vh vault create <name> --s3 --api-key <key> --bucket-mode create|adopt`, or **Create a new bucket**
+  in the web console. Detach and cleanup work as on the other providers; cleanup deletes every object version, which
+  B2 requires before a bucket can go.
+  - New B2 buckets are private and are created in the account's own region (the one in the endpoint); another
+    region is refused.
+  - B2 bucket names have 6 to 63 characters, can't start with `b2-`, and are shared by every Backblaze account. The
+    length and prefix are checked before anything is sent, and a name another account holds is reported as taken
+    (on AWS S3 too) instead of pointing at adoption.
+  - Backblaze's S3-compatible API has no lifecycle or event-notification calls, and B2 buckets are always versioned.
+    `vh upstream admin status <api-key> --probe` lists `lifecycle`, `versioning` and the `events` capabilities as
+    missing for a B2 key, `vh upstream lifecycle` and `--abort-multipart-days` are refused with that reason, and
+    event-driven sync stays AWS S3 and Cloudflare R2 only. Set B2 lifecycle rules in the Backblaze console.
+  - The application key must be a standard key (not the master key) with access to all buckets.
+  - A credential for a B2 S3 endpoint must use the `backblaze-b2` provider: saving one under another provider is
+    refused, as for AWS and R2 endpoints. Protection locks on B2 buckets follow the endpoint, and the upgrade moves
+    existing locks and bucket records to the new identity so that every lock keeps applying.
+  - A credential that managed storage issued for a vault can't be turned into an administrative one.
+
+See [Managed Upstream Buckets](/vaults/upstream-buckets#backblaze-b2).
+
+### S3 gateway
+
+- **Bucket configuration calls get real answers, and never create or delete a bucket.** Every bucket request with a
+  subresource the gateway did not handle was taken for something else. A GET such as `get_bucket_versioning`,
+  `get_bucket_lifecycle_configuration` or `get_bucket_location` was answered with a key listing, which clients read as
+  an empty, successful answer, and `list_object_versions` listed no versions for a bucket full of objects. A PUT such as
+  `put_bucket_versioning` was CreateBucket: it reported success without changing anything, and created the bucket when
+  it did not exist. A DELETE such as `delete_bucket_lifecycle` or `delete_bucket_policy` was DeleteBucket and deleted
+  the bucket when it was empty.
+- Now a GET answers what S3 answers for a bucket that never had the feature configured: `?location` and `?versioning`
+  answer an empty `LocationConstraint` (us-east-1) and `VersioningConfiguration` (never enabled), `?lifecycle`,
+  `?policy`, `?cors`, `?tagging`, `?encryption`, `?object-lock`, `?website`, `?replication`, `?publicAccessBlock` and
+  `?ownershipControls` answer their S3 "not found" errors, and ListObjectVersions (`?versions`), `?acl`,
+  `?policyStatus` and any subresource the gateway does not know answer `NotImplemented`. Every PUT, DELETE or POST
+  of a configuration answers `NotImplemented` and changes nothing. These calls are authorized as a listing of the
+  bucket is. The full table is in the S3 gateway semantics page.
+
+Nothing to do after upgrading. A tool that relied on `put_bucket_versioning` or a similar call appearing to succeed
+now sees `NotImplemented`, which is what the gateway has always done: it never kept bucket configuration.
+
+- **Listings of more than one page work with every S3 client.** The continuation token of ListObjectsV2 was the last
+  key, percent-encoded whenever the client asked for `EncodingType=url`, which boto3, the AWS CLI and most SDKs always
+  do. Clients send a token back untouched, so the second request listed the first page again: boto3 stopped with
+  "The same next token was received twice", and no bucket with more than 1,000 keys (or any listing with a smaller
+  page size) could be listed. The token is now opaque and never encoded. A token the gateway did not issue is refused
+  with `InvalidArgument`; a listing in flight across the upgrade starts over.
+- **Keys are listed in S3's order.** Listings followed the locale of the PostgreSQL cluster (`big.bin` before
+  `big-single.bin`, case mixed together). They are now in ascending UTF-8 byte order on every install, and
+  `start-after`, `marker` and continuation tokens resume with the same comparison, so paging can't skip or repeat a
+  key. Tools that merge or diff listings by comparing keys (sync and backup clients) get what they expect. In-progress
+  multipart uploads list in the same order.
+- **ListObjects (v1) pages.** A bucket GET without `list-type=2` now answers as ListObjects: it honors `marker` and
+  returns `Marker` and `NextMarker`. It used to answer in the ListObjectsV2 shape and ignore `marker`, so a v1 client
+  never got past the first page.
+- **`start-after` with a delimiter** lists the common prefix that the named key lies in when keys after it remain
+  there, as S3 does, and the answer echoes `StartAfter` and `ContinuationToken`.
+
+Nothing to do after upgrading. Clients that paged with `start-after` to work around the token keep working.
+
+- **A bucket an S3 client creates can live in a provider account.** Until now a `CreateBucket` through the gateway
+  always made a local vault. An *upstream profile* names a provider credential and the settings of the vault to
+  create: upstream encryption on or off, the sync strategy, the conflict policy and an optional prefix for the
+  upstream bucket's name. A gateway credential that uses a profile gets, for every bucket it creates, a new bucket
+  in that provider account (AWS S3, Cloudflare R2 or Backblaze B2), an S3 vault over it with the profile's settings,
+  and the gateway bucket bound to that vault:
+
+  ```bash
+  vh s3-gateway upstream create vl-b2 --api-key b2-main --no-encrypt --sync-strategy mirror --on-sync-conflict keep_local
+  vh s3-gateway creds scope backup set --upstream vl-b2
+  vh s3-gateway creds scope backup show
+  ```
+
+  In the web console: the **Upstream** tab of the S3 gateway page, and **New buckets** on a key.
+  - A credential with no upstream setting keeps creating local vaults; nothing changes for existing credentials.
+  - An existing bucket is never taken over. Your own bucket of that name is used only while it is empty; one that
+    holds objects, or a name another account holds, fails the `CreateBucket` with `409 BucketAlreadyExists`. A
+    provider failure is `503`. A refused `CreateBucket` never falls back to a local vault.
+  - A client can pick a profile per request by sending its name as the region: in
+    `CreateBucketConfiguration.LocationConstraint`, or as the region it signs with. `LocationConstraint=local` forces
+    a local vault; real regions, which most clients send by default, select nothing. A request can only name the
+    credential's own profile or one on its allowlist (`creds scope <credential> set --allow-upstream <profile>`), so
+    one key can reach several provider accounts and no others; anything else is `403 AccessDenied`.
+  - `s3_gateway.default_upstream_profile` sets a server default, used only by credentials set to
+    `--upstream server-default`.
+  - A profile's changed sync strategy or conflict policy also applies to the buckets already created from it, unless
+    `s3_gateway.reapply_upstream_profile_changes` is off or the credential says otherwise (`--reapply off`).
+  - Pointing a credential at a profile needs management of the credential plus `admin.upstream.provision` and
+    permission to use the provider credential, for whoever makes the change and for the credential's principal; the
+    principal is checked again on every `CreateBucket`.
+  - A provider credential can't be deleted while a profile uses it.
+
+  See [Upstream Profiles](/s3-gateway/buckets#upstream-profiles).
+- The `remote_cache` and `remote_proxy` bucket modes are documented as what they are: whether the gateway keeps a
+  local copy of an object it fetched for a read. How a vault and its upstream bucket are kept in step is the vault's
+  sync strategy, whatever the mode.
+
 <!-- vl-release:entry version=1.24.1 -->
 ## 1.24.1 — macOS package for 1.24
 

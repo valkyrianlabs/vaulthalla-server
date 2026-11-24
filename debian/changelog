@@ -1,3 +1,100 @@
+vaulthalla (1.25.0-1) unstable; urgency=high
+
+  * Upstream: Backblaze B2 provider administration over B2's S3-compatible API
+    (storage/s3/provider/admin/B2Admin): ListBuckets (unpaged), HeadBucket,
+    CreateBucket (x-amz-acl: private, LocationConstraint = the endpoint's
+    region), DeleteBucket, GetBucketVersioning, Get Object Lock Configuration,
+    ListObjectsV2/ListObjectVersions, DeleteObjects. Lifecycle and event
+    notifications are not in that API: AdminClient::supportsLifecycle() is
+    false, putLifecycle and putVersioning(Suspended) are CapabilityMissing with
+    nothing sent, the probe reports lifecycle, versioning and events.* as
+    missing, and admin::supportsEvents() keeps event-driven sync to AWS S3 and
+    Cloudflare R2.
+    - Bucket identity for a https://s3.<region>.backblazeb2.com endpoint is
+      (backblaze-b2, <endpoint host>, bucket) whatever the key's provider
+      label; a label that contradicts the endpoint is refused on save.
+      Migration 153_backblaze_b2_identity.sql renames existing upstream_bucket
+      rows ('s3:backblaze-b2', and other generic labels over a B2 endpoint
+      host), one row per bucket, and carries a lock over from any row left
+      under its old label.
+    - B2 bucket names (6-63 characters, no "b2-" prefix) are validated before
+      any request (storage::upstream::validBucketNameFor); a provisioning
+      region other than the key's own is refused.
+    - Bucket creation reports a name held by another account (HeadBucket 403,
+      or CreateBucket BucketAlreadyExists) as taken instead of suggesting
+      adoption.
+    - admin::supportsAdmin() is false for keys issued by managed storage
+      (origin "cloud").
+  * Web console: provider administration, the bucket inventory and "Create a
+    new bucket" for Backblaze B2 credentials; lifecycle, event and region
+    fields are hidden where B2 has none.
+  * S3 gateway: bucket subresource requests (`/<bucket>?versioning`,
+    `?lifecycle`, `?policy`, ...) are configuration calls, routed before
+    CreateBucket, DeleteBucket and the listing. A config PUT created a missing
+    bucket and a config DELETE deleted an empty one; every unhandled GET was
+    answered with a key listing. GETs now answer S3's defaults for an
+    unconfigured bucket (`?location`, `?versioning`, `?notification`,
+    `?logging`, `?accelerate`, `?requestPayment`) or its 404
+    (`NoSuchLifecycleConfiguration`, `NoSuchBucketPolicy`, ...); `?versions`,
+    `?acl`, `?policyStatus`, unknown subresources and every write answer 501
+    `NotImplemented`. Authorised as a listing.
+  * `tools/smoke/s3_gateway_bucket_subresources.py`: read-only boto3 check of a
+    bucket's configuration answers, run by
+    `S3GatewayDbTest.Boto3HearsS3sAnswersForBucketConfiguration`.
+  * S3 gateway: ListObjectsV2 continuation tokens are opaque (`vh1.` +
+    base64url of the last item, `protocols/s3/Listing.hpp`) and never
+    percent-encoded under `EncodingType=url`; they were the URL-encoded last
+    key, which no client decodes, so every second page was the first again.
+    Unknown tokens answer `InvalidArgument`.
+  * S3 gateway: object listings sort and resume by UTF-8 bytes (`~<~`/`~>~` on
+    `idx_s3_gateway_object_vault_key`) instead of the database collation, for
+    local, `remote_cache` and `remote_proxy` buckets; ListMultipartUploads too.
+  * S3 gateway: bucket GET without `list-type=2` is ListObjects v1 (`marker`,
+    `Marker`, `NextMarker`, no `KeyCount`); `start-after`/`marker` inside a
+    common prefix still list that prefix; listing parameters that are not UTF-8
+    answer `InvalidArgument`. ListObjectsV2 echoes `StartAfter` and
+    `ContinuationToken`.
+  * `tools/smoke/s3_gateway_list_paging.py`: read-only boto3 paginator check of
+    a gateway bucket (order, v1, StartAfter, delimiter), run by
+    `S3GatewayDbTest.Boto3PaginatorsListABucketLargerThanOnePage` over 2,500
+    keys.
+  * S3 gateway: upstream profiles (migration
+    154_s3_gateway_upstream_profiles.sql: s3_gateway_upstream_profile, the
+    credential's upstream_profile_id / upstream_server_default /
+    upstream_reapply, the bucket's created_by_credential_id /
+    upstream_profile_id, and the allowlist
+    s3_gateway_credential_upstream_profile: a profile a request names must be
+    the credential's own or listed, else Denied). A gateway CreateBucket
+    resolves a profile (ops::s3_gateway::profileForCreate: LocationConstraint,
+    signing region, the credential's profile, the server default it follows)
+    and creates the bucket through ops::vaults::create with the new
+    provisioning mode ops::upstream::BucketMode::CreateOrAdoptEmpty: create the
+    upstream bucket, or adopt this account's own while it lists empty; a bucket
+    that holds objects or a name another account holds is a Conflict and
+    nothing is changed.
+    - The gateway answers ops refusals as S3 errors: Conflict 409
+      BucketAlreadyExists, Denied 403 AccessDenied, other refusals 400
+      InvalidArgument, a provider failure 503 ServiceUnavailable; a malformed
+      CreateBucketConfiguration is 400 MalformedXML. A bucket subresource PUT
+      is answered as before.
+    - CLI: `vh s3-gateway upstream list|show|create|update|delete`;
+      `creds scope <credential> set --upstream <profile>|server-default|local [--reapply on|off|inherit] [--allow-upstream <profile>|none]...`;
+      `creds scope <credential> show` and `creds list` report it (JSON:
+      `upstream`).
+    - ws: s3.gateway.upstreamProfiles.list|create|update|delete,
+      s3.gateway.credentials.upstream.set (step-up family secrets);
+      S3GatewayCredential gains `upstream`, S3GatewayBucket
+      `created_by_credential_id` and `upstream_profile_id`; new models
+      S3GatewayUpstreamProfile and S3GatewayCredentialUpstream.
+    - Config: s3_gateway.default_upstream_profile (validated on
+      settings.update) and s3_gateway.reapply_upstream_profile_changes.
+    - ops::api_keys::remove refuses a key an upstream profile uses (the foreign
+      key is ON DELETE RESTRICT).
+  * Web console: an Upstream tab on the S3 gateway page (profiles), a "New
+    buckets" block on a key, and the two server settings.
+
+ -- Cooper Larson <cooper@valkyrianlabs.com>  Tue, 24 Nov 2026 03:54:35 +0000
+
 vaulthalla (1.24.1-1) unstable; urgency=high
 
   * Build: ops/Mfa.hpp includes <nlohmann/json.hpp> (ops::mfa::Status holds a
