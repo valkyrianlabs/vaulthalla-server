@@ -1,6 +1,6 @@
 ---
 title: S3 Gateway Semantics
-description: Understand S3 Gateway LIST, HEAD, GET, PUT, DELETE, ETags, multipart storage, backfill, and current protocol limitations.
+description: Understand S3 Gateway LIST, bucket subresources, HEAD, GET, PUT, DELETE, ETags, multipart storage, backfill, and current protocol limitations.
 order: 60
 status: published
 tags:
@@ -45,6 +45,39 @@ A page holds up to `max-keys` items, 1000 at most. With a `delimiter`, each comm
 `encoding-type=url` percent-encodes the fields that hold key text and nothing else: `Key`, `Prefix`, `Delimiter`, `CommonPrefixes`, and `StartAfter` (ListObjectsV2) or `Marker` and `NextMarker` (ListObjects). SDKs decode exactly those fields.
 
 `prefix`, `delimiter`, `start-after` and `marker` must be valid UTF-8; anything else is refused with `InvalidArgument`.
+
+## Bucket Subresources
+
+A bucket request that names a subresource (`GET /bucket?versioning`, `PUT /bucket?lifecycle`, `DELETE /bucket?policy`, ...) is a configuration call. It is never answered as a listing, and it never creates or deletes a bucket. The gateway has no bucket configuration of its own (see [Limitations](#limitations)), so a GET answers what S3 answers for a bucket that never had the feature configured:
+
+| Subresource | GET answer |
+| --- | --- |
+| `location` | 200, an empty `LocationConstraint` (`us-east-1`) |
+| `versioning` | 200, an empty `VersioningConfiguration`: versioning was never enabled |
+| `notification`, `logging`, `accelerate` | 200, an empty `NotificationConfiguration`, `BucketLoggingStatus` or `AccelerateConfiguration` |
+| `requestPayment` | 200, `Payer` `BucketOwner` |
+| `lifecycle` | 404 `NoSuchLifecycleConfiguration` |
+| `policy` | 404 `NoSuchBucketPolicy` |
+| `cors` | 404 `NoSuchCORSConfiguration` |
+| `tagging` | 404 `NoSuchTagSet` |
+| `encryption` | 404 `ServerSideEncryptionConfigurationNotFoundError` (vault encryption at rest is not an S3 bucket encryption setting) |
+| `object-lock` | 404 `ObjectLockConfigurationNotFoundError` |
+| `website` | 404 `NoSuchWebsiteConfiguration` |
+| `replication` | 404 `ReplicationConfigurationNotFoundError` |
+| `publicAccessBlock` | 404 `NoSuchPublicAccessBlockConfiguration` |
+| `ownershipControls` | 404 `OwnershipControlsNotFoundError` |
+| `versions` (ListObjectVersions) | 501 `NotImplemented` |
+| `acl`, `policyStatus` | 501 `NotImplemented`: access is decided by Vaulthalla RBAC and credential scopes, which an S3 ACL or policy status can't describe |
+| `uploads` | ListMultipartUploads |
+| any other subresource | 501 `NotImplemented` |
+
+PUT, DELETE and POST on any of these (other than POST `?delete`, DeleteObjects) answer 501 `NotImplemented` and change nothing: `put_bucket_versioning`, `put_bucket_lifecycle_configuration`, `delete_bucket_policy` and the like fail loudly instead of appearing to succeed.
+
+Remote-backed buckets answer the same way. The answer describes the gateway bucket, not the settings of the upstream S3/R2 bucket behind it.
+
+A subresource call is authorized as a listing of the bucket is. A caller who may not list the bucket gets the listing's error (`NoSuchBucket`, `AccessDenied`), whatever subresource it names.
+
+Every subresource S3 defines is recognized by name, and any other query parameter sent without a value is treated as a subresource the gateway does not know. The listing parameters (`list-type`, `prefix`, `delimiter`, `marker`, `start-after`, `continuation-token`, `max-keys`, `encoding-type`, `fetch-owner`), the paging parameters of ListMultipartUploads, presigned-URL parameters and other parameters with a value keep a request a listing.
 
 ## HEAD
 
@@ -116,9 +149,10 @@ Current S3 Gateway behavior does not implement:
 
 - IAM policy or bucket policy emulation.
 - ACLs.
-- S3 object versioning.
+- S3 object versioning, including ListObjectVersions.
 - Lifecycle rules.
 - Object lock, legal hold, or MFA delete.
+- Bucket configuration of any kind (CORS, tagging, encryption settings, website, replication, notifications, logging). [Bucket Subresources](#bucket-subresources) lists what each configuration call answers.
 - Vaulthalla undo-delete integration for gateway deletes.
 
 Large PUT and multipart bodies are accepted by the gateway path, but operators should size `max_body_size_mb`, client retry behavior, and request budgets for the workload.

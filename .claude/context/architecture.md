@@ -128,11 +128,18 @@ and keys after it still roll up into its prefix. `list-type=2` is ListObjectsV2,
 (`xml::listObjectsV2` / `xml::listObjects`). The v2 continuation token is opaque (`protocols/s3/Listing.hpp`: `vh1.` +
 unpadded base64url of the position) and never percent-encoded: `EncodingType=url` covers key fields only, and clients
 send tokens back verbatim (boto3 always asks for `url`; an encoded token made page two page one again, v1.23). Unknown
-tokens and listing parameters that aren't UTF-8 answer `InvalidArgument`. Not served: ListObjectVersions and the other
-bucket subresource GETs (`?versions`, `?location`, `?versioning`, …) still fall into the ListObjects handler. Tests:
+tokens and listing parameters that aren't UTF-8 answer `InvalidArgument`. Bucket subresources (`bucketSubresources`
+in Router.cpp: every S3 subresource by name, plus any other parameter without a value; listing, multipart-paging and
+signing parameters never count) are configuration calls, routed before CreateBucket/DeleteBucket/listing
+(`bucketSubresourceResponse`; only GET `?uploads` and POST `?delete` are served elsewhere): authorised as a listing
+(HeadBucket + ListObjects), a GET answers S3's unconfigured-bucket default (`xml::unconfiguredBucketSubresource`:
+location, versioning, notification, logging, accelerate, requestPayment) or its 404 (`missingBucketConfiguration`), or
+NotImplemented (`?versions`, `?acl`, `?policyStatus`, unknown); every write is NotImplemented. Through v1.24.1 a config
+PUT was CreateBucket and a config DELETE was DeleteBucket. Tests:
 `S3GatewayListing*` (`test_s3_gateway_listing.cpp`: an SDK-style paginator over the router, every page size, both
-encodings, delimiters, all three modes), `S3GatewayDbTest.Boto3PaginatorsListABucketLargerThanOnePage` (real boto3,
-2,500 keys, skips without boto3).
+encodings, delimiters, all three modes, and the bucket subresource answers, writes and authorisation),
+`S3GatewayDbTest.Boto3PaginatorsListABucketLargerThanOnePage` (real boto3, 2,500 keys, skips without boto3),
+`S3GatewayDbTest.Boto3HearsS3sAnswersForBucketConfiguration` (real boto3 configuration calls).
 
 > `core/include/config/Config.hpp` compiled-in defaults are **33369/33370**, but the shipped config,
 > web fallbacks, and Caddyfile all use **36969/36970**. Trust the config file, and treat that

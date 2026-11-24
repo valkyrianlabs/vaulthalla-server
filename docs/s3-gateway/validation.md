@@ -40,6 +40,17 @@ S3_GATEWAY_ENDPOINT=http://127.0.0.1:39000 AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCE
 
 It requires that ListObjectsV2 lists every key once in UTF-8 byte order, that ListObjects (v1), paging by `StartAfter` and a smaller page size give the same listing, and that a `Delimiter=/` listing is what the flat one folds into. Point it at a bucket with more than 1,000 keys so the default page size crosses a page boundary; `--expect-keys N` asserts the count. The DB-backed unit suite runs it against an in-process gateway holding 2,500 keys (`S3GatewayDbTest.Boto3PaginatorsListABucketLargerThanOnePage`, skipped where python3 has no boto3).
 
+## Bucket Configuration Calls
+
+`tools/smoke/s3_gateway_bucket_subresources.py` asks a bucket about its configuration with boto3 and checks each answer against what S3 says for a bucket that never had the feature configured. It only sends GETs:
+
+```bash
+S3_GATEWAY_ENDPOINT=http://127.0.0.1:39000 AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... \
+  tools/smoke/s3_gateway_bucket_subresources.py --bucket archive
+```
+
+It requires that `get_bucket_location` answers no `LocationConstraint`, `get_bucket_versioning` no `Status`, `get_bucket_lifecycle_configuration` and `get_bucket_policy` raise `NoSuchLifecycleConfiguration` and `NoSuchBucketPolicy`, and `list_object_versions` raises `NotImplemented`. The DB-backed unit suite runs it against an in-process gateway (`S3GatewayDbTest.Boto3HearsS3sAnswersForBucketConfiguration`, skipped where python3 has no boto3).
+
 ## Remote R2/S3 Smoke
 
 Remote-backed smoke runs when remote env is present or required explicitly:

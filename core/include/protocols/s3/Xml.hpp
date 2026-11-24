@@ -7,6 +7,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace vh::protocols::s3::xml {
@@ -58,6 +59,10 @@ std::string completeMultipartUpload(const std::string& location, const std::stri
 std::string listMultipartUploads(const std::string& bucket, const std::vector<db::query::s3::MultipartUpload>& uploads);
 std::string listParts(const std::string& bucket, const std::string& key, const std::string& uploadId,
                       const std::vector<db::query::s3::MultipartPart>& parts);
+// S3's answer to GET /<bucket>?<subresource> for a bucket that never had it configured, when that answer is a
+// document: ?location (us-east-1, an empty LocationConstraint), ?versioning (never enabled, so no Status),
+// ?notification, ?logging and ?accelerate (empty), ?requestPayment (the bucket owner pays). None for any other.
+std::optional<std::string> unconfiguredBucketSubresource(std::string_view subresource);
 
 std::string httpDate(std::time_t ts);
 std::string iso8601(std::time_t ts);

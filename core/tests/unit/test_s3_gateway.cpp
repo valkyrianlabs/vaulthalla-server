@@ -3560,3 +3560,92 @@ TEST_F(S3GatewayDbTest, Boto3PaginatorsListABucketLargerThanOnePage) {
     std::filesystem::remove_all(work);
     service.stop();
 }
+
+// boto3's configuration calls against the running gateway (tools/smoke/s3_gateway_bucket_subresources.py). They used to
+// be answered with a key listing, which boto3 parsed as an empty answer: get_bucket_versioning and get_bucket_location
+// "succeeded" with nothing, get_bucket_lifecycle_configuration with no rules, list_object_versions with no versions.
+// Skipped where python3 has no boto3 (CI); dev has it.
+TEST_F(S3GatewayDbTest, Boto3HearsS3sAnswersForBucketConfiguration) {
+    if (std::system("python3 -c 'import boto3' >/dev/null 2>&1") != 0) GTEST_SKIP() << "python3 has no boto3";
+
+    s3gw::ConfigRestore restoreConfig(vh::config::Registry::get());
+    auto cfg = vh::config::Registry::get();
+    cfg.s3_gateway.enabled = true;
+    cfg.s3_gateway.host = "127.0.0.1";
+    cfg.s3_gateway.port = freeLoopbackPort();
+    cfg.s3_gateway.require_sigv4 = true;
+    cfg.s3_gateway.allow_path_style = true;
+    vh::config::Registry::set(cfg);
+
+    const auto admin = vh::identities::manager().userByName("admin");
+    ASSERT_TRUE(admin);
+    // A vault of its own: the suite's shared vault holds what earlier tests wrote, and the listing counts keys.
+    const auto configVaultId = createLocalVault(s3gw::uniqueSuffix("boto3_config"), admin->id);
+    const std::string bucketName = "boto3-config-" + std::to_string(configVaultId);
+    vh::db::query::s3::Gateway::bindBucket({
+        .vault_id = configVaultId,
+        .bucket_name = bucketName,
+        .api_exclusive = true,
+        .mode = "local",
+        .created_by = admin->id
+    });
+    const vh::protocols::s3::CredentialManager manager;
+    const auto secret = manager.createCredential({
+        .created_by = admin->id,
+        .principal_user_id = admin->id,
+        .name = "boto3-config-" + s3gw::uniqueSuffix("credential"),
+        .scope_mode = "vault_allowlist",
+        .description = std::nullopt,
+        .expires_at = std::nullopt,
+        .vault_scopes = {{
+            .credential_id = 0,
+            .vault_id = configVaultId,
+            .can_list = true,
+            .can_read = true,
+            .can_write = false,
+            .can_delete = false,
+            .can_admin = false
+        }}
+    });
+    for (const std::string key : {"config/a.txt", "config/b.txt", "top.txt"})
+        vh::db::query::s3::Gateway::upsertObject({
+            .vault_id = configVaultId,
+            .object_key = key,
+            .etag = "\"etag\"",
+            .size_bytes = 1,
+            .content_type = "text/plain",
+            .storage_class = std::nullopt,
+            .last_modified = std::time(nullptr),
+            .multipart = false,
+            .part_count = std::nullopt
+        });
+
+    vh::concurrency::ThreadPoolManager::instance().init();
+    ThreadPoolShutdown shutdownPools{true};
+    vh::protocols::s3::GatewayService service;
+    service.start();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!service.gatewayStatus().ready && service.isRunning() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    ASSERT_TRUE(service.gatewayStatus().ready);
+
+    const auto work = std::filesystem::temp_directory_path() / s3gw::uniqueSuffix("vh_boto3_config");
+    std::filesystem::create_directories(work);
+    const auto script = std::filesystem::path(VH_TEST_ASSETS_DIR) / ".." / ".." / "tools" / "smoke" /
+                        "s3_gateway_bucket_subresources.py";
+    const auto command =
+        "AWS_ACCESS_KEY_ID='" + secret.credential.access_key + "' AWS_SECRET_ACCESS_KEY='" + secret.secret_access_key +
+        "' AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null AWS_EC2_METADATA_DISABLED=true " +
+        (std::system("command -v timeout >/dev/null 2>&1") == 0 ? "timeout 120 " : "") + "python3 '" + script.string() +
+        "' --endpoint http://127.0.0.1:" + std::to_string(cfg.s3_gateway.port) + " --bucket " + bucketName +
+        " --expect-keys 3 >'" + (work / "boto3.log").string() + "' 2>&1";
+    const auto status = std::system(command.c_str());
+    std::ifstream in(work / "boto3.log");
+    const std::string log{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+    EXPECT_EQ(status, 0) << log;
+    EXPECT_NE(log.find("ok: location, versioning, lifecycle, policy and versions answer as S3 does; 3 keys listed"),
+              std::string::npos) << log;
+
+    std::filesystem::remove_all(work);
+    service.stop();
+}

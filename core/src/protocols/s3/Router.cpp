@@ -38,6 +38,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <vector>
@@ -432,6 +433,86 @@ xml::ListObjectsRequest parseListObjectsRequest(const std::map<std::string, std:
         asked.marker = keyText("marker");
     }
     return asked;
+}
+
+// A bucket request's subresources: the query parameters that name an operation on the bucket (?versioning,
+// ?lifecycle, ?uploads, ...) rather than qualify one. Every subresource S3 has is named here, whatever its value; any
+// other parameter without a value is taken for one this list does not know yet. Parameters with a value (and the
+// listing, paging and signing ones, valued or not) qualify the request, so ?list-type=2&x-id=ListObjectsV2 or a
+// presigned listing still lists.
+std::vector<std::string> bucketSubresources(const std::map<std::string, std::string>& query) {
+    static constexpr auto subresources = std::to_array<std::string_view>({
+        "accelerate", "acl", "analytics", "cors", "delete", "encryption", "intelligent-tiering", "inventory",
+        "lifecycle", "location", "logging", "metadataConfiguration", "metadataInventoryTable", "metadataJournalTable",
+        "metadataTable", "metrics", "notification", "object-lock", "ownershipControls", "policy", "policyStatus",
+        "publicAccessBlock", "replication", "requestPayment", "session", "tagging", "uploads", "versioning",
+        "versions", "website"});
+    static constexpr auto parameters = std::to_array<std::string_view>({
+        "list-type", "prefix", "delimiter", "marker", "start-after", "continuation-token", "max-keys",
+        "encoding-type", "fetch-owner", "key-marker", "version-id-marker", "upload-id-marker", "max-uploads", "id",
+        "x-id", "X-Amz-Algorithm", "X-Amz-Credential", "X-Amz-Date", "X-Amz-Expires", "X-Amz-SignedHeaders",
+        "X-Amz-Signature", "X-Amz-Security-Token", "X-Amz-Content-Sha256", "AWSAccessKeyId", "Signature", "Expires"});
+    const auto named = [](const auto& names, const std::string& name) {
+        return std::ranges::find(names, std::string_view{name}) != names.end();
+    };
+    std::vector<std::string> out;
+    for (const auto& [name, value] : query)
+        if (named(subresources, name) || (value.empty() && !named(parameters, name))) out.push_back(name);
+    return out;
+}
+
+// What S3 answers for a subresource of a bucket that never had it configured, when that answer is an error: the
+// gateway has no lifecycle rules, policies, CORS, tags, bucket encryption settings, object lock, website, replication,
+// public access block or ownership controls (docs/s3-gateway/semantics.md, Limitations).
+std::optional<S3Error> missingBucketConfiguration(const std::string& subresource, const std::string& bucket) {
+    static const std::map<std::string, std::pair<std::string, std::string>, std::less<>> missing{
+        {"lifecycle", {"NoSuchLifecycleConfiguration", "The lifecycle configuration does not exist"}},
+        {"policy", {"NoSuchBucketPolicy", "The bucket policy does not exist"}},
+        {"cors", {"NoSuchCORSConfiguration", "The CORS configuration does not exist"}},
+        {"tagging", {"NoSuchTagSet", "The TagSet does not exist"}},
+        {"encryption", {"ServerSideEncryptionConfigurationNotFoundError",
+                        "The server side encryption configuration was not found"}},
+        {"object-lock", {"ObjectLockConfigurationNotFoundError",
+                         "Object Lock configuration does not exist for this bucket"}},
+        {"website", {"NoSuchWebsiteConfiguration", "The specified bucket does not have a website configuration"}},
+        {"replication", {"ReplicationConfigurationNotFoundError", "The replication configuration was not found"}},
+        {"publicAccessBlock", {"NoSuchPublicAccessBlockConfiguration",
+                               "The public access block configuration was not found"}},
+        {"ownershipControls", {"OwnershipControlsNotFoundError", "The bucket ownership controls were not found"}},
+    };
+    const auto it = missing.find(subresource);
+    if (it == missing.end()) return std::nullopt;
+    return S3Error{it->second.first, it->second.second, http::status::not_found, bucket};
+}
+
+// GET, PUT, DELETE or POST /<bucket>?<subresource> for every subresource the router does not serve itself (it serves
+// GET ?uploads and POST ?delete). A configuration call is never CreateBucket, DeleteBucket or a listing: before this,
+// PUT /<bucket>?versioning created the bucket when it did not exist, DELETE /<bucket>?lifecycle deleted an empty one,
+// and every GET listed keys. It is authorised as a listing of the bucket is, so a caller who may not list the bucket
+// gets the listing's error (NoSuchBucket, AccessDenied) and learns nothing about its configuration. A GET answers
+// what S3 answers for a bucket that never had the feature configured, or NotImplemented; any write is NotImplemented
+// and changes nothing.
+Router::Response bucketSubresourceResponse(
+    const Router::Request& request,
+    const ObjectStore& objects,
+    const Router::ParsedTarget& parsed,
+    const AuthContext& auth,
+    const std::vector<std::string>& subresources) {
+    const auto bucket = objects.headBucket(parsed.bucket, auth);
+    objects.requireS3Permission(bucket, auth, S3Action::ListObjects);
+
+    const auto& subresource = subresources.front();
+    if (subresources.size() > 1)
+        throw notImplemented("A bucket request may name one subresource; this one names " +
+                             std::to_string(subresources.size()), parsed.bucket);
+    if (request.method() != http::verb::get)
+        throw notImplemented("The S3 gateway does not implement " + std::string(request.method_string()) +
+                             " on the bucket ?" + subresource + " subresource", parsed.bucket);
+    if (const auto body = xml::unconfiguredBucketSubresource(subresource))
+        return makeResponse(request, http::status::ok, *body);
+    if (auto missing = missingBucketConfiguration(subresource, parsed.bucket)) throw std::move(*missing);
+    throw notImplemented("The S3 gateway does not implement the bucket ?" + subresource + " subresource",
+                         parsed.bucket);
 }
 
 std::vector<std::string> parseDeleteObjects(const std::string& body, bool& quiet) {
@@ -1034,6 +1115,16 @@ Router::Response Router::routeAuthenticated(
     }
 
     if (parsed.key.empty()) {
+        // A subresource makes the request a configuration call, before anything below can take it for CreateBucket,
+        // DeleteBucket or a listing. HEAD has no subresource form and stays HeadBucket.
+        if (const auto subresources = bucketSubresources(parsed.query);
+            !subresources.empty() && request.method() != http::verb::head) {
+            const bool served = subresources.size() == 1 &&
+                ((request.method() == http::verb::get && subresources.front() == "uploads") ||
+                 (request.method() == http::verb::post && subresources.front() == "delete"));
+            if (!served) return bucketSubresourceResponse(request, objects_, parsed, auth, subresources);
+        }
+
         if (request.method() == http::verb::put) {
             // A bucket subresource PUT (?versioning, ?tagging, ...) is answered as before; only a plain CreateBucket
             // carries a CreateBucketConfiguration.
