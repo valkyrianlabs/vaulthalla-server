@@ -337,13 +337,14 @@ TEST_F(UpstreamOpsTest, ABackblazeB2KeyListsCreatesAdoptsAndDetachesBuckets) {
     {
         std::scoped_lock lock(cloud->mutex);
         EXPECT_EQ(cloud->buckets.at(name).region, "us-west-004") << "the key's own region, taken from its endpoint";
-        // Versioning off is really off on B2: a bucket Vaulthalla creates keeps only the latest version of the vault's
-        // files (test_recovery_b2.cpp has the rest).
+        // Versioning off is really off on B2: a bucket Vaulthalla creates keeps only the latest version (this suite's
+        // encrypting vaults are path_v0: the whole bucket plus the index rule; test_recovery_b2.cpp has opaque_v1).
         const auto& lc = cloud->buckets.at(name).lifecycle;
-        ASSERT_EQ(lc.size(), 1u);
-        EXPECT_EQ(lc[0].id, "vaulthalla-managed");
-        EXPECT_EQ(lc[0].prefix, "o/");
-        EXPECT_EQ(lc[0].expire_noncurrent_days.value_or(0), 1u);
+        ASSERT_EQ(lc.size(), 2u);
+        const auto owned = std::ranges::find(lc, std::string("vaulthalla-managed"), &padmin::LifecycleRule::id);
+        ASSERT_NE(owned, lc.end());
+        EXPECT_EQ(owned->prefix, "");
+        EXPECT_EQ(owned->expire_noncurrent_days.value_or(0), 1u);
     }
     const auto row = b2RowOf(name);
     ASSERT_TRUE(row) << "recorded under backblaze-b2 and the region endpoint";

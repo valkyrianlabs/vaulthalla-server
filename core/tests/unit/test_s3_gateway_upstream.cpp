@@ -966,6 +966,12 @@ TEST_F(GatewayUpstreamTest, AProfilesVersioningDefaultIsAppliedToEveryBucketItCr
         EXPECT_EQ(owned->prefix, "") << "an unencrypted (transparent) vault: the whole bucket";
     }
 
+    // New encrypting vaults get opaque_v1, as outside tests (gtest_main makes the suite default path_v0).
+    vault::model::setNewEncryptingLayoutForTesting(std::nullopt);
+    struct RestoreLayout {
+        ~RestoreLayout() { vault::model::setNewEncryptingLayoutForTesting(vault::model::StorageLayout::PathV0); }
+    } restoreLayout;
+
     // 30 days: asked for once, when the profile is set (the cost can't be estimated before the buckets exist).
     gw::CreateProfile req{.name = profileName(), .api_key = keyId, .encrypt_upstream = true,
                           .sync_strategy = std::string("cache"), .conflict_policy = std::string("keep_local"),

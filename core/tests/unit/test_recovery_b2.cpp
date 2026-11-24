@@ -25,6 +25,7 @@
 #include "recovery/provider/Capabilities.hpp"
 #include "recovery/provider/Policy.hpp"
 #include "recovery/provider/State.hpp"
+#include "auth/stepup/StepUp.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/Manager.hpp"
 #include "storage/s3/provider/admin/Admin.hpp"
@@ -92,9 +93,12 @@ protected:
         storage::upstream::guard::reload();
         vh::recovery::cost::setCatalogStoreForTesting(test_support::recovery_pricing::catalogStore());
         pol::setReadBackForTesting(6, std::chrono::milliseconds(0));
+        // New encrypting vaults get opaque_v1, as outside tests (gtest_main makes the suite default path_v0).
+        vault::model::setNewEncryptingLayoutForTesting(std::nullopt);
     }
 
     void TearDown() override {
+        vault::model::setNewEncryptingLayoutForTesting(vault::model::StorageLayout::PathV0);
         padmin::setFactoryForTesting(std::nullopt);
         storage::upstream::provision::setObjectHeadForTesting({});
         vh::recovery::cost::setCatalogStoreForTesting(nullptr);
@@ -475,6 +479,32 @@ TEST_F(RecoveryB2Test, AForeignRuleThatDeletesSoonerIsReported) {
     EXPECT_EQ(st.provider.foreign_noncurrent_rules[0], "b2:(all files): 7 days");
     EXPECT_TRUE(has(st.warnings, "sooner than Vaulthalla's retention"));
     EXPECT_TRUE(has(st.warnings, ".vaulthalla/")) << "and it reaches the opaque vault's manifest";
+}
+
+TEST_F(RecoveryB2Test, DeletingProviderHistoryIsADataDestroyStepUp) {
+    const auto v = legacyManagedVault();
+    namespace su = auth::stepup;
+    {
+        // An agent can't produce a step-up: history off on a bucket that keeps everything is refused, nothing is sent.
+        const su::Scope agent(su::Channel::Agent);
+        const auto calls = callsOn(v.bucket);
+        try {
+            (void)rec::update(superUser, v.id, modeOff(true));
+            FAIL() << "an agent deleted provider history";
+        } catch (const ops::StepUpRequired& e) {
+            EXPECT_EQ(e.family, "data.destroy");
+        }
+        EXPECT_EQ(callsOn(v.bucket), calls);
+        EXPECT_EQ(retentionMode(v), "unset");
+        // What deletes nothing needs no step-up: keeping every version (indefinite).
+        EXPECT_NO_THROW((void)enable(v, kB2Forever));
+    }
+    {
+        // The host (vh over the unix socket) never prompts.
+        const su::Scope host(su::Channel::Host);
+        EXPECT_NO_THROW((void)rec::update(superUser, v.id, modeOff(true)));
+        EXPECT_EQ(retentionMode(v), "latest");
+    }
 }
 
 }
