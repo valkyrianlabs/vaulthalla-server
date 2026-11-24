@@ -1,3 +1,116 @@
+vaulthalla (1.26.0-1) unstable; urgency=high
+
+  * Backblaze B2 provider versioning (migration 156_b2_provider_versioning.sql:
+    upstream_bucket.noncurrent_retention_mode gains 'latest';
+    s3_gateway_upstream_profile.versioning, NULL = off). B2Admin reads and
+    writes lifecycle rules through B2's native API (b2_list_buckets with
+    bucketTypes ["all"], b2_update_bucket with ifRevisionIs = the revision
+    read, so a concurrent change is a 409 and nothing is written); Vaulthalla's
+    own rules are recorded in the bucket's bucketInfo["vaulthalla-lifecycle"]
+    and recognized only when a rule equals a recorded one; every other rule and
+    bucketInfo entry is written back as read. The application key needs
+    writeBuckets to set a rule.
+    - Recovery capability contract per provider
+      (recovery/provider/Capabilities.hpp, `capabilities` in
+      vault.recovery.status): AWS S3 as before; B2 always versioned, retention
+      N days / indefinite, history off, no enable, no suspend, restore by
+      transfer only (CopyObject from a version id isn't documented by
+      Backblaze); Cloudflare R2 nothing.
+    - B2 rules are scoped by layout: opaque_v1 → prefix "o/" and never a rule
+      under .vaulthalla/ (the version_log manifest keeps its older roots
+      there); transparent and path_v0 → the whole bucket plus
+      vaulthalla-manifest-versions.
+    - A bucket Vaulthalla creates on B2 keeps only the latest version (owned
+      rule daysFromHidingToDeleting 1, recorded 'latest'); an S3 gateway
+      upstream profile may set `versioning` off | <N>d | indefinite for the
+      buckets it creates (B2 only; AWS S3 and R2 profiles accept only off).
+      Mode off / local_snapshots on B2 rewrites the rule to the latest version,
+      with recovery_retention_shorten when that deletes history; adopted
+      buckets need the same acceptance, unmanaged ones accept_adoption,
+      protected ones are never touched.
+    - Provider versioning on B2: no PutBucketVersioning, no propagation window.
+      `vault.recovery.suspend` on B2 is invalid. `keepsHistory()` (backlog
+      replays) is false for a 'latest' bucket.
+    - `vault.recovery.update` carries step-up family data.destroy when the
+      provider would delete history sooner (AWS and B2): agents can no longer
+      shorten provider retention.
+    - `ops::upstream::detach` removes Vaulthalla's B2 rules too.
+      `vh upstream lifecycle` stays refused on B2.
+  * Sync: passes run on their own pool (ThreadPoolManager::syncPassPool,
+    sync.max_concurrent_passes, default 4) and their operations on the sync
+    pool (sync.worker_threads, default one per CPU core, 4..64; 12 on 12 cores,
+    was 6 shared with the passes). Six passes due together held every worker of
+    the shared pool while waiting on operations queued behind them, and
+    upstream sync hung for good (every release up to 1.25.0).
+  * Sync: every regular pass is rescheduled however it ends (Local::finishRun,
+    a scope guard in Local and Cloud): SUCCESS and STALLED after the interval,
+    ERROR with backoff (interval x 2^(n-1), at most max(interval, 1 h)), reset
+    by a success; scoped, interrupted and replaced tasks are not. Exceptions
+    from startTask and the event save are logged and no longer leave
+    runningFlag set. A stage that fails ends the pass; key-rotation exceptions
+    are recorded as errors.
+  * Sync: the uploads and remote deletes that succeeded are recorded in the
+    remote index and manifest once however execution ends (Cloud::sync: normal
+    return, failed operations, a request-budget stop after a phase, any
+    exception; Cloud::completedActions, filled per phase by Executor::run
+    before the budget check, which also waits for the operations already handed
+    out when dispatching throws). A plan larger than the PUT budget converges
+    over passes instead of re-uploading the same objects. Operations refused by
+    the budget are not errors: one warning, the pass is STALLED
+    (Local::processFutures, the Upload/Download/Delete tasks).
+  * Sync planner: a file and its remote object of the same size whose content
+    hashes match, or that neither changed since their baseline, are in sync and
+    plan nothing. They used to go on to RemotePolicy::decideForBoth, which
+    answers mirror + keep_local with Upload and mirror + keep_remote with
+    Download unconditionally, so every non-opaque mirrored vault (transparent
+    and path_v0, e.g. S3 gateway buckets of a mirror/keep_local upstream
+    profile) transferred every file on every pass. opaque_v1 was spared by its
+    generation check. Existing index rows and baselines suffice: no backfill.
+  * Sync events: sync_event.upsert and sync_throughput.upsert/accumulate cast
+    their counter parameters to bigint (a pass over 2 GiB failed with "out of
+    range for type integer"); Engine::newSyncEvent no longer fails a pass when
+    the previous event cannot be saved.
+  * Database: database.pool_size is honoured (Transactions::initFromConfig,
+    clamped to 4..256 with a warning; default 24, was ignored in favour of 4),
+    with a startup warning below sync.worker_threads +
+    sync.max_concurrent_passes. Row mappers read parent chains in the caller's
+    transaction (files/directories/symlinks_from_pq_res(res, txn)), so a
+    listing holds one pooled connection instead of waiting for a second.
+  * vh vault sync info prints the stored last sync and last success times; the
+    engine's copy of the policy is updated when a pass starts and succeeds.
+  * Vault read grants (migration 155_vault_read_grants.sql:
+    read_grant_recipient, vault_read_grant, vault_read_grant_recipient,
+    permission vault.sync.action.read_grants = sync action bit 3, bit 11 of
+    sync_permissions, granted to no role). ops::read_grants issues, for one
+    vault, a read-only S3 gateway credential (vault-allowlist, built-in reader
+    role, principal = the issuer) and a read-only upstream key restricted to
+    the vault's bucket, and returns both in one JSON document only as an
+    OpenPGP message encrypted to one or two pinned recipients. Nothing secret
+    is stored, logged or audited; a failed upstream key or encryption rolls the
+    gateway credential back; revoke deletes both and stays
+    revocation_incomplete (retryable) while the provider refuses.
+    - Backblaze B2 read keys (B2Admin::createReadKey / deleteReadKey): native
+      b2_authorize_account (v4), b2_list_buckets, b2_create_key with
+      capabilities listBuckets, listFiles, readFiles and bucketIds = [the
+      bucket], b2_delete_key. The account key needs writeKeys. AWS S3 and
+      Cloudflare R2: not supported yet (AdminClient::supportsReadKeys).
+    - Recipients are OpenPGP public keys pinned by full fingerprint (file/stdin
+      through vh, or a keyserver by fingerprint; the key must hash to it);
+      super admins only, step-up family secrets, agents refused. Revoked,
+      expired and sign-only keys are refused.
+    - OpenPGP through the system gpg (crypto/openpgp/Gpg): throwaway --homedir,
+      --no-options --no-autostart --batch, recipients by --recipient-file,
+      plaintext over a socket on stdin. New runtime dependency: Debian Depends
+      gpg; macOS cask depends_on formula gnupg; Brewfile gnupg for the tests.
+    - Config vaults.read_grants.{max_per_vault (1..32, default 4),
+      gateway_endpoint} (config.yaml only).
+    - CLI: `vh vault read-grant issue|list|show|revoke` and
+      `vh vault read-grant recipient list|add|remove`; recipient add/remove are
+      MCP exclusions. `ops::api_keys::remove` refuses a key with grants that
+      are not revoked.
+
+ -- Cooper Larson <cooper@valkyrianlabs.com>  Tue, 24 Nov 2026 21:41:39 +0000
+
 vaulthalla (1.25.0-1) unstable; urgency=high
 
   * Upstream: Backblaze B2 provider administration over B2's S3-compatible API
