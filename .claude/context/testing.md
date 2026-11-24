@@ -427,6 +427,11 @@ Dev mode requires both `VH_BUILD_MODE=dev` and the gitignored `enable_dev_mode` 
 ## Other harnesses
 
 - `tools/smoke/s3_gateway_{e2e,merge_ready,scoped_budget_smoke}.sh`: S3 gateway smoke runs against a live install.
+- `tools/smoke/s3_gateway_list_paging.py`: read-only boto3 paginator check of one gateway bucket (byte order, no
+  repeated token, v1 = v2 = StartAfter paging, Delimiter=/ fold); endpoint and credentials from the environment. Also
+  run by `S3GatewayDbTest.Boto3PaginatorsListABucketLargerThanOnePage` against an in-process gateway (no install).
+  Listing order only differs from byte order on a non-C cluster: dev (en_US.UTF-8) shows it, the macOS test cluster
+  (`--locale=C`) can't.
 - `tools/e2e/{load_env.sh,provision_e2e_user.sh}` + `web/tests/e2e` (Playwright). MFA (#405): the e2e account is an
   admin, so provisioning gives it a TOTP factor before any worker starts (`tools/e2e/enroll_totp.py`: the real ws
   sign-in through `tools/lab/mfa.py`, the seed in `$RESULT_DIR/totp-<user>.json`, 0600, exported as

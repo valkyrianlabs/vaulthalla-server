@@ -113,18 +113,26 @@ struct ObjectState {
     std::optional<uint32_t> part_count;
 };
 
+// One page of a bucket's keys (Gateway::listObjectStates), in S3's order: ascending UTF-8 bytes of the key, whatever
+// the database's collation is. Every comparison of the listing (the sort, the place a page starts, the roll-up into
+// common prefixes) is that one byte comparison, so a page boundary can't skip or repeat a key.
 struct ObjectListParams {
     std::string prefix;
-    std::optional<std::string> delimiter;
-    std::optional<std::string> start_after;
-    std::optional<std::string> continuation_token;
-    uint32_t max_keys{1000};
+    std::optional<std::string> delimiter;   // empty: none
+    // The page starts strictly after this position: a key (StartAfter, the v1 Marker; it need not exist) or the
+    // last item of the page before (ObjectListResult::next_after). With a delimiter, a position that is itself a
+    // common prefix of this listing skips every key under it; any other position names a key, and keys after it
+    // still roll up into their common prefix, even the one the position lies in.
+    std::optional<std::string> after;
+    uint32_t max_keys{1000};                // capped at 1000; 0 answers an empty page
 };
 
 struct ObjectListResult {
-    std::vector<ObjectState> objects;
-    std::vector<std::string> common_prefixes;
-    std::optional<std::string> next_continuation_token;
+    std::vector<ObjectState> objects;           // ascending
+    std::vector<std::string> common_prefixes;   // ascending; with `objects`, at most max_keys items
+    // The last item of a truncated page, a key or a common prefix: the next page's ObjectListParams::after. The S3
+    // layer hands it out as NextMarker (v1) or wrapped in a continuation token (v2, protocols/s3/Listing.hpp).
+    std::optional<std::string> next_after;
     bool is_truncated{};
 };
 
