@@ -1,5 +1,16 @@
 # Vaulthalla release notes
 
+<!-- vl-release:entry version=1.26.2 -->
+## 1.26.2 — Faster Vaulthalla upgrades on macOS
+
+_Released 2026-11-24_
+
+### macOS
+
+- Upgrading or uninstalling the `vaulthalla-server` cask no longer spends about 25 seconds removing the previous
+  version's files: they are deleted in batches instead of one at a time. The "Waiting for … to stop" message now
+  appears only when a service really takes more than a couple of seconds to stop, instead of on almost every run.
+
 <!-- vl-release:entry version=1.26.1 -->
 ## 1.26.1 — Connection health no longer warns about signed-in device sessions
 
