@@ -180,11 +180,12 @@ TEST_F(ShellServerTest, IdleClientDoesNotBlockOtherClients) {
     ASSERT_GE(active, 0);
     sendRequest(active, "version");
 
-    const auto first = readFrame(active, 3s);
+    // The bug is an indefinite hang, so a generous wait checks the same thing without failing on a busy runner.
+    const auto first = readFrame(active, 10s);
     ASSERT_TRUE(first.has_value()) << "second client got no reply while the first was idle";
     if (!isGroupDenial(*first)) {
         EXPECT_EQ(first->value("type", ""), "hello");
-        const auto result = readFrame(active, 5s);
+        const auto result = readFrame(active, 10s);
         ASSERT_TRUE(result.has_value());
         EXPECT_EQ(result->value("type", ""), "result");
         EXPECT_EQ(result->value("exit_code", -1), 0);
