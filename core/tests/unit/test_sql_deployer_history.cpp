@@ -1443,7 +1443,8 @@ TEST_F(SqlDeployerHistoryDb, DeviceScopeMigration152KeepsEveryDeviceUnscoped) {
 // 153 (Backblaze B2 identity) on a 152-era database: B2 buckets recorded as 's3:backblaze-b2', or under another
 // generic label with a B2 S3 endpoint as their account, become 'backblaze-b2' with everything else unchanged, so their
 // protection locks and bindings still match what a B2 key resolves to. Other providers' rows and the audit history
-// are left alone, a lock is never lost to a collision, and running it again changes nothing.
+// are left alone, a bucket recorded under several generic labels gets one row renamed (no unique-key collision), a lock
+// is never lost to a collision, and running it again changes nothing.
 TEST_F(SqlDeployerHistoryDb, BackblazeIdentityMigration153KeepsEveryLockAndRecord) {
     inRolledBackTxn([](pqxx::work& txn) {
         txn.exec("DELETE FROM schema_migrations WHERE filename = '153_backblaze_b2_identity.sql'");
@@ -1475,6 +1476,13 @@ TEST_F(SqlDeployerHistoryDb, BackblazeIdentityMigration153KeepsEveryLockAndRecor
         // The same bucket recorded twice: unlocked as Backblaze B2, locked through a key saved as "Other".
         const auto twiceB2 = add("s3:backblaze-b2", host, "claude-test-153-twice", false, "adopted");
         const auto twiceOther = add("s3:other", host, "claude-test-153-twice", true);
+        // The same bucket under two generic labels and never as 's3:backblaze-b2': only one row can take the identity.
+        // The adopted record wins over the older unmanaged one, and the lock comes over from the row left behind.
+        const auto pairOther = add("s3:other", host, "claude-test-153-pair", true);
+        const auto pairMinio = add("s3:minio", host, "claude-test-153-pair", false, "adopted");
+        // Two plain records: the older one wins.
+        const auto tieOlder = add("s3:other", host, "claude-test-153-tie", false);
+        const auto tieNewer = add("s3:minio", host, "claude-test-153-tie", false);
         txn.exec("INSERT INTO upstream_audit (action, provider, account_ref, bucket, outcome) VALUES "
                  "('protect', 's3:backblaze-b2', $1, 'claude-test-153-locked', 'ok')", pqxx::params{host});
 
@@ -1497,8 +1505,15 @@ TEST_F(SqlDeployerHistoryDb, BackblazeIdentityMigration153KeepsEveryLockAndRecor
             EXPECT_EQ(row(twiceB2), (std::tuple{std::string("backblaze-b2"), host, std::string("claude-test-153-twice"),
                                                 std::string("adopted"), true, std::string("keep out")}));
             EXPECT_EQ(std::get<0>(row(twiceOther)), "s3:other") << "left as it was";
+            EXPECT_EQ(row(pairMinio), (std::tuple{std::string("backblaze-b2"), host, std::string("claude-test-153-pair"),
+                                                  std::string("adopted"), true, std::string("keep out")}));
+            EXPECT_EQ(row(pairOther), (std::tuple{std::string("s3:other"), host, std::string("claude-test-153-pair"),
+                                                  std::string("unmanaged"), true, std::string("keep out")}))
+                << "left as it was";
+            EXPECT_EQ(std::get<0>(row(tieOlder)), "backblaze-b2");
+            EXPECT_EQ(std::get<0>(row(tieNewer)), "s3:minio");
             EXPECT_EQ(txn.exec("SELECT count(*) FROM upstream_bucket WHERE provider = 'backblaze-b2' AND is_protected "
-                               "AND bucket LIKE 'claude-test-153-%'").one_field_ref().as<int>(), 3);
+                               "AND bucket LIKE 'claude-test-153-%'").one_field_ref().as<int>(), 4);
             EXPECT_EQ(txn.exec("SELECT provider FROM upstream_audit WHERE bucket = 'claude-test-153-locked'")
                           .one_field_ref().as<std::string>(), "s3:backblaze-b2") << "history is not rewritten";
         };

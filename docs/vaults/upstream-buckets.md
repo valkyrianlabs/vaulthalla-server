@@ -212,7 +212,8 @@ Creating never takes over an existing bucket:
    to another account (AWS and Backblaze B2 share bucket names across all accounts) is reported as taken, since there
    is nothing to adopt: choose another name.
 2. The provider must create it. "Already exists" or "already owned by you" is refused and nothing changes.
-3. The new bucket must be empty. If it isn't, creation stops, the bucket is left as it is and marked failed.
+3. The new bucket must be empty, with no old object versions or delete markers (Backblaze B2 hide markers) either. If
+   it isn't, creation stops, the bucket is left as it is and marked failed.
 
 Only then is the bucket recorded as one Vaulthalla created, and the vault created and bound. A failure before that
 point (a timeout, a throttled request) leaves no claim on the name at all. If anything fails after the bucket was
