@@ -1,5 +1,6 @@
 #include "sync/tasks/Upload.hpp"
 #include "storage/CloudEngine.hpp"
+#include "storage/s3/Controller.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
 #include "log/Redact.hpp"
@@ -26,6 +27,10 @@ void Upload::operator()() {
         engine->upload(file);
         op->success = true;
         recordBaseline(engine, vh::sync::model::Baseline::afterUpload(*file));
+    } catch (const storage::s3::RequestBudgetExceeded& e) {
+        // Not done, not an error of its own: the pass stops as STALLED with the budget's reason (Local::processFutures).
+        log::Registry::sync()->debug("[UploadTask] Not uploaded (request budget): {} - {}", log::file(file->id, file->path),
+                                     e.what());
     } catch (const std::exception& e) {
         log::Registry::sync()->error("[UploadTask] Failed to upload file: {} - {}", log::file(file->id, file->path), e.what());
     }

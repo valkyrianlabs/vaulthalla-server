@@ -772,7 +772,7 @@ Config& Config::operator=(Config&&) noexcept = default;
         c.port = j.value("port", 5432);
         c.name = j.value("name", "vaulthalla");
         c.user = j.value("user", "vaulthalla");
-        c.pool_size = j.value("pool_size", 10);
+        c.pool_size = j.value("pool_size", DatabaseConfig{}.pool_size);
     }
 
     void to_json(nlohmann::json &j, const AuthConfig &c) {
@@ -883,6 +883,8 @@ Config& Config::operator=(Config&&) noexcept = default;
         j = {
             {"event_audit_retention_days", c.event_audit_retention_days},
             {"event_audit_max_entries", c.event_audit_max_entries},
+            {"worker_threads", c.worker_threads},
+            {"max_concurrent_passes", c.max_concurrent_passes},
             {"replicas", {{"experimental", c.replicas.experimental}}}
         };
     }
@@ -890,6 +892,9 @@ Config& Config::operator=(Config&&) noexcept = default;
     void from_json(const nlohmann::json &j, SyncConfig &c) {
         c.event_audit_retention_days = std::max(7, j.value("event_audit_retention_days", 30));
         c.event_audit_max_entries = std::max(1000, j.value("event_audit_max_entries", 10000));
+        // Absent from older clients' settings updates: unchanged.
+        c.worker_threads = j.value("worker_threads", c.worker_threads);
+        c.max_concurrent_passes = j.value("max_concurrent_passes", c.max_concurrent_passes);
         if (const auto r = j.find("replicas"); r != j.end() && r->is_object())
             c.replicas.experimental = r->value("experimental", false);
     }

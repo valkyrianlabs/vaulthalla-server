@@ -3793,6 +3793,7 @@
           ]
         },
         {
+          "description": "Pooled connections, read at startup; kept within 4..256.",
           "name": "pool_size",
           "required": true,
           "types": [
@@ -13703,6 +13704,26 @@
           "minimum": 0,
           "name": "event_audit_max_entries",
           "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Threads that run sync operations (uploads, downloads, deletes); 0: one per CPU core (at least 4, at most 64). Read at startup. Absent from older clients' settings updates: unchanged.",
+          "maximum": 256,
+          "minimum": 0,
+          "name": "worker_threads",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Sync passes that run at once, on threads of their own; 0: 4. Read at startup. Absent from older clients' settings updates: unchanged.",
+          "maximum": 64,
+          "minimum": 0,
+          "name": "max_concurrent_passes",
+          "required": false,
           "types": [
             "integer"
           ]
@@ -24292,7 +24313,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "49bc5a53d8c235066f23702dff4750f603c262b5b3c6e22c217fdceaf6db44cb",
+  "models_hash": "a2849dc9f75eed87c29f7e874f222944cd6106a78f44585ef8f446fa356c9d4d",
   "protocol": {
     "min": 1,
     "version": 1

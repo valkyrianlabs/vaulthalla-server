@@ -10,6 +10,7 @@
 #include <queue>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 #include <mutex>
 #include <shared_mutex>
 
@@ -60,6 +61,9 @@ public:
     static constexpr std::chrono::seconds kRegularWaitBound{30};
 
     void refreshEngines();
+
+    // The tasks waiting in the run queue, earliest first (tests and diagnostics).
+    [[nodiscard]] std::vector<std::shared_ptr<Local>> queuedTasks() const;
 
 protected:
     void runLoop() override;

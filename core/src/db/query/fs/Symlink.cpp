@@ -91,7 +91,7 @@ std::vector<Symlink::SymlinkPtr> Symlink::listSymlinksInDir(const unsigned int p
             ? txn.exec(pqxx::prepped{"list_symlinks_in_dir_by_parent_id_recursive"}, parentId)
             : txn.exec(pqxx::prepped{"list_symlinks_in_dir_by_parent_id"}, parentId);
 
-        return vh::fs::model::symlinks_from_pq_res(res);
+        return vh::fs::model::symlinks_from_pq_res(res, txn);
     });
 }
 

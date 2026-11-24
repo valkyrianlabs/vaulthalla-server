@@ -108,7 +108,7 @@ void Controller::runLoop() {
         }
 
         if (!task || task->isInterrupted()) continue;
-        ThreadPoolManager::instance().syncPool()->submit(task);
+        ThreadPoolManager::instance().syncPassPool()->submit(task);
     }
 }
 
@@ -177,13 +177,24 @@ Controller::ScopedResult Controller::runScoped(const unsigned int vaultId, std::
         // The task owns the lease from here: it releases it when it runs, or when it is destroyed unrun (a pool that
         // drops queued work while stopping).
         task->adoptPassLease();
-        ThreadPoolManager::instance().syncPool()->submit(task);
+        ThreadPoolManager::instance().syncPassPool()->submit(task);
     } catch (...) {
         releasePass(vaultId);
         throw;
     }
     log::Registry::sync()->debug("[SyncController] Scoped (event) sync started for vault ID: {}", vaultId);
     return ScopedResult::Started;
+}
+
+std::vector<std::shared_ptr<Local>> Controller::queuedTasks() const {
+    auto copy = [&] {
+        std::scoped_lock lock(pqMutex_);
+        return pq;
+    }();
+    std::vector<std::shared_ptr<Local>> out;
+    out.reserve(copy.size());
+    for (; !copy.empty(); copy.pop()) out.push_back(copy.top());
+    return out;
 }
 
 bool Controller::tryAcquirePass(const unsigned int vaultId) {
@@ -239,7 +250,12 @@ void Controller::pruneStaleTasks(const std::vector<std::shared_ptr<Engine> >& en
         for (const auto& [id, task] : taskMap_)
             if (!live.contains(task->vaultId())) staleIds.push_back(id);
 
-        for (auto id : staleIds) taskMap_.erase(id);
+        // Interrupted, so a queued or running task of a vault that is gone is not rescheduled (every outcome
+        // reschedules a regular task otherwise).
+        for (auto id : staleIds) {
+            if (const auto& task = taskMap_[id]) task->interrupt();
+            taskMap_.erase(id);
+        }
     }
 }
 

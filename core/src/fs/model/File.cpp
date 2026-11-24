@@ -8,6 +8,8 @@
 
 #include <nlohmann/json.hpp>
 #include <pqxx/result>
+#include <pqxx/transaction_base>
+#include <unordered_map>
 #include <regex>
 #include <pugixml.hpp>
 #include <algorithm>
@@ -77,12 +79,16 @@ void vh::fs::model::to_json(nlohmann::json& j, const std::vector<std::shared_ptr
     for (const auto& file : files) j.push_back(*file);
 }
 
-std::vector<std::shared_ptr<File>> vh::fs::model::files_from_pq_res(const pqxx::result& res) {
+std::vector<std::shared_ptr<File>> vh::fs::model::files_from_pq_res(const pqxx::result& res, pqxx::transaction_base& txn) {
     std::vector<std::shared_ptr<File>> files;
+    files.reserve(res.size());
+    std::unordered_map<unsigned int, pqxx::result> chains;
     for (const auto& row : res) {
         if (const auto parentId = row["parent_id"].as<std::optional<unsigned int>>()) {
-            const auto parentChain = db::query::fs::Entry::collectParentChain(*parentId);
-            files.push_back(std::make_shared<File>(row, parentChain));
+            auto chain = chains.find(*parentId);
+            if (chain == chains.end())
+                chain = chains.emplace(*parentId, db::query::fs::Entry::collectParentChain(txn, *parentId)).first;
+            files.push_back(std::make_shared<File>(row, chain->second));
         } else files.push_back(std::make_shared<File>(row, pqxx::result{}));
     }
     return files;

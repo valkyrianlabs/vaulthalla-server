@@ -127,10 +127,26 @@ std::vector<Action> Planner::build(
             }
 
             if (!Cloud::hasPotentialConflict(L, R, false)) {
-                // Same content (size and hash agree, or no hash to disagree): both sides are in sync for conflict
-                // purposes. An open conflict on it converged on its own. Metadata-only differences still go through
-                // decideForBoth below, as before.
-                ctx->noteInSync(*L, *R);
+                // Same size, and no hash disagrees. When that is proof the object already holds this content (the
+                // hashes match: the index row is this file's own upload, or the manifest's copy of it), or neither
+                // side changed since they last agreed (a hashless row from a LIST, an inventory or an event, against
+                // the baseline), there is nothing to transfer under any strategy or policy. decideForBoth used to be
+                // asked anyway, and it answers mirror + keep_local with an upload (keep_remote with a download)
+                // unconditionally: a mirrored vault outside opaque_v1 sent every object again on every pass.
+                const bool sameHash = L->content_hash && R->content_hash && *L->content_hash == *R->content_hash;
+                const auto* base = ctx->hasOpenConflict(L->id) ? nullptr : ctx->baselineFor(L->id);
+                // An event said the object was overwritten (#96): a same-size overwrite reads as unchanged against
+                // a hashless row, so only matching hashes count then.
+                const bool remoteSaidChanged = ctx->scope && ctx->scope->changed.contains(k.rel);
+                const auto divergence = base && !remoteSaidChanged ? classify(*L, *R, base) : Divergence::Unknown;
+                if (sameHash || divergence == Divergence::InSync) {
+                    ctx->noteInSync(*L, *R);
+                    continue;
+                }
+                // Never compared before (or an open conflict): agreed for conflict purposes, as before; the policy
+                // decides below. A side that changed since the baseline (same size, nothing to compare the content
+                // by) keeps its baseline, so a failed transfer is planned again, and is decided by the policy too.
+                if (divergence == Divergence::Unknown) ctx->noteInSync(*L, *R);
             } else {
                 // Compared with what both sides were at their last sync (#187). Neither side changed since: nothing
                 // to transfer under any policy (#190). files.content_hash hashes the sealed bytes, so a file this

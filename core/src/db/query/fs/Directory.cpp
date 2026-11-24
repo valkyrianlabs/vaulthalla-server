@@ -239,7 +239,7 @@ std::vector<Directory::DirPtr> Directory::listDirectoriesInDir(const unsigned in
             ? txn.exec(pqxx::prepped{"list_dirs_in_dir_by_parent_id_recursive"}, parentId)
             : txn.exec(pqxx::prepped{"list_dirs_in_dir_by_parent_id"}, parentId);
 
-        return vh::fs::model::directories_from_pq_res(res);
+        return vh::fs::model::directories_from_pq_res(res, txn);
     });
 }
 

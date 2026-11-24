@@ -124,6 +124,10 @@ Cloud::~Cloud() {
 }
 
 void Cloud::operator()() {
+    // Replaced (runNow, a new engine) or stopped while it waited on the pass pool: its successor runs instead. (A
+    // scoped pass is never interrupted; one dropped unrun reports through ~Cloud.)
+    if (!scope && isInterrupted()) return;
+
     // One pass per vault at a time (#96): a regular pass waits while an event-scoped pass runs, and the reverse.
     // runScoped() takes the lease before it submits a scoped pass; a regular pass takes it here. A regular pass that
     // has to wait says so, and the event applier yields to it.
@@ -138,10 +142,23 @@ void Cloud::operator()() {
     if (!scope && controller) controller->clearRegularWaiting(vaultId());
     const PassLease lease{vaultId(), controller != nullptr};
 
-    startTask();
+    // However the pass ends (an exception anywhere, startTask and the event save included): not running any more,
+    // the event saved, a regular task rescheduled (finishRun), then a scoped pass's completion reported. Declared
+    // after the lease, so it runs while the lease is still held.
+    struct Finish {
+        Cloud& pass;
+        explicit Finish(Cloud& p) : pass(p) {}
+        Finish(const Finish&) = delete;
+        Finish& operator=(const Finish&) = delete;
+        ~Finish() {
+            pass.finishRun();
+            pass.reportScopedFinish();
+        }
+    } const finish(*this);
 
     std::shared_ptr<CloudEngine> cloud;
     try {
+        startTask();
         cloud = cloudEngine();
         // The remote access gate (storage/RemoteAccess.hpp): a restricted vault's pass is skipped before any request,
         // so it prevents failures instead of retrying them. Local writes and deletes stay pending and go up on the
@@ -156,17 +173,15 @@ void Cloud::operator()() {
         loadRemovedKeys();
 
         // A scoped pass reconciles the named keys only: the vault-wide maintenance (at-rest repair, trash purge,
-        // key rotation) stays with the regular pass.
+        // key rotation) stays with the regular pass. The bins are cleared below however the stages end.
         const Stage regularStages[] = {
             {"shared",   [this]{ processSharedOps(); }},
             {"initBins", [this]{ initBins(); }},
             {"sync",     [this]{ sync(); }},
-            {"clearBins",[this]{ clearBins(); }},
         };
         const Stage scopedStages[] = {
             {"initBins", [this]{ initScopedBins(); }},
             {"sync",     [this]{ sync(); }},
-            {"clearBins",[this]{ clearBins(); }},
         };
 
         if (scope) runStages(scopedStages);
@@ -200,28 +215,39 @@ void Cloud::operator()() {
         event->error_message.clear();
     } catch (const std::exception& e) {
         if (cloud) event->applyS3RequestMetrics(cloud->s3RequestMetrics());
+        log::Registry::sync()->error("[CloudSync] Sync pass for vault {} stopped by an exception: {}", vaultId(), e.what());
         handleError(fmt::format("[CloudSync] {}", e.what()));
     } catch (...) {
         if (cloud) event->applyS3RequestMetrics(cloud->s3RequestMetrics());
+        log::Registry::sync()->error("[CloudSync] Sync pass for vault {} stopped by an unknown exception", vaultId());
         handleError("[CloudSync] Unknown exception");
     }
 
     // A full LIST rebuilt the index but the pass stopped before publishing it (failed operations, an error or a stall
     // after initBins): publish it now, as the post-LIST publish did. No-op otherwise.
-    if (cloud) cloud->publishPendingRemoteIndexManifest();
+    try {
+        if (cloud) cloud->publishPendingRemoteIndexManifest();
+    } catch (const std::exception& e) {
+        log::Registry::sync()->error("[CloudSync] Vault {}: the rebuilt remote index was not published: {}", vaultId(),
+                                     e.what());
+    } catch (...) {
+        log::Registry::sync()->error("[CloudSync] Vault {}: the rebuilt remote index was not published", vaultId());
+    }
+    clearBins();
+}
 
-    shutdown();
-
-    if (scope && scope->on_finish) {
+void Cloud::reportScopedFinish() noexcept {
+    if (!scope || !scope->on_finish) return;
+    try {
         const bool ok = event && event->status == Event::Status::SUCCESS && event->num_failed_ops == 0;
         std::string why;
         if (event && !ok) why = !event->stall_reason.empty() ? event->stall_reason : event->error_message;
         if (!ok && why.empty()) why = "scoped sync pass did not complete";
-        try {
-            scope->on_finish(ok, why);
-        } catch (const std::exception& e) {
-            log::Registry::sync()->error("[CloudSync] Vault {}: scoped pass completion handler failed: {}", vaultId(), e.what());
-        }
+        scope->on_finish(ok, why);
+    } catch (const std::exception& e) {
+        log::Registry::sync()->error("[CloudSync] Vault {}: scoped pass completion handler failed: {}", vaultId(), e.what());
+    } catch (...) {
+        log::Registry::sync()->error("[CloudSync] Vault {}: scoped pass completion handler failed", vaultId());
     }
 }
 
@@ -238,6 +264,7 @@ std::vector<Action> Cloud::planPass(S3CostEstimate* planningNotes) {
 
 void Cloud::sync() {
     const auto self = std::static_pointer_cast<Cloud>(shared_from_this());
+    completedActions.clear();
     S3CostEstimate planningNotes;
     const auto plan = planPass(&planningNotes);
     auto estimate = Planner::estimateS3Cost(plan, opaque);
@@ -350,18 +377,47 @@ void Cloud::sync() {
         estimate.remote_index_objects,
         estimate.archive_tier_downloads_skipped);
     bool remoteExecutionStarted = false;
+    // The operations that succeeded are recorded (remote index, manifest) once, however execution ends: a normal
+    // return, failed operations, the request budget running out after a phase, any exception. The next pass then
+    // plans only what is left; a vault with more to upload than one pass's budget converges over several passes
+    // instead of uploading the same first objects every time. A failed or refused operation never reaches the
+    // index, and a manifest names an object only through it.
+    bool recorded = false;
+    const auto recordCompleted = [&](const bool everyOperationSucceeded) {
+        if (recorded) return;
+        recorded = true;
+        if (everyOperationSucceeded) {
+            cloud->applyRemoteIndexMutation(plan);
+            return;
+        }
+        if (completedActions.empty()) return;
+        log::Registry::sync()->info("[CloudSync] Vault {}: recording the {} remote change(s) that completed",
+                                    engine->vault->id, completedActions.size());
+        cloud->applyRemoteIndexMutation(completedActions);
+    };
     try {
         remoteExecutionStarted = true;
         Executor::run(self, plan);
         event->computeDashboardStats();
-        if (event->num_failed_ops == 0)
-            cloud->applyRemoteIndexMutation(plan);
+        recordCompleted(event->num_failed_ops == 0);
         budgetService.commit(
             budgetDecision.reservations,
             budgetPriceEstimate.available
                 ? std::make_optional(budgetPriceEstimate.estimated_cost)
                 : std::optional<std::string>{});
     } catch (...) {
+        // What completed before the stop is recorded; a failure to record (the budget may refuse the manifest PUT
+        // too) is logged and never hides why the pass stopped. Index rows written before it stay.
+        try {
+            if (remoteExecutionStarted) recordCompleted(false);
+        } catch (const std::exception& e) {
+            log::Registry::sync()->warn("[CloudSync] Vault {}: recording the remote changes completed before the pass "
+                                        "stopped did not finish (what reached the index stays; the next pass publishes "
+                                        "it): {}", engine->vault->id, e.what());
+        } catch (...) {
+            log::Registry::sync()->warn("[CloudSync] Vault {}: recording the remote changes completed before the pass "
+                                        "stopped did not finish", engine->vault->id);
+        }
         // Once the executor starts, remote writes may already have happened; committing
         // the reservation is intentionally conservative for the shared budget ledger.
         if (remoteExecutionStarted) budgetService.commit(budgetDecision.reservations, std::nullopt);
@@ -551,6 +607,7 @@ void Cloud::clearBins() {
     baselines.clear();
     openConflicts.clear();
     conflictWrites = {};
+    completedActions.clear();
 }
 
 // ##########################################

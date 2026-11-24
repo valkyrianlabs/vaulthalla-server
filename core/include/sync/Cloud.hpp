@@ -26,6 +26,9 @@ namespace vh::sync {
         std::vector<std::shared_ptr<fs::model::File> > localFiles, s3Files;
         std::unordered_map<std::u8string, std::shared_ptr<fs::model::File> > localMap, s3Map;
         std::unordered_map<std::u8string, std::optional<std::string> > remoteHashMap;
+        // The plan's remote changes (uploads, remote deletes) whose operation reported success (Executor::run): what
+        // a pass with some failed operations still records in the remote index and the manifest.
+        std::vector<model::Action> completedActions;
 
         // Conflict state for this pass (#187): loaded with the bins, decided by the planner, written by
         // flushConflictState() before anything executes.
@@ -97,6 +100,8 @@ namespace vh::sync {
         // ##########################################
 
         void operator()() override;
+        // A scoped pass's on_finish, after finishRun() (never throws).
+        void reportScopedFinish() noexcept;
 
         // ##########################################
         // ############# Sync Operations ############

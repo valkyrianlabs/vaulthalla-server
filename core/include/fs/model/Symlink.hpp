@@ -22,5 +22,6 @@ namespace vh::fs::model {
 
     void to_json(nlohmann::json &j, const std::vector<std::shared_ptr<Symlink> > &symlinks);
 
-    std::vector<std::shared_ptr<Symlink> > symlinks_from_pq_res(const pqxx::result &res);
+    // Parent chains read in `txn` (see files_from_pq_res).
+    std::vector<std::shared_ptr<Symlink> > symlinks_from_pq_res(const pqxx::result &res, pqxx::transaction_base &txn);
 }

@@ -61,7 +61,7 @@ std::vector<std::shared_ptr<::vh::fs::model::File>> FormatConversion::legacyFile
             "WHERE f.content_format = 'gcm0' AND fs.vault_id = $1 AND f.encrypted_with_key_version = $2 "
             "AND f.fs_entry_id > $3 ORDER BY f.fs_entry_id LIMIT $4",
             pqxx::params{vaultId, keyVersion, afterId, i64(limit)});
-        return ::vh::fs::model::files_from_pq_res(res);
+        return ::vh::fs::model::files_from_pq_res(res, txn);
     });
 }
 

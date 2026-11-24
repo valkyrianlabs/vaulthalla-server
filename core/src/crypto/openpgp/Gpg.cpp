@@ -1,5 +1,6 @@
 #include "crypto/openpgp/Gpg.hpp"
 
+#include "fs/ops/file.hpp"
 #include "platform/Fd.hpp"
 
 #include <fmt/format.h>
@@ -20,7 +21,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <fstream>
+#include <span>
 #include <sstream>
 
 namespace vh::crypto::openpgp {
@@ -417,11 +418,10 @@ std::string encrypt(const std::string_view plaintext, const std::vector<std::str
         args.emplace_back(a);
     for (std::size_t i = 0; i < armoredKeys.size(); ++i) {
         const auto file = home.path() / ("recipient-" + std::to_string(i) + ".asc");
-        {
-            std::ofstream outFile(file, std::ios::binary | std::ios::trunc);
-            outFile << armoredKeys[i];
-            if (!outFile) throw std::runtime_error("could not write a recipient key for gpg");
-        }
+        // A public key (inspect() above refused anything holding secret material), created exclusively with mode 0600
+        // in the 0700 throwaway home: never an existing name, never the plaintext (that goes over stdin only).
+        const auto& key = armoredKeys[i];
+        ::vh::fs::ops::writeFileExclusive(file, std::span(reinterpret_cast<const uint8_t*>(key.data()), key.size()), 0600);
         args.emplace_back("--recipient-file");
         args.push_back(file.string());
     }

@@ -142,7 +142,7 @@ void waitForShutdownSignal() {
 // --- Core Init ---
 
 void initDB() {
-    vh::db::Transactions::init();
+    vh::db::Transactions::initFromConfig(Registry::get().database.pool_size);
     vh::db::seed::init_tables_if_not_exists();
     vh::db::Transactions::dbPool_->initPreparedStatements();
 
@@ -238,7 +238,21 @@ void stopRuntime() {
 void startVaulthalla() {
     const auto log = vh::log::Registry::vaulthalla();
 
-    ThreadPoolManager::instance().init();
+    const auto& syncConfig = Registry::get().sync;
+    ThreadPoolManager::instance().init({.syncWorkers = syncConfig.worker_threads,
+                                        .syncPasses = syncConfig.max_concurrent_passes});
+    {
+        const auto workers = ThreadPoolManager::syncWorkersFor(syncConfig.worker_threads,
+                                                               std::thread::hardware_concurrency());
+        const auto passes = ThreadPoolManager::syncPassesFor(syncConfig.max_concurrent_passes);
+        log->info("[*] Sync: {} operation thread(s), {} concurrent pass(es)", workers, passes);
+        // Every sync thread may need a connection for a moment; the listeners and FUSE need theirs too.
+        const auto poolSize = vh::db::DBPool::resolveSize(Registry::get().database.pool_size);
+        if (poolSize < workers + passes)
+            log->warn("[!] database.pool_size ({}) is below sync.worker_threads + sync.max_concurrent_passes ({}): sync "
+                      "operations will wait for database connections; raise it (PostgreSQL max_connections permitting)",
+                      poolSize, workers + passes);
+    }
 
     // Before anything is written under it (sealed secrets, vault bytes, upload staging): only the daemon's uid may
     // traverse the backing tree. Fail closed: no secrets or storage without that boundary. (A no-op on Linux, where

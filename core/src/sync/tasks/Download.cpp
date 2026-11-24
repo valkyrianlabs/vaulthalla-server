@@ -1,5 +1,6 @@
 #include "sync/tasks/Download.hpp"
 #include "storage/CloudEngine.hpp"
+#include "storage/s3/Controller.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
 #include "log/Redact.hpp"
@@ -30,6 +31,9 @@ void Download::operator()() {
         }
         op->success = true;
         if (local) recordBaseline(engine, vh::sync::model::Baseline::afterDownload(*local, *file));
+    } catch (const storage::s3::RequestBudgetExceeded& e) {
+        log::Registry::sync()->debug("[DownloadTask] Not downloaded (request budget): {} - {}",
+                                     log::file(file->id, file->path), e.what());
     } catch (const std::exception& e) {
         log::Registry::sync()->error("[DownloadTask] Failed to download file: {} - {}", log::file(file->id, file->path), e.what());
     }
