@@ -229,4 +229,25 @@ std::string listParts(
     return out.str();
 }
 
+std::optional<std::string> unconfiguredBucketSubresource(const std::string_view subresource) {
+    std::string_view element;
+    std::string_view content;
+    if (subresource == "location") element = "LocationConstraint";
+    else if (subresource == "versioning") element = "VersioningConfiguration";
+    else if (subresource == "notification") element = "NotificationConfiguration";
+    else if (subresource == "logging") element = "BucketLoggingStatus";
+    else if (subresource == "accelerate") element = "AccelerateConfiguration";
+    else if (subresource == "requestPayment") {
+        element = "RequestPaymentConfiguration";
+        content = "<Payer>BucketOwner</Payer>";
+    } else return std::nullopt;
+
+    std::ostringstream out;
+    out << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        << "<" << element << " xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"";
+    if (content.empty()) out << "/>";
+    else out << ">" << content << "</" << element << ">";
+    return out.str();
+}
+
 } // namespace vh::protocols::s3::xml
