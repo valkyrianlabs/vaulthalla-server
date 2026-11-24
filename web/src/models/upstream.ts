@@ -25,7 +25,7 @@ export interface Capability {
 }
 
 export interface AccountIdentity {
-  provider: string // aws-s3 | cloudflare-r2
+  provider: string // aws-s3 | cloudflare-r2 | backblaze-b2
   account_ref: string
   principal: string
 }
@@ -231,5 +231,13 @@ export interface AuditEntry {
 }
 
 // Providers with an admin adapter (matches s3_provider_from_string spellings in core).
-export const ADMIN_PROVIDERS = ['AWS', 'Cloudflare R2'] as const
-export const supportsAdmin = (provider: string | null | undefined) => provider === 'AWS' || provider === 'Cloudflare R2'
+export const ADMIN_PROVIDERS = ['AWS', 'Cloudflare R2', 'Backblaze B2'] as const
+export const supportsAdmin = (provider: string | null | undefined) =>
+  (ADMIN_PROVIDERS as readonly string[]).includes(provider ?? '')
+
+// What a provider's admin adapter covers beyond buckets. Backblaze B2's S3-compatible API has no lifecycle or
+// event-notification calls (core refuses both for a B2 key), and a B2 account keeps its buckets in one region.
+export const adminFeatures = (provider: string | null | undefined) => {
+  const b2 = provider === 'Backblaze B2'
+  return { b2, lifecycle: !b2, events: !b2, region: !b2 }
+}

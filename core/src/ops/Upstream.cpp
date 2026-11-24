@@ -107,7 +107,7 @@ api_keys::APIKeyPtr withSecrets(const api_keys::APIKeyPtr& key) {
 }
 
 std::string unsupportedReason(const vault::model::APIKey& key) {
-    if (!padmin::supportsAdmin(key)) return "provider administration supports AWS S3 and Cloudflare R2 keys only";
+    if (const auto why = padmin::adminUnsupportedReason(key); !why.empty()) return why;
     if (!key.admin_enabled)
         return "API key '" + key.name + "' is not enabled for provider administration (vh upstream admin enable " +
                key.name + ")";
@@ -132,8 +132,21 @@ std::unique_ptr<padmin::AdminClient> adminClient(const api_keys::APIKeyPtr& key,
     return client;
 }
 
+// What Backblaze B2's S3-compatible API can't do for this key's buckets (nullptr: the provider has lifecycle rules).
+const char* lifecycleGap(const vault::model::APIKey& key) {
+    return key.provider == vault::model::S3Provider::BackblazeB2 ? padmin::kB2LifecycleUnsupported : nullptr;
+}
+
 // A provisioning region becomes part of a host name (AWS) or a CreateBucket body: only real values.
 void requireValidRegion(const vault::model::APIKey& key, const std::string& region) {
+    if (key.provider == vault::model::S3Provider::BackblazeB2) {
+        // A B2 account lives in one region, the one its endpoint names: nothing else can be asked for.
+        const auto own = padmin::b2EndpointRegion(key);
+        if (!storage::upstream::validB2Region(region) || !own || region != *own)
+            throw Invalid("a Backblaze B2 account keeps its buckets in one region" +
+                          (own ? ": this key creates them in " + *own : std::string{}) + ", not '" + region + "'");
+        return;
+    }
     if (key.provider == vault::model::S3Provider::CloudflareR2) {
         if (!storage::upstream::validR2LocationHint(region))
             throw Invalid("unknown R2 location hint '" + region + "' (wnam, enam, weur, eeur, apac, oc or auto)");
@@ -148,8 +161,10 @@ void requireValidRegion(const vault::model::APIKey& key, const std::string& regi
 BucketIdentity identityOf(const api_keys::APIKeyPtr& key, const std::string& bucket, const bool strict = true) {
     if (bucket.empty()) throw Invalid("bucket name is required");
     if (strict) {
+        // The provider's own rules (Backblaze B2: 6 characters or more, never "b2-…"), before any request names it.
         std::string why;
-        if (!storage::upstream::validBucketName(bucket, why)) throw Invalid("invalid bucket name '" + bucket + "': " + why);
+        if (!storage::upstream::validBucketNameFor(padmin::providerIdentity(*key), bucket, why))
+            throw Invalid("invalid bucket name '" + bucket + "': " + why);
     } else if (bucket.size() > 255 || std::ranges::any_of(bucket, [](const unsigned char c) {
                    return c <= 0x20 || c == 0x7f || c == '/' || c == '?' || c == '#' || c == '%' || c == '\\';
                })) {
@@ -279,6 +294,7 @@ BucketRow rowFor(const BucketIdentity& id, const std::optional<std::string>& reg
 }
 
 std::vector<std::string> lifecycleFields(const vault::model::APIKey& key) {
+    if (lifecycleGap(key)) return {};
     std::vector<std::string> out{"abort_incomplete_multipart_days", "expire_current_days"};
     if (key.provider == vault::model::S3Provider::AWS) out.emplace_back("expire_noncurrent_days");
     out.emplace_back("prefix");
@@ -375,6 +391,7 @@ std::string defaultRegion(const vault::model::APIKey& key) {
     auto region = key.region;
     if (key.provider == vault::model::S3Provider::AWS && (region.empty() || region == "auto")) return "us-east-1";
     if (key.provider == vault::model::S3Provider::CloudflareR2 && (region.empty() || region == "auto")) return {};
+    if (key.provider == vault::model::S3Provider::BackblazeB2) return padmin::b2EndpointRegion(key).value_or(std::string{});
     return region;
 }
 
@@ -614,6 +631,7 @@ Inspection inspect(const Actor& actor, const KeyRef& ref, const std::string& buc
 
 Inspection setLifecycle(const Actor& actor, const KeyRef& ref, const std::string& bucket, const LifecyclePatch& patch) {
     auto key = authorize(actor, ref, UpPerm::Configure, KeyPerm::Consume);
+    if (const auto* gap = lifecycleGap(*key)) throw Invalid(gap);
     const auto id = identityOf(key, bucket);
     requireUnprotected(actor, id, "lifecycle", key->id);
     const auto row = BucketQuery::getByIdentity(id.provider, *id.account_ref, id.bucket);
@@ -762,6 +780,12 @@ ProvisionTicket beginProvision(const Actor& actor, const unsigned int apiKeyId, 
     const bool aws = key->provider == vault::model::S3Provider::AWS;
 
     // Refuse what would fail later before anything exists upstream.
+    if (req.lifecycle)
+        if (const auto* gap = lifecycleGap(*key)) throw Invalid(gap);
+    if (req.events && !padmin::supportsEvents(*key))
+        throw Invalid(key->provider == vault::model::S3Provider::BackblazeB2
+                          ? std::string(padmin::kB2EventsUnsupported)
+                          : "event-driven sync supports AWS S3 and Cloudflare R2 vaults only");
     if (req.lifecycle) {
         if (req.lifecycle->expire_noncurrent_days && *req.lifecycle->expire_noncurrent_days > 0 && !aws)
             throw Invalid("this provider has no object versions: noncurrent-version expiration is not supported");
@@ -940,8 +964,9 @@ BucketRow detach(const Actor& actor, const KeyRef& ref, const std::string& bucke
     try {
         LifecyclePatch clear;
         clear.clear = true;
-        // Every vaulthalla-* rule goes: the owned rule and the manifest-versions rule file recovery manages.
-        lifecycleRemoved = applyLifecycle(*client, *key, bucket, clear, true);
+        // Every vaulthalla-* rule goes: the owned rule and the manifest-versions rule file recovery manages. A provider
+        // whose lifecycle Vaulthalla can't reach (Backblaze B2) never got a rule of ours: nothing to remove.
+        if (!lifecycleGap(*key)) lifecycleRemoved = applyLifecycle(*client, *key, bucket, clear, true);
     } catch (const NeedsConfirmation&) {
         throw;
     } catch (const std::exception& e) {

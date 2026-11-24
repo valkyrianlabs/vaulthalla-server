@@ -15,8 +15,9 @@
 
 // Provider administration for upstream S3 accounts (#237): buckets, lifecycle, event notifications and the queues
 // they feed (#96). One administrative API key per provider account does everything; Vaulthalla splits authority with
-// admin.upstream.* RBAC, not with extra cloud identities. AWS S3 and Cloudflare R2 have adapters; every other provider
-// answers adminSupport() == false and keeps working as plain vault storage.
+// admin.upstream.* RBAC, not with extra cloud identities. AWS S3, Cloudflare R2 and Backblaze B2 have adapters (B2 for
+// buckets only: its S3-compatible API has no lifecycle or event-notification calls); every other provider answers
+// supportsAdmin() == false and keeps working as plain vault storage.
 //
 // These are trusted primitives: they never authorize (ops::upstream does) and they never consult protection locks
 // themselves — storage::upstream::guard is called by the adapters for every bucket-scoped request before it is sent.
@@ -43,9 +44,9 @@ struct CapabilityMissing : std::runtime_error {
 };
 
 struct AccountIdentity {
-    std::string provider;        // providerIdentity(): "aws-s3" | "cloudflare-r2"
-    std::string account_ref;     // AWS 12-digit account, R2 32-hex account id
-    std::string principal;       // AWS caller ARN, R2 "r2-token" (never a secret)
+    std::string provider;        // providerIdentity(): "aws-s3" | "cloudflare-r2" | "backblaze-b2"
+    std::string account_ref;     // AWS 12-digit account, R2 32-hex account id, B2 the region's S3 endpoint host
+    std::string principal;       // AWS caller ARN, R2 "r2-token", B2 "b2-application-key" (never a secret)
 };
 
 // One capability probe result. `ok` false + `detail` says what the operator must grant.
@@ -92,6 +93,17 @@ struct VersioningState {
 inline constexpr const char* kR2VersioningUnsupported =
     "Cloudflare R2 has no object versioning (no version ids, noncurrent versions or delete markers); "
     "use local snapshots or local versioning for file recovery on R2";
+
+// What Backblaze B2's S3-compatible API leaves to its console and native API (probe details, CapabilityMissing).
+inline constexpr const char* kB2LifecycleUnsupported =
+    "Backblaze B2 lifecycle rules are set in the Backblaze console or its native API; its S3-compatible API has no "
+    "lifecycle calls, so Vaulthalla neither reads nor changes them";
+inline constexpr const char* kB2EventsUnsupported =
+    "Backblaze B2 event notifications are not available through its S3-compatible API; event-driven sync supports "
+    "AWS S3 and Cloudflare R2 vaults only";
+inline constexpr const char* kB2VersioningFixed =
+    "Backblaze B2 buckets always keep object versions and how long is set by B2 lifecycle rules (Backblaze console or "
+    "native API), so Vaulthalla can't turn versioning on or off, or set its retention, on B2";
 
 // Provider-neutral lifecycle rule. Only the fields both a provider and Vaulthalla support are exposed; adapters refuse
 // (Invalid via std::invalid_argument) a field their provider lacks (R2 has no noncurrent versions; neither exposes
@@ -153,7 +165,8 @@ struct ObjectPage {
 
 struct CreateBucketRequest {
     std::string name;
-    std::optional<std::string> region;          // AWS region; R2 location hint (wnam, enam, weur, eeur, apac, oc)
+    std::optional<std::string> region;          // AWS region; R2 location hint (wnam, enam, weur, eeur, apac, oc);
+                                                // B2: the key's own region or nothing (an account lives in one region)
 };
 
 // How many requests/bytes admin + queue calls cost, for diagnostics and budgets.
@@ -186,10 +199,15 @@ public:
     virtual void deleteBucket(const std::string& bucket) = 0;
 
     [[nodiscard]] virtual BucketConfiguration inspect(const std::string& bucket) = 0;
+    // Whether lifecycle rules can be read and written at all (B2: false — its S3-compatible API has none). When false,
+    // inspect() answers lifecycle_readable = false and putLifecycle throws CapabilityMissing("lifecycle", …) with
+    // nothing sent (name and guard still checked first).
+    [[nodiscard]] virtual bool supportsLifecycle() const { return true; }
     // Writes the full rule set: callers pass foreign rules back unchanged (merge happens in storage::upstream).
     virtual void putLifecycle(const std::string& bucket, const std::vector<LifecycleRule>& rules) = 0;
 
-    // Provider (native) object versioning. AWS: true. R2: false — it has none (kR2VersioningUnsupported).
+    // Provider (native) object versioning. AWS: true. R2: false — it has none (kR2VersioningUnsupported). B2: true,
+    // always on: versioning() reads it, putVersioning(Enabled) only confirms it and Suspended is CapabilityMissing.
     [[nodiscard]] virtual bool supportsVersioning() const = 0;
     // GetBucketVersioning (guarded). Throws ProviderError when the provider refuses (e.g. AccessDenied: the credential
     // lacks s3:GetBucketVersioning). Providers without versioning answer Unversioned without sending a request; this
@@ -281,7 +299,8 @@ public:
     [[nodiscard]] virtual Metrics metrics() const = 0;
 };
 
-// Factory. nullptr when the key's provider has no admin adapter. eventsFor throws CapabilityMissing for R2 without a
+// Factory. nullptr when the key's provider has no admin adapter (eventsFor: no events adapter, which includes
+// Backblaze B2). eventsFor throws CapabilityMissing for R2 without a
 // provider token (the message says which Cloudflare token to add). The key must carry its decrypted secret (and, for
 // R2 events, provider_token). Tests install fakes with setFactoryForTesting (honoured in test mode only). Clients are
 // not thread-safe: one per worker.
@@ -290,23 +309,36 @@ struct Factory {
     std::function<std::unique_ptr<EventsClient>(const std::shared_ptr<vault::model::APIKey>&)> events;
 };
 
+// AWS S3, Cloudflare R2, and Backblaze B2 keys whose endpoint is https://s3.<region>.backblazeb2.com. Never a key
+// managed storage issued (origin "cloud"): that bucket's account belongs to the service.
 [[nodiscard]] bool supportsAdmin(const vault::model::APIKey& key);
+// Event-driven sync (EventsClient): AWS S3 and Cloudflare R2 only.
+[[nodiscard]] bool supportsEvents(const vault::model::APIKey& key);
+// Why supportsAdmin(key) is false, for people ("" when it is true).
+[[nodiscard]] std::string adminUnsupportedReason(const vault::model::APIKey& key);
 [[nodiscard]] std::unique_ptr<AdminClient> adminFor(const std::shared_ptr<vault::model::APIKey>& key);
 [[nodiscard]] std::unique_ptr<EventsClient> eventsFor(const std::shared_ptr<vault::model::APIKey>& key);
 void setFactoryForTesting(std::optional<Factory> factory);
 
 // The provider part of a bucket identity: the profile id for providers with an admin adapter ("aws-s3",
-// "cloudflare-r2"), "s3:<lower-case provider name>" for the others ("s3:minio").
+// "cloudflare-r2", "backblaze-b2"), "s3:<lower-case provider name>" for the others ("s3:minio").
 [[nodiscard]] std::string providerIdentity(vault::model::S3Provider provider);
-// The provider part of the identity of the buckets a key reaches, following its endpoint host: an R2 or AWS endpoint
-// is "cloudflare-r2" / "aws-s3" whatever provider the key was saved with (so a lock can't be dodged by the label).
+// The provider part of the identity of the buckets a key reaches, following its endpoint host: an R2, AWS or B2
+// endpoint is "cloudflare-r2" / "aws-s3" / "backblaze-b2" whatever provider the key was saved with (so a lock can't be
+// dodged by the label).
 [[nodiscard]] std::string providerIdentity(const vault::model::APIKey& key);
 // Why the key's declared provider contradicts its endpoint (an R2 endpoint saved as "Other"), or nullopt.
 [[nodiscard]] std::optional<std::string> providerEndpointMismatch(const vault::model::APIKey& key);
 
 // The account a key belongs to without a network call when the provider encodes it (R2 endpoint host), else the
-// cached api_keys.provider_account_id, else nullopt.
+// cached api_keys.provider_account_id, else nullopt. Backblaze B2: the region's S3 endpoint host
+// ("s3.us-west-004.backblazeb2.com"). B2 bucket names are unique across every B2 account, so the host and the name
+// identify a bucket; it is also what Vaulthalla recorded for B2 buckets before B2 had an adapter.
 [[nodiscard]] std::optional<std::string> staticAccountRef(const vault::model::APIKey& key);
+
+// The region of a Backblaze B2 S3 endpoint (https://s3.<region>.backblazeb2.com → "us-west-004"), nullopt for every
+// other endpoint. It is the SigV4 signing region and the only region a bucket of that key can be created in.
+[[nodiscard]] std::optional<std::string> b2EndpointRegion(const vault::model::APIKey& key);
 
 // Vaulthalla-owned rule/queue naming.
 inline constexpr const char* kOwnedPrefix = "vaulthalla-";

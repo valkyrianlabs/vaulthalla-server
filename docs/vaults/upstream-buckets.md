@@ -1,29 +1,36 @@
 ---
 title: Managed Upstream Buckets
 navTitle: Managed Buckets
-description: Let Vaulthalla administer AWS S3 and Cloudflare R2 buckets for your vaults - inventory, protection locks, new and adopted buckets, lifecycle rules and safe cleanup.
+description: Let Vaulthalla administer AWS S3, Cloudflare R2 and Backblaze B2 buckets for your vaults - inventory, protection locks, new and adopted buckets, lifecycle rules and safe cleanup.
 order: 225
 status: published
 tags:
   - vaults
   - s3
   - r2
+  - backblaze-b2
   - upstream-storage
   - administration
 ---
 
 # Managed Upstream Buckets
 
-An upstream provider credential can also administer its AWS S3 or Cloudflare R2 account. With provider administration
-turned on, Vaulthalla lists the account's buckets, creates new buckets for vaults, adopts existing ones, manages its own
-lifecycle and event rules, and cleans up buckets it created. You choose the vault configuration; Vaulthalla runs the
-bucket machinery.
+An upstream provider credential can also administer its AWS S3, Cloudflare R2 or Backblaze B2 account. With provider
+administration turned on, Vaulthalla lists the account's buckets, creates new buckets for vaults, adopts existing ones,
+manages its own lifecycle and event rules, and cleans up buckets it created. You choose the vault configuration;
+Vaulthalla runs the bucket machinery.
 
-Other S3-compatible providers (MinIO, Wasabi, Backblaze B2, ...) keep working as plain vault storage, within what each
-bucket supports: Backblaze B2 doesn't support conditional writes, so a vault with opaque storage there publishes its
-encrypted manifest as object versions, at one listing more per publish (see
-[Providers Without Conditional Writes](/vaults/s3-r2-vaults#providers-without-conditional-writes)). Bucket protection
-locks apply to them too; the rest of this page is AWS S3 and Cloudflare R2 only.
+| | AWS S3 | Cloudflare R2 | Backblaze B2 |
+| --- | --- | --- | --- |
+| Bucket inventory, protection locks | yes | yes | yes |
+| Create and adopt buckets, detach, cleanup | yes | yes | yes |
+| Lifecycle rules | yes | yes | no: set them in the Backblaze console |
+| [Event-driven sync](/vaults/event-sync) | yes | yes | no |
+| [Provider versioning](/vaults/recovery#provider-versioning-aws-s3) | yes | no | no |
+
+Other S3-compatible providers (MinIO, Wasabi, ...) keep working as plain vault storage, within what each bucket
+supports. Bucket protection locks apply to them too; the rest of this page is AWS S3, Cloudflare R2 and Backblaze B2
+only.
 
 :::callout{theme="warning" title="Nothing here deletes data by default"}
 Deleting or detaching a vault never deletes its bucket or objects. Deleting an upstream bucket is a separate,
@@ -92,6 +99,53 @@ whether one is stored). `--clear-provider-token` removes it. The account ID come
 (`https://<account-id>.r2.cloudflarestorage.com`). R2 signs every request with region `auto`; location hints such as
 `wnam` are only used when creating a bucket.
 
+### Backblaze B2
+
+Vaulthalla administers Backblaze B2 through B2's S3-compatible API, with the same application key the vault's storage
+uses. The credential's provider must be `backblaze-b2` and its endpoint the account's S3 endpoint,
+`https://s3.<region>.backblazeb2.com` (for example `https://s3.us-west-004.backblazeb2.com`; Backblaze shows it on each
+bucket as **Endpoint**).
+
+```bash
+vh api-key create b2-admin --provider backblaze-b2 \
+  --access <keyID> --secret <applicationKey> \
+  --endpoint https://s3.us-west-004.backblazeb2.com --region us-west-004
+vh upstream admin enable b2-admin
+vh upstream buckets b2-admin
+```
+
+The application key:
+
+- must be a standard application key. Backblaze's S3-compatible API doesn't accept the account's master application
+  key.
+- must have access to **all buckets**. A key restricted to one bucket can't create buckets, and can't list the account
+  without the `listAllBucketNames` capability; `status --probe` then reports `buckets.list` as missing.
+- needs `listBuckets`, `readBuckets`, `writeBuckets` and `deleteBuckets` for bucket administration and
+  `readBucketRetentions` to read object lock, on top of the file capabilities (`listFiles`, `readFiles`, `writeFiles`,
+  `deleteFiles`) vault storage needs. A read-write key for all buckets created in the Backblaze console has them.
+
+What is different on B2:
+
+- **Bucket names** are shared by every Backblaze account, have 6 to 63 characters, and can't start with `b2-`.
+  Vaulthalla checks the length and the prefix before it sends anything. A name another account already holds is
+  reported as taken: choose another name, or let Vaulthalla generate one (`--generate-bucket`).
+- **Region.** A Backblaze account keeps its buckets in one region, the one in the endpoint. New buckets are created
+  there; `--region` is not needed and any other region is refused.
+- **New buckets are private** (`allPrivate`).
+- **Lifecycle rules** are not part of B2's S3-compatible API. Vaulthalla neither reads nor changes them: `vh upstream
+  lifecycle` and `--abort-multipart-days` are refused for a B2 credential, and `status --probe` lists `lifecycle` as
+  missing. Set them in the Backblaze console (bucket → **Lifecycle Settings**). Don't use a rule that removes old
+  versions under `.vaulthalla/`: a vault with opaque storage on B2 publishes its manifest as versions there (see
+  [Providers Without Conditional Writes](/vaults/s3-r2-vaults#providers-without-conditional-writes)).
+- **Versions.** Every B2 bucket keeps object versions and that can't be switched off, so `inspect` always shows
+  versioning enabled, and cleanup deletes every version before it deletes a bucket. Provider versioning as a vault's
+  [recovery mode](/vaults/recovery) stays AWS S3 only; use local snapshots or local versioning on B2.
+- **Event-driven sync** is not available: B2's event notifications aren't reachable through its S3-compatible API.
+  B2 vaults sync on their interval.
+- **Account.** Vaulthalla identifies a B2 bucket by the region endpoint and its name (names are unique across
+  Backblaze), so the inventory shows the endpoint host as the account. Backblaze allows 100 buckets per account
+  unless its support raises the limit.
+
 ## Bucket Inventory
 
 ```bash
@@ -126,12 +180,13 @@ vh upstream unprotect <api-key> <bucket>
 - The lock belongs to the bucket itself (provider, account and bucket name), not to the credential. Deleting and
   re-creating the credential keeps it, and any other credential for the same account sees it.
 - The provider and account come from the credential's endpoint, not its label: a credential for an
-  `….r2.cloudflarestorage.com` or `….amazonaws.com` endpoint is treated as Cloudflare R2 or AWS S3 whatever provider
-  it was saved with, so a lock can't be sidestepped by relabelling a key. New credentials whose provider contradicts
-  their endpoint are refused.
+  `….r2.cloudflarestorage.com`, `….amazonaws.com` or `s3.<region>.backblazeb2.com` endpoint is treated as Cloudflare
+  R2, AWS S3 or Backblaze B2 whatever provider it was saved with, so a lock can't be sidestepped by relabelling a key.
+  New credentials whose provider contradicts their endpoint are refused.
 - Locks work for any provider, including ones without administration support.
-- Bucket names are checked before they are used anywhere upstream (3–63 characters of `a-z 0-9 . -`); a name like
-  `x/../prod` is refused. Buckets with older, non-conforming names can still be locked.
+- Bucket names are checked before they are used anywhere upstream (3–63 characters of `a-z 0-9 . -`; on Backblaze B2
+  at least 6, and not starting with `b2-`); a name like `x/../prod` is refused. Buckets with older, non-conforming
+  names can still be locked.
 - Removing a lock needs the separate `admin.upstream.unprotect` permission, the right to use the credential
   (`consume`), and an explicit confirmation (`--yes` for scripts). Both directions are recorded in the audit log with
   who, when and the reason.
@@ -143,16 +198,22 @@ vh upstream unprotect <api-key> <bucket>
 ```bash
 vh vault create media --s3 --api-key aws-admin --bucket-mode create --generate-bucket --region us-east-2
 vh vault create media --s3 --api-key r2-admin --bucket-mode create --bucket vh-media --events
+vh vault create media --s3 --api-key b2-admin --bucket-mode create --bucket acme-media-vault
 ```
 
 In the web console, **New vault** offers *Create a new bucket* for administrative credentials, with *Generate a name*,
-the region or location hint, and optional advanced settings (incomplete-upload cleanup, event-driven sync).
+the region or location hint, and optional advanced settings (incomplete-upload cleanup, event-driven sync). For a
+Backblaze B2 credential it asks for the name only: the region is the account's, and lifecycle rules and events stay
+with Backblaze.
 
 Creating never takes over an existing bucket:
 
-1. The name must not exist (a `HeadBucket` 404). An existing bucket is refused: adopt it instead.
+1. The name must not exist (a `HeadBucket` 404). An existing bucket is refused: adopt it instead. A name that belongs
+   to another account (AWS and Backblaze B2 share bucket names across all accounts) is reported as taken, since there
+   is nothing to adopt: choose another name.
 2. The provider must create it. "Already exists" or "already owned by you" is refused and nothing changes.
-3. The new bucket must be empty. If it isn't, creation stops, the bucket is left as it is and marked failed.
+3. The new bucket must be empty, with no old object versions or delete markers (Backblaze B2 hide markers) either. If
+   it isn't, creation stops, the bucket is left as it is and marked failed.
 
 Only then is the bucket recorded as one Vaulthalla created, and the vault created and bound. A failure before that
 point (a timeout, a throttled request) leaves no claim on the name at all. If anything fails after the bucket was
@@ -210,6 +271,10 @@ day, and its retention is the `NoncurrentDays` of `vaulthalla-managed`. For thos
 Expiration rules delete data, so they need explicit confirmation (`--yes`). Value `0` removes a setting. New R2 buckets
 come with Cloudflare's default multipart-abort rule; it is kept as a foreign rule.
 
+Backblaze B2 has no lifecycle calls in its S3-compatible API: `vh upstream lifecycle` is refused for a B2 credential
+and `inspect` shows lifecycle and event rules as not readable. Manage them in the
+[Backblaze console](#backblaze-b2).
+
 ## Vault Deletion, Detach And Cleanup
 
 Deleting a vault ([Deleting And Restoring Vaults](/vaults/deleting-vaults)) leaves its bucket and objects in place
@@ -220,7 +285,7 @@ the purge would delete all of it. Keep the upstream data, detach the bucket, and
 **Detach** gives a bucket that no vault uses back to you: Vaulthalla removes its own event rules and its
 `vaulthalla-managed` lifecycle rule, and the bucket becomes `unmanaged`. Data is untouched. Detach doesn't change the
 bucket's versioning and, today, leaves a `vaulthalla-manifest-versions` rule in place: remove it with the provider if
-you no longer want it.
+you no longer want it. On Backblaze B2 there are no Vaulthalla rules to remove, so detach only changes the record.
 
 ```bash
 vh upstream detach <api-key> <bucket>

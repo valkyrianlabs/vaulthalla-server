@@ -66,7 +66,8 @@ std::shared_ptr<vault::model::S3Vault> authorizeVault(const Actor& actor, const 
 std::string supportGap(const vault::model::S3Vault& vault) {
     const auto key = db::query::vault::APIKey::getAPIKey(vault.api_key_id);
     if (!key) return "the vault's API key no longer exists";
-    if (!padmin::supportsAdmin(*key)) return "event-driven sync supports AWS S3 and Cloudflare R2 vaults only";
+    if (key->provider == vault::model::S3Provider::BackblazeB2) return padmin::kB2EventsUnsupported;
+    if (!padmin::supportsEvents(*key)) return "event-driven sync supports AWS S3 and Cloudflare R2 vaults only";
     if (!key->admin_enabled)
         return "the vault's API key '" + key->name + "' is not enabled for provider administration";
     if (key->provider == vault::model::S3Provider::CloudflareR2 && !key->hasProviderToken())

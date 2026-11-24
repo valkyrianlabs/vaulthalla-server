@@ -5,7 +5,8 @@
 //    test bucket before any request, and the endpoint's region is read from b2_authorize_account's s3ApiUrl.
 //  - LiveB2.*: opt-in (VH_LIVE_TESTS=1 + VH_B2_TEST_KEY_ID, VH_B2_TEST_APP_KEY). One bucket per run, created through
 //    B2's native API on the first live test and emptied of every version and deleted after the last, also when tests
-//    fail. One consolidated test: the version_log manifest against the real S3 adapter.
+//    fail. Two tests: the version_log manifest against the real S3 adapter, and the product's B2 admin adapter
+//    (B2Admin, which also creates the run bucket) against the run bucket.
 //
 // Run: (eval "$(grep -E '^export VH_B2_TEST_' <repo>/.bashrc)"; VH_LIVE_TESTS=1 build/core/vh_unit_tests --gtest_filter='LiveB2*')
 
@@ -104,6 +105,91 @@ mf::Entry fileEntry(const std::string& uid, const std::string& parent, std::stri
     e.key_version = 1;
     e.object = mf::ObjectRef{"\"etag-" + e.uid.substr(0, 6) + "\"", size + 136, std::nullopt, std::nullopt};
     return e;
+}
+
+// The product's Backblaze B2 admin adapter against the real S3-compatible API. The run bucket was created through it
+// (RunB2Bucket: CreateBucket with x-amz-acl: private and the endpoint's region). Here: the account listing shows it,
+// HeadBucket tells present from absent, a second CreateBucket of the same name is a collision the provisioner
+// recognises, inspect reads versioning and object lock (and never asks for lifecycle or notifications, which B2's S3
+// API lacks), the version listing sees every version of an overwritten key, and the probe reports what is missing.
+TEST_F(LiveB2, TheAdminAdapterAdministersTheRunBucket) {
+    namespace padmin = storage::s3::provider::admin;
+    auto& admin = this->admin();
+    const auto region = b2().account().region;
+    EXPECT_EQ(admin.providerId(), "backblaze-b2");
+    EXPECT_FALSE(admin.supportsLifecycle());
+
+    // vh upstream buckets
+    const auto page = admin.listBuckets({}, 1000);
+    EXPECT_TRUE(page.next_token.empty());
+    EXPECT_TRUE(std::ranges::any_of(page.buckets, [&](const auto& b) { return b.name == bucket(); }))
+        << "ListBuckets does not show " << bucket() << " among " << page.buckets.size() << " bucket(s)";
+
+    // HeadBucket: present, and absent for a test name nobody created.
+    EXPECT_EQ(admin.headBucket(bucket()), std::optional<std::string>(region));
+    auto absent = bucket();
+    absent.back() = absent.back() == '9' ? '8' : '9';
+    ASSERT_TRUE(live::isRunBucketName(absent));
+    EXPECT_EQ(admin.headBucket(absent), std::nullopt);
+
+    // A name this account already holds.
+    try {
+        admin.createBucket({.name = bucket(), .region = std::nullopt});
+        ADD_FAILURE() << "creating the run bucket a second time must be refused";
+    } catch (const padmin::ProviderError& e) {
+        std::cout << "[live] CreateBucket on an existing own bucket: HTTP " << e.http_status << " " << e.code << std::endl;
+        EXPECT_EQ(e.http_status, 409);
+        EXPECT_EQ(e.code, "BucketAlreadyOwnedByYou");
+    }
+
+    // vh upstream inspect
+    const auto config = admin.inspect(bucket());
+    EXPECT_EQ(config.region, std::optional<std::string>(region));
+    EXPECT_EQ(config.versioning, padmin::Versioning::Enabled) << "B2 buckets are always versioned";
+    ASSERT_TRUE(config.object_lock.has_value()) << "Get Object Lock Configuration was not readable";
+    EXPECT_FALSE(*config.object_lock);
+    EXPECT_FALSE(config.lifecycle_readable);
+    EXPECT_FALSE(config.notifications_readable);
+    for (const auto& w : config.warnings) std::cout << "[live] inspect warning: " << w << std::endl;
+    EXPECT_EQ(config.warnings.size(), 1u);
+    EXPECT_EQ(admin.versioning(bucket()).status, padmin::Versioning::Enabled);
+    EXPECT_NO_THROW(admin.putVersioning(bucket(), padmin::Versioning::Enabled));
+    EXPECT_THROW(admin.putVersioning(bucket(), padmin::Versioning::Suspended), padmin::CapabilityMissing);
+    EXPECT_THROW(admin.putLifecycle(bucket(), {}), padmin::CapabilityMissing);
+
+    // The emptiness check and cleanup: one current object, two versions of it.
+    const auto key = prefix() + "admin-adapter.txt";
+    const auto bytes = [](const std::string& text) { return std::vector<uint8_t>(text.begin(), text.end()); };
+    controller().uploadBufferWithMetadata(key, bytes("first"), std::unordered_map<std::string, std::string>{});
+    controller().uploadBufferWithMetadata(key, bytes("second"), std::unordered_map<std::string, std::string>{});
+    const auto current = admin.objectsUnder(bucket(), prefix());
+    ASSERT_EQ(current.size(), 1u);
+    EXPECT_EQ(current[0].key, key);
+    std::size_t versions = 0, latest = 0;
+    std::string token;
+    do {
+        const auto listing = admin.listObjectVersions(bucket(), token, 1000);
+        for (const auto& o : listing.objects) {
+            if (o.key != key) continue;
+            ++versions;
+            if (o.latest) ++latest;
+            EXPECT_TRUE(o.version_id && !o.version_id->empty());
+        }
+        token = listing.next_token;
+    } while (!token.empty());
+    EXPECT_EQ(versions, 2u);
+    EXPECT_EQ(latest, 1u);
+
+    // vh upstream admin status --probe
+    const auto caps = admin.probe();
+    for (const auto& c : caps.items)
+        std::cout << "[live] probe " << (c.ok ? "[ok]      " : "[missing] ") << c.name << std::endl;
+    EXPECT_EQ(caps.identity.provider, "backblaze-b2");
+    EXPECT_EQ(caps.identity.account_ref, "s3." + region + ".backblazeb2.com");
+    EXPECT_TRUE(caps.has("buckets.list"));
+    EXPECT_TRUE(caps.has("buckets.create"));
+    for (const char* missing : {"lifecycle", "versioning", "events.queues", "events.notifications"})
+        EXPECT_FALSE(caps.has(missing)) << missing;
 }
 
 // The version_log manifest on Backblaze B2 through the production S3 adapter: the probe says version_log; publishes

@@ -55,7 +55,8 @@ storage::upstream::BucketIdentity S3ApiAdmin::bucketIdentity(const std::string& 
 
 void S3ApiAdmin::requireBucket(const std::string& bucket) {
     if (bucket.empty()) throw std::invalid_argument("bucket name is required");
-    storage::upstream::requireValidBucketName(bucket);   // before the guard: the guard must see the real name
+    // Before the guard: the guard must see the real name.
+    storage::upstream::requireValidBucketNameFor(providerIdentity(*key_), bucket);
     storage::upstream::guard::require(bucketIdentity(bucket));
 }
 
@@ -85,6 +86,7 @@ std::optional<std::string> S3ApiAdmin::headBucket(const std::string& bucket) {
 
 void S3ApiAdmin::createBucket(const CreateBucketRequest& request) {
     auto c = detail::call("PUT");
+    for (auto& [name, value] : createBucketHeaders()) c.headers[name] = std::move(value);
     if (const auto location = locationConstraint(request)) {
         pugi::xml_document doc;
         auto root = doc.append_child("CreateBucketConfiguration");
@@ -111,6 +113,17 @@ std::optional<std::vector<LifecycleRule>> S3ApiAdmin::getLifecycle(const std::st
     if (info.code == "NoSuchLifecycleConfiguration") return std::vector<LifecycleRule>{};
     if (response.status == 403 || info.code == "AccessDenied") return std::nullopt;
     throw detail::makeError("GetBucketLifecycleConfiguration " + bucket, response, info, secrets());
+}
+
+std::optional<bool> S3ApiAdmin::getObjectLock(const std::string& bucket) {
+    const auto lock = bucketCall(bucket, detail::call("GET", {{"object-lock", ""}}), "get");
+    if (lock.ok()) {
+        pugi::xml_document doc;
+        doc.load_string(lock.body.c_str());
+        return std::string(doc.child("ObjectLockConfiguration").child_value("ObjectLockEnabled")) == "Enabled";
+    }
+    if (detail::s3Error(lock).code == "ObjectLockConfigurationNotFoundError") return false;
+    return std::nullopt;
 }
 
 VersioningState S3ApiAdmin::getVersioning(const std::string& bucket, std::vector<std::string>& warnings) {

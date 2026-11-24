@@ -168,7 +168,7 @@ const NewVaultForm = () => {
       const effective = { ...values, bucket_mode: mode }
       const sendS3 = (adopted: boolean) =>
         withEncryptionWaiver(accept => {
-          const provision = provisionPayload(effective, adopted)
+          const provision = provisionPayload(effective, adopted, credential?.provider)
           return api.send('storage.vault.add', {
             ...common,
             type: 's3',
@@ -290,8 +290,8 @@ const NewVaultForm = () => {
               {canProvision ? (
                 <div className="space-y-4 rounded-card border border-line p-4">
                   <BucketModeSelector value={mode} onChange={m => setValue('bucket_mode', m, { shouldDirty: true })} canProvision={canProvision} />
-                  {mode === 'create' ? <CreateBucketFields regionHint={credential?.region} /> : null}
-                  {mode === 'adopt' ? <AdoptBucketFields apiKeyId={Number(apiKeyId)} /> : null}
+                  {mode === 'create' ? <CreateBucketFields regionHint={credential?.region} provider={credential?.provider} /> : null}
+                  {mode === 'adopt' ? <AdoptBucketFields apiKeyId={Number(apiKeyId)} provider={credential?.provider} /> : null}
                   {mode === 'existing' ? (
                     <p className="text-xs text-fg-subtle">Binds a bucket by name without any provider administration, as for any other credential.</p>
                   ) : null}

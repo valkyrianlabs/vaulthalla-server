@@ -165,14 +165,8 @@ BucketConfiguration AwsAdmin::inspect(const std::string& bucket) {
     config.versioning = versioning.status;
     config.mfa_delete = versioning.mfa_delete;
 
-    const auto lock = bucketCall(bucket, detail::call("GET", {{"object-lock", ""}}), "get");
-    if (lock.ok()) {
-        pugi::xml_document doc;
-        doc.load_string(lock.body.c_str());
-        config.object_lock = std::string(doc.child("ObjectLockConfiguration").child_value("ObjectLockEnabled")) == "Enabled";
-    } else if (detail::s3Error(lock).code == "ObjectLockConfigurationNotFoundError") {
-        config.object_lock = false;
-    } else {
+    config.object_lock = getObjectLock(bucket);
+    if (!config.object_lock) {
         config.warnings.emplace_back("object lock configuration is not readable with this credential "
                                      "(s3:GetBucketObjectLockConfiguration); cleanup treats it as unknown");
     }

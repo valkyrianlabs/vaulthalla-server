@@ -170,7 +170,9 @@ static const auto bucketModeOpt = Optional::Single(
 static const auto generateBucketFlag = Flag::Alias(
     "s3_generate_bucket", "With --bucket-mode create: pick an available bucket name", "generate-bucket");
 static const auto bucketRegionOpt = Optional::Single(
-    "s3_bucket_region", "With --bucket-mode create: AWS region or R2 location hint (wnam, enam, weur, eeur, apac, oc)",
+    "s3_bucket_region",
+    "With --bucket-mode create: AWS region or R2 location hint (wnam, enam, weur, eeur, apac, oc). Backblaze B2 buckets "
+    "are always created in the key's own region",
     "region", "region")
     .withGen("region", contract::gen::constant("us-east-2"));
 static const auto eventsFlag = Flag::Alias(

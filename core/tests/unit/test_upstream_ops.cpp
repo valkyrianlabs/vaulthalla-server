@@ -29,6 +29,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <functional>
 #include <set>
 #include <thread>
 
@@ -76,6 +77,21 @@ protected:
         const auto id = runtime::Deps::get().apiKeyManager->addAPIKey(key);
         if (enable) (void)up::enableAdmin(superUser, id, {});
         return id;
+    }
+
+    // A Backblaze B2 application key: the same fake account behind it, but B2's identity, rules and limits in ops.
+    static constexpr const char* kB2Host = "s3.us-west-004.backblazeb2.com";
+    static unsigned b2Key(const UserPtr& owner, const bool enable = true,
+                          const std::string& endpoint = std::string("https://") + kB2Host) {
+        auto key = std::make_shared<vault::model::APIKey>(owner->id, "up_b2_key_" + tag(), vault::model::S3Provider::BackblazeB2,
+                                                          "0041234567890ab0000000001", "K004secret-value-000000000000000",
+                                                          "us-west-004", endpoint);
+        const auto id = runtime::Deps::get().apiKeyManager->addAPIKey(key);
+        if (enable) (void)up::enableAdmin(superUser, id, {});
+        return id;
+    }
+    static std::optional<storage::upstream::model::Bucket> b2RowOf(const std::string& name) {
+        return db::query::upstream::Bucket::getByIdentity("backblaze-b2", kB2Host, name);
     }
 
     static std::string bucketName() { return "vh-test-" + tag(); }
@@ -250,6 +266,200 @@ TEST_F(UpstreamOpsTest, CreatingOverAnExistingBucketNeverTakesItOver) {
 
     std::scoped_lock lock(cloud->mutex);
     EXPECT_EQ(cloud->deleteBucketCalls, 0u) << "no collision path deletes anything";
+}
+
+// Bucket names are shared by every account of a provider (AWS, Backblaze B2). A name someone else holds can't be
+// adopted, so the refusal says the name is taken instead of pointing at adoption; nothing is claimed or deleted.
+TEST_F(UpstreamOpsTest, ANameAnotherAccountHoldsIsReportedAsTakenNotAsAdoptable) {
+    const auto refusal = [&](const unsigned keyId, const std::string& name) {
+        try {
+            (void)s3Vault(keyId, name, up::Provision{.mode = up::BucketMode::Create});
+        } catch (const ops::Conflict& e) {
+            return std::string(e.what());
+        }
+        ADD_FAILURE() << "creating '" << name << "' must be refused";
+        return std::string{};
+    };
+    const auto expectTaken = [](const std::string& message, const std::string& name) {
+        EXPECT_NE(message.find("'" + name + "' is already taken"), std::string::npos) << message;
+        EXPECT_NE(message.find("choose another name"), std::string::npos) << message;
+        EXPECT_EQ(message.find("adopt"), std::string::npos) << message;
+    };
+
+    for (const auto keyId : {awsKey(superUser), b2Key(superUser)}) {
+        // The provider answers HeadBucket 403: the bucket exists and isn't this credential's.
+        const auto forbidden = bucketName();
+        // The provider hides it from HeadBucket and CreateBucket answers BucketAlreadyExists.
+        const auto hidden = bucketName();
+        {
+            std::scoped_lock lock(cloud->mutex);
+            cloud->otherAccount.insert(forbidden);
+            cloud->takenElsewhere.insert(hidden);
+        }
+        expectTaken(refusal(keyId, forbidden), forbidden);
+        expectTaken(refusal(keyId, hidden), hidden);
+        EXPECT_FALSE(exists(forbidden));
+        EXPECT_FALSE(exists(hidden));
+        for (const auto& name : {forbidden, hidden}) {
+            EXPECT_FALSE(rowOf(name) && rowOf(name)->created_by_vaulthalla) << name;
+            EXPECT_FALSE(b2RowOf(name) && b2RowOf(name)->created_by_vaulthalla) << name;
+        }
+    }
+
+    // This account's own bucket still points at adoption.
+    const auto keyId = awsKey(superUser);
+    const auto own = bucketName();
+    seedBucket(own, {{"kept", 1}});
+    EXPECT_NE(refusal(keyId, own).find("adopt it instead"), std::string::npos);
+
+    std::scoped_lock lock(cloud->mutex);
+    EXPECT_EQ(cloud->deleteBucketCalls, 0u);
+}
+
+// ---- Backblaze B2 ----------------------------------------------------------------------------------------------------
+
+TEST_F(UpstreamOpsTest, ABackblazeB2KeyListsCreatesAdoptsAndDetachesBuckets) {
+    const auto keyId = b2Key(superUser);
+    const auto status = up::adminStatus(superUser, keyId, false);
+    EXPECT_TRUE(status.supported);
+    EXPECT_TRUE(status.enabled);
+    EXPECT_TRUE(status.unsupported_reason.empty());
+    EXPECT_EQ(status.account_ref.value_or(""), kB2Host);
+
+    // vh vault create --s3 --bucket-mode create
+    const auto name = bucketName();
+    const auto vault = s3Vault(keyId, name, up::Provision{.mode = up::BucketMode::Create});
+    ASSERT_TRUE(vault);
+    ASSERT_TRUE(exists(name));
+    {
+        std::scoped_lock lock(cloud->mutex);
+        EXPECT_EQ(cloud->buckets.at(name).region, "us-west-004") << "the key's own region, taken from its endpoint";
+        EXPECT_TRUE(cloud->buckets.at(name).lifecycle.empty()) << "no lifecycle rule is ever written on B2";
+    }
+    const auto row = b2RowOf(name);
+    ASSERT_TRUE(row) << "recorded under backblaze-b2 and the region endpoint";
+    EXPECT_EQ(row->ownership, storage::upstream::model::Ownership::Managed);
+    EXPECT_EQ(row->provisioning_state, storage::upstream::model::ProvisioningState::Ready);
+    EXPECT_TRUE(row->created_by_vaulthalla);
+    EXPECT_EQ(row->vault_id.value_or(0), vault->id);
+    EXPECT_FALSE(rowOf(name)) << "nothing recorded as AWS";
+
+    // vh upstream buckets
+    const auto inv = up::inventory(superUser, keyId);
+    EXPECT_EQ(inv.provider, "backblaze-b2");
+    EXPECT_EQ(inv.account_ref, kB2Host);
+    const auto it = std::ranges::find(inv.buckets, name, &up::BucketRow::name);
+    ASSERT_NE(it, inv.buckets.end());
+    EXPECT_EQ(it->state, up::BucketState::Managed);
+
+    // vh upstream inspect: no lifecycle field is offered.
+    const auto inspection = up::inspect(superUser, keyId, name);
+    EXPECT_TRUE(inspection.supported_lifecycle_fields.empty());
+
+    // vh upstream adopt-check + vh vault create --bucket-mode adopt
+    const auto existing = bucketName();
+    seedBucket(existing, {{"photos/a.jpg", 10}});
+    const auto report = up::adoptPreflight(superUser, keyId, existing);
+    EXPECT_EQ(report.objects_scanned, 1u);
+    EXPECT_TRUE(report.blockers.empty());
+    EXPECT_THROW((void)s3Vault(keyId, existing, up::Provision{.mode = up::BucketMode::Adopt}), ops::NeedsConfirmation);
+    const auto adopted = s3Vault(keyId, existing, up::Provision{.mode = up::BucketMode::Adopt, .accept_adoption = true});
+    ASSERT_TRUE(adopted);
+    ASSERT_TRUE(b2RowOf(existing));
+    EXPECT_EQ(b2RowOf(existing)->ownership, storage::upstream::model::Ownership::Adopted);
+    EXPECT_EQ(objectCount(existing), 1u);
+
+    // vh upstream detach: there is no lifecycle rule of ours to remove, and that must not stop it.
+    const auto spare = bucketName();
+    const auto ticket = up::beginProvision(superUser, keyId, "v", spare, {.mode = up::BucketMode::Create});
+    (void)db::query::upstream::Bucket::setProvisioningState(ticket.upstream_bucket_id,
+                                                            storage::upstream::model::ProvisioningState::Ready,
+                                                            ticket.operation_token);
+    seedBucket(spare, {{"kept", 4}});
+    const auto detached = up::detach(superUser, keyId, spare);
+    EXPECT_EQ(detached.state, up::BucketState::Unmanaged);
+    EXPECT_EQ(objectCount(spare), 1u);
+}
+
+TEST_F(UpstreamOpsTest, ABackblazeB2KeyRefusesWhatB2sS3ApiCannotDoBeforeAnythingIsSent) {
+    const auto keyId = b2Key(superUser);
+    const auto callsBefore = allCalls();
+    const auto invalid = [&](const std::function<void()>& fn) {
+        try {
+            fn();
+        } catch (const ops::Invalid& e) {
+            return std::string(e.what());
+        }
+        ADD_FAILURE() << "expected ops::Invalid";
+        return std::string{};
+    };
+    const auto create = [&](const std::string& bucket, up::Provision provision) {
+        provision.mode = up::BucketMode::Create;
+        return [keyId, bucket, provision] { (void)s3Vault(keyId, bucket, provision); };
+    };
+
+    // Names B2 doesn't allow: under 6 characters, or the reserved b2- prefix.
+    EXPECT_NE(invalid(create("abcde", {})).find("6 to 63"), std::string::npos);
+    EXPECT_NE(invalid(create("b2-backups-" + tag(), {})).find("b2-"), std::string::npos);
+    EXPECT_NE(invalid([&] { (void)up::inspect(superUser, keyId, "abcde"); }).find("6 to 63"), std::string::npos);
+    EXPECT_NE(invalid([&] { (void)up::adoptPreflight(superUser, keyId, "b2-reserved"); }).find("b2-"), std::string::npos);
+
+    // Lifecycle rules and event notifications aren't in B2's S3-compatible API.
+    const auto name = bucketName();
+    EXPECT_EQ(invalid(create(name, {.lifecycle = up::LifecyclePatch{.abort_incomplete_multipart_days = 7}})),
+              padmin::kB2LifecycleUnsupported);
+    EXPECT_EQ(invalid(create(name, {.events = true})), padmin::kB2EventsUnsupported);
+    EXPECT_EQ(invalid([&] { (void)up::setLifecycle(superUser, keyId, name, {.abort_incomplete_multipart_days = 3}); }),
+              padmin::kB2LifecycleUnsupported);
+
+    // A B2 account lives in one region.
+    const auto region = invalid(create(name, {.region = std::string("us-east-005")}));
+    EXPECT_NE(region.find("us-west-004"), std::string::npos) << region;
+    EXPECT_NE(invalid(create(name, {.region = std::string("us-east-2")})).find("one region"), std::string::npos);
+
+    EXPECT_EQ(allCalls(), callsBefore) << "none of these may reach the provider";
+    EXPECT_FALSE(exists(name));
+    EXPECT_FALSE(b2RowOf(name));
+
+    // Naming its own region is fine.
+    EXPECT_TRUE(s3Vault(keyId, name, up::Provision{.mode = up::BucketMode::Create, .region = std::string("us-west-004")}));
+    EXPECT_TRUE(exists(name));
+}
+
+TEST_F(UpstreamOpsTest, ABackblazeB2VaultReportsEventSyncAsUnavailable) {
+    const auto keyId = b2Key(superUser);
+    const auto vault = s3Vault(keyId, bucketName(), up::Provision{.mode = up::BucketMode::Create});
+    ASSERT_TRUE(vault);
+    try {
+        (void)up::enableEvents(superUser, vault->id, {});
+        FAIL() << "event-driven sync must be refused on Backblaze B2";
+    } catch (const ops::Error& e) {
+        EXPECT_NE(std::string(e.what()).find("AWS S3 and Cloudflare R2 vaults only"), std::string::npos) << e.what();
+        EXPECT_NE(std::string(e.what()).find("Backblaze B2"), std::string::npos) << e.what();
+    }
+}
+
+TEST_F(UpstreamOpsTest, OnlyABackblazeEndpointMakesABackblazeKeyAdministrative) {
+    // The Backblaze B2 label over an endpoint that isn't B2's S3 API: plain storage, with the reason.
+    const auto keyId = b2Key(superUser, /*enable=*/false, "https://b2-proxy.example.net");
+    const auto status = up::adminStatus(superUser, keyId, false);
+    EXPECT_FALSE(status.supported);
+    EXPECT_NE(status.unsupported_reason.find("s3.<region>.backblazeb2.com"), std::string::npos);
+    EXPECT_THROW((void)up::enableAdmin(superUser, keyId, {}), ops::Invalid);
+    EXPECT_THROW((void)up::inventory(superUser, keyId), ops::Invalid);
+
+    // A B2 endpoint under another provider's label is refused when the key is saved (the lock follows the endpoint).
+    try {
+        (void)ops::api_keys::create(superUser, {.name = "up_b2_mislabelled_" + tag(),
+                                                .provider = vault::model::S3Provider::Other,
+                                                .access_key = "0041234567890ab0000000002",
+                                                .secret_access_key = "K004secret-value-000000000000001",
+                                                .endpoint = std::string("https://") + kB2Host,
+                                                .region = "us-west-004"});
+        FAIL() << "a B2 endpoint saved as 'Other' must be refused";
+    } catch (const ops::Invalid& e) {
+        EXPECT_NE(std::string(e.what()).find("backblaze-b2"), std::string::npos) << e.what();
+    }
 }
 
 TEST_F(UpstreamOpsTest, ConcurrentCreatesOfOneNameHaveOneWinner) {
@@ -760,6 +970,63 @@ TEST_F(UpstreamOpsTest, ARetryResumesOnlyABucketThisRecordReallyCreated) {
 
     std::scoped_lock lock(cloud->mutex);
     EXPECT_EQ(cloud->deleteBucketCalls, 1u) << "only the rollback of the bucket this attempt itself created";
+}
+
+// The emptiness check lists every version: a versioned bucket (AWS S3; Backblaze B2 always) whose objects are all
+// non-current versions or delete/hide markers has an empty ListObjectsV2 but is not empty. It existed before us, so it
+// is never claimed as created by Vaulthalla (which would let cleanup delete every version in it), and an earlier
+// attempt's bucket that gained versions is not resumed.
+TEST_F(UpstreamOpsTest, ABucketHoldingOnlyOldVersionsOrDeleteMarkersIsNotEmpty) {
+    namespace m = storage::upstream::model;
+    using BQ = db::query::upstream::Bucket;
+    const padmin::ObjectSummary oldVersion{.key = "report.pdf", .size = 9, .etag = "e", .last_modified = {},
+                                           .version_id = "v-old", .delete_marker = false, .latest = false};
+    const padmin::ObjectSummary marker{.key = "hidden.txt", .size = 0, .etag = {}, .last_modified = {},
+                                       .version_id = "v-hide", .delete_marker = true, .latest = true};
+    const auto seedHistory = [&](const std::string& name, const padmin::ObjectSummary& entry) {
+        std::scoped_lock lock(cloud->mutex);
+        cloud->buckets[name].history = {entry};
+        cloud->hiddenFromHead.insert(name);
+        cloud->silentCreate = true;   // CreateBucket answers 200 on a bucket the account owns (AWS us-east-1)
+    };
+    const auto historyOf = [&](const std::string& name) {
+        std::scoped_lock lock(cloud->mutex);
+        return cloud->buckets.at(name).history.size();
+    };
+
+    for (const bool b2 : {false, true}) {
+        const auto keyId = b2 ? b2Key(superUser) : awsKey(superUser);
+        const auto row = [&](const std::string& name) { return b2 ? b2RowOf(name) : rowOf(name); };
+        for (const auto& entry : {oldVersion, marker}) {
+            const auto name = bucketName();
+            seedHistory(name, entry);
+            EXPECT_THROW((void)up::beginProvision(superUser, keyId, "v", name, {.mode = up::BucketMode::Create}),
+                         ops::Conflict) << name;
+            EXPECT_EQ(historyOf(name), 1u) << "nothing in it is touched";
+            const auto r = row(name);
+            ASSERT_TRUE(r) << name;
+            EXPECT_FALSE(r->created_by_vaulthalla) << name << ": " << (entry.delete_marker ? "marker" : "old version");
+            EXPECT_EQ(r->ownership, m::Ownership::Unmanaged) << name;
+
+            const auto plan = up::cleanupPreflight(superUser, keyId, name);
+            EXPECT_FALSE(plan.blockers.empty()) << "never ours to clean up";
+            EXPECT_TRUE(plan.confirm_token.empty());
+        }
+
+        // Our own bucket from a failed attempt that has since gained an old version: not empty, not resumed.
+        const auto ours = bucketName();
+        const auto first = up::beginProvision(superUser, keyId, "v", ours, {.mode = up::BucketMode::Create});
+        ASSERT_TRUE(BQ::setProvisioningState(first.upstream_bucket_id, m::ProvisioningState::Failed, first.operation_token, "x"));
+        {
+            std::scoped_lock lock(cloud->mutex);
+            cloud->buckets.at(ours).history = {oldVersion};
+        }
+        EXPECT_THROW((void)up::beginProvision(superUser, keyId, "v", ours, {.mode = up::BucketMode::Create}), ops::Conflict);
+        EXPECT_EQ(historyOf(ours), 1u);
+    }
+
+    std::scoped_lock lock(cloud->mutex);
+    EXPECT_EQ(cloud->deleteBucketCalls, 0u);
 }
 
 TEST_F(UpstreamOpsTest, CleanupHoldsALeaseAgainstAdoptionAndProvisioning) {

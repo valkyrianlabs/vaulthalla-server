@@ -27,8 +27,8 @@ static std::shared_ptr<CommandUsage> adminEnable(const std::weak_ptr<CommandUsag
     auto cmd = node(parent);
     cmd->aliases = {"enable", "on"};
     cmd->effect = CommandEffect::Write;
-    cmd->description = "Turn on provider administration (AWS S3, Cloudflare R2) for an upstream API key. Probes what the "
-                       "credential can do first. Run again to store or clear the Cloudflare API token.";
+    cmd->description = "Turn on provider administration (AWS S3, Cloudflare R2, Backblaze B2) for an upstream API key. "
+                       "Probes what the credential can do first. Run again to store or clear the Cloudflare API token.";
     cmd->positionals = {apiKeyPos};
     cmd->optional_flags = {
         Flag::Alias("provider_token", "Cloudflare R2: ask for the account API token (Queues Edit + Workers R2 Storage "
@@ -37,7 +37,9 @@ static std::shared_ptr<CommandUsage> adminEnable(const std::weak_ptr<CommandUsag
     cmd->examples = {
         {"vh upstream admin enable aws-admin", "Let Vaulthalla administer the AWS account of key 'aws-admin'."},
         {"vh upstream admin enable r2-admin --provider-token",
-         "Enable R2 administration and store the Cloudflare API token event-driven sync needs."}};
+         "Enable R2 administration and store the Cloudflare API token event-driven sync needs."},
+        {"vh upstream admin enable b2-admin",
+         "Let Vaulthalla list, create and adopt buckets with the Backblaze B2 application key 'b2-admin'."}};
     return cmd;
 }
 
@@ -138,7 +140,8 @@ static std::shared_ptr<CommandUsage> lifecycle(const std::weak_ptr<CommandUsage>
     cmd->aliases = {"lifecycle"};
     cmd->effect = CommandEffect::Destructive;
     cmd->description = "Set or clear Vaulthalla's lifecycle rule on a managed or adopted bucket; other rules are kept. "
-                       "0 removes a setting. Expiration deletes data and asks for confirmation.";
+                       "0 removes a setting. Expiration deletes data and asks for confirmation. Not for Backblaze "
+                       "B2, whose lifecycle rules are set in the Backblaze console.";
     cmd->positionals = {apiKeyPos, bucketPos};
     cmd->optional = {
         Optional::Single("abort_multipart_days", "Abort incomplete multipart uploads after N days", "abort-multipart-days", "n")
@@ -288,8 +291,8 @@ static std::shared_ptr<CommandUsage> audit(const std::weak_ptr<CommandUsage>& pa
 static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = node(parent);
     cmd->aliases = {"upstream"};
-    cmd->description = "Administer upstream S3/R2 accounts: bucket inventory, protection locks, lifecycle, adoption "
-                       "checks, cleanup and event-driven sync.";
+    cmd->description = "Administer upstream AWS S3, Cloudflare R2 and Backblaze B2 accounts: bucket inventory, "
+                       "protection locks, lifecycle, adoption checks, cleanup and event-driven sync.";
     cmd->examples = {{"vh upstream buckets aws-admin", "List the account's buckets."},
                      {"vh upstream events status", "Event-driven sync status of every S3 vault."}};
     cmd->subcommands = {admin(cmd->weak_from_this()),     buckets(cmd->weak_from_this()),

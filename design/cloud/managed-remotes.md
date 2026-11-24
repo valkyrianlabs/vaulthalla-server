@@ -30,8 +30,10 @@ never in the data path. Everything else is a proposal.
   No ws command, web surface, RBAC module or background poller exists for the cloud.
 - **Keys.** `api_keys` rows (the secret sealed under `ak_master`; migrations 020, 110, 124) belong to a user;
   `ops::api_keys::update` edits one in place, re-probes it, asks a `secrets` step-up and rebuilds bound engines.
-- **Backblaze** is `S3Provider::BackblazeB2`, a `GenericProfile` with no admin adapter (`storage/s3/provider/
-  Registry.cpp:15`). **The probe** (`storage/s3/validate.cpp`) checks the key's format (20-128 of `[A-Za-z0-9/+=]`,
+- **Backblaze** is `S3Provider::BackblazeB2`, a `GenericProfile` (`storage/s3/provider/Registry.cpp:15`). When this
+  was written it had no admin adapter; since 2026-11-23 customer B2 keys have one for bucket administration
+  (`provider/admin/B2Admin`), which a key issued by managed storage (`origin = 'cloud'`) never gets
+  (`admin::supportsAdmin`). **The probe** (`storage/s3/validate.cpp`) checks the key's format (20-128 of `[A-Za-z0-9/+=]`,
   which B2 ids and secrets satisfy) and calls ListBuckets; success, or `AccessDenied` without a signature error,
   passes, so a bucket-limited key should pass either way (Phase 2 confirms). `isBucketEmpty` lists the bucket.
 - **Creation paths:** `ops::vaults::create` (CLI, ws, gateway remote-cache buckets), `Manager::initUserStorage`, the

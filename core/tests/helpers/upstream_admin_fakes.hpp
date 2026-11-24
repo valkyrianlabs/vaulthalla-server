@@ -27,6 +27,9 @@ constexpr const char* kAccount = "123456789012";
 struct FakeCloud {
     struct Bucket {
         std::map<std::string, uint64_t> objects;
+        // Non-current versions and delete markers (B2 hide markers): ListObjectVersions shows them, ListObjectsV2
+        // doesn't, and a bucket that holds any of them isn't empty. Only on a provider with versioning.
+        std::vector<padmin::ObjectSummary> history;
         std::vector<padmin::LifecycleRule> lifecycle;
         std::string region{"us-east-2"};
         std::set<std::string> locked;   // deletes of these fail (object lock)
@@ -41,6 +44,8 @@ struct FakeCloud {
     std::mutex mutex;
     std::map<std::string, Bucket> buckets;
     std::set<std::string> otherAccount;   // HeadBucket 403
+    std::set<std::string> takenElsewhere; // HeadBucket says absent, CreateBucket answers BucketAlreadyExists: another
+                                          // account holds the name and this credential can't see its bucket
     std::set<std::string> hiddenFromHead; // HeadBucket says absent although it exists (race / us-east-1 create)
     bool silentCreate = false;            // CreateBucket on an existing bucket answers 200 (AWS us-east-1)
     std::set<std::string> headFails;      // HeadBucket fails transiently (503 SlowDown)
@@ -114,6 +119,7 @@ public:
         guard(request.name);
         std::scoped_lock lock(c_->mutex);
         c_->touch(request.name);
+        if (c_->takenElsewhere.contains(request.name)) throw padmin::ProviderError("taken", "BucketAlreadyExists", 409);
         if (c_->buckets.contains(request.name)) {
             if (c_->silentCreate) return;
             throw padmin::ProviderError("exists", "BucketAlreadyOwnedByYou", 409);
@@ -127,7 +133,8 @@ public:
         ++c_->deleteBucketCalls;
         const auto it = c_->buckets.find(bucket);
         if (it == c_->buckets.end()) throw padmin::ProviderError("no such bucket", "NoSuchBucket", 404);
-        if (!it->second.objects.empty()) throw padmin::ProviderError("not empty", "BucketNotEmpty", 409);
+        if (!it->second.objects.empty() || !it->second.history.empty())
+            throw padmin::ProviderError("not empty", "BucketNotEmpty", 409);
         c_->buckets.erase(it);
     }
     padmin::BucketConfiguration inspect(const std::string& bucket) override {
@@ -199,7 +206,14 @@ public:
         return page;
     }
     padmin::ObjectPage listObjectVersions(const std::string& bucket, const std::string& token, unsigned int max) override {
-        return listObjects(bucket, token, max);
+        auto page = listObjects(bucket, token, max);
+        std::scoped_lock lock(c_->mutex);
+        if (!c_->versioningSupported) return page;
+        for (const auto& o : c_->buckets.at(bucket).history) {
+            if (page.objects.size() >= max) break;
+            page.objects.push_back(o);
+        }
+        return page;
     }
     std::vector<std::pair<std::string, std::string>> deleteObjects(const std::string& bucket,
                                                                    const std::vector<padmin::ObjectSummary>& objects) override {
@@ -217,8 +231,14 @@ public:
         std::vector<std::pair<std::string, std::string>> failed;
         auto& b = c_->buckets.at(bucket);
         for (const auto& o : objects) {
-            if (b.locked.contains(o.key)) failed.emplace_back(o.key, "AccessDenied");
-            else b.objects.erase(o.key);
+            if (b.locked.contains(o.key)) {
+                failed.emplace_back(o.key, "AccessDenied");
+                continue;
+            }
+            const auto version = [&](const padmin::ObjectSummary& h) {
+                return o.version_id && h.key == o.key && h.version_id == o.version_id;
+            };
+            if (std::erase_if(b.history, version) == 0) b.objects.erase(o.key);
         }
         return failed;
     }

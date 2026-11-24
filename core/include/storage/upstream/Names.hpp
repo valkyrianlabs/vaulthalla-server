@@ -15,8 +15,18 @@ namespace vh::storage::upstream {
 // Throws std::invalid_argument("invalid bucket name '…': <why>").
 void requireValidBucketName(const std::string& name);
 
+// Backblaze B2, on top of the S3 rules: at least 6 characters, and names starting with "b2-" are reserved for
+// Backblaze. (B2 names are also unique across every B2 account, which only the provider can tell.)
+[[nodiscard]] bool validB2BucketName(const std::string& name, std::string& why);
+// The rules of the bucket's provider, by the provider part of its identity (admin::providerIdentity):
+// "backblaze-b2" adds B2's rules, everything else is validBucketName.
+[[nodiscard]] bool validBucketNameFor(const std::string& provider, const std::string& name, std::string& why);
+void requireValidBucketNameFor(const std::string& provider, const std::string& name);
+
 // AWS region codes ("us-east-2", "eu-central-1", "ap-southeast-4", "us-gov-west-1", "cn-north-1").
 [[nodiscard]] bool validAwsRegion(const std::string& region);
+// Backblaze B2 region codes as its S3 endpoints spell them ("us-west-004", "eu-central-003").
+[[nodiscard]] bool validB2Region(const std::string& region);
 // Cloudflare R2 location hints accepted by CreateBucket ("wnam", "enam", "weur", "eeur", "apac", "oc"), or "auto".
 [[nodiscard]] bool validR2LocationHint(const std::string& hint);
 

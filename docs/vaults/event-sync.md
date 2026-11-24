@@ -25,6 +25,9 @@ keys. No bucket listing is repeated.
 
 No Worker, Lambda or public webhook endpoint is deployed; Vaulthalla pulls from the queue.
 
+Other providers, including Backblaze B2, sync on the vault's interval: B2's event notifications aren't available
+through the S3-compatible API Vaulthalla uses, so event-driven sync is refused for B2 vaults with that reason.
+
 :::toc[On this page]{depth="3" theme="compact"}
 :::
 
