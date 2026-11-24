@@ -28,8 +28,16 @@ class MacosPackageScripts(unittest.TestCase):
             self.assertIn("--apply", call)
         self.assertLess(text.index("--remove --apply"), text.index("pkgutil --only-files"))
         self.assertIn("is still loaded", text)
-        # The wait for launchd to stop the daemons (up to 75 s) is announced, so it doesn't look like a hang.
+        # A wait for launchd to stop the daemons (up to 75 s) that lasts is announced, so it doesn't look like a hang.
         self.assertIn('echo "Waiting for $label to stop', text)
+
+    def test_uninstall_removes_the_receipt_in_batches(self) -> None:
+        # One rm per receipt path (~10,000 of them) took ~25 s of every Homebrew upgrade.
+        text = (PKG / "uninstall.sh").read_text()
+        self.assertIn("xargs -0 rm -f", text)
+        self.assertIn("xargs -0 rm -rf", text)
+        self.assertNotRegex(text, r"while IFS= read -r \w+; do\s*(case [^;]*\) )?rm ")
+        self.assertNotRegex(text, r"case \"/\$d/\"")
 
     def test_payload_and_web_console_are_readable(self) -> None:
         self.assertIn('chmod -R u+rwX,go+rX,go-w "$ROOT"', (PKG / "build-pkg.sh").read_text())
