@@ -8,6 +8,8 @@
 #include "db/query/rbac/Permission.hpp"
 #include "db/query/rbac/role/Vault.hpp"
 #include "db/query/vault/APIKey.hpp"
+#include "recovery/Model.hpp"
+#include "storage/s3/provider/admin/Admin.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
@@ -992,6 +994,52 @@ std::optional<UpstreamProfile> serverDefaultProfile() {
     return db::query::s3::Gateway::getUpstreamProfileByName(name);
 }
 
+namespace {
+
+// off | indefinite | <N>d, normalized ("30" → "30d"); Invalid otherwise.
+std::string gwVersioningValue(const std::string& value) {
+    if (value == "off") return value;
+    try {
+        return vh::recovery::ProviderRetention::parse(value).str();
+    } catch (const std::invalid_argument& e) {
+        throw Invalid("versioning is off, indefinite or a number of days such as 30d: " + std::string(e.what()));
+    }
+}
+
+// What a bucket created through the profile keeps (Provision::keep_history): nullopt = only the latest version.
+std::optional<vh::recovery::ProviderRetention> gwKeepHistory(const UpstreamProfile& profile) {
+    if (profile.versioning.empty() || profile.versioning == "off") return std::nullopt;
+    return vh::recovery::ProviderRetention::parse(profile.versioning);
+}
+
+// The profile's versioning against what its key's provider can do, then the person's acceptance of what it costs.
+void gwRequireVersioning(const UpstreamProfile& profile, const std::string& previous, const bool accepted) {
+    if (profile.versioning == "off") return;
+    const auto key = db::query::vault::APIKey::getAPIKey(profile.api_key_id);
+    const auto provider = key ? storage::s3::provider::admin::providerIdentity(*key) : std::string{};
+    if (provider == "cloudflare-r2")
+        throw Invalid("upstream profile '" + profile.name + "': Cloudflare R2 has no object versions, so its versioning "
+                      "can only be off");
+    if (provider == "aws-s3")
+        throw Invalid("upstream profile '" + profile.name + "': on AWS S3, versioning is turned on per vault with its cost "
+                      "disclosure (vh vault recovery set <vault> --mode provider-versioning), never when a bucket is "
+                      "created, so the profile's versioning can only be off");
+    if (provider != "backblaze-b2")
+        throw Invalid("upstream profile '" + profile.name + "': versioning other than off is available for Backblaze B2 "
+                      "profiles only");
+    if (profile.versioning == previous || accepted) return;
+    const auto keep = gwKeepHistory(profile);
+    throw NeedsConfirmation(PROFILE_VERSIONING,
+        "Every bucket created through upstream profile '" + profile.name + "' will keep old versions " +
+        (keep->indefinite ? std::string("indefinitely") : "for " + std::to_string(keep->days) + " days") +
+        " on Backblaze B2: each overwritten or deleted file stays there as a full copy, billed at the bucket's storage "
+        "rate" + (keep->indefinite ? " for as long as the bucket exists" : " until it is deleted") +
+        ". Vaulthalla can't estimate the cost before the buckets exist (see vh recovery costs <vault> afterwards). "
+        "Buckets that already exist are not changed. Accept to set it.");
+}
+
+}
+
 UpstreamProfile createUpstreamProfile(const Actor& actor, const CreateProfile& req) {
     requireActor(actor);
     requireGw(actor, GwPerm::ManageBuckets, "manage_buckets", "create S3 gateway upstream profiles");
@@ -1008,8 +1056,10 @@ UpstreamProfile createUpstreamProfile(const Actor& actor, const CreateProfile& r
     profile.sync_strategy = requireStrategy(req.sync_strategy.value_or(defaults.default_remote_sync_strategy));
     profile.conflict_policy = requireConflictPolicy(req.conflict_policy.value_or(defaults.default_remote_conflict_policy));
     profile.bucket_prefix = requireBucketPrefix(req.bucket_prefix.value_or(""));
+    profile.versioning = gwVersioningValue(req.versioning.value_or("off"));
     profile.description = req.description;
     profile.created_by = actor->id;
+    gwRequireVersioning(profile, "off", req.accept_versioning);
 
     profile.id = db::query::s3::Gateway::createUpstreamProfile(profile);
     const auto audited = profileAudited(actor, "s3.upstream_profile.create", "created", profile);
@@ -1021,7 +1071,7 @@ UpdatedProfile updateUpstreamProfile(const Actor& actor, const ProfileRef& ref, 
     requireGw(actor, GwPerm::ManageBuckets, "manage_buckets", "change S3 gateway upstream profiles");
     auto profile = requireProfile(ref);
     if (!req.api_key && !req.encrypt_upstream && !req.sync_strategy && !req.conflict_policy && !req.bucket_prefix &&
-        !req.description)
+        !req.description && !req.versioning)
         throw Invalid("nothing to update: give a setting to change");
 
     const auto before = profile;
@@ -1033,6 +1083,10 @@ UpdatedProfile updateUpstreamProfile(const Actor& actor, const ProfileRef& ref, 
     if (req.conflict_policy) profile.conflict_policy = requireConflictPolicy(*req.conflict_policy);
     if (req.bucket_prefix) profile.bucket_prefix = requireBucketPrefix(*req.bucket_prefix);
     if (req.description) profile.description = *req.description;
+    if (req.versioning) profile.versioning = gwVersioningValue(*req.versioning);
+    // Checked whatever changed: a new key of another provider must fit the versioning the profile already has.
+    gwRequireVersioning(profile, before.api_key_id == profile.api_key_id ? before.versioning : std::string("off"),
+                        req.accept_versioning);
 
     const auto audited = profileAudited(actor, "s3.upstream_profile.update", "changed", profile);
     if (!db::query::s3::Gateway::updateUpstreamProfile(profile))
@@ -1211,7 +1265,8 @@ Bucket createProfileBucket(const Actor& actor, const UpstreamProfile& profile, c
             .api_key_id = profile.api_key_id,
             .bucket = profile.bucket_prefix + bucketName,
             .encrypt_upstream = profile.encrypt_upstream,
-            .provision = ops::upstream::Provision{.mode = ops::upstream::BucketMode::CreateOrAdoptEmpty}},
+            .provision = ops::upstream::Provision{.mode = ops::upstream::BucketMode::CreateOrAdoptEmpty,
+                                                  .keep_history = gwKeepHistory(profile)}},
         .sync = {
             .strategy = profile.sync_strategy,
             .conflict_policy = profile.conflict_policy,

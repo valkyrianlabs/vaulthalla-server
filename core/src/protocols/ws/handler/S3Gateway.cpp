@@ -74,6 +74,7 @@ json S3GatewayJson::upstreamProfile(const db::query::s3::UpstreamProfile& profil
         {"sync_strategy", profile.sync_strategy},
         {"conflict_policy", profile.conflict_policy},
         {"bucket_prefix", profile.bucket_prefix},
+        {"versioning", profile.versioning},
         {"description", profile.description ? json(*profile.description) : json(nullptr)},
         {"server_default", serverDefault},
         {"created_by", profile.created_by ? json(*profile.created_by) : json(nullptr)},
@@ -762,7 +763,9 @@ json S3Gateway::upstreamProfilesCreate(const json& payload, const std::shared_pt
         .conflict_policy = optionalString(payload, "conflict_policy"),
         .bucket_prefix = payload.is_object() && payload.contains("bucket_prefix") && payload.at("bucket_prefix").is_string()
                              ? std::make_optional(payload.at("bucket_prefix").get<std::string>()) : std::nullopt,
-        .description = optionalString(payload, "description")}))}};
+        .description = optionalString(payload, "description"),
+        .versioning = optionalString(payload, "versioning"),
+        .accept_versioning = gwOptionalBool(payload, "accept_versioning").value_or(false)}))}};
 }
 
 json S3Gateway::upstreamProfilesUpdate(const json& payload, const std::shared_ptr<Session>& session) {
@@ -776,6 +779,8 @@ json S3Gateway::upstreamProfilesUpdate(const json& payload, const std::shared_pt
     if (payload.is_object() && payload.contains("bucket_prefix") && payload.at("bucket_prefix").is_string())
         req.bucket_prefix = payload.at("bucket_prefix").get<std::string>();
     if (payload.is_object() && payload.contains("description")) req.description = optionalString(payload, "description");
+    req.versioning = optionalString(payload, "versioning");
+    req.accept_versioning = gwOptionalBool(payload, "accept_versioning").value_or(false);
     const auto updated = gw::updateUpstreamProfile(gwActor(session), profileRefFromPayload(payload), req);
     json reapplied = json::array();
     for (const auto& r : updated.reapplied)

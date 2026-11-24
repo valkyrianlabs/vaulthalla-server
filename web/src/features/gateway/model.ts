@@ -85,6 +85,8 @@ export interface UpstreamProfile {
   sync_strategy: string | null
   conflict_policy: string | null
   bucket_prefix: string
+  // What a bucket created through the profile keeps on the provider: off | <N>d | indefinite (B2 only for non-off).
+  versioning: string
   description: string | null
   server_default: boolean
 }
@@ -101,6 +103,7 @@ export const toProfile = (input: unknown): UpstreamProfile => {
     sync_strategy: str(d.sync_strategy),
     conflict_policy: str(d.conflict_policy),
     bucket_prefix: typeof d.bucket_prefix === 'string' ? d.bucket_prefix : '',
+    versioning: str(d.versioning) ?? 'off',
     description: str(d.description),
     server_default: bool(d.server_default) ?? false,
   }

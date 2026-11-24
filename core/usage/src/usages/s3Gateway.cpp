@@ -424,13 +424,19 @@ std::shared_ptr<CommandUsage> upstream(const std::weak_ptr<CommandUsage>& parent
                                 {"on-sync-conflict", "conflict"}, "policy"),
             Optional::ManyToOne("bucket_prefix", "Prefix of the upstream bucket's name (the upstream bucket is "
                                 "<prefix><gateway bucket>); empty for none", {"bucket-prefix"}, "prefix"),
-            Optional::ManyToOne("description", "Profile description", {"description"}, "text")};
+            Optional::ManyToOne("description", "Profile description", {"description"}, "text"),
+            Optional::ManyToOne("versioning", "What every bucket created through the profile keeps on the provider: "
+                                "off (the default: only the latest version), <N>d (old versions for N days) or "
+                                "indefinite. Anything but off is Backblaze B2 only; new buckets only",
+                                {"versioning"}, "off|<N>d|indefinite")};
     };
     const auto encryptFlags = [] {
         return std::vector<Flag>{
             Flag::WithAliases("encrypt", "Encrypt objects before they are uploaded (the default)", {"encrypt"}),
             Flag::WithAliases("no_encrypt", "Store objects upstream as they are, readable straight from the provider",
                               {"no-encrypt"}),
+            Flag::WithAliases("accept_versioning", "Accept that the profile's buckets keep (and bill for) old versions",
+                              {"accept-versioning"}),
             jsonFlag};
     };
 
@@ -459,7 +465,9 @@ std::shared_ptr<CommandUsage> upstream(const std::weak_ptr<CommandUsage>& parent
         {"vh s3-gateway upstream create vl-b2 --api-key b2-main --no-encrypt --sync-strategy mirror --on-sync-conflict keep_local",
          "Buckets created through this profile mirror to a Backblaze B2 bucket of the same name, unencrypted."},
         {"vh s3-gateway upstream create r2-edge --api-key r2-main --bucket-prefix acme-",
-         "Encrypted cache vaults over R2 buckets named acme-<bucket>."}};
+         "Encrypted cache vaults over R2 buckets named acme-<bucket>."},
+        {"vh s3-gateway upstream create vl-b2-30d --api-key b2-main --versioning 30d --accept-versioning",
+         "Backblaze B2 buckets that keep old versions for 30 days (provider versioning on every new vault)."}};
 
     auto update = build(cmd->weak_from_this());
     update->aliases = {"update", "set", "edit"};

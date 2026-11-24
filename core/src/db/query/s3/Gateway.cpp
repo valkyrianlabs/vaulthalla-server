@@ -69,6 +69,7 @@ UpstreamProfile profileFromRow(pqxx::row_ref row) {
         .sync_strategy = row["sync_strategy"].as<std::string>(),
         .conflict_policy = row["conflict_policy"].as<std::string>(),
         .bucket_prefix = row["bucket_prefix"].as<std::string>(),
+        .versioning = row["versioning"].as<std::optional<std::string>>().value_or("off"),
         .description = row["description"].as<std::optional<std::string>>(),
         .created_by = row["created_by"].as<std::optional<uint32_t>>(),
         .created_at = ts(row, "created_at"),
@@ -1065,12 +1066,13 @@ uint32_t Gateway::createUpstreamProfile(const UpstreamProfile& profile) {
             R"SQL(
                 INSERT INTO s3_gateway_upstream_profile
                     (name, api_key_id, encrypt_upstream, sync_strategy, conflict_policy, bucket_prefix, description,
-                     created_by)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                     created_by, versioning)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 RETURNING id
             )SQL",
             pqxx::params{profile.name, profile.api_key_id, profile.encrypt_upstream, profile.sync_strategy,
-                         profile.conflict_policy, profile.bucket_prefix, profile.description, profile.created_by})
+                         profile.conflict_policy, profile.bucket_prefix, profile.description, profile.created_by,
+                         profile.versioning})
             .one_field_ref().as<uint32_t>();
     });
 }
@@ -1081,11 +1083,11 @@ bool Gateway::updateUpstreamProfile(const UpstreamProfile& profile) {
             R"SQL(
                 UPDATE s3_gateway_upstream_profile
                 SET api_key_id = $2, encrypt_upstream = $3, sync_strategy = $4, conflict_policy = $5,
-                    bucket_prefix = $6, description = $7
+                    bucket_prefix = $6, description = $7, versioning = $8
                 WHERE id = $1
             )SQL",
             pqxx::params{profile.id, profile.api_key_id, profile.encrypt_upstream, profile.sync_strategy,
-                         profile.conflict_policy, profile.bucket_prefix, profile.description})
+                         profile.conflict_policy, profile.bucket_prefix, profile.description, profile.versioning})
             .affected_rows() > 0;
     });
 }

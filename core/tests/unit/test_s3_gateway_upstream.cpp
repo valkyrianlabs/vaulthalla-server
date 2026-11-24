@@ -22,6 +22,7 @@
 
 #include "config/Registry.hpp"
 #include "db/query/rbac/role/Admin.hpp"
+#include "db/query/recovery/Policy.hpp"
 #include "db/query/s3/Gateway.hpp"
 #include "db/query/upstream/Bucket.hpp"
 #include "db/query/vault/APIKey.hpp"
@@ -45,6 +46,7 @@
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/S3Gateway.hpp"
+#include "recovery/Model.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/Manager.hpp"
@@ -939,6 +941,121 @@ TEST_F(GatewayUpstreamTest, TheCliAndTheWebSetAndReportTheSameThing) {
     EXPECT_EQ(protocols::ws::handler::S3Gateway::upstreamProfilesDelete(json{{"profile", wsProfile}}, ws(superUser)),
               (json{{"deleted", true}}));
     EXPECT_NE(cli("s3-gateway upstream show " + cliProfile, superUser).first, 0);
+}
+
+
+// ---- the profile's versioning default (migration 156) --------------------------------------------------------------
+
+TEST_F(GatewayUpstreamTest, AProfilesVersioningDefaultIsAppliedToEveryBucketItCreates) {
+    const auto keyId = b2Key();
+    // Without a versioning: off, the owner's default. The bucket keeps only the latest version.
+    const auto plain = mirrorProfile(keyId);
+    EXPECT_EQ(plain.versioning, "off");
+    const auto plainCred = withProfile(credentialFor(superUser), plain);
+    const auto first = bucketName();
+    (void)createBucket(first, authFor(plainCred));
+    const auto firstVault = vaultOf(first);
+    ASSERT_TRUE(firstVault);
+    EXPECT_EQ(db::query::recovery::Policy::get(firstVault->id).mode, vh::recovery::Mode::Off);
+    {
+        std::scoped_lock lock(cloud->mutex);
+        const auto& lc = cloud->buckets.at(first).lifecycle;
+        const auto owned = std::ranges::find(lc, std::string("vaulthalla-managed"), &padmin::LifecycleRule::id);
+        ASSERT_NE(owned, lc.end()) << "versioning off is really off on B2";
+        EXPECT_EQ(owned->expire_noncurrent_days.value_or(0), 1u);
+        EXPECT_EQ(owned->prefix, "") << "an unencrypted (transparent) vault: the whole bucket";
+    }
+
+    // 30 days: asked for once, when the profile is set (the cost can't be estimated before the buckets exist).
+    gw::CreateProfile req{.name = profileName(), .api_key = keyId, .encrypt_upstream = true,
+                          .sync_strategy = std::string("cache"), .conflict_policy = std::string("keep_local"),
+                          .versioning = std::string("30")};
+    try {
+        (void)gw::createUpstreamProfile(superUser, req);
+        FAIL() << "a versioning default that bills old versions needs its acceptance";
+    } catch (const ops::NeedsConfirmation& e) {
+        EXPECT_EQ(e.code, gw::PROFILE_VERSIONING);
+    }
+    req.accept_versioning = true;
+    const auto keeping = gw::createUpstreamProfile(superUser, req);
+    EXPECT_EQ(keeping.versioning, "30d");
+    const auto cred = withProfile(credentialFor(superUser), keeping);
+    const auto name = bucketName();
+    (void)createBucket(name, authFor(cred));
+    const auto vault = vaultOf(name);
+    ASSERT_TRUE(vault);
+    EXPECT_EQ(db::query::recovery::Policy::get(vault->id).mode, vh::recovery::Mode::ProviderVersioning);
+    const auto row = upstreamRow(name);
+    ASSERT_TRUE(row);
+    const auto versioning = db::query::upstream::Bucket::getVersioning(row->id);
+    ASSERT_TRUE(versioning);
+    EXPECT_EQ(versioning->retention_mode, "days");
+    EXPECT_EQ(versioning->retention_days.value_or(0), 30u);
+    {
+        std::scoped_lock lock(cloud->mutex);
+        const auto& lc = cloud->buckets.at(name).lifecycle;
+        const auto owned = std::ranges::find(lc, std::string("vaulthalla-managed"), &padmin::LifecycleRule::id);
+        ASSERT_NE(owned, lc.end());
+        EXPECT_EQ(owned->expire_noncurrent_days.value_or(0), 30u);
+        EXPECT_EQ(owned->prefix, "o/") << "an encrypting vault's files only";
+        EXPECT_TRUE(cloud->putVersioningCalls.empty());
+    }
+
+    // Changing the default asks again, for buckets created afterwards only.
+    EXPECT_THROW((void)gw::updateUpstreamProfile(superUser, gw::ProfileRef{keeping.id}, {.versioning = std::string("indefinite")}),
+                 ops::NeedsConfirmation);
+    const auto changed = gw::updateUpstreamProfile(superUser, gw::ProfileRef{keeping.id},
+                                                   {.versioning = std::string("indefinite"), .accept_versioning = true});
+    EXPECT_EQ(changed.profile.versioning, "indefinite");
+    EXPECT_EQ(db::query::upstream::Bucket::getVersioning(row->id)->retention_days.value_or(0), 30u)
+        << "an existing bucket keeps its own";
+    // Back to off needs nothing (it never keeps more than before for new buckets).
+    EXPECT_EQ(gw::updateUpstreamProfile(superUser, gw::ProfileRef{keeping.id}, {.versioning = std::string("off")})
+                  .profile.versioning, "off");
+    EXPECT_THROW((void)gw::updateUpstreamProfile(superUser, gw::ProfileRef{keeping.id}, {.versioning = std::string("soon")}),
+                 ops::Invalid);
+}
+
+TEST_F(GatewayUpstreamTest, AVersioningDefaultIsValidatedAgainstTheProvider) {
+    const auto add = [&](const vault::model::S3Provider provider, const std::string& endpoint, const std::string& region) {
+        auto key = std::make_shared<vault::model::APIKey>(superUser->id, "gwu_k_" + gwuTag(), provider,
+                                                          "AKIATESTACCESSKEY000", "secret-value-0000000000000000000000000",
+                                                          region, endpoint);
+        const auto id = runtime::Deps::get().apiKeyManager->addAPIKey(key);
+        (void)up::enableAdmin(superUser, id, {});
+        return id;
+    };
+    const auto r2 = add(vault::model::S3Provider::CloudflareR2,
+                        "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com", "auto");
+    const auto aws = add(vault::model::S3Provider::AWS, "https://s3.us-east-2.amazonaws.com", "us-east-2");
+    for (const auto keyId : {r2, aws}) {
+        for (const auto* value : {"30d", "indefinite"}) {
+            try {
+                (void)gw::createUpstreamProfile(superUser, {.name = profileName(), .api_key = keyId,
+                                                            .versioning = std::string(value), .accept_versioning = true});
+                FAIL() << value;
+            } catch (const ops::Invalid& e) {
+                EXPECT_NE(std::string(e.what()).find("can only be off"), std::string::npos) << e.what();
+            }
+        }
+        EXPECT_EQ(gw::createUpstreamProfile(superUser, {.name = profileName(), .api_key = keyId,
+                                                        .versioning = std::string("off")}).versioning, "off");
+    }
+    // A B2 profile with a retention can't move to a key of a provider without one.
+    const auto b2 = gw::createUpstreamProfile(superUser, {.name = profileName(), .api_key = b2Key(),
+                                                          .versioning = std::string("90d"), .accept_versioning = true});
+    EXPECT_THROW((void)gw::updateUpstreamProfile(superUser, gw::ProfileRef{b2.id}, {.api_key = r2}), ops::Invalid);
+
+    // The CLI and ws carry the same field.
+    auto [code, out] = cli("s3-gateway upstream show " + b2.name + " --json", superUser);
+    ASSERT_EQ(code, 0) << out;
+    EXPECT_EQ(json::parse(out).at("versioning"), "90d");
+    const auto created = cli("s3-gateway upstream create " + profileName() + " --api-key " + std::to_string(b2Key()) +
+                                 " --versioning 7d --accept-versioning --json", superUser);
+    ASSERT_EQ(created.first, 0) << created.second;
+    EXPECT_EQ(json::parse(created.second).at("versioning"), "7d");
+    EXPECT_NE(cli("s3-gateway upstream create " + profileName() + " --api-key " + std::to_string(b2Key()) +
+                      " --versioning 7d", superUser).first, 0) << "without the acceptance";
 }
 
 }

@@ -118,6 +118,9 @@ struct CreateRemoteCacheBucket {
 // An upstream profile as the caller named it: by id or by name.
 using ProfileRef = std::variant<uint32_t, std::string>;
 
+// NeedsConfirmation code: a profile whose buckets keep old versions on the provider (versioning other than off).
+inline constexpr const char* PROFILE_VERSIONING = "upstream_profile_versioning";
+
 struct CreateProfile {
     std::string name;                               // region-shaped ("vl-b2"), immutable, never "local" or a real region
     std::variant<unsigned int, std::string> api_key;   // id or name; must be enabled for provider administration
@@ -126,9 +129,18 @@ struct CreateProfile {
     std::optional<std::string> conflict_policy{};   // keep_local | keep_remote | keep_newest | ask; default likewise
     std::optional<std::string> bucket_prefix{};     // the upstream bucket is <prefix><gateway bucket>
     std::optional<std::string> description{};
+    // What every bucket created through the profile keeps on the provider: off (default: only the latest version,
+    // the owner's default) | <N>d (old versions N days, 1..36500) | indefinite. Anything but off is Backblaze B2 only
+    // (its buckets are always versioned; Vaulthalla sets the lifecycle rule when it creates the bucket). AWS S3
+    // turns versioning on per vault with its cost disclosure, never at bucket creation; R2 has no versions. Anything
+    // but off needs accept_versioning (NeedsConfirmation{PROFILE_VERSIONING}): the cost can't be estimated before the
+    // buckets exist.
+    std::optional<std::string> versioning{};
+    bool accept_versioning{false};
 };
 
-// Absent fields stay as they are. The name never changes.
+// Absent fields stay as they are. The name never changes. A versioning change applies to buckets created from then
+// on; existing buckets keep theirs (vh vault recovery set changes one, with its own acceptance).
 struct UpdateProfile {
     std::optional<std::variant<unsigned int, std::string>> api_key{};
     std::optional<bool> encrypt_upstream{};
@@ -136,6 +148,8 @@ struct UpdateProfile {
     std::optional<std::string> conflict_policy{};
     std::optional<std::string> bucket_prefix{};
     std::optional<std::optional<std::string>> description{};
+    std::optional<std::string> versioning{};
+    bool accept_versioning{false};
 };
 
 // A bucket created from a profile, after a change of the profile's sync settings.
