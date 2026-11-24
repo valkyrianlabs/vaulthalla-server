@@ -13,6 +13,11 @@
   operations already handed out when dispatching throws). A plan larger than the PUT budget converges over passes
   instead of re-uploading the same objects. Operations refused by the budget are not errors: one warning, the pass is
   STALLED (Local::processFutures, the Upload/Download/Delete tasks).
+- Sync planner: a file and its remote object of the same size whose content hashes match, or that neither changed
+  since their baseline, are in sync and plan nothing. They used to go on to RemotePolicy::decideForBoth, which
+  answers mirror + keep_local with Upload and mirror + keep_remote with Download unconditionally, so every non-opaque
+  mirrored vault (transparent and path_v0, e.g. S3 gateway buckets of a mirror/keep_local upstream profile) transferred every file on every
+  pass. opaque_v1 was spared by its generation check. Existing index rows and baselines suffice: no backfill.
 - Sync events: sync_event.upsert and sync_throughput.upsert/accumulate cast their counter parameters to bigint (a pass
   over 2 GiB failed with "out of range for type integer"); Engine::newSyncEvent no longer fails a pass when the
   previous event cannot be saved.

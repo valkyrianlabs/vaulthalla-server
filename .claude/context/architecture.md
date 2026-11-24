@@ -1835,6 +1835,10 @@ stage "Copy And Delete")
   sides agree again), `superseded` (remote side gone; duplicates closed by 107). `event_id` is the first run that saw
   it and is `ON DELETE SET NULL` (event retention no longer deletes open conflicts). Auto-resolved conflicts under
   `keep_*` stay per-event history rows (`sync_conflict.upsert`); `Event::upsert` skips unresolved ones.
+- **A same-size pair with matching hashes, or unchanged on both sides since its baseline, plans nothing** (Planner,
+  `!hasPotentialConflict` branch), under every strategy and policy. Until this fix it went on to
+  `RemotePolicy::decideForBoth`, whose mirror + keep_local answer is always Upload (keep_remote: Download): every
+  non-opaque mirrored vault re-sent every file each pass (`SyncPassSchedulingDb.*Mirror*`).
 - **Detection under `ask` is two-sided only.** `files.content_hash` is blake2b of the *sealed* backing file, so a
   download re-sealed under a fresh IV never hashes like the object it came from, and `hasPotentialConflict` (size or
   hash differ) fires on any one-sided edit. `sync_file_baseline` records each side's identity when they last agreed

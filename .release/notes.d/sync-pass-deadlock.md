@@ -21,6 +21,15 @@
   pass started over with the same files, adding a new version of each on a versioned bucket. Each pass now keeps what
   it uploaded and the next one continues with the rest. Operations the budget refused are reported once, as a stall
   with the budget's reason, instead of one error per file.
+- **Mirrored vaults stop uploading everything again on every pass.** A vault with strategy `mirror` and conflict
+  policy `keep_local` in the transparent or encrypted path layout (such as the buckets the S3 gateway creates
+  through an upstream profile with those settings) planned an upload of every file on every pass, even when the bucket already held
+  exactly that content: a few GB every interval, and a new version of every object on buckets that keep versions.
+  `keep_remote` mirrors downloaded every file the same way. Vaults in the encrypted opaque layout were not affected.
+  A file is now transferred only when it is new or its content changed. Nothing to do after upgrading: the first
+  pass recognises what the bucket already holds from what the server recorded when it uploaded it, uploads nothing
+  that is already there, and no reconciliation or extra requests are needed. On buckets that keep versions, the
+  extra versions earlier passes created stay until the bucket's lifecycle rules remove them.
 - **Large passes are recorded.** A pass that moved more than 2 GiB failed to save its statistics (`value "…" is out
   of range for type integer`), and its vault then refused every later pass until a restart.
 - **`database.pool_size` is used.** It was read and ignored: every install ran with 4 database connections, and

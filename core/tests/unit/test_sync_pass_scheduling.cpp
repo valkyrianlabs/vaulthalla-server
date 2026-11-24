@@ -14,6 +14,12 @@
 #include "../helpers/temp_dir.hpp"
 #include "../helpers/versioned_bucket.hpp"
 
+#include "ops/Vaults.hpp"
+#include "storage/RemoteAccess.hpp"
+#include "vault/APIKeyManager.hpp"
+#include "vault/model/APIKey.hpp"
+#include "vault/model/S3Vault.hpp"
+
 #include "concurrency/Task.hpp"
 #include "concurrency/ThreadPool.hpp"
 #include "concurrency/ThreadPoolManager.hpp"
@@ -308,6 +314,64 @@ protected:
         return out;
     }
 
+    // An S3 vault as the S3 gateway's upstream profile vl-b2 makes them (production, 1.25.0): transparent layout
+    // (readable keys, plaintext objects), strategy mirror, conflict policy keep_local, on a bucket that keeps versions.
+    static CloudVault mirroredTransparentVault() {
+        auto apiKey = std::make_shared<vault::model::APIKey>(superUser->id, "spm_key_" + vh::test::uniqueTag('m'),
+                                                             vault::model::S3Provider::AWS, "AKIATESTACCESSKEY000",
+                                                             "secret-value-0000000000000000000000000", "us-east-1",
+                                                             "https://s3.example.com");
+        const auto keyId = runtime::Deps::get().apiKeyManager->addAPIKey(apiKey);
+        CloudVault v;
+        v.bucketName = "spm-" + vh::test::uniqueTag('m');
+        const auto created = ops::vaults::create(superUser, {.name = "spm_vault_" + vh::test::uniqueTag('m'),
+                                                             .type = vault::model::VaultType::S3,
+                                                             .s3 = ops::vaults::S3Spec{.api_key_id = keyId,
+                                                                                       .bucket = v.bucketName,
+                                                                                       .encrypt_upstream = false}});
+        v.engine = std::static_pointer_cast<storage::CloudEngine>(runtime::Deps::get().storageManager->getEngine(created->id));
+        v.bucket = std::make_shared<test_support::versioned::VersionedBucket>(Versioning::Enabled, v.bucketName);
+        v.engine->setS3ControllerForTesting(v.bucket);
+        v.engine->setRemoteFetchGate([](const storage::CloudEngine&, const storage::RemoteFetchRequest&) {
+            return std::unique_ptr<storage::RemoteFetchReservation>{};
+        });
+        const auto policy = v.engine->remote_policy();
+        policy->strategy = sync::model::RemotePolicy::Strategy::Mirror;
+        policy->conflict_policy = sync::model::RemotePolicy::ConflictPolicy::KeepLocal;
+        return v;
+    }
+
+    // Every transfer a pass of the vault would plan now (the real planner, nothing executed).
+    static std::vector<std::string> plannedTransfers(const CloudVault& v) {
+        auto cloud = std::make_shared<sync::Cloud>(v.engine);
+        cloud->event = std::make_shared<sync::model::Event>();
+        cloud->event->vault_id = v.id();
+        cloud->event->timestamp_begin = std::time(nullptr);
+        db::query::sync::Event::create(cloud->event);
+        cloud->initBins();
+        std::vector<std::string> out;
+        for (const auto& a : cloud->planPass()) {
+            if (a.type == sync::model::ActionType::EnsureDirectories) continue;
+            const auto& f = a.local ? a.local : a.remote;
+            const char* kind = "other";
+            switch (a.type) {
+            case sync::model::ActionType::Upload: kind = "upload"; break;
+            case sync::model::ActionType::Download: kind = "download"; break;
+            case sync::model::ActionType::IndexRemoteOnly: kind = "index"; break;
+            case sync::model::ActionType::DeleteLocal: kind = "delete-local"; break;
+            case sync::model::ActionType::DeleteRemote: kind = "delete-remote"; break;
+            case sync::model::ActionType::EnsureDirectories: break;
+            }
+            out.push_back(std::string(kind) + " " + (f ? f->path.string() : std::string{"?"}));
+        }
+        cloud->clearBins();
+        return out;
+    }
+
+    static std::string keyOf(const CloudVault& v, const std::string& path) {
+        return v.engine->objectKeyOf(*db::query::fs::File::getFileByPath(v.id(), path));
+    }
+
     static bool indexed(const CloudVault& v, const std::string& path) {
         const auto rows = db::query::sync::RemoteObjectIndex::listFilesForVault(v.id());
         return std::ranges::any_of(rows, [&](const auto& f) { return f && f->path == path; });
@@ -457,6 +521,70 @@ TEST_F(SyncPassSchedulingDb, APassStoppedAfterItsUploadsRecordsThem) {
     EXPECT_TRUE(indexed(v, "/up1.txt"));
     EXPECT_TRUE(indexed(v, "/up2.txt"));
     EXPECT_TRUE(plannedUploads(v).empty()) << "the uploads before the stop are not planned again";
+}
+
+// Production, 1.25.0: a fully mirrored vault (transparent layout, mirror + keep_local, written through the S3
+// gateway) uploaded every object again on every pass, adding a version of each on B2. A pass after a successful one
+// plans nothing, for a small object and for one above the multipart part size alike.
+TEST_F(SyncPassSchedulingDb, AnUnchangedMirroredVaultPlansNothingAfterAPass) {
+    const auto v = mirroredTransparentVault();
+    ASSERT_EQ(std::static_pointer_cast<vault::model::S3Vault>(v.engine->vault)->storage_layout,
+              vault::model::StorageLayout::Transparent);
+    write(v, "/small.txt", "a small object");
+    write(v, "/big.bin", std::string(6 * 1024 * 1024 + 17, 'b'));   // above s3::Controller::MIN_PART_SIZE
+    const auto task = std::make_shared<sync::Cloud>(v.engine);
+    (*task)();
+    ASSERT_EQ(task->event->status, Status::SUCCESS) << task->event->error_message;
+    ASSERT_EQ(task->event->num_ops_total, 2u);
+    EXPECT_EQ(v.bucket->history(keyOf(v, "/small.txt")).size(), 1u);
+    EXPECT_EQ(v.bucket->history(keyOf(v, "/big.bin")).size(), 1u);
+
+    EXPECT_EQ(plannedTransfers(v), std::vector<std::string>{});
+    for (int pass = 0; pass < 2; ++pass) {
+        (*task)();
+        EXPECT_EQ(task->event->status, Status::SUCCESS) << task->event->error_message;
+        EXPECT_EQ(task->event->num_ops_total, 0u) << "pass " << pass << " transferred something";
+        EXPECT_EQ(task->event->s3_put_requests, 0u) << "pass " << pass;
+    }
+    EXPECT_EQ(v.bucket->history(keyOf(v, "/small.txt")).size(), 1u) << "uploaded again";
+    EXPECT_EQ(v.bucket->history(keyOf(v, "/big.bin")).size(), 1u) << "uploaded again";
+
+    // A changed object (same size too) is uploaded, exactly once, and nothing else.
+    write(v, "/small.txt", "a SMALL object");
+    EXPECT_EQ(plannedTransfers(v), std::vector<std::string>{"upload /small.txt"});
+    (*task)();
+    EXPECT_EQ(task->event->status, Status::SUCCESS) << task->event->error_message;
+    EXPECT_EQ(task->event->num_ops_total, 1u);
+    EXPECT_EQ(v.bucket->history(keyOf(v, "/small.txt")).size(), 2u);
+    EXPECT_EQ(v.bucket->history(keyOf(v, "/big.bin")).size(), 1u);
+    EXPECT_EQ(plannedTransfers(v), std::vector<std::string>{});
+}
+
+// The index these production vaults have: rows written by the upload (CloudEngine::recordOwnUpload) and the
+// baselines Baseline::afterUpload and noteInSync wrote, all unchanged since 1.25.0, here also rebuilt from a full
+// LIST (hashless rows with the bucket's ETags, as `vh vault sync reconcile` or an empty index leaves them). Nothing
+// is uploaded again.
+TEST_F(SyncPassSchedulingDb, AMirroredVaultIndexedBy125ConvergesWithoutUploads) {
+    const auto v = mirroredTransparentVault();
+    for (int i = 0; i < 3; ++i) write(v, "/f" + std::to_string(i) + ".txt", "object " + std::to_string(i));
+    const auto task = std::make_shared<sync::Cloud>(v.engine);
+    (*task)();
+    ASSERT_EQ(task->event->status, Status::SUCCESS) << task->event->error_message;
+    EXPECT_TRUE(plannedTransfers(v).empty());
+
+    const auto listed = v.engine->getGroupedFilesFromS3();
+    ASSERT_EQ(listed.size(), 3u);
+    std::vector<std::shared_ptr<fs::model::File>> rows;
+    for (const auto& [_, f] : listed) {
+        EXPECT_FALSE(f->content_hash) << "a LIST row has no content hash";
+        rows.push_back(f);
+    }
+    db::query::sync::RemoteObjectIndex::replaceFromListObjects(v.id(), rows);
+    EXPECT_EQ(plannedTransfers(v), std::vector<std::string>{});
+    (*task)();
+    EXPECT_EQ(task->event->status, Status::SUCCESS) << task->event->error_message;
+    EXPECT_EQ(task->event->num_ops_total, 0u);
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(v.bucket->history(keyOf(v, "/f" + std::to_string(i) + ".txt")).size(), 1u);
 }
 
 // A stage that fails ends the pass: nothing after it runs.
