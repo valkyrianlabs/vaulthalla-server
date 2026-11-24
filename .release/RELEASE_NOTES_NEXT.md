@@ -1,3 +1,5 @@
+# Upstream sync that keeps running, vault read grants, and version retention on Backblaze B2
+
 <!--
 vl-release staged release notes: the user-facing story of the NEXT release.
 Maintained continuously while working; `vlr prepare` promotes it into the release notes
