@@ -9,7 +9,7 @@ export const WS_CONTRACT_VERSION = 3
 export const WS_CONTRACT_HASH = 'bb3be7716796cabb23fe60ecb0df6475f489aae21f399a77a64ad2d4dd0b7943'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '49bc5a53d8c235066f23702dff4750f603c262b5b3c6e22c217fdceaf6db44cb'
+export const WS_MODELS_HASH = 'a2849dc9f75eed87c29f7e874f222944cd6106a78f44585ef8f446fa356c9d4d'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -2134,6 +2134,8 @@ export interface WsModels {
   'SyncConfig': {
     event_audit_retention_days: number
     event_audit_max_entries: number
+    worker_threads?: number
+    max_concurrent_passes?: number
     replicas?: WsModels['ReplicasConfig']
   }
   /**
