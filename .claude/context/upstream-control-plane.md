@@ -45,7 +45,8 @@ plain storage, but protection locks still apply.
   an `x-amz-bucket-region` hint costs one more HEAD (≤ 3). Name validation and the guard still come first; a
   malformed hint or header is ignored, never routed to.
   Every protect/unprotect: `guard::reload()` + `subscriptions::invalidateCache()` + `onBucketProtected/Unprotected`.
-- Create-new never takes over: HeadBucket 404 → CreateBucket (collision = Conflict) → must list empty; compensation
+- Create-new never takes over: HeadBucket 404 → CreateBucket (collision = Conflict) → must list empty by
+  `listObjectVersions` (old versions and delete/hide markers count; R2 falls back to ListObjectsV2); compensation
   deletes only an empty bucket created by the same operation token. No rollback deletes a pre-existing bucket.
   The claim row is `unmanaged` + `provision_attempted` until `confirmCreated` (token-guarded) after a 2xx create and an
   empty listing; all ownership/state writes are token-guarded.
@@ -155,7 +156,9 @@ plain storage, but protection locks still apply.
   the host is enough, and no network call or re-keying is needed. Two B2 accounts in one region therefore share an
   inventory scope (`listForAccount`): a bucket Vaulthalla knows from one shows as "not listed" under the other's key.
   Migration 153 renames `upstream_bucket.provider` from `s3:backblaze-b2` (and other `s3:*` labels over a B2 host),
-  carrying a lock over on a collision; `upstream_audit` keeps what it recorded.
+  one row per bucket (`s3:backblaze-b2` first, else `DISTINCT ON`: vault-bound, then managed/adopted, then lowest id;
+  the rest stay under their old label), carrying a lock over from any row left behind; `upstream_audit` keeps what it
+  recorded.
 - **A taken name:** `provision::createManaged` reports a HeadBucket 403 without a region, and a CreateBucket
   `BucketAlreadyExists`, as "already taken … choose another name" (`ops::Conflict`); `BucketAlreadyOwnedByYou` still
   says "adopt it instead". Applies to AWS too.

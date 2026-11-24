@@ -55,7 +55,7 @@ struct Lease {
 [[nodiscard]] Lease createManaged(s3::provider::admin::AdminClient& admin, const BucketIdentity& id,
                                   const std::optional<std::string>& region, std::optional<uint32_t> apiKeyId);
 
-// True when the bucket lists no object (one ListObjectsV2 call, at most one key).
+// True when the bucket lists no object version at all (one ListObjectVersions call, at most one entry).
 [[nodiscard]] bool listsEmpty(s3::provider::admin::AdminClient& admin, const std::string& bucket);
 
 // Adopt path, up to "configuring". Throws BucketProtected, BucketMissing, ProvisionConflict.

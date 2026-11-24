@@ -69,8 +69,11 @@ std::optional<std::string> probeExisting(padmin::AdminClient& admin, const std::
 
 }
 
+// Empty means no object version at all: ListObjectsV2 shows only current objects, so a versioned bucket whose objects
+// are all non-current or behind delete markers (B2 hide markers) would look empty. Providers without versioning (R2)
+// answer listObjectVersions with the plain listing.
 bool listsEmpty(padmin::AdminClient& admin, const std::string& bucket) {
-    return admin.listObjects(bucket, {}, 1).objects.empty();
+    return admin.listObjectVersions(bucket, {}, 1).objects.empty();
 }
 
 std::string newOperationToken() { return randomLower(32); }
@@ -157,7 +160,7 @@ Lease createManaged(padmin::AdminClient& admin, const BucketIdentity& id, const 
                 throw BucketExists("bucket '" + id.bucket + "' already exists (" + e.code + "); adopt it instead");
             }
             // AWS us-east-1 answers 200 to CreateBucket on a bucket the account already owns: a bucket that lists
-            // anything existed before this call. (Residual race: an *empty* bucket the same account created between
+            // anything (an old version or a delete marker included) existed before this call. (Residual race: an *empty* bucket the same account created between
             // our HeadBucket and CreateBucket is indistinguishable from a new one there; it can only come from another
             // writer racing on the exact name within milliseconds, and it holds nothing.)
             if (!listsEmpty(admin, id.bucket)) {
@@ -228,7 +231,7 @@ void compensate(padmin::AdminClient* admin, const Lease& lease, const std::strin
         if (lease.created && admin) {
             bool empty = false;
             try {
-                empty = admin->listObjectVersions(lease.row.bucket, {}, 1).objects.empty();
+                empty = listsEmpty(*admin, lease.row.bucket);
             } catch (const std::exception& e) {
                 log::Registry::storage()->warn("[upstream::provision] can't tell whether '{}' is empty: {}", lease.row.bucket, e.what());
             }

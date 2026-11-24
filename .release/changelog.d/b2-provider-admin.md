@@ -7,7 +7,7 @@
   - Bucket identity for a https://s3.<region>.backblazeb2.com endpoint is (backblaze-b2, <endpoint host>, bucket)
     whatever the key's provider label; a label that contradicts the endpoint is refused on save. Migration
     153_backblaze_b2_identity.sql renames existing upstream_bucket rows ('s3:backblaze-b2', and other generic labels
-    over a B2 endpoint host) and carries a lock over where both exist.
+    over a B2 endpoint host), one row per bucket, and carries a lock over from any row left under its old label.
   - B2 bucket names (6-63 characters, no "b2-" prefix) are validated before any request
     (storage::upstream::validBucketNameFor); a provisioning region other than the key's own is refused.
   - Bucket creation reports a name held by another account (HeadBucket 403, or CreateBucket BucketAlreadyExists) as

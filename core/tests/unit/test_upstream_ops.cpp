@@ -975,6 +975,63 @@ TEST_F(UpstreamOpsTest, ARetryResumesOnlyABucketThisRecordReallyCreated) {
     EXPECT_EQ(cloud->deleteBucketCalls, 1u) << "only the rollback of the bucket this attempt itself created";
 }
 
+// The emptiness check lists every version: a versioned bucket (AWS S3; Backblaze B2 always) whose objects are all
+// non-current versions or delete/hide markers has an empty ListObjectsV2 but is not empty. It existed before us, so it
+// is never claimed as created by Vaulthalla (which would let cleanup delete every version in it), and an earlier
+// attempt's bucket that gained versions is not resumed.
+TEST_F(UpstreamOpsTest, ABucketHoldingOnlyOldVersionsOrDeleteMarkersIsNotEmpty) {
+    namespace m = storage::upstream::model;
+    using BQ = db::query::upstream::Bucket;
+    const padmin::ObjectSummary oldVersion{.key = "report.pdf", .size = 9, .etag = "e", .last_modified = {},
+                                           .version_id = "v-old", .delete_marker = false, .latest = false};
+    const padmin::ObjectSummary marker{.key = "hidden.txt", .size = 0, .etag = {}, .last_modified = {},
+                                       .version_id = "v-hide", .delete_marker = true, .latest = true};
+    const auto seedHistory = [&](const std::string& name, const padmin::ObjectSummary& entry) {
+        std::scoped_lock lock(cloud->mutex);
+        cloud->buckets[name].history = {entry};
+        cloud->hiddenFromHead.insert(name);
+        cloud->silentCreate = true;   // CreateBucket answers 200 on a bucket the account owns (AWS us-east-1)
+    };
+    const auto historyOf = [&](const std::string& name) {
+        std::scoped_lock lock(cloud->mutex);
+        return cloud->buckets.at(name).history.size();
+    };
+
+    for (const bool b2 : {false, true}) {
+        const auto keyId = b2 ? b2Key(superUser) : awsKey(superUser);
+        const auto row = [&](const std::string& name) { return b2 ? b2RowOf(name) : rowOf(name); };
+        for (const auto& entry : {oldVersion, marker}) {
+            const auto name = bucketName();
+            seedHistory(name, entry);
+            EXPECT_THROW((void)up::beginProvision(superUser, keyId, "v", name, {.mode = up::BucketMode::Create}),
+                         ops::Conflict) << name;
+            EXPECT_EQ(historyOf(name), 1u) << "nothing in it is touched";
+            const auto r = row(name);
+            ASSERT_TRUE(r) << name;
+            EXPECT_FALSE(r->created_by_vaulthalla) << name << ": " << (entry.delete_marker ? "marker" : "old version");
+            EXPECT_EQ(r->ownership, m::Ownership::Unmanaged) << name;
+
+            const auto plan = up::cleanupPreflight(superUser, keyId, name);
+            EXPECT_FALSE(plan.blockers.empty()) << "never ours to clean up";
+            EXPECT_TRUE(plan.confirm_token.empty());
+        }
+
+        // Our own bucket from a failed attempt that has since gained an old version: not empty, not resumed.
+        const auto ours = bucketName();
+        const auto first = up::beginProvision(superUser, keyId, "v", ours, {.mode = up::BucketMode::Create});
+        ASSERT_TRUE(BQ::setProvisioningState(first.upstream_bucket_id, m::ProvisioningState::Failed, first.operation_token, "x"));
+        {
+            std::scoped_lock lock(cloud->mutex);
+            cloud->buckets.at(ours).history = {oldVersion};
+        }
+        EXPECT_THROW((void)up::beginProvision(superUser, keyId, "v", ours, {.mode = up::BucketMode::Create}), ops::Conflict);
+        EXPECT_EQ(historyOf(ours), 1u);
+    }
+
+    std::scoped_lock lock(cloud->mutex);
+    EXPECT_EQ(cloud->deleteBucketCalls, 0u);
+}
+
 TEST_F(UpstreamOpsTest, CleanupHoldsALeaseAgainstAdoptionAndProvisioning) {
     namespace m = storage::upstream::model;
     const auto keyId = awsKey(superUser);
