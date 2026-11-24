@@ -1,3 +1,5 @@
+# Connection health no longer warns about signed-in device sessions
+
 <!--
 vl-release staged release notes: the user-facing story of the NEXT release.
 Maintained continuously while working; `vlr prepare` promotes it into the release notes

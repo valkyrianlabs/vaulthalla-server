@@ -33,17 +33,22 @@ void assignMinAge(std::optional<std::uint64_t>& current, const std::uint64_t can
     current = current ? std::max(*current, candidate) : std::optional<std::uint64_t>(candidate);
 }
 
-std::string modeName(const protocols::ws::SessionMode mode) {
+}
+
+// A paired device (the desktop app, an agent) signs in with its certificate and is Device; one in the middle of
+// pairing is DevicePairing. Both used to fall through to "unauthenticated", so every connected desktop app
+// raised the connection-health warning on the node it was looking at.
+std::string sessionModeName(const protocols::ws::SessionMode mode) {
     using protocols::ws::SessionMode;
     switch (mode) {
         case SessionMode::Human: return "human";
         case SessionMode::SharePending: return "share_pending";
         case SessionMode::Share: return "share";
-        case SessionMode::Unauthenticated:
-        default: return "unauthenticated";
+        case SessionMode::Device: return "device";
+        case SessionMode::DevicePairing: return "device_pairing";
+        case SessionMode::Unauthenticated: return "unauthenticated";
     }
-}
-
+    return "unauthenticated";
 }
 
 ConnectionStats ConnectionStats::snapshot() {
@@ -65,41 +70,33 @@ ConnectionStats ConnectionStats::snapshot() {
     for (const auto& [_, session] : manager->getActive()) {
         if (!session) continue;
 
-        ++out.activeWsSessionsTotal;
-        const auto age = ageSeconds(session->connectionOpenedAt);
-        assignMinAge(out.oldestSessionAgeSeconds, age);
-
-        const auto mode = modeName(session->mode());
-        ++out.sessionsByMode[mode];
-
-        if (mode == "human") {
-            ++out.activeHumanSessions;
-        } else if (mode == "share") {
-            ++out.activeShareSessions;
-        } else if (mode == "share_pending") {
-            ++out.activeSharePendingSessions;
-        } else {
-            ++out.activeUnauthenticatedSessions;
-            assignMinAge(out.oldestUnauthenticatedSessionAgeSeconds, age);
-        }
+        out.count(sessionModeName(session->mode()), ageSeconds(session->connectionOpenedAt));
     }
 
     out.finalize();
     return out;
 }
 
-void ConnectionStats::finalize() {
-    if (activeUnauthenticatedSessions >= 20) {
-        status = "critical";
-    } else if (
-        activeUnauthenticatedSessions > 0 ||
-        (oldestUnauthenticatedSessionAgeSeconds && unauthenticatedTimeoutSeconds > 0 &&
-         *oldestUnauthenticatedSessionAgeSeconds >= unauthenticatedTimeoutSeconds)
-    ) {
-        status = "warning";
-    } else {
-        status = "healthy";
+void ConnectionStats::count(const std::string& mode, const std::uint64_t ageSeconds) {
+    ++activeWsSessionsTotal;
+    assignMinAge(oldestSessionAgeSeconds, ageSeconds);
+    ++sessionsByMode[mode];
+
+    if (mode == "human") {
+        ++activeHumanSessions;
+    } else if (mode == "share") {
+        ++activeShareSessions;
+    } else if (mode == "share_pending") {
+        ++activeSharePendingSessions;
+    } else if (mode == "unauthenticated") {
+        ++activeUnauthenticatedSessions;
+        assignMinAge(oldestUnauthenticatedSessionAgeSeconds, ageSeconds);
     }
+    // device, device_pairing: in the total and in sessionsByMode only.
+}
+
+void ConnectionStats::finalize() {
+    status = activeUnauthenticatedSessions >= kUnauthenticatedFlood ? "critical" : "healthy";
 }
 
 void to_json(nlohmann::json& j, const ConnectionStats& stats) {
