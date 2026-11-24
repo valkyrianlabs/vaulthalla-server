@@ -36,9 +36,11 @@ Use an upstream S3/R2 vault when Vaulthalla should store vault data in AWS S3, C
 ## Upstream Provider Credentials
 
 :::callout{theme="info" title="Let Vaulthalla manage the bucket"}
-With an AWS S3 or Cloudflare R2 credential, Vaulthalla can also create the bucket for you, adopt an existing one,
-protect buckets it must never touch, and sync from provider events instead of scans. See
-[Managed Upstream Buckets](/vaults/upstream-buckets) and [Event-Driven Sync](/vaults/event-sync).
+With an AWS S3, Cloudflare R2 or Backblaze B2 credential, Vaulthalla can also create the bucket for you, adopt an
+existing one, protect buckets it must never touch, and (AWS, R2) sync from provider events instead of scans. On
+Backblaze B2, whose buckets always keep every version, it also sets how long old versions stay from the vault's
+[recovery mode](/vaults/recovery#provider-versioning-on-backblaze-b2): a bucket it creates keeps only the latest one.
+See [Managed Upstream Buckets](/vaults/upstream-buckets) and [Event-Driven Sync](/vaults/event-sync).
 :::
 
 Create an upstream provider credential before creating the vault:
@@ -268,7 +270,7 @@ default), the probe reports `version_log`:
 
 | Vault | What happens |
 |---|---|
-| Without upstream encryption (`--no-encrypt`) | Works. Its index is written without conditions; one server writes it. |
+| Without upstream encryption (`--no-encrypt`) | Works. Its index is written without conditions; one server writes it, and only its current version is ever read (so a whole-bucket history rule is safe for it). |
 | Encrypting, created before release 1.22 (`path_v0`) | Works, as before: its index is written without conditions. It can be moved to opaque storage there (`vh vault migrate-layout`). |
 | Encrypting, opaque storage (`opaque_v1`) | Works. The encrypted manifest's root is written as a new version of `.vaulthalla/root` on each publish, and the server lists the root's versions once to confirm its own version is the one that counts. Restarts, `vh vault recover`, recovery recipients and key rotation work as on any other bucket. |
 
@@ -280,10 +282,13 @@ What changes for an opaque vault on such a bucket:
 - **Keep every version under `.vaulthalla/`.** The server deletes the root versions it no longer needs itself (it keeps
   the current root, its two predecessors and a week of history) and every version of a manifest segment once no
   recent root uses it. Don't set a lifecycle rule that removes old versions under `.vaulthalla/` (in Backblaze, "Keep
-  only the last version of the file" or a rule with `daysFromHidingToDeleting`): it could remove the current root
-  while a stray version from a crashed write sits above it, and the vault then refuses its manifest (`fork`) instead
-  of reading the wrong one; when it removes an older version between roots, the server reads the newest root and
-  reports a gap in the manifest's history.
+  only the last version of the file" on the whole bucket, or any rule with `daysFromHidingToDeleting` whose prefix
+  reaches `.vaulthalla/`): it could remove the current root while a stray version from a crashed write sits above it,
+  and the vault then refuses its manifest (`fork`) instead of reading the wrong one; when it removes an older version
+  between roots, the server reads the newest root and reports a gap in the manifest's history. The rule Vaulthalla
+  itself sets on a Backblaze B2 bucket for the vault's [recovery mode](/vaults/recovery#provider-versioning-on-backblaze-b2)
+  covers only `o/` (the files) for these vaults, and `vh vault recovery status --refresh` warns about any other rule
+  that reaches `.vaulthalla/`.
 - **One server per vault.** A vault restored elsewhere with `vh vault recover` takes the vault over: the old server,
   if it still runs, stops publishing the vault's manifest and alerts its operators (`manifest_superseded`).
 - **New alerts** (operator notifications, and the vault's sync stalls until someone looks):

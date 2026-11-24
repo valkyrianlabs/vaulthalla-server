@@ -71,6 +71,12 @@ struct FakeCloud {
     std::set<std::string> getVersioningDenied;   // GetBucketVersioning answers 403 AccessDenied
     // Eventual consistency: after a PutBucketVersioning, this many reads (versioning()/inspect) still see the old state.
     unsigned staleReadsAfterPut = 0;
+    // What a new bucket's versioning reads as (Backblaze B2: Enabled, always).
+    padmin::Versioning newBucketVersioning{padmin::Versioning::Unversioned};
+    // Lifecycle writes: every PutLifecycle (accepted or not); a bucket here answers its next one with 409 (another
+    // writer changed it since it was read: B2's ifRevisionIs).
+    unsigned putLifecycleCalls = 0;
+    std::set<std::string> lifecycleConflictOnce;
     std::vector<std::pair<std::string, padmin::Versioning>> putVersioningCalls;   // (bucket, target), accepted or not
     unsigned getVersioningCalls = 0;
 
@@ -135,6 +141,8 @@ public:
             throw padmin::ProviderError("exists", "BucketAlreadyOwnedByYou", 409);
         }
         c_->buckets[request.name].region = request.region.value_or("us-east-1");
+        c_->buckets[request.name].versioning = c_->newBucketVersioning;
+        c_->buckets[request.name].previousVersioning = c_->newBucketVersioning;
     }
     void deleteBucket(const std::string& bucket) override {
         guard(bucket);
@@ -165,6 +173,10 @@ public:
         guard(bucket);
         std::scoped_lock lock(c_->mutex);
         c_->touch(bucket);
+        ++c_->putLifecycleCalls;
+        if (c_->lifecycleConflictOnce.erase(bucket) > 0)
+            throw padmin::ProviderError("b2_update_bucket failed (HTTP 409 conflict): The ifRevisionIs test failed.",
+                                        "conflict", 409);
         c_->buckets.at(bucket).lifecycle = rules;
     }
     bool supportsVersioning() const override {

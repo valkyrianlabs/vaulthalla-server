@@ -337,7 +337,14 @@ TEST_F(UpstreamOpsTest, ABackblazeB2KeyListsCreatesAdoptsAndDetachesBuckets) {
     {
         std::scoped_lock lock(cloud->mutex);
         EXPECT_EQ(cloud->buckets.at(name).region, "us-west-004") << "the key's own region, taken from its endpoint";
-        EXPECT_TRUE(cloud->buckets.at(name).lifecycle.empty()) << "no lifecycle rule is ever written on B2";
+        // Versioning off is really off on B2: a bucket Vaulthalla creates keeps only the latest version (this suite's
+        // encrypting vaults are path_v0: the whole bucket plus the index rule; test_recovery_b2.cpp has opaque_v1).
+        const auto& lc = cloud->buckets.at(name).lifecycle;
+        ASSERT_EQ(lc.size(), 2u);
+        const auto owned = std::ranges::find(lc, std::string("vaulthalla-managed"), &padmin::LifecycleRule::id);
+        ASSERT_NE(owned, lc.end());
+        EXPECT_EQ(owned->prefix, "");
+        EXPECT_EQ(owned->expire_noncurrent_days.value_or(0), 1u);
     }
     const auto row = b2RowOf(name);
     ASSERT_TRUE(row) << "recorded under backblaze-b2 and the region endpoint";
@@ -372,7 +379,7 @@ TEST_F(UpstreamOpsTest, ABackblazeB2KeyListsCreatesAdoptsAndDetachesBuckets) {
     EXPECT_EQ(b2RowOf(existing)->ownership, storage::upstream::model::Ownership::Adopted);
     EXPECT_EQ(objectCount(existing), 1u);
 
-    // vh upstream detach: there is no lifecycle rule of ours to remove, and that must not stop it.
+    // vh upstream detach: a bucket without a rule of ours detaches too (beginProvision alone writes none).
     const auto spare = bucketName();
     const auto ticket = up::beginProvision(superUser, keyId, "v", spare, {.mode = up::BucketMode::Create});
     (void)db::query::upstream::Bucket::setProvisioningState(ticket.upstream_bucket_id,

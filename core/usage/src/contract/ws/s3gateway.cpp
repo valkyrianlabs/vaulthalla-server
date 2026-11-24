@@ -123,7 +123,20 @@ std::vector<WsField> s3gwProfileSettings() {
             str("conflict_policy").opt().oneOf({"keep_local", "keep_remote", "keep_newest", "ask"})
                 .desc("Create: defaults to vaults.s3.default_remote_conflict_policy."),
             str("bucket_prefix").opt().desc("The upstream bucket is <prefix><gateway bucket>; \"\" for none."),
-            str("description").opt().nullable().desc("null or \"\" clears it.")};
+            str("description").opt().nullable().desc("null or \"\" clears it."),
+            str("versioning").opt().gen(gen::constant("off"))
+                .desc("What every bucket created through the profile keeps on the provider: off (default; only the "
+                      "latest version), indefinite or <N>d (1..36500). Anything but off is Backblaze B2 only and needs "
+                      "accept_versioning. Applies to buckets created afterwards."),
+            boolean("accept_versioning").opt().desc("Accept that the profile's buckets keep (and bill for) old versions.")};
+}
+
+// The confirmation a versioning other than off asks for (ops::s3_gateway::PROFILE_VERSIONING).
+std::vector<WsConfirmation> s3gwProfileConfirmations() {
+    return {{.code = "upstream_profile_versioning",
+             .accept_field = "accept_versioning",
+             .description = "The profile's buckets will keep old versions on Backblaze B2, billed until they expire: "
+                            "resend with accept_versioning once the person accepts."}};
 }
 
 // ---- budget payloads (gateway credential budgets only) --------------------------------------------------------
@@ -272,6 +285,7 @@ std::vector<WsCommandUsage> s3GatewayCommands() {
                   str("api_key").opt().nullable().desc("The upstream API key by name.")},
                  s3gwProfileSettings()),
         {object("profile", "S3GatewayUpstreamProfile")}));
+    out.back().confirmations = s3gwProfileConfirmations();
 
     out.push_back(s3gwCommand(
         "s3.gateway.upstreamProfiles.update",
@@ -286,6 +300,7 @@ std::vector<WsCommandUsage> s3GatewayCommands() {
          objectArray("reapplied", "", {str("bucket_name"), uinteger("vault_id"), boolean("applied"),
                                        str("detail").nullable().desc("Why the bucket was left as it is.")})},
         {}, 60s));
+    out.back().confirmations = s3gwProfileConfirmations();
 
     out.push_back(s3gwCommand(
         "s3.gateway.upstreamProfiles.delete",

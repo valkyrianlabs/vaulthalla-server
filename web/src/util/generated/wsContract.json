@@ -9631,6 +9631,95 @@
       "name": "RecoveryPointDetail"
     },
     {
+      "description": "What the vault's provider can do for provider versioning (to_json(recovery::ProviderCapabilities)).",
+      "fields": [
+        {
+          "description": "Every bucket keeps versions and that can't be switched off (Backblaze B2).",
+          "name": "always_versioned",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Versioning is turned on with a request (AWS PutBucketVersioning).",
+          "name": "enable",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "suspend",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "retention_days",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "retention_indefinite",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Mode off keeps only the latest version on the provider (B2 lifecycle rule).",
+          "name": "history_off",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "list_versions",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "restore_copy",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "restore_transfer",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "propagation_minutes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "\"operation: why\" for what is false above.",
+          "items": "string",
+          "name": "unsupported",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "name": "RecoveryProviderCapabilities"
+    },
+    {
       "description": "The vault bucket's provider versioning state (to_json(recovery::ProviderVersioningState)).",
       "fields": [
         {
@@ -9645,6 +9734,14 @@
           "required": true,
           "types": [
             "string"
+          ]
+        },
+        {
+          "model": "RecoveryProviderCapabilities",
+          "name": "capabilities",
+          "required": true,
+          "types": [
+            "object"
           ]
         },
         {
@@ -9754,7 +9851,7 @@
           ]
         },
         {
-          "description": "unset | days | indefinite (what Vaulthalla set).",
+          "description": "unset | days | indefinite | latest (what Vaulthalla set; latest: only the latest version is kept, Backblaze B2 with mode off).",
           "name": "retention_mode",
           "required": true,
           "types": [
@@ -9786,6 +9883,15 @@
           "types": [
             "integer",
             "null"
+          ]
+        },
+        {
+          "description": "Vaulthalla's own lifecycle rules on the bucket as last read.",
+          "items": "string",
+          "name": "vaulthalla_rules",
+          "required": true,
+          "types": [
+            "array"
           ]
         },
         {
@@ -11775,6 +11881,14 @@
         {
           "description": "The upstream bucket is <bucket_prefix><gateway bucket>.",
           "name": "bucket_prefix",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "What a bucket created through the profile keeps on the provider: off (only the latest version), indefinite or <N>d. Anything but off is Backblaze B2 only.",
+          "name": "versioning",
           "required": true,
           "types": [
             "string"
@@ -24313,7 +24427,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "a2849dc9f75eed87c29f7e874f222944cd6106a78f44585ef8f446fa356c9d4d",
+  "models_hash": "a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9",
   "protocol": {
     "min": 1,
     "version": 1
@@ -45916,7 +46030,13 @@
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "s3.gateway.upstreamProfiles.create",
-      "confirmations": [],
+      "confirmations": [
+        {
+          "accept_field": "accept_versioning",
+          "code": "upstream_profile_versioning",
+          "description": "The profile's buckets will keep old versions on Backblaze B2, billed until they expire: resend with accept_versioning once the person accepts."
+        }
+      ],
       "description": "Create an upstream profile over an API key that is enabled for provider administration. Needs admin.s3_gateway.manage_buckets, admin.upstream.provision and Consume on the key. The name is what S3 clients send as a region to select the profile, and never changes.",
       "effect": "write",
       "input": "payload",
@@ -46012,6 +46132,28 @@
             "string",
             "null"
           ]
+        },
+        {
+          "description": "What every bucket created through the profile keeps on the provider: off (default; only the latest version), indefinite or <N>d (1..36500). Anything but off is Backblaze B2 only and needs accept_versioning. Applies to buckets created afterwards.",
+          "generator": {
+            "kind": "const",
+            "values": [
+              "off"
+            ]
+          },
+          "name": "versioning",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Accept that the profile's buckets keep (and bill for) old versions.",
+          "name": "accept_versioning",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
         }
       ],
       "refusal_codes": [
@@ -46019,7 +46161,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "upstream_profile_versioning"
       ],
       "refusal_kinds": [
         "denied",
@@ -46165,7 +46308,13 @@
       "auth": "human",
       "client_timeout_ms": 60000,
       "command": "s3.gateway.upstreamProfiles.update",
-      "confirmations": [],
+      "confirmations": [
+        {
+          "accept_field": "accept_versioning",
+          "code": "upstream_profile_versioning",
+          "description": "The profile's buckets will keep old versions on Backblaze B2, billed until they expire: resend with accept_versioning once the person accepts."
+        }
+      ],
       "description": "Change a profile; absent members stay as they are. A changed sync strategy or conflict policy is re-applied to the buckets created from the profile whose credential (or the server) asks for it; `reapplied` says what happened to each. The API key, encryption and prefix only apply to buckets created afterwards.",
       "effect": "write",
       "input": "payload",
@@ -46273,6 +46422,28 @@
             "string",
             "null"
           ]
+        },
+        {
+          "description": "What every bucket created through the profile keeps on the provider: off (default; only the latest version), indefinite or <N>d (1..36500). Anything but off is Backblaze B2 only and needs accept_versioning. Applies to buckets created afterwards.",
+          "generator": {
+            "kind": "const",
+            "values": [
+              "off"
+            ]
+          },
+          "name": "versioning",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Accept that the profile's buckets keep (and bill for) old versions.",
+          "name": "accept_versioning",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
         }
       ],
       "refusal_codes": [
@@ -46280,7 +46451,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "upstream_profile_versioning"
       ],
       "refusal_kinds": [
         "denied",
@@ -56572,7 +56744,7 @@
           "description": "Suspending versioning on the bucket: resend with confirm (existing versions are kept)."
         }
       ],
-      "description": "Suspend versioning on the vault's bucket; existing versions are kept and nothing is deleted. A refusal with data.code 'recovery_versioning_suspend' asks for confirmation: resend with confirm.",
+      "description": "Suspend versioning on the vault's bucket (AWS S3); existing versions are kept and nothing is deleted. A refusal with data.code 'recovery_versioning_suspend' asks for confirmation: resend with confirm. Backblaze B2 can't suspend (invalid): set mode off to keep only the latest version.",
       "effect": "destructive",
       "input": "payload",
       "operation": "recovery.suspend",
@@ -56660,7 +56832,7 @@
           "description": "The vault's bucket is not managed by Vaulthalla yet: resend with accept_adoption to adopt it."
         }
       ],
-      "description": "Change a vault's recovery settings. mode provider_versioning needs disclosure_token from vault.recovery.disclosure ('recovery_versioning_disclosure'); unpriced costs need accept_unpriced ('recovery_versioning_unpriced'); a shorter retention needs accept_retention_shortening ('recovery_retention_shorten'); the vault's unmanaged bucket needs accept_adoption ('upstream_adoption').",
+      "description": "Change a vault's recovery settings. mode provider_versioning needs disclosure_token from vault.recovery.disclosure ('recovery_versioning_disclosure'); unpriced costs need accept_unpriced ('recovery_versioning_unpriced'); a shorter retention needs accept_retention_shortening ('recovery_retention_shorten') and a data.destroy step-up; the vault's unmanaged bucket needs accept_adoption ('upstream_adoption'). On Backblaze B2, mode off or local_snapshots also makes the bucket keep only the latest version, asked with 'recovery_retention_shorten' (and the step-up) when that deletes history that exists now.",
       "effect": "write",
       "input": "payload",
       "operation": "recovery.update",
@@ -56848,6 +57020,7 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "step_up_required",
         "recovery_versioning_disclosure",
         "recovery_versioning_unpriced",
         "recovery_retention_shorten",
@@ -56858,7 +57031,8 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized"
+        "unauthorized",
+        "step_up_required"
       ],
       "response": [
         {
@@ -56871,6 +57045,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -57855,5 +58030,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "bb3be7716796cabb23fe60ecb0df6475f489aae21f399a77a64ad2d4dd0b7943"
+  "ws_hash": "f4ac6394093213b0d9fde36ea0729572c2a274889f6563f12573da937046f423"
 }

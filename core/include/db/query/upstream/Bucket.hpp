@@ -50,7 +50,8 @@ struct BucketVersioning {
     std::optional<std::time_t> settles_at;             // writes are versioned for sure from then on (AWS: + 15 min)
     std::optional<bool> mfa_delete;
     std::optional<bool> object_lock;
-    std::string retention_mode = "unset";              // unset | days | indefinite (what Vaulthalla set)
+    // unset | days | indefinite | latest (what Vaulthalla set; latest: only the latest version is kept, B2 mode off)
+    std::string retention_mode = "unset";
     std::optional<unsigned int> retention_days;
     std::optional<std::time_t> retention_set_at;
     std::optional<uint32_t> retention_set_by;
@@ -139,7 +140,7 @@ public:
     // was never recorded, enabled_by_vaulthalla kept). settles_at only ever moves later (never shortens a window).
     static void recordVersioningEnabled(int64_t id, std::optional<uint32_t> userId, bool byVaulthalla,
                                         std::time_t settlesAt);
-    // The noncurrent retention Vaulthalla set: mode unset | days | indefinite (days only with "days").
+    // The noncurrent retention Vaulthalla set: mode unset | days | indefinite | latest (days only with "days").
     static void recordRetention(int64_t id, const std::string& mode, std::optional<unsigned int> days,
                                 std::optional<uint32_t> userId);
 

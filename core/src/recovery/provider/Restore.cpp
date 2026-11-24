@@ -11,6 +11,8 @@
 #include "db/query/recovery/ObjectVersion.hpp"
 #include "db/query/sync/Conflict.hpp"
 #include "db/query/sync/RemoteObjectIndex.hpp"
+#include "db/query/vault/APIKey.hpp"
+#include "storage/s3/provider/admin/Admin.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
@@ -21,6 +23,7 @@
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "platform/Durable.hpp"
+#include "recovery/provider/Capabilities.hpp"
 #include "recovery/provider/Points.hpp"
 #include "recovery/provider/Versions.hpp"
 #include "runtime/Deps.hpp"
@@ -59,6 +62,16 @@
 namespace vh::recovery::provider {
 
 namespace restore_detail {
+
+// Whether the vault's provider restores a version by CopyObject from its version id (AWS); else every restore is a
+// transfer (Backblaze B2 doesn't document a versioned copy source: recovery/provider/Capabilities.hpp).
+bool providerCopiesVersions(const storage::CloudEngine& engine) {
+    const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(engine.vault);
+    if (!s3) return false;
+    const auto key = db::query::vault::APIKey::getAPIKey(s3->api_key_id);
+    if (!key) return true;   // as before: the copy decides by key, size and layout alone
+    return capabilitiesOf(storage::s3::provider::admin::providerIdentity(*key)).restore_copy;
+}
 
 using FilePtr = std::shared_ptr<fs::model::File>;
 using VersionRow = db::query::recovery::ObjectVersionRow;
@@ -444,6 +457,7 @@ struct PlanContext {
     std::shared_ptr<storage::CloudEngine> engine;
     unsigned int currentKeyVersion{};
     bool encryptUpstream{true};
+    bool copiesVersions{true};
     std::unordered_map<uint32_t, db::query::sync::ConflictRecord> openConflicts;
     std::unordered_map<uint32_t, sync::model::Baseline> baselines;
 
@@ -455,6 +469,7 @@ struct PlanContext {
             } catch (const std::exception&) {}
         }
         if (const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(engine->vault)) encryptUpstream = s3->encrypt_upstream;
+        copiesVersions = providerCopiesVersions(*engine);
         openConflicts = db::query::sync::Conflict::openForVault(engine->vault->id);
         baselines = db::query::sync::Conflict::baselinesForVault(engine->vault->id);
     }
@@ -495,10 +510,11 @@ PlanItem itemFor(const PlanContext& ctx, const VersionRow& v, const std::filesys
     const bool keyOk = !v.encrypted.has_value() ? true   // unknown metadata: decided after the HEAD
                                     : (encrypted ? (ctx.encryptUpstream && v.key_version == ctx.currentKeyVersion)
                                                  : !ctx.encryptUpstream);
-    item.method = sameKey && fitsCopy && keyOk ? "provider_copy" : "provider_transfer";
+    item.method = sameKey && fitsCopy && keyOk && ctx.copiesVersions ? "provider_copy" : "provider_transfer";
     if (!v.encrypted.has_value()) item.notes.emplace_back("no Vaulthalla metadata recorded: copy or transfer is decided after a HEAD");
     if (item.method == "provider_transfer") {
-        if (!sameKey) item.notes.emplace_back("another destination: GET, re-seal and PUT");
+        if (!ctx.copiesVersions) item.notes.emplace_back(std::string("restored by transfer: ") + kB2CopyFromVersionUnsupported);
+        else if (!sameKey) item.notes.emplace_back("another destination: GET, re-seal and PUT");
         else if (!fitsCopy) item.notes.emplace_back("larger than one CopyObject (5 GiB): GET, re-seal and PUT");
         else if (encrypted && v.key_version != ctx.currentKeyVersion)
             item.notes.emplace_back("sealed under key version " + std::to_string(v.key_version.value_or(0)) +
@@ -875,7 +891,8 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
                                          "event subscription with foreign_objects=import accepts such objects)");
         }
         const auto currentKeyVersion = engine->encryptionManager->get_key_version();
-        const bool copyable = destKey == srcKey && meta.object_size <= s3::Controller::MAX_SINGLE_COPY_BYTES &&
+        const bool copyable = restore_detail::providerCopiesVersions(*engine) && destKey == srcKey &&
+                              meta.object_size <= s3::Controller::MAX_SINGLE_COPY_BYTES &&
                               ((meta.encrypted && encryptUpstream && meta.key_version == currentKeyVersion) ||
                                (!meta.encrypted && !encryptUpstream));
 

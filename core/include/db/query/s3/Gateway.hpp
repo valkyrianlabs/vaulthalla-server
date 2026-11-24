@@ -48,6 +48,9 @@ struct UpstreamProfile {
     std::string sync_strategy{"cache"};
     std::string conflict_policy{"keep_local"};
     std::string bucket_prefix{};      // the upstream bucket is <prefix><gateway bucket>
+    // What a bucket created through the profile keeps on the provider (migration 156): off (the owner's default; NULL
+    // reads as off) | indefinite | <N>d. Anything but off is Backblaze B2 only (ops::s3_gateway validates it).
+    std::string versioning{"off"};
     std::optional<std::string> description{};
     std::optional<uint32_t> created_by{};
     std::time_t created_at{};

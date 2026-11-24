@@ -2,6 +2,7 @@
 
 #include "db/query/upstream/Bucket.hpp"
 #include "recovery/Model.hpp"
+#include "recovery/provider/Capabilities.hpp"
 #include "storage/s3/provider/admin/Admin.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "storage/upstream/Lifecycle.hpp"
@@ -14,8 +15,8 @@
 #include <string>
 #include <vector>
 
-// Provider versioning policy primitives (trusted: they never authorize; ops::recovery does). AWS S3 today; the
-// capability comes from AdminClient::supportsVersioning (R2: none).
+// Provider versioning policy primitives (trusted: they never authorize; ops::recovery does). AWS S3 and Backblaze B2;
+// what each provider can do is recovery::provider::capabilitiesOf (Capabilities.hpp; R2: nothing).
 namespace vh::recovery::provider::policy {
 
 namespace padmin = storage::s3::provider::admin;
@@ -66,18 +67,38 @@ struct RetentionResult {
     // Other applications' rules that expire noncurrent versions ("id: N days", "(partial)" when they cover some keys).
     std::vector<std::string> foreign_rules;
     std::optional<unsigned int> foreign_whole_days;    // the shortest foreign rule over the whole vault
+    // Vaulthalla's own rules that expire old versions ("vaulthalla-managed: 'o/', 30 days").
+    std::vector<std::string> vaulthalla_rules;
     std::vector<std::string> warnings;
+};
+
+// How the bucket is read for a vault: where its data lives (coverage) and whether .vaulthalla/ must keep its old
+// versions (an opaque_v1 vault on a bucket without conditional writes: Backblaze B2).
+struct VaultView {
+    std::string data_prefix{};            // "" = the whole bucket; opaque_v1 on B2: "o/"
+    bool protect_metadata{false};         // warn about any rule that deletes old versions under .vaulthalla/
+    bool warn_current_expiry{false};      // warn about foreign rules that expire (hide) current objects (B2)
 };
 
 // Vaulthalla's noncurrent retention: the owned rule's NoncurrentDays (indefinite: none of ours) plus the
 // manifest-versions rule; every other rule is preserved and re-verified after the write (GET-merge-PUT-GET).
-// Throws std::invalid_argument (lifecycle unreadable, a provider without versions), UnmodeledOwnedRule, ProviderError,
-// std::runtime_error (foreign rules changed under the write).
+// `scope` (ruleScopeFor) places the owned rule (AWS: where it is; B2 opaque_v1: "o/") and says whether the
+// manifest-versions rule is written (B2 opaque_v1: never, and an earlier one is removed).
+// Throws std::invalid_argument (lifecycle unreadable, a provider without versions), UnmodeledOwnedRule, ProviderError
+// (B2: 409 when the bucket changed between the read and the write), std::runtime_error (foreign rules changed under
+// the write).
 [[nodiscard]] RetentionResult applyRetention(padmin::AdminClient& admin, const std::string& bucket,
-                                             const ProviderRetention& retention, bool allowNoncurrent);
+                                             const ProviderRetention& retention, bool allowNoncurrent,
+                                             const RuleScope& scope = {}, const VaultView& view = {});
+// History off on a provider that always keeps versions (Backblaze B2): the owned rule deletes every old version one
+// day after it stops being current (B2's "keep only the last version": daysFromHidingToDeleting 1), scoped and
+// verified like applyRetention. Hidden (deleted) files go too: B2 removes a hide marker once it is the oldest version.
+[[nodiscard]] RetentionResult applyLatestOnly(padmin::AdminClient& admin, const std::string& bucket,
+                                              const RuleScope& scope, const VaultView& view = {});
+inline constexpr unsigned int kLatestOnlyDays = 1;   // B2's minimum
 
 // What a bucket's lifecycle already does to noncurrent versions (no write).
-[[nodiscard]] RetentionResult describeRetention(const std::vector<padmin::LifecycleRule>& rules);
+[[nodiscard]] RetentionResult describeRetention(const std::vector<padmin::LifecycleRule>& rules, const VaultView& view = {});
 
 // ---- disclosure token ----------------------------------------------------------------------------------------------
 

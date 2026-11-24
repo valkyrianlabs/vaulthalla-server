@@ -204,6 +204,8 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
         {"storage.vault.remove", "covered by ATargetBoundGrantBindsTheExactAction"},
         {"recovery.point.delete", "needs a recovery point"},
         {"vault.recovery.suspend", "needs a versioned provider bucket"},
+        {"vault.recovery.update", "only when the provider would delete history sooner: needs a provider bucket "
+                                  "(RecoveryB2Test.DeletingProviderHistoryIsADataDestroyStepUp)"},
         {"vault.recover", "needs a bucket and the customer's recovery material (VaultRecoverDb; the console is refused "
                           "recover_requires_device first)"},
         {"vault.layout.migrate", "needs an encrypting S3 vault on path_v0 with recovery material and a bucket; the ops "

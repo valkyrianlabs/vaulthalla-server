@@ -252,8 +252,8 @@ std::shared_ptr<CommandUsage> vaultRecoveryStatus(const std::weak_ptr<CommandUsa
     cmd->positionals = {rbVaultPos};
     cmd->optional = {rbOwner};
     cmd->optional_flags = {
-        Flag::Alias("refresh", "Read the bucket's versioning, lifecycle and object lock again (one admin call)",
-                    "refresh"),
+        Flag::Alias("refresh", "Read the bucket's versioning, lifecycle rules and object lock again (AWS: one admin "
+                    "round trip; Backblaze B2 also reads its lifecycle rules through the native API)", "refresh"),
         rbJson};
     cmd->examples = {{"vh vault recovery status 42", "Recovery settings of vault 42."},
                      {"vh vault recovery status photos --owner alice --refresh", "Re-read the bucket state first."}};
@@ -267,7 +267,11 @@ std::shared_ptr<CommandUsage> vaultRecoverySet(const std::weak_ptr<CommandUsage>
     cmd->description = "Change a vault's recovery settings. Turning on provider versioning first shows the cost "
                        "disclosure and asks you to type ENABLE VERSIONING (and to accept separately when the cost "
                        "can't be estimated). Without a terminal it needs --yes, plus --accept-unpriced when unpriced. "
-                       "Shortening retention deletes history sooner and is asked separately.";
+                       "Shortening retention deletes history sooner and is asked separately "
+                       "(--accept-retention-shortening; in the web console also a step-up; agents can't). On Backblaze "
+                       "B2, whose buckets always keep versions, --mode off or local-snapshots also makes the bucket keep "
+                       "only the latest version (old ones are deleted a day after they are replaced), asked the same "
+                       "way when that deletes history that exists now.";
     cmd->positionals = {rbVaultPos};
     cmd->optional = {rbOwner};
     cmd->groups = {
@@ -304,7 +308,9 @@ std::shared_ptr<CommandUsage> vaultRecoverySet(const std::weak_ptr<CommandUsage>
         {"vh vault recovery set 42 --mode provider-versioning --retention 90d",
          "Review the cost disclosure and turn on S3 versioning with 90-day retention."},
         {"vh vault recovery set 42 --mode provider-versioning --retention 30d --yes --accept-unpriced",
-         "The same from a script (the disclosure is still fetched and printed)."}};
+         "The same from a script (the disclosure is still fetched and printed)."},
+        {"vh vault recovery set 42 --mode off --accept-retention-shortening",
+         "Backblaze B2: keep only the latest version of every file in the bucket, deleting the history kept so far."}};
     return cmd;
 }
 
@@ -312,8 +318,9 @@ std::shared_ptr<CommandUsage> vaultRecoverySuspend(const std::weak_ptr<CommandUs
     auto cmd = rbNode(parent);
     cmd->aliases = {"suspend"};
     cmd->effect = CommandEffect::Write;
-    cmd->description = "Suspend versioning on the vault's bucket. Existing versions are kept and nothing is deleted; "
-                       "a bucket can never return to unversioned. Asks for confirmation.";
+    cmd->description = "Suspend versioning on the vault's bucket (AWS S3). Existing versions are kept and nothing is "
+                       "deleted; a bucket can never return to unversioned. Asks for confirmation. Backblaze B2 buckets "
+                       "can't be suspended: set --mode off to keep only the latest version instead.";
     cmd->positionals = {rbVaultPos};
     cmd->optional = {rbOwner};
     cmd->optional_flags = {rbYes};
@@ -339,8 +346,8 @@ std::shared_ptr<CommandUsage> vaultRecoveryDisclosure(const std::weak_ptr<Comman
 std::shared_ptr<CommandUsage> vaultRecovery(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = rbNode(parent);
     cmd->aliases = {"recovery"};
-    cmd->description = "File recovery settings of a vault: local snapshots, local versioning and provider (S3) "
-                       "versioning with its cost disclosure. (Undeleting a vault is 'vh vault restore'.)";
+    cmd->description = "File recovery settings of a vault: local snapshots, local versioning and provider versioning "
+                       "(AWS S3, Backblaze B2) with its cost disclosure. (Undeleting a vault is 'vh vault restore'.)";
     cmd->examples = {{"vh vault recovery status 42", "Recovery settings of vault 42."},
                      {"vh vault recovery set 42 --mode local-snapshots", "Allow snapshots in vault 42."}};
     cmd->subcommands = {vaultRecoveryStatus(cmd->weak_from_this()), vaultRecoverySet(cmd->weak_from_this()),

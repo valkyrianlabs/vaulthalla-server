@@ -11,7 +11,7 @@ BucketVersioning bucketVersioningForVault(const uint32_t vaultId, const std::tim
         BucketVersioning v;
         const auto res = txn.exec(R"SQL(
             SELECT COALESCE(versioning_status, 'unknown') AS status, versioning_enabled_by_vaulthalla,
-                   extract(epoch FROM versioning_settles_at)::bigint AS settles_at
+                   extract(epoch FROM versioning_settles_at)::bigint AS settles_at, noncurrent_retention_mode
             FROM upstream_bucket WHERE vault_id = $1
             ORDER BY updated_at DESC, id DESC LIMIT 1
         )SQL", pqxx::params{vaultId});
@@ -20,6 +20,7 @@ BucketVersioning bucketVersioningForVault(const uint32_t vaultId, const std::tim
         v.status = row["status"].as<std::string>();
         v.enabled_by_vaulthalla = row["versioning_enabled_by_vaulthalla"].as<bool>();
         if (!row["settles_at"].is_null()) v.settles_at = static_cast<std::time_t>(row["settles_at"].as<int64_t>());
+        v.retention_mode = row["noncurrent_retention_mode"].as<std::string>();
         v.settled = v.status == "enabled" && (!v.settles_at || now >= *v.settles_at);
         return v;
     });

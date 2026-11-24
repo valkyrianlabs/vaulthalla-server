@@ -429,7 +429,8 @@ S3/R2 vault may do with its bucket (read-only: no uploads, deletes or manifest p
 ## File Recovery
 
 Earlier versions of files come from three places: local snapshots you take, local versions kept automatically when
-local versioning is on, and the provider's own object versions when an AWS S3 bucket has versioning enabled. Their
+local versioning is on, and the provider's own object versions (an AWS S3 bucket with versioning enabled, or a
+Backblaze B2 bucket, which always keeps versions). Their
 ids are `snap-<id>`, `lv-<id>` and `pv-<id>`. Undeleting a whole vault is `vh vault restore`, not this.
 
 Vault settings:
@@ -452,8 +453,11 @@ the cost can't be estimated you accept that separately (`ACCEPT UNPRICED`). With
 `--accept-unpriced` when unpriced. A shorter retention deletes history sooner and is asked separately (`SHORTEN`, or
 `--accept-retention-shortening`), and so is adopting the vault's unmanaged bucket (`ADOPT`, or `--adopt-bucket`).
 `--retention` takes `30d`, `90d`, `365d`, `indefinite` or any number of days from 1 to 36500; there is no default.
-Changing the mode never suspends a versioned bucket; `suspend` does (type `SUSPEND`, or `--yes`), and it deletes
-nothing. Local versioning flags you leave out keep their stored values; `--keep-last 0`, `--max-age-days 0` and
+Changing the mode never suspends a versioned AWS bucket; `suspend` does (type `SUSPEND`, or `--yes`), and it deletes
+nothing. On Backblaze B2 (always versioned, no suspend), `--mode off` or `--mode local-snapshots` makes the bucket keep
+only the latest version, and `--retention` is B2's lifecycle rule; whenever that deletes history that exists now it
+needs `--accept-retention-shortening` (and, in the web console, a step-up). See
+[Provider Versioning On Backblaze B2](/vaults/recovery#provider-versioning-on-backblaze-b2). Local versioning flags you leave out keep their stored values; `--keep-last 0`, `--max-age-days 0` and
 `--version-quota 0` remove the limit, and `--cost-alert none` clears the alert.
 
 Snapshots and recovery points:
@@ -581,6 +585,7 @@ vh s3-gateway upstream create vl-b2 --api-key b2-main --no-encrypt --sync-strate
 vh s3-gateway upstream list
 vh s3-gateway upstream show vl-b2
 vh s3-gateway upstream update vl-b2 --bucket-prefix acme-
+vh s3-gateway upstream update vl-b2 --versioning 30d --accept-versioning
 vh s3-gateway upstream delete vl-b2
 vh s3-gateway creds scope backup set --upstream vl-b2
 vh s3-gateway creds scope backup set --upstream vl-b2 --allow-upstream r2-edge

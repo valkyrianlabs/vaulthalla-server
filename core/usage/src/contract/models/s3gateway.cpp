@@ -67,6 +67,8 @@ std::vector<WsModel> s3GatewayModels() {
          str("sync_strategy").oneOf({"cache", "sync", "mirror"}),
          str("conflict_policy").oneOf({"keep_local", "keep_remote", "keep_newest", "ask"}),
          str("bucket_prefix").desc("The upstream bucket is <bucket_prefix><gateway bucket>."),
+         str("versioning").desc("What a bucket created through the profile keeps on the provider: off (only the latest "
+                                "version), indefinite or <N>d. Anything but off is Backblaze B2 only."),
          str("description").nullable(),
          boolean("server_default").desc("This profile is s3_gateway.default_upstream_profile."),
          s3gwModelCreatedBy(),

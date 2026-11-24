@@ -120,9 +120,21 @@ std::vector<WsModel> recoveryModels() {
         {boolean("enabled"), uinteger("keep_last").nullable().desc("Per file; null = no limit."),
          uinteger("max_age_days").nullable(), uinteger("quota_bytes").nullable()}));
 
+    out.push_back(model("RecoveryProviderCapabilities",
+        "What the vault's provider can do for provider versioning (to_json(recovery::ProviderCapabilities)).",
+        {boolean("always_versioned").desc("Every bucket keeps versions and that can't be switched off (Backblaze B2)."),
+         boolean("enable").desc("Versioning is turned on with a request (AWS PutBucketVersioning)."),
+         boolean("suspend"),
+         boolean("retention_days"), boolean("retention_indefinite"),
+         boolean("history_off").desc("Mode off keeps only the latest version on the provider (B2 lifecycle rule)."),
+         boolean("list_versions"), boolean("restore_copy"), boolean("restore_transfer"),
+         uinteger("propagation_minutes"),
+         strArray("unsupported").desc("\"operation: why\" for what is false above.")}));
+
     out.push_back(model("RecoveryProviderVersioningState",
         "The vault bucket's provider versioning state (to_json(recovery::ProviderVersioningState)).",
         {boolean("supported"), str("unsupported_reason"),
+         object("capabilities", "RecoveryProviderCapabilities"),
          str("provider").nullable(), str("bucket").nullable(), str("region").nullable(),
          str("storage_class").nullable(),
          str("bucket_state").desc("managed | adopted | unmanaged | protected | unknown."),
@@ -131,10 +143,12 @@ std::vector<WsModel> recoveryModels() {
          recTime("enabled_at"), recTime("settles_at"), recTime("checked_at"),
          boolean("settled").desc("Enabled and past the provider's propagation period."),
          boolean("object_lock").nullable(), boolean("mfa_delete").nullable(),
-         str("retention_mode").desc("unset | days | indefinite (what Vaulthalla set)."),
+         str("retention_mode").desc("unset | days | indefinite | latest (what Vaulthalla set; latest: only the latest "
+                                    "version is kept, Backblaze B2 with mode off)."),
          uinteger("retention_days").nullable(),
          strArray("foreign_noncurrent_rules").desc("Other applications' noncurrent-expiry rules (\"id: days\")."),
          uinteger("effective_noncurrent_days").nullable(),
+         strArray("vaulthalla_rules").desc("Vaulthalla's own lifecycle rules on the bucket as last read."),
          strArray("warnings")}));
 
     out.push_back(model("RecoveryBacklog",

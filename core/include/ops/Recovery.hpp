@@ -78,12 +78,32 @@ struct Update {
     bool accept_adoption = false;                        // BUCKET_ADOPTION (the vault's own unmanaged bucket)
 };
 
-// Mode → provider_versioning: provider must support it (AWS S3 today; R2 refused), key admin-enabled, bucket
-// managed/adopted (or adopted now with accept_adoption), never protected; a valid disclosure token for this vault,
-// bucket, retention and actor; enables bucket versioning only if it isn't already enabled, re-reads it, and records the
-// propagation window. Mode away from provider_versioning never suspends bucket versioning (suspendVersioning does).
-// A retention change that shortens history needs accept_retention_shortening, including from automation.
+// Mode → provider_versioning: provider must support it (AWS S3 and Backblaze B2; R2 refused), key admin-enabled,
+// bucket managed/adopted (or adopted now with accept_adoption), never protected; a valid disclosure token for this
+// vault, bucket, retention and actor; enables bucket versioning only if it isn't already enabled, re-reads it, and
+// records the propagation window. Mode away from provider_versioning never suspends bucket versioning
+// (suspendVersioning does). A retention change that shortens history needs accept_retention_shortening, including from
+// automation, and a data.destroy step-up (#359: an agent can't produce one).
+//
+// Backblaze B2 (every bucket keeps every version; lifecycle rules decide how long): mode off or local_snapshots,
+// asked for in an update, keeps only the latest version on the provider (the owned rule deletes old versions a day
+// after they are replaced; recorded as retention "latest"), on a managed or adopted bucket (or the vault's own
+// unmanaged one with accept_adoption), never a protected one. Deleting history that exists now needs
+// accept_retention_shortening and the same step-up. Without the key's administration, or without
+// admin.upstream.configure + key Consume, only the preference changes (a warning says so). Provider versioning on B2:
+// no PutBucketVersioning and no propagation window; the retention rule is scoped to the vault's data (opaque_v1:
+// "o/", nothing under .vaulthalla/). suspendVersioning on B2 is Invalid (kB2SuspendUnsupported).
 [[nodiscard]] Status update(const Actor& actor, uint32_t vaultId, const Update& req);
+
+namespace detail {
+// A bucket Vaulthalla just created for a vault (ops::upstream::finishProvision; also an empty one the S3 gateway
+// adopted): on Backblaze B2 it gets the history its creator chose, `keep` (nullopt = only the latest version, the
+// owner's default: versioning off; days or indefinite = provider versioning with that retention, the vault's mode
+// set to provider_versioning). Trusted: the vault creation authorized it, and the bucket holds no history yet. Other
+// providers: nothing. Never throws; returns warnings (the vault stays usable, status says what is missing).
+[[nodiscard]] std::vector<std::string> applyNewBucketHistory(const Actor& actor, uint32_t vaultId,
+                                                             const std::optional<ProviderRetention>& keep);
+}
 
 // The cost disclosure for enabling provider versioning with `retention` (default: the bucket's current Vaulthalla
 // retention, else none chosen → scenarios only). Read-only; at most one admin inspect and no object requests.

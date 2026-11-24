@@ -26,6 +26,7 @@ void to_json(nlohmann::json& j, const ItemOutcome& v);
 void to_json(nlohmann::json& j, const RestoreResult& v);
 void to_json(nlohmann::json& j, const ProviderRetention& v);  // {indefinite, days (null when indefinite), value: "30d"}
 void to_json(nlohmann::json& j, const LocalVersioningPolicy& v);
+void to_json(nlohmann::json& j, const ProviderCapabilities& v);
 void to_json(nlohmann::json& j, const ProviderVersioningState& v);
 void to_json(nlohmann::json& j, const Backlog& v);
 void to_json(nlohmann::json& j, const StoreUsage& v);

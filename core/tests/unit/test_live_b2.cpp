@@ -17,6 +17,9 @@
 #include "crypto/id/ObjectUid.hpp"
 #include "storage/s3/Capability.hpp"
 #include "storage/s3/ManifestStore.hpp"
+#include "recovery/provider/Capabilities.hpp"
+#include "recovery/provider/Policy.hpp"
+#include "vault/model/S3Vault.hpp"
 #include <vl/vaultfmt/manifest/Content.hpp>
 #include <vl/vaultfmt/manifest/Document.hpp>
 #include <vl/vaultfmt/manifest/Objects.hpp>
@@ -110,8 +113,10 @@ mf::Entry fileEntry(const std::string& uid, const std::string& parent, std::stri
 // The product's Backblaze B2 admin adapter against the real S3-compatible API. The run bucket was created through it
 // (RunB2Bucket: CreateBucket with x-amz-acl: private and the endpoint's region). Here: the account listing shows it,
 // HeadBucket tells present from absent, a second CreateBucket of the same name is a collision the provisioner
-// recognises, inspect reads versioning and object lock (and never asks for lifecycle or notifications, which B2's S3
-// API lacks), the version listing sees every version of an overwritten key, and the probe reports what is missing.
+// recognises, inspect reads versioning and object lock over the S3 API and lifecycle rules over the native API (never
+// B2's S3 lifecycle or notification calls), the file-history rule round-trips (b2_update_bucket with ifRevisionIs and
+// the bucketInfo record), the version listing sees every version of an overwritten key, and the probe reports what
+// is missing.
 TEST_F(LiveB2, TheAdminAdapterAdministersTheRunBucket) {
     namespace padmin = storage::s3::provider::admin;
     auto& admin = this->admin();
@@ -148,14 +153,32 @@ TEST_F(LiveB2, TheAdminAdapterAdministersTheRunBucket) {
     EXPECT_EQ(config.versioning, padmin::Versioning::Enabled) << "B2 buckets are always versioned";
     ASSERT_TRUE(config.object_lock.has_value()) << "Get Object Lock Configuration was not readable";
     EXPECT_FALSE(*config.object_lock);
-    EXPECT_FALSE(config.lifecycle_readable);
+    EXPECT_TRUE(config.lifecycle_readable) << "lifecycle rules come from B2's native API (b2_list_buckets)";
     EXPECT_FALSE(config.notifications_readable);
     for (const auto& w : config.warnings) std::cout << "[live] inspect warning: " << w << std::endl;
     EXPECT_EQ(config.warnings.size(), 1u);
     EXPECT_EQ(admin.versioning(bucket()).status, padmin::Versioning::Enabled);
     EXPECT_NO_THROW(admin.putVersioning(bucket(), padmin::Versioning::Enabled));
     EXPECT_THROW(admin.putVersioning(bucket(), padmin::Versioning::Suspended), padmin::CapabilityMissing);
-    EXPECT_THROW(admin.putLifecycle(bucket(), {}), padmin::CapabilityMissing);
+
+    // The file-history rule round trip (b2_update_bucket with ifRevisionIs, the bucketInfo record): keep only the
+    // latest version under o/, read it back as Vaulthalla's, then remove it again (indefinite = no rule of ours).
+    {
+        namespace pol = vh::recovery::provider::policy;
+        const auto scope = vh::recovery::provider::ruleScopeFor("backblaze-b2", vault::model::StorageLayout::OpaqueV1);
+        const auto latest = pol::applyLatestOnly(admin, bucket(), scope);
+        EXPECT_TRUE(latest.written);
+        ASSERT_EQ(latest.vaulthalla_rules.size(), 1u);
+        std::cout << "[live] B2 rule: " << latest.vaulthalla_rules[0] << std::endl;
+        const auto reread = admin.inspect(bucket());
+        const auto ours = std::ranges::find_if(reread.lifecycle, [](const padmin::LifecycleRule& r) { return !r.foreign; });
+        ASSERT_NE(ours, reread.lifecycle.end()) << "the bucketInfo record makes the rule recognizable";
+        EXPECT_EQ(ours->prefix, "o/");
+        EXPECT_EQ(ours->expire_noncurrent_days.value_or(0), 1u);
+        (void)pol::applyRetention(admin, bucket(), {.indefinite = true, .days = 0}, true, scope);
+        EXPECT_TRUE(std::ranges::none_of(admin.inspect(bucket()).lifecycle,
+                                         [](const padmin::LifecycleRule& r) { return !r.foreign; }));
+    }
 
     // The emptiness check and cleanup: one current object, two versions of it.
     const auto key = prefix() + "admin-adapter.txt";
@@ -188,8 +211,9 @@ TEST_F(LiveB2, TheAdminAdapterAdministersTheRunBucket) {
     EXPECT_EQ(caps.identity.account_ref, "s3." + region + ".backblazeb2.com");
     EXPECT_TRUE(caps.has("buckets.list"));
     EXPECT_TRUE(caps.has("buckets.create"));
-    for (const char* missing : {"lifecycle", "versioning", "events.queues", "events.notifications"})
-        EXPECT_FALSE(caps.has(missing)) << missing;
+    EXPECT_TRUE(caps.has("lifecycle")) << "the run key holds listBuckets and writeBuckets";
+    EXPECT_TRUE(caps.has("versioning")) << "always on";
+    for (const char* missing : {"events.queues", "events.notifications"}) EXPECT_FALSE(caps.has(missing)) << missing;
 }
 
 // The version_log manifest on Backblaze B2 through the production S3 adapter: the probe says version_log; publishes

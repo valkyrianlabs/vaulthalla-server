@@ -354,7 +354,8 @@ std::string gwProfileSettings(const gw::UpstreamProfile& profile) {
     out << "API key " << (key ? "'" + key->name + "' (" + vh::vault::model::to_string(key->provider) + ")"
                              : "#" + std::to_string(profile.api_key_id))
         << ", upstream encryption " << (profile.encrypt_upstream ? "on" : "off") << ", " << profile.sync_strategy << " + "
-        << profile.conflict_policy << ", upstream bucket " << profile.bucket_prefix << "<bucket>";
+        << profile.conflict_policy << ", upstream bucket " << profile.bucket_prefix << "<bucket>, versioning "
+        << (profile.versioning == "off" ? std::string("off (latest version only)") : profile.versioning);
     return out.str();
 }
 
@@ -1184,6 +1185,8 @@ CommandResult handleGwUpstreamCreate(const CommandCall& call) {
         req.conflict_policy = optVal(call, std::vector<std::string>{"on-sync-conflict", "conflict"});
         req.bucket_prefix = optVal(call, "bucket-prefix");
         req.description = optVal(call, "description");
+        req.versioning = optVal(call, "versioning");
+        req.accept_versioning = hasFlag(call, "accept-versioning");
         return gw::createUpstreamProfile(call.user, req);
     }, [&](const gw::UpstreamProfile& profile) {
         if (hasFlag(call, "json")) return gwProfileJson(profile).dump(4) + "\n";
@@ -1202,6 +1205,8 @@ CommandResult handleGwUpstreamUpdate(const CommandCall& call) {
         req.conflict_policy = optVal(call, std::vector<std::string>{"on-sync-conflict", "conflict"});
         if (hasKey(call, "bucket-prefix")) req.bucket_prefix = optVal(call, "bucket-prefix").value_or("");
         if (hasKey(call, "description")) req.description = optVal(call, "description");
+        req.versioning = optVal(call, "versioning");
+        req.accept_versioning = hasFlag(call, "accept-versioning");
         return gw::updateUpstreamProfile(call.user, gwProfileRef(call.positionals[0]), req);
     }, [&](const gw::UpdatedProfile& updated) {
         if (hasFlag(call, "json")) {

@@ -97,6 +97,9 @@ std::vector<WsStepUp> stepUpTable() {
         {"storage.vault.remove", "data.destroy", kTarget, ""},
         {"recovery.point.delete", "data.destroy", kTarget, ""},
         {"vault.recovery.suspend", "data.destroy", kTarget, ""},
+        {"vault.recovery.update", "data.destroy", kTarget,
+         "when the provider would delete history sooner (the accepted recovery_retention_shorten of a provider retention, "
+         "or Backblaze B2 mode off on a bucket that keeps history)"},
         {"upstream.bucket.cleanup", "data.destroy", kTarget, ""},
         {"vault.layout.cleanup", "data.destroy", kTarget, "with confirm (the dry run never asks)"},
         {"upstream.bucket.unprotect", "data.destroy", kTarget, "when the bucket is protected"},
