@@ -14,24 +14,27 @@ case "${1:-}" in --purge) PURGE=true ;; '') ;; *) echo "usage: uninstall.sh [--p
 # deleted while a daemon might still be running.
 if [ "$PURGE" = true ]; then "$SUPPORT/vaulthalla-provision" --remove --purge --apply
 else "$SUPPORT/vaulthalla-provision" --remove --apply; fi
-# bootout returns while launchd still lets a daemon exit (up to its ExitTimeOut: 60 s for PostgreSQL). Say so, or the
-# silent wait looks like a hang.
+# bootout returns while launchd still lets a daemon exit (up to its ExitTimeOut: 60 s for PostgreSQL). A wait that lasts
+# is announced, or the silence looks like a hang; most daemons are gone within a second, and announcing those made the
+# wait look like the slow step.
 for label in sh.vaulthalla.caddy sh.vaulthalla.server sh.vaulthalla.web sh.vaulthalla.postgres; do
   i=0
   while /bin/launchctl print "system/$label" >/dev/null 2>&1; do
-    [ "$i" -eq 0 ] && echo "Waiting for $label to stop (up to 75 s)..."
     i=$((i + 1))
     if [ "$i" -gt 75 ]; then echo "uninstall.sh: $label is still loaded; stopping" >&2; exit 1; fi
+    [ "$i" -eq 3 ] && echo "Waiting for $label to stop (up to 75 s)..."
     sleep 1
   done
 done
 
+# The receipt lists ~8,400 files and ~1,600 directories (the web console's node_modules): an rm per path took ~25 s of
+# every Homebrew upgrade, so paths go to rm in batches. `s|^.|/&|p` drops empty lines, so no batch ever names "/".
 if /usr/sbin/pkgutil --pkg-info "$PKG_ID" >/dev/null 2>&1; then
-  /usr/sbin/pkgutil --only-files --files "$PKG_ID" | while IFS= read -r f; do rm -f "/$f"; done
+  echo "Removing the installed files..."
+  /usr/sbin/pkgutil --only-files --files "$PKG_ID" | sed -n 's|^.|/&|p' | tr '\n' '\0' | xargs -0 rm -f || true
   # Only directories the package owns outright (a vaulthalla path component); shared ones like usr/local/bin stay.
-  /usr/sbin/pkgutil --only-dirs --files "$PKG_ID" | LC_ALL=C sort -r | while IFS= read -r d; do
-    case "/$d/" in */vaulthalla/*|*/vaulthalla-web/*) rm -rf "/${d:?}" ;; esac
-  done
+  /usr/sbin/pkgutil --only-dirs --files "$PKG_ID" | LC_ALL=C sort -r \
+    | { grep -E '(^|/)vaulthalla(-web)?(/|$)' || true; } | sed -n 's|^.|/&|p' | tr '\n' '\0' | xargs -0 rm -rf
   /usr/sbin/pkgutil --forget "$PKG_ID" >/dev/null
 fi
 
