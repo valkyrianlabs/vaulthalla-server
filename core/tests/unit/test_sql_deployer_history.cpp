@@ -1512,6 +1512,120 @@ TEST_F(SqlDeployerHistoryDb, BackblazeIdentityMigration153KeepsEveryLockAndRecor
     });
 }
 
+// 154 (S3 gateway upstream profiles) on a 153-era database: existing credentials and buckets keep everything and get
+// "no upstream source" (a CreateBucket still makes a local vault); the new table refuses what the gateway would
+// misread ("local" as a profile name, a credential with two sources); running it again changes nothing.
+TEST_F(SqlDeployerHistoryDb, S3GatewayUpstreamProfilesMigration154IsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        const std::string file = "154_s3_gateway_upstream_profiles.sql";
+        txn.exec("ALTER TABLE s3_gateway_bucket DROP COLUMN IF EXISTS created_by_credential_id, "
+                 "DROP COLUMN IF EXISTS upstream_profile_id");
+        txn.exec("ALTER TABLE s3_gateway_credentials DROP COLUMN IF EXISTS upstream_profile_id, "
+                 "DROP COLUMN IF EXISTS upstream_server_default, DROP COLUMN IF EXISTS upstream_reapply");
+        txn.exec("DROP TABLE IF EXISTS s3_gateway_credential_upstream_profile");
+        txn.exec("DROP TABLE IF EXISTS s3_gateway_upstream_profile");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
+
+        const auto userId = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_154_user', 'x') "
+                                     "RETURNING id").one_field_ref().as<int>();
+        const auto vaultId = txn.exec("INSERT INTO vault (type, name, owner_id, mount_point, uid) "
+                                      "VALUES ('local', 'claude_test_154_vault', $1, '0123456789ABCDEFGHJKMNPQRSTVWX154', gen_random_uuid()) "
+                                      "RETURNING id", pqxx::params{userId}).one_field_ref().as<int>();
+        const auto credentialId = txn.exec(
+            "INSERT INTO s3_gateway_credentials (user_id, principal_user_id, name, access_key, "
+            "encrypted_secret_access_key, iv, scope_mode, description) "
+            "VALUES ($1, $1, 'claude_test_154_cred', 'VHCLAUDETEST154', '\\x00', '\\x00', 'user_access', 'kept') "
+            "RETURNING id", pqxx::params{userId}).one_field_ref().as<int>();
+        txn.exec("INSERT INTO s3_gateway_bucket (vault_id, bucket_name, api_exclusive, mode) "
+                 "VALUES ($1, 'claude-test-154', TRUE, 'local')", pqxx::params{vaultId});
+        const auto keyId = txn.exec(
+            "INSERT INTO api_keys (user_id, name, provider, access_key, encrypted_secret_access_key, iv, region, endpoint) "
+            "VALUES ($1, 'claude_test_154_key', 'Backblaze B2', 'k', '\\x00', '\\x00', 'us-west-004', "
+            "'https://s3.us-west-004.backblazeb2.com') RETURNING id", pqxx::params{userId}).one_field_ref().as<int>();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, file));
+        EXPECT_EQ(recordedHash(txn, file), currentHash(file));
+
+        const auto check = [&] {
+            const auto cred = txn.exec("SELECT description, scope_mode, upstream_profile_id IS NULL, upstream_server_default, "
+                                       "upstream_reapply IS NULL FROM s3_gateway_credentials WHERE id = $1",
+                                       pqxx::params{credentialId}).one_row();
+            EXPECT_EQ(cred[0].as<std::string>(), "kept");
+            EXPECT_EQ(cred[1].as<std::string>(), "user_access");
+            EXPECT_TRUE(cred[2].as<bool>()) << "no profile: a CreateBucket still makes a local vault";
+            EXPECT_FALSE(cred[3].as<bool>()) << "an existing credential never follows a server default";
+            EXPECT_TRUE(cred[4].as<bool>());
+            const auto bucket = txn.exec("SELECT mode, api_exclusive, created_by_credential_id IS NULL, "
+                                         "upstream_profile_id IS NULL FROM s3_gateway_bucket WHERE bucket_name = "
+                                         "'claude-test-154'").one_row();
+            EXPECT_EQ(bucket[0].as<std::string>(), "local");
+            EXPECT_TRUE(bucket[1].as<bool>());
+            EXPECT_TRUE(bucket[2].as<bool>());
+            EXPECT_TRUE(bucket[3].as<bool>());
+        };
+        check();
+
+        // What the schema itself refuses.
+        const auto insertProfile = [&](const std::string& name, const std::string& strategy, const std::string& prefix) {
+            pqxx::subtransaction sub(txn);
+            const auto id = sub.exec("INSERT INTO s3_gateway_upstream_profile (name, api_key_id, sync_strategy, "
+                                     "conflict_policy, bucket_prefix) VALUES ($1, $2, $3, 'keep_local', $4) RETURNING id",
+                                     pqxx::params{name, keyId, strategy, prefix}).one_field_ref().as<int>();
+            sub.commit();
+            return id;
+        };
+        for (const auto* bad : {"local", "Upper", "-lead", "trail-", "under_score", ""})
+            EXPECT_ANY_THROW((void)insertProfile(bad, "mirror", "")) << bad;
+        EXPECT_ANY_THROW((void)insertProfile("claude-154-a", "copy", ""));
+        EXPECT_ANY_THROW((void)insertProfile("claude-154-b", "mirror", "Bad_Prefix"));
+        const auto profileId = insertProfile("claude-154", "mirror", "vlp-");
+        EXPECT_ANY_THROW((void)insertProfile("claude-154", "sync", "")) << "names are unique";
+        {
+            pqxx::subtransaction sub(txn);
+            EXPECT_ANY_THROW(sub.exec("UPDATE s3_gateway_credentials SET upstream_profile_id = $2, "
+                                      "upstream_server_default = TRUE WHERE id = $1", pqxx::params{credentialId, profileId}))
+                << "one upstream source at most";
+        }
+        txn.exec("UPDATE s3_gateway_credentials SET upstream_profile_id = $2 WHERE id = $1",
+                 pqxx::params{credentialId, profileId});
+        {
+            pqxx::subtransaction sub(txn);
+            EXPECT_ANY_THROW(sub.exec("DELETE FROM s3_gateway_upstream_profile WHERE id = $1", pqxx::params{profileId}))
+                << "a profile a credential uses is not deleted from under it";
+        }
+        {
+            pqxx::subtransaction sub(txn);
+            EXPECT_ANY_THROW(sub.exec("DELETE FROM api_keys WHERE id = $1", pqxx::params{keyId}))
+                << "nor is the API key of a profile";
+        }
+        txn.exec("UPDATE s3_gateway_credentials SET upstream_profile_id = NULL WHERE id = $1", pqxx::params{credentialId});
+        // The allowlist: one row per (credential, profile), and it holds its profile in place too.
+        txn.exec("INSERT INTO s3_gateway_credential_upstream_profile (credential_id, profile_id) VALUES ($1, $2)",
+                 pqxx::params{credentialId, profileId});
+        {
+            pqxx::subtransaction sub(txn);
+            EXPECT_ANY_THROW(sub.exec("INSERT INTO s3_gateway_credential_upstream_profile (credential_id, profile_id) "
+                                      "VALUES ($1, $2)", pqxx::params{credentialId, profileId}));
+        }
+        {
+            pqxx::subtransaction sub(txn);
+            EXPECT_ANY_THROW(sub.exec("DELETE FROM s3_gateway_upstream_profile WHERE id = $1", pqxx::params{profileId}))
+                << "a profile on a credential's allowlist stays";
+        }
+        txn.exec("DELETE FROM s3_gateway_credential_upstream_profile WHERE credential_id = $1", pqxx::params{credentialId});
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / file)));
+        check();
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM s3_gateway_upstream_profile WHERE name = 'claude-154'")
+                      .one_field_ref().as<int>(), 1);
+    });
+}
+
 TEST_F(SqlDeployerHistoryDb, RecoveryRecipientsMigrationIsAdditiveIdempotentAndCustomerOnly) {
     inRolledBackTxn([](pqxx::work& txn) {
         txn.exec("DROP TABLE IF EXISTS vault_key_envelope");

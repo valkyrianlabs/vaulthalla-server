@@ -86,9 +86,13 @@ public:
     ResolvedBucket resolveBucket(const std::string& bucket, const std::shared_ptr<identities::User>& actor) const;
     ResolvedBucket headBucket(const std::string& bucket, const AuthContext& auth) const;
     ResolvedBucket headBucket(const std::string& bucket, const std::shared_ptr<identities::User>& actor) const;
+    // A gateway CreateBucket. Where the bucket's vault lives follows the credential's upstream profile, or the profile
+    // the request names with `locationConstraint` or its signing region (ops::s3_gateway::profileForCreate); with
+    // none, a local vault. An existing bucket answers as HeadBucket does.
     ResolvedBucket createBucket(const std::string& bucket, const AuthContext& auth,
                                 const std::string& mode = "local",
-                                uintmax_t quotaBytes = 0) const;
+                                uintmax_t quotaBytes = 0,
+                                const std::string& locationConstraint = {}) const;
     ResolvedBucket createBucket(const std::string& bucket, const std::shared_ptr<identities::User>& actor,
                                 const std::string& mode = "local",
                                 uintmax_t quotaBytes = 0) const;

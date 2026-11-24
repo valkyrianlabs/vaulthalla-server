@@ -494,6 +494,8 @@ Config& Config::operator=(Config&&) noexcept = default;
             {"allow_virtual_hosted_style", c.allow_virtual_hosted_style},
             {"default_bucket_mode", c.default_bucket_mode},
             {"default_api_exclusive", c.default_api_exclusive},
+            {"default_upstream_profile", c.default_upstream_profile},
+            {"reapply_upstream_profile_changes", c.reapply_upstream_profile_changes},
             {"multipart", c.multipart},
             {"synthetic_local_request_cost_usd", c.synthetic_local_request_cost_usd}
         };
@@ -515,6 +517,8 @@ Config& Config::operator=(Config&&) noexcept = default;
         c.allow_virtual_hosted_style = j.value("allow_virtual_hosted_style", true);
         c.default_bucket_mode = j.value("default_bucket_mode", "local");
         c.default_api_exclusive = j.value("default_api_exclusive", true);
+        c.default_upstream_profile = j.value("default_upstream_profile", "");
+        c.reapply_upstream_profile_changes = j.value("reapply_upstream_profile_changes", true);
         if (j.contains("multipart")) j.at("multipart").get_to(c.multipart);
         if (j.contains("synthetic_local_request_cost_usd"))
             j.at("synthetic_local_request_cost_usd").get_to(c.synthetic_local_request_cost_usd);

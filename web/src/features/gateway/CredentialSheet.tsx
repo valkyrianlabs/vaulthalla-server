@@ -19,6 +19,7 @@ import { findPolicy } from '@/features/cost/queries'
 import { Money } from '@/features/cost/bits'
 import { LedgerTable } from '@/features/cost/tables'
 import { SCOPE_MODES, type GatewayCredential, type PathOverride, type ScopeMode } from '@/features/gateway/model'
+import { syncSummary } from '@/features/gateway/UpstreamProfilesTab'
 import {
   refreshCredentials,
   refreshGatewayBudgets,
@@ -31,6 +32,7 @@ import {
   useGatewayPolicies,
   useRoleAssignments,
   useSelectedVaults,
+  useUpstreamProfiles,
   useVaultOptions,
   useVaultOverrides,
   useVaultRoleOptions,
@@ -631,6 +633,152 @@ const AccessEditor = ({ credential }: { credential: GatewayCredential }) => {
   )
 }
 
+// ---- new buckets ------------------------------------------------------------------------------------------------
+
+type Reapply = 'inherit' | 'on' | 'off'
+
+// What a CreateBucket made with this key creates: a local vault, or an S3 vault over an upstream profile.
+const UpstreamEditor = ({ credential }: { credential: GatewayCredential }) => {
+  const profiles = useUpstreamProfiles()
+  const current = credential.upstream
+  const [choice, setChoice] = useState(
+    current.source === 'profile' && current.profile ? `profile:${current.profile.id}`
+    : current.source === 'server_default' ? 'server_default'
+    : 'local',
+  )
+  const [reapply, setReapply] = useState<Reapply>(
+    current.reapply === null ? 'inherit'
+    : current.reapply ? 'on'
+    : 'off',
+  )
+  const [allowed, setAllowed] = useState<number[]>(current.allowed.map(p => p.id))
+  const [busy, setBusy] = useState(false)
+  const list = profiles.data?.profiles ?? []
+  // Profiles the key already may select stay listed even when the profile list can't be read.
+  const selectable = [...list, ...current.allowed.filter(a => !list.some(p => p.id === a.id))]
+  const selected =
+    choice === 'server_default' ? (list.find(p => p.server_default) ?? null)
+    : choice.startsWith('profile:') ? (list.find(p => `profile:${p.id}` === choice) ?? current.profile)
+    : null
+
+  const save = async () => {
+    setBusy(true)
+    const done = await run(
+      () =>
+        api.send('s3.gateway.credentials.upstream.set', {
+          credential_id: credential.id,
+          ...(choice.startsWith('profile:') ?
+            { source: 'profile', profile_id: Number(choice.slice('profile:'.length)) }
+          : { source: choice === 'server_default' ? 'server_default' : 'local' }),
+          reapply: reapply === 'inherit' ? null : reapply === 'on',
+          allowed_profile_ids: allowed,
+        }),
+      refreshCredentials,
+      'Could not change what this key creates',
+    )
+    setBusy(false)
+    if (done) notify.success('Saved', credential.name)
+  }
+
+  return (
+    <section data-testid="s3-gateway-section-credential-upstream">
+      <SectionTitle hint="Where a bucket goes when an S3 client creates one with this key.">New buckets</SectionTitle>
+      <Block
+        title="CreateBucket creates"
+        hint="A local vault, or an S3 vault over a new bucket in a provider account (an upstream profile). The key’s principal needs the right to create buckets with that provider credential.">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Storage" htmlFor="gw-upstream-source">
+            <Select
+              id="gw-upstream-source"
+              data-testid="s3-gateway-credential-upstream"
+              value={choice}
+              onChange={e => setChoice(e.target.value)}>
+              <option value="local">Local vault</option>
+              <option value="server_default">
+                Server default{profiles.data?.default_profile ? ` (${profiles.data.default_profile})` : ' (not set)'}
+              </option>
+              {choice.startsWith('profile:') && !list.some(p => `profile:${p.id}` === choice) && current.profile ?
+                <option value={choice}>{current.profile.name}</option>
+              : null}
+              {list.map(p => (
+                <option key={p.id} value={`profile:${p.id}`}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field
+            label="Buckets follow profile changes"
+            htmlFor="gw-upstream-reapply"
+            hint="Whether a changed sync strategy or conflict policy of the profile also applies to the buckets this key already created.">
+            <Select id="gw-upstream-reapply" value={reapply} onChange={e => setReapply(e.target.value as Reapply)}>
+              <option value="inherit">
+                Server setting
+                {profiles.data?.reapply_default === null || profiles.data === undefined ?
+                  ''
+                : profiles.data.reapply_default ?
+                  ' (yes)'
+                : ' (no)'}
+              </option>
+              <option value="on">Yes</option>
+              <option value="off">No</option>
+            </Select>
+          </Field>
+        </div>
+        {selected ?
+          <p className="text-fg-subtle text-xs">
+            {selected.api_key_name ?? `Credential #${selected.api_key_id ?? DASH}`}
+            {selected.provider ? ` (${selected.provider})` : ''} · upstream encryption{' '}
+            {selected.encrypt_upstream === null ?
+              DASH
+            : selected.encrypt_upstream ?
+              'on'
+            : 'off'}{' '}
+            · {syncSummary(selected)} · upstream bucket{' '}
+            <span className="font-mono">{selected.bucket_prefix}&lt;bucket&gt;</span>
+          </p>
+        : null}
+        {selectable.length > 0 ?
+          <fieldset className="space-y-1.5">
+            <legend className="text-fg text-[13px] font-medium">Profiles a client may select</legend>
+            <p className="text-fg-subtle text-xs">
+              A client picks one by sending its name as the region. Profiles left unchecked are out of this key’s reach.
+            </p>
+            <div className="flex flex-wrap gap-x-5 gap-y-1.5 pt-1">
+              {selectable.map(p => (
+                <label key={p.id} className="text-fg-muted flex items-center gap-2 text-sm">
+                  <Checkbox
+                    data-testid={`s3-gateway-credential-allow-upstream-${p.name}`}
+                    checked={allowed.includes(p.id)}
+                    onCheckedChange={on => setAllowed(ids => (on ? [...ids.filter(id => id !== p.id), p.id] : ids.filter(id => id !== p.id)))}
+                  />
+                  <span className="font-mono text-xs">{p.name}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        : null}
+        {current.problem ?
+          <p className="text-warn text-xs" role="status">
+            New buckets can’t be created with this key: {current.problem}.
+          </p>
+        : null}
+        <div className="flex justify-end">
+          <Button
+            variant="primary"
+            size="sm"
+            loading={busy}
+            data-testid="s3-gateway-save-credential-upstream"
+            onClick={() => void save()}>
+            {busy ? null : <FloppyDiskIcon aria-hidden />}
+            Save
+          </Button>
+        </div>
+      </Block>
+    </section>
+  )
+}
+
 // ---- budget -----------------------------------------------------------------------------------------------------
 
 const Usage = ({ trend, policy }: { trend: BudgetTrend | undefined; policy: BudgetPolicy | null }) => {
@@ -884,6 +1032,7 @@ export default function CredentialSheet({
         }>
         <div className="space-y-8">
           <AccessEditor key={credential.id} credential={credential} />
+          <UpstreamEditor key={`upstream-${credential.id}`} credential={credential} />
           <BudgetEditor credential={credential} />
         </div>
       </SheetContent>

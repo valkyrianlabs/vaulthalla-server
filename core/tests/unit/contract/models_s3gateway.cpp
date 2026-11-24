@@ -11,6 +11,7 @@
 #include "rbac/permission/Override.hpp"
 #include "rbac/permission/Permission.hpp"
 #include "rbac/role/Vault.hpp"
+#include "vault/model/APIKey.hpp"
 #include "vault/model/Vault.hpp"
 
 #include <memory>
@@ -50,6 +51,32 @@ db::query::s3::GatewayCredential bareCredential() {
     c.scope_mode = "user_access";
     c.created_at = 1'700'000'000;
     return c;
+}
+
+db::query::s3::UpstreamProfile profileRow(const bool everyMember) {
+    db::query::s3::UpstreamProfile p;
+    p.id = 5;
+    p.name = "vl-b2";
+    p.api_key_id = 8;
+    p.encrypt_upstream = false;
+    p.sync_strategy = "mirror";
+    p.conflict_policy = "keep_local";
+    p.created_at = 1'700'000'000;
+    p.updated_at = 1'700'000'500;
+    if (everyMember) {
+        p.bucket_prefix = "vlp-";
+        p.description = "Backblaze B2 for backups";
+        p.created_by = 1;
+    }
+    return p;
+}
+
+std::shared_ptr<vault::model::APIKey> profileKey() {
+    auto key = std::make_shared<vault::model::APIKey>();
+    key->id = 8;
+    key->name = "b2-main";
+    key->provider = vault::model::S3Provider::BackblazeB2;
+    return key;
 }
 
 std::shared_ptr<identities::User> principal() {
@@ -104,11 +131,24 @@ void checkS3GatewayModels(Checker& c) {
     namespace t = test_contract_models_s3gateway;
     using t::GwJson;
 
-    const auto fullCredential = GwJson::credential(t::fullCredential(), t::principal());
+    const auto fullProfile = GwJson::upstreamProfile(t::profileRow(true), t::profileKey(), true);
+    c.check(fullProfile, "S3GatewayUpstreamProfile", "profile with every optional member set, the server default");
+    c.check(GwJson::upstreamProfile(t::profileRow(false), nullptr, false), "S3GatewayUpstreamProfile",
+            "profile without prefix/description/creator whose API key can't be read");
+
+    const auto profileUpstream = GwJson::credentialUpstream("profile", fullProfile, {}, true, true, json::array({fullProfile}));
+    c.check(profileUpstream, "S3GatewayCredentialUpstream", "a credential's own profile, re-apply chosen, an allowlist");
+    const auto localUpstream = GwJson::credentialUpstream("local", nullptr, {}, std::nullopt, false, json::array());
+    c.check(localUpstream, "S3GatewayCredentialUpstream", "local vaults, re-apply inherited");
+    c.check(GwJson::credentialUpstream("server_default", nullptr, "no server default is set", std::nullopt, true, json::array()),
+            "S3GatewayCredentialUpstream", "the server default, which is not set");
+
+    const auto fullCredential = GwJson::credential(t::fullCredential(), t::principal(), profileUpstream);
     c.check(fullCredential, "S3GatewayCredential", "credential with every optional member set");
-    c.check(GwJson::credential(t::bareCredential(), t::principalWithoutEmail()), "S3GatewayCredential",
+    c.check(GwJson::credential(t::bareCredential(), t::principalWithoutEmail(), localUpstream), "S3GatewayCredential",
             "credential without description/expiry, principal without email");
-    c.check(GwJson::credential(t::bareCredential(), nullptr), "S3GatewayCredential", "credential whose principal is gone");
+    c.check(GwJson::credential(t::bareCredential(), nullptr, localUpstream), "S3GatewayCredential",
+            "credential whose principal is gone");
 
     const auto vault = GwJson::vault(t::vaultRow(true));
     c.check(vault, "S3GatewayVaultRef", "vault with a fuse_name");
@@ -169,8 +209,12 @@ void checkS3GatewayModels(Checker& c) {
     bucket.created_by = 1;
     bucket.created_at = 1'700'000'000;
     bucket.updated_at = 1'700'000'500;
-    c.check(GwJson::bucket(bucket), "S3GatewayBucket", "bucket binding");
+    bucket.created_by_credential_id = 11;
+    bucket.upstream_profile_id = 5;
+    c.check(GwJson::bucket(bucket), "S3GatewayBucket", "bucket a credential created through an upstream profile");
     bucket.created_by.reset();
+    bucket.created_by_credential_id.reset();
+    bucket.upstream_profile_id.reset();
     bucket.mode = "local";
     c.check(GwJson::bucket(bucket), "S3GatewayBucket", "local binding without creator");
 }

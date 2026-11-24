@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '466cd1b8c26eb04ca683132e1d7fd289e56a4cf536caf6fde6a17e08ec52d1ea'
+export const WS_CONTRACT_HASH = 'bb3be7716796cabb23fe60ecb0df6475f489aae21f399a77a64ad2d4dd0b7943'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '7a68c3ca1641638a1dcdf0d7062b9d0edf93754e0a5c0cedae20ecd06260f766'
+export const WS_MODELS_HASH = '49bc5a53d8c235066f23702dff4750f603c262b5b3c6e22c217fdceaf6db44cb'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -1659,6 +1659,8 @@ export interface WsModels {
     created_by: number | null
     created_at: number
     updated_at: number
+    created_by_credential_id: number | null
+    upstream_profile_id: number | null
   }
   /**
    * s3_gateway.* (Config.cpp to_json(S3GatewayConfig)).
@@ -1674,6 +1676,8 @@ export interface WsModels {
     allow_virtual_hosted_style: boolean
     default_bucket_mode: string
     default_api_exclusive: boolean
+    default_upstream_profile?: string
+    reapply_upstream_profile_changes?: boolean
     multipart: WsModels['S3GatewayMultipartConfig']
     synthetic_local_request_cost_usd: WsModels['S3GatewaySyntheticLocalRequestCostConfig']
   }
@@ -1695,6 +1699,18 @@ export interface WsModels {
     created_at: number
     last_used_at: number | null
     expires_at: number | null
+    upstream: WsModels['S3GatewayCredentialUpstream']
+  }
+  /**
+   * What a credential's CreateBucket creates. S3GatewayJson::credentialUpstream (ws/handler/S3Gateway.cpp).
+   */
+  'S3GatewayCredentialUpstream': {
+    source: 'local' | 'profile' | 'server_default'
+    profile: WsModels['S3GatewayUpstreamProfile'] | null
+    problem: string | null
+    reapply: boolean | null
+    reapply_effective: boolean
+    allowed_profiles: WsModels['S3GatewayUpstreamProfile'][]
   }
   /**
    * A credential's default vault role (global and vault-allowlist credentials). S3GatewayJson::defaultRole
@@ -1801,6 +1817,26 @@ export interface WsModels {
     copy: string
     downloaded_gb: string
     uploaded_gb: string
+  }
+  /**
+   * An upstream profile: the API key and vault settings a gateway CreateBucket applies.
+   * S3GatewayJson::upstreamProfile (ws/handler/S3Gateway.cpp).
+   */
+  'S3GatewayUpstreamProfile': {
+    id: number
+    name: string
+    api_key_id: number
+    api_key_name: string | null
+    provider: string | null
+    encrypt_upstream: boolean
+    sync_strategy: 'cache' | 'sync' | 'mirror'
+    conflict_policy: 'keep_local' | 'keep_remote' | 'keep_newest' | 'ask'
+    bucket_prefix: string
+    description: string | null
+    server_default: boolean
+    created_by: number | null
+    created_at: number
+    updated_at: number
   }
   /**
    * A vault as s3.gateway.* names it. S3GatewayJson::vault (ws/handler/S3Gateway.cpp).
@@ -6362,6 +6398,30 @@ export interface WsContract {
     }
   }
   /**
+   * Choose what a credential's CreateBucket creates: a vault over an upstream profile (source profile, with
+   * profile_id or profile), over the server's default profile (server_default), or a local vault (local).
+   * Needs management of the credential plus admin.upstream.provision and Consume on the profile's API key,
+   * for the caller and for the credential's principal. Absent members stay as they are; nothing to change is
+   * 'invalid'.
+   */
+  's3.gateway.credentials.upstream.set': {
+    payload: {
+      credential_id?: number
+      access_key?: string
+      credential_access_key?: string
+      name?: string
+      credential_name?: string
+      credential?: string
+      source?: 'local' | 'profile' | 'server_default'
+      profile_id?: number
+      profile?: string
+      reapply?: boolean | null
+      allowed_profile_ids?: (number)[]
+      allowed_profiles?: (string)[]
+    }
+    response: { credential: WsModels['S3GatewayCredential'] }
+  }
+  /**
    * S3 gateway runtime status: running/configured/ready, the listen endpoint and request counters.
    */
   's3.gateway.status': {
@@ -6378,6 +6438,67 @@ export interface WsContract {
         total_requests: number
         failed_requests: number
       }
+    }
+  }
+  /**
+   * Create an upstream profile over an API key that is enabled for provider administration. Needs
+   * admin.s3_gateway.manage_buckets, admin.upstream.provision and Consume on the key. The name is what S3
+   * clients send as a region to select the profile, and never changes.
+   */
+  's3.gateway.upstreamProfiles.create': {
+    payload: {
+      name: string
+      api_key_id?: number | null
+      api_key?: string | null
+      encrypt_upstream?: boolean
+      sync_strategy?: 'cache' | 'sync' | 'mirror'
+      conflict_policy?: 'keep_local' | 'keep_remote' | 'keep_newest' | 'ask'
+      bucket_prefix?: string
+      description?: string | null
+    }
+    response: { profile: WsModels['S3GatewayUpstreamProfile'] }
+  }
+  /**
+   * Delete a profile no credential uses and that is not the server default ('conflict' otherwise). Buckets
+   * created from it are untouched.
+   */
+  's3.gateway.upstreamProfiles.delete': {
+    payload: { profile_id?: number; profile?: string }
+    response: { deleted: boolean }
+  }
+  /**
+   * The upstream profiles (what a gateway CreateBucket creates), the server default and the server's re-apply
+   * setting.
+   */
+  's3.gateway.upstreamProfiles.list': {
+    payload: null
+    response: {
+      profiles: WsModels['S3GatewayUpstreamProfile'][]
+      default_profile: string | null
+      reapply_default: boolean
+    }
+  }
+  /**
+   * Change a profile; absent members stay as they are. A changed sync strategy or conflict policy is
+   * re-applied to the buckets created from the profile whose credential (or the server) asks for it;
+   * `reapplied` says what happened to each. The API key, encryption and prefix only apply to buckets created
+   * afterwards.
+   */
+  's3.gateway.upstreamProfiles.update': {
+    payload: {
+      profile_id?: number
+      profile?: string
+      api_key_id?: number | null
+      api_key?: string | null
+      encrypt_upstream?: boolean
+      sync_strategy?: 'cache' | 'sync' | 'mirror'
+      conflict_policy?: 'keep_local' | 'keep_remote' | 'keep_newest' | 'ask'
+      bucket_prefix?: string
+      description?: string | null
+    }
+    response: {
+      profile: WsModels['S3GatewayUpstreamProfile']
+      reapplied: { bucket_name: string; vault_id: number; applied: boolean; detail: string | null }[]
     }
   }
   /**
@@ -8084,7 +8205,12 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   's3.gateway.credentials.selectedVaults.list',
   's3.gateway.credentials.selectedVaults.remove',
   's3.gateway.credentials.selectedVaults.replace',
+  's3.gateway.credentials.upstream.set',
   's3.gateway.status',
+  's3.gateway.upstreamProfiles.create',
+  's3.gateway.upstreamProfiles.delete',
+  's3.gateway.upstreamProfiles.list',
+  's3.gateway.upstreamProfiles.update',
   'settings.get',
   'settings.policy.get',
   'settings.update',
@@ -8286,6 +8412,7 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   's3.gateway.credentials.roles.overrides.remove': 'secrets',
   's3.gateway.credentials.roles.revoke': 'secrets',
   's3.gateway.credentials.scope.update': 'secrets',
+  's3.gateway.credentials.upstream.set': 'secrets',
   'settings.update': 'settings',
   'storage.apiKey.add': 'secrets',
   'storage.apiKey.remove': 'secrets',
@@ -8509,7 +8636,12 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   's3.gateway.credentials.selectedVaults.list': 15000,
   's3.gateway.credentials.selectedVaults.remove': 15000,
   's3.gateway.credentials.selectedVaults.replace': 15000,
+  's3.gateway.credentials.upstream.set': 15000,
   's3.gateway.status': 15000,
+  's3.gateway.upstreamProfiles.create': 15000,
+  's3.gateway.upstreamProfiles.delete': 15000,
+  's3.gateway.upstreamProfiles.list': 15000,
+  's3.gateway.upstreamProfiles.update': 60000,
   'settings.get': 15000,
   'settings.policy.get': 15000,
   'settings.update': 15000,

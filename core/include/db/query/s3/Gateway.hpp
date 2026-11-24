@@ -31,6 +31,27 @@ struct GatewayCredential {
     std::time_t created_at{};
     std::optional<std::time_t> last_used_at;
     std::optional<std::time_t> expires_at;
+    // What this credential's CreateBucket creates (migration 154): a vault over this upstream profile, or over the
+    // server's default profile, or (neither) a local vault. upstream_reapply: unset = the server's setting.
+    std::optional<uint32_t> upstream_profile_id{};
+    bool upstream_server_default{false};
+    std::optional<bool> upstream_reapply{};
+};
+
+// What a gateway CreateBucket creates upstream (migration 154). The API key is a reference; its secret never leaves
+// api_keys.
+struct UpstreamProfile {
+    uint32_t id{};
+    std::string name{};               // region-shaped and immutable: clients select the profile with it
+    uint32_t api_key_id{};
+    bool encrypt_upstream{true};
+    std::string sync_strategy{"cache"};
+    std::string conflict_policy{"keep_local"};
+    std::string bucket_prefix{};      // the upstream bucket is <prefix><gateway bucket>
+    std::optional<std::string> description{};
+    std::optional<uint32_t> created_by{};
+    std::time_t created_at{};
+    std::time_t updated_at{};
 };
 
 struct CredentialVaultAccessShorthand {
@@ -99,6 +120,16 @@ struct BucketBinding {
     std::optional<uint32_t> created_by;
     std::time_t created_at{};
     std::time_t updated_at{};
+    // Set by a gateway CreateBucket that went through an upstream profile (migration 154).
+    std::optional<uint32_t> created_by_credential_id{};
+    std::optional<uint32_t> upstream_profile_id{};
+};
+
+// A bucket created from an upstream profile, with its creating credential's re-apply choice (unset = the server's;
+// also unset once that credential is gone).
+struct ProfileBucket {
+    BucketBinding binding{};
+    std::optional<bool> credential_reapply{};
 };
 
 struct ObjectState {
@@ -204,6 +235,28 @@ public:
         std::optional<std::string> description,
         std::optional<std::time_t> expiresAt,
         std::optional<bool> enforceBudgetForLocalRequests = std::nullopt);
+    static std::optional<GatewayCredential> getCredentialById(uint32_t id);
+    // The credential's upstream source: a profile, the server default, or neither (the schema refuses both).
+    static void setCredentialUpstream(uint32_t credentialId, std::optional<uint32_t> profileId, bool serverDefault,
+                                      std::optional<bool> reapply);
+    // Credentials whose own profile it is, or that may select it.
+    static std::vector<GatewayCredential> listCredentialsUsingProfile(uint32_t profileId);
+    // The profiles a credential may select per request, besides its own (by name).
+    static std::vector<UpstreamProfile> listCredentialAllowedProfiles(uint32_t credentialId);
+    static void replaceCredentialAllowedProfiles(uint32_t credentialId, const std::vector<uint32_t>& profileIds,
+                                                 std::optional<uint32_t> createdBy);
+
+    static uint32_t createUpstreamProfile(const UpstreamProfile& profile);
+    // Everything but the name, which is immutable. False when the profile is gone.
+    static bool updateUpstreamProfile(const UpstreamProfile& profile);
+    static bool deleteUpstreamProfile(uint32_t id);
+    static std::optional<UpstreamProfile> getUpstreamProfile(uint32_t id);
+    static std::optional<UpstreamProfile> getUpstreamProfileByName(const std::string& name);
+    static std::vector<UpstreamProfile> listUpstreamProfiles();
+    static std::vector<UpstreamProfile> listUpstreamProfilesUsingKey(uint32_t apiKeyId);
+    // The live buckets a gateway CreateBucket made from this profile.
+    static std::vector<ProfileBucket> listBucketsOfProfile(uint32_t profileId);
+
     static void recordSyncOrigin(
         uint32_t vaultId,
         const std::string& objectKey,

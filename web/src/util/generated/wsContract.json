@@ -10716,6 +10716,26 @@
           "types": [
             "integer"
           ]
+        },
+        {
+          "description": "The gateway credential whose CreateBucket made the bucket through an upstream profile.",
+          "minimum": 0,
+          "name": "created_by_credential_id",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The upstream profile the bucket was created from.",
+          "minimum": 0,
+          "name": "upstream_profile_id",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
         }
       ],
       "name": "S3GatewayBucket"
@@ -10793,6 +10813,22 @@
         {
           "name": "default_api_exclusive",
           "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The upstream profile a CreateBucket uses for credentials that opted into the server default; empty: none. Absent from older clients' settings updates: unchanged.",
+          "name": "default_upstream_profile",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Absent from older clients' settings updates: unchanged.",
+          "name": "reapply_upstream_profile_changes",
+          "required": false,
           "types": [
             "boolean"
           ]
@@ -10962,9 +10998,82 @@
             "integer",
             "null"
           ]
+        },
+        {
+          "description": "What a CreateBucket made with this credential creates.",
+          "model": "S3GatewayCredentialUpstream",
+          "name": "upstream",
+          "required": true,
+          "types": [
+            "object"
+          ]
         }
       ],
       "name": "S3GatewayCredential"
+    },
+    {
+      "description": "What a credential's CreateBucket creates. S3GatewayJson::credentialUpstream (ws/handler/S3Gateway.cpp).",
+      "fields": [
+        {
+          "description": "local: a local vault. profile: the credential's own profile. server_default: the server's.",
+          "enum": [
+            "local",
+            "profile",
+            "server_default"
+          ],
+          "name": "source",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The profile a CreateBucket would use now; null for local, or when `problem` says why.",
+          "model": "S3GatewayUpstreamProfile",
+          "name": "profile",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "Why there is no profile although the source asks for one.",
+          "name": "problem",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The credential's own choice; null follows the server's setting.",
+          "name": "reapply",
+          "required": true,
+          "types": [
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "name": "reapply_effective",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The profiles a request made with this credential may name (LocationConstraint or signing region) besides `profile`. Any other profile is refused.",
+          "items": "object",
+          "model": "S3GatewayUpstreamProfile",
+          "name": "allowed_profiles",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "name": "S3GatewayCredentialUpstream"
     },
     {
       "description": "A credential's default vault role (global and vault-allowlist credentials). S3GatewayJson::defaultRole (ws/handler/S3Gateway.cpp).",
@@ -11584,6 +11693,136 @@
         }
       ],
       "name": "S3GatewaySyntheticLocalRequestCostConfig"
+    },
+    {
+      "description": "An upstream profile: the API key and vault settings a gateway CreateBucket applies. S3GatewayJson::upstreamProfile (ws/handler/S3Gateway.cpp).",
+      "fields": [
+        {
+          "minimum": 0,
+          "name": "id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Region-shaped; S3 clients send it as LocationConstraint or sign with it to select the profile.",
+          "name": "name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Null when the key can no longer be read.",
+          "name": "api_key_name",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The key's provider label.",
+          "name": "provider",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "encrypt_upstream",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "enum": [
+            "cache",
+            "sync",
+            "mirror"
+          ],
+          "name": "sync_strategy",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "keep_local",
+            "keep_remote",
+            "keep_newest",
+            "ask"
+          ],
+          "name": "conflict_policy",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The upstream bucket is <bucket_prefix><gateway bucket>.",
+          "name": "bucket_prefix",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "description",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "This profile is s3_gateway.default_upstream_profile.",
+          "name": "server_default",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "User id that created it.",
+          "minimum": 0,
+          "name": "created_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "Epoch seconds.",
+          "name": "created_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Epoch seconds.",
+          "name": "updated_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "name": "S3GatewayUpstreamProfile"
     },
     {
       "description": "A vault as s3.gateway.* names it. S3GatewayJson::vault (ws/handler/S3Gateway.cpp).",
@@ -24053,7 +24292,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "7a68c3ca1641638a1dcdf0d7062b9d0edf93754e0a5c0cedae20ecd06260f766",
+  "models_hash": "49bc5a53d8c235066f23702dff4750f603c262b5b3c6e22c217fdceaf6db44cb",
   "protocol": {
     "min": 1,
     "version": 1
@@ -45367,6 +45606,187 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
+      "command": "s3.gateway.credentials.upstream.set",
+      "confirmations": [],
+      "description": "Choose what a credential's CreateBucket creates: a vault over an upstream profile (source profile, with profile_id or profile), over the server's default profile (server_default), or a local vault (local). Needs management of the credential plus admin.upstream.provision and Consume on the profile's API key, for the caller and for the credential's principal. Absent members stay as they are; nothing to change is 'invalid'.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The credential. One of credential_id, access_key / credential_access_key or name / credential_name / credential is required.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "s3_credential",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "credential_id",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The credential's access key.",
+          "name": "access_key",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Legacy spelling of access_key.",
+          "name": "credential_access_key",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The credential's name.",
+          "name": "name",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Legacy spelling of name.",
+          "name": "credential_name",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Legacy: the credential's access key or name.",
+          "name": "credential",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Defaults to profile when a profile is named.",
+          "enum": [
+            "local",
+            "profile",
+            "server_default"
+          ],
+          "name": "source",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The upstream profile. profile_id or profile (its name) is required.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "s3_upstream_profile",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "profile_id",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The upstream profile by name.",
+          "name": "profile",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Whether a change of the profile's sync settings also applies to the buckets this credential created; null follows s3_gateway.reapply_upstream_profile_changes.",
+          "name": "reapply",
+          "required": false,
+          "types": [
+            "boolean",
+            "null"
+          ]
+        },
+        {
+          "description": "Replaces the allowlist: the profiles a request made with this credential may name besides its own. [] clears it.",
+          "element": {
+            "description": "A profile id.",
+            "minimum": 0,
+            "name": "",
+            "required": true,
+            "types": [
+              "integer"
+            ]
+          },
+          "name": "allowed_profile_ids",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "The same, by name; both lists are joined.",
+          "element": {
+            "description": "A profile name.",
+            "name": "",
+            "required": true,
+            "types": [
+              "string"
+            ]
+          },
+          "name": "allowed_profiles",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "model": "S3GatewayCredential",
+          "name": "credential",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "secrets",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
       "command": "s3.gateway.status",
       "confirmations": [],
       "description": "S3 gateway runtime status: running/configured/ready, the listen endpoint and request counters.",
@@ -45464,6 +45884,438 @@
           "required": true,
           "types": [
             "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "s3.gateway.upstreamProfiles.create",
+      "confirmations": [],
+      "description": "Create an upstream profile over an API key that is enabled for provider administration. Needs admin.s3_gateway.manage_buckets, admin.upstream.provision and Consume on the key. The name is what S3 clients send as a region to select the profile, and never changes.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "1 to 32 lowercase letters, digits and hyphens; not 'local' and not a provider region.",
+          "generator": {
+            "kind": "pattern",
+            "pattern": "vh-{a}{a}{a}{9}{9}"
+          },
+          "name": "name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The upstream API key: api_key_id or api_key (name) is required.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The upstream API key by name.",
+          "name": "api_key",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Encrypt objects before upload. Create: defaults to true.",
+          "name": "encrypt_upstream",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Create: defaults to vaults.s3.default_remote_sync_strategy.",
+          "enum": [
+            "cache",
+            "sync",
+            "mirror"
+          ],
+          "name": "sync_strategy",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Create: defaults to vaults.s3.default_remote_conflict_policy.",
+          "enum": [
+            "keep_local",
+            "keep_remote",
+            "keep_newest",
+            "ask"
+          ],
+          "name": "conflict_policy",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The upstream bucket is <prefix><gateway bucket>; \"\" for none.",
+          "name": "bucket_prefix",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "null or \"\" clears it.",
+          "name": "description",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "S3GatewayUpstreamProfile",
+          "name": "profile",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "s3.gateway.upstreamProfiles.delete",
+      "confirmations": [],
+      "description": "Delete a profile no credential uses and that is not the server default ('conflict' otherwise). Buckets created from it are untouched.",
+      "effect": "destructive",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The upstream profile. profile_id or profile (its name) is required.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "s3_upstream_profile",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "profile_id",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The upstream profile by name.",
+          "name": "profile",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "name": "deleted",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "s3.gateway.upstreamProfiles.list",
+      "confirmations": [],
+      "description": "The upstream profiles (what a gateway CreateBucket creates), the server default and the server's re-apply setting.",
+      "effect": "read",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "items": "object",
+          "model": "S3GatewayUpstreamProfile",
+          "name": "profiles",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "s3_gateway.default_upstream_profile, or null when unset.",
+          "name": "default_profile",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "s3_gateway.reapply_upstream_profile_changes.",
+          "name": "reapply_default",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "s3.gateway.upstreamProfiles.update",
+      "confirmations": [],
+      "description": "Change a profile; absent members stay as they are. A changed sync strategy or conflict policy is re-applied to the buckets created from the profile whose credential (or the server) asks for it; `reapplied` says what happened to each. The API key, encryption and prefix only apply to buckets created afterwards.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The upstream profile. profile_id or profile (its name) is required.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "s3_upstream_profile",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "profile_id",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The upstream profile by name.",
+          "name": "profile",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "api_key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "api_key_id",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The upstream API key by name.",
+          "name": "api_key",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "Encrypt objects before upload. Create: defaults to true.",
+          "name": "encrypt_upstream",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Create: defaults to vaults.s3.default_remote_sync_strategy.",
+          "enum": [
+            "cache",
+            "sync",
+            "mirror"
+          ],
+          "name": "sync_strategy",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Create: defaults to vaults.s3.default_remote_conflict_policy.",
+          "enum": [
+            "keep_local",
+            "keep_remote",
+            "keep_newest",
+            "ask"
+          ],
+          "name": "conflict_policy",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The upstream bucket is <prefix><gateway bucket>; \"\" for none.",
+          "name": "bucket_prefix",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "null or \"\" clears it.",
+          "name": "description",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "model": "S3GatewayUpstreamProfile",
+          "name": "profile",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "bucket_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "applied",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Why the bucket was left as it is.",
+              "name": "detail",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "reapplied",
+          "required": true,
+          "types": [
+            "array"
           ]
         }
       ],
@@ -56982,5 +57834,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "466cd1b8c26eb04ca683132e1d7fd289e56a4cf536caf6fde6a17e08ec52d1ea"
+  "ws_hash": "bb3be7716796cabb23fe60ecb0df6475f489aae21f399a77a64ad2d4dd0b7943"
 }

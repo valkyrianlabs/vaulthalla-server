@@ -28,6 +28,12 @@ struct ProvisionConflict : std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
+// The create path found the bucket already there, in this credential's own account (or known to Vaulthalla): the
+// caller may still adopt it. A name another account holds stays a plain ProvisionConflict.
+struct BucketExists : ProvisionConflict {
+    using ProvisionConflict::ProvisionConflict;
+};
+
 // Adoption of a bucket that doesn't exist (or isn't reachable with this credential).
 struct BucketMissing : std::runtime_error {
     using std::runtime_error::runtime_error;
@@ -44,10 +50,13 @@ struct Lease {
     bool created = false;       // this attempt (or an earlier attempt of ours it resumed) created the bucket
 };
 
-// Create path, up to "configuring". Throws BucketProtected, ProvisionConflict, ProviderError/CapabilityMissing (the row
-// is then marked failed, never deleted).
+// Create path, up to "configuring". Throws BucketProtected, ProvisionConflict (BucketExists when the bucket is this
+// account's own), ProviderError/CapabilityMissing (the row is then marked failed, never deleted).
 [[nodiscard]] Lease createManaged(s3::provider::admin::AdminClient& admin, const BucketIdentity& id,
                                   const std::optional<std::string>& region, std::optional<uint32_t> apiKeyId);
+
+// True when the bucket lists no object (one ListObjectsV2 call, at most one key).
+[[nodiscard]] bool listsEmpty(s3::provider::admin::AdminClient& admin, const std::string& bucket);
 
 // Adopt path, up to "configuring". Throws BucketProtected, BucketMissing, ProvisionConflict.
 [[nodiscard]] Lease beginAdopt(s3::provider::admin::AdminClient& admin, const BucketIdentity& id,

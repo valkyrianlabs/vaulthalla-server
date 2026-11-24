@@ -100,6 +100,11 @@ struct S3GatewayConfig {
     bool allow_virtual_hosted_style = true;
     std::string default_bucket_mode = "local";
     bool default_api_exclusive = true;
+    // Upstream profiles (migration 154). default_upstream_profile: the profile a CreateBucket uses for credentials
+    // that opted into the server default (empty: none). reapply_upstream_profile_changes: whether a change of a
+    // profile's sync settings is re-applied to the buckets created from it, for credentials with no choice of their own.
+    std::string default_upstream_profile{};
+    bool reapply_upstream_profile_changes = true;
     // default_remote_sync_strategy / default_remote_conflict_policy moved to vaults.s3 (#164); config.yaml still
     // accepts them here as deprecated aliases (loadConfig).
     S3GatewayMultipartConfig multipart;

@@ -156,7 +156,8 @@ AuthContext Authenticator::authenticate(const vl::sigv4::VerificationInput& inpu
             .access_key = "dev-only",
             .scope_mode = "user_access",
             .enforce_budget_for_local_requests = false,
-            .dev_context = true
+            .dev_context = true,
+            .signing_region = {}
         };
     }
 
@@ -168,6 +169,12 @@ AuthContext Authenticator::authenticate(const vl::sigv4::VerificationInput& inpu
     auto user = vh::identities::manager().user(secret.credential.principal_user_id);
     if (!user || !user->authorizing()) throw accessDenied(input.target);
 
+    // Verified above, so it parses; the scope's region is all that is read from it.
+    auto parseOptions = gatewayVerifyOptions();
+    parseOptions.allow_streaming_signed_payload = streamingBody != nullptr;
+    std::string signingRegion;
+    if (const auto parsed = vl::sigv4::parseAuthorization(input, parseOptions)) signingRegion = parsed->credential.region;
+
     credentials().markUsed(secret.credential.id);
     return {
         .user = std::move(user),
@@ -176,7 +183,8 @@ AuthContext Authenticator::authenticate(const vl::sigv4::VerificationInput& inpu
         .access_key = secret.credential.access_key,
         .scope_mode = secret.credential.scope_mode,
         .enforce_budget_for_local_requests = secret.credential.enforce_budget_for_local_requests,
-        .dev_context = false
+        .dev_context = false,
+        .signing_region = std::move(signingRegion)
     };
 }
 

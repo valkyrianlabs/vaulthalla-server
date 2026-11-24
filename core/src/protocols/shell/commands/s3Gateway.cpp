@@ -17,6 +17,8 @@
 #include "protocols/shell/commands/helpers.hpp"
 #include "protocols/shell/commands/vault.hpp"
 #include "protocols/shell/util/argsHelpers.hpp"
+#include "protocols/shell/util/runOp.hpp"
+#include "protocols/ws/handler/S3GatewayJson.hpp"
 #include "rbac/permission/admin/S3Gateway.hpp"
 #include "rbac/resolver/admin/all.hpp"
 #include "rbac/role/Vault.hpp"
@@ -329,6 +331,83 @@ CommandResult handleEnable(const CommandCall& call) { return setGatewayEnabled(c
 
 CommandResult handleDisable(const CommandCall& call) { return setGatewayEnabled(call, false, "S3 gateway disabled.\n"); }
 
+// ---- upstream profiles: one JSON shape with the ws commands (S3GatewayJson) ---------------------------------------
+
+nlohmann::json gwProfileJson(const gw::UpstreamProfile& profile) {
+    return ws::handler::S3GatewayJson::upstreamProfile(
+        profile, db::query::vault::APIKey::getAPIKey(profile.api_key_id),
+        vh::config::Registry::get().s3_gateway.default_upstream_profile == profile.name);
+}
+
+nlohmann::json gwUpstreamJson(const gw::CredentialUpstream& upstream) {
+    nlohmann::json allowed = nlohmann::json::array();
+    for (const auto& profile : upstream.allowed) allowed.push_back(gwProfileJson(profile));
+    return ws::handler::S3GatewayJson::credentialUpstream(
+        upstream.source, upstream.profile ? gwProfileJson(*upstream.profile) : nlohmann::json(nullptr), upstream.problem,
+        upstream.reapply, upstream.reapply_effective, std::move(allowed));
+}
+
+// "API key 'b2-main' (Backblaze B2), encryption off, mirror + keep_local, upstream bucket <prefix><bucket>"
+std::string gwProfileSettings(const gw::UpstreamProfile& profile) {
+    const auto key = db::query::vault::APIKey::getAPIKey(profile.api_key_id);
+    std::ostringstream out;
+    out << "API key " << (key ? "'" + key->name + "' (" + vh::vault::model::to_string(key->provider) + ")"
+                             : "#" + std::to_string(profile.api_key_id))
+        << ", upstream encryption " << (profile.encrypt_upstream ? "on" : "off") << ", " << profile.sync_strategy << " + "
+        << profile.conflict_policy << ", upstream bucket " << profile.bucket_prefix << "<bucket>";
+    return out.str();
+}
+
+std::string gwRenderUpstream(const gw::CredentialUpstream& upstream) {
+    std::ostringstream out;
+    out << "  new buckets: ";
+    if (upstream.source == "local") out << "local vault\n";
+    else if (!upstream.profile) out << "upstream (" << upstream.source << "), but " << upstream.problem << "\n";
+    else
+        out << "upstream profile " << upstream.profile->name << (upstream.source == "server_default" ? " (the server default)" : "")
+            << "\n    " << gwProfileSettings(*upstream.profile) << "\n";
+    out << "  may also select:";
+    if (upstream.allowed.empty()) out << " no other profile";
+    for (const auto& profile : upstream.allowed) out << " " << profile.name;
+    out << "\n";
+    out << "  follows profile changes: " << yesNo(upstream.reapply_effective)
+        << (upstream.reapply ? " (this credential)" : " (server setting)") << "\n";
+    return out.str();
+}
+
+// --upstream <profile> | local | server-default, and --reapply on | off | inherit. Empty when neither was given.
+std::optional<gw::SetCredentialUpstream> gwUpstreamFromOptions(const CommandCall& call) {
+    gw::SetCredentialUpstream req;
+    if (const auto value = optVal(call, "upstream"); value && !value->empty()) {
+        if (*value == "local") req.source = "local";
+        else if (*value == "server-default" || *value == "server_default") req.source = "server_default";
+        else req.profile = gw::ProfileRef{*value};
+    } else if (hasKey(call, "upstream")) {
+        throw ops::Invalid("--upstream needs a profile name, 'server-default' or 'local'");
+    }
+    if (const auto value = optVal(call, "reapply"); value && !value->empty()) {
+        if (*value == "on" || *value == "yes" || *value == "true") req.reapply = std::optional<bool>{true};
+        else if (*value == "off" || *value == "no" || *value == "false") req.reapply = std::optional<bool>{false};
+        else if (*value == "inherit" || *value == "default") req.reapply = std::optional<bool>{};
+        else throw ops::Invalid("--reapply must be on, off or inherit");
+    } else if (hasKey(call, "reapply")) {
+        throw ops::Invalid("--reapply must be on, off or inherit");
+    }
+    // --allow-upstream <profile> (repeatable) replaces the allowlist; "none" clears it.
+    if (const auto names = optVals(call, "allow-upstream"); !names.empty()) {
+        req.allowed.emplace();
+        for (const auto& name : names) {
+            if (name == "none") continue;
+            if (name.empty()) throw ops::Invalid("--allow-upstream needs a profile name, or 'none'");
+            req.allowed->emplace_back(name);
+        }
+    } else if (hasKey(call, "allow-upstream")) {
+        throw ops::Invalid("--allow-upstream needs a profile name, or 'none'");
+    }
+    if (!req.source && !req.profile && !req.reapply && !req.allowed) return std::nullopt;
+    return req;
+}
+
 CommandResult handleCredsCreate(const CommandCall& call) {
     if (call.positionals.empty()) return usage(call.constructFullArgs());
     gw::CreateCredential req{
@@ -396,7 +475,8 @@ CommandResult handleCredsList(const CommandCall& call) {
                 {"enabled", credential.enabled},
                 {"created_at", credential.created_at},
                 {"last_used_at", credential.last_used_at ? nlohmann::json(*credential.last_used_at) : nlohmann::json(nullptr)},
-                {"expires_at", credential.expires_at ? nlohmann::json(*credential.expires_at) : nlohmann::json(nullptr)}
+                {"expires_at", credential.expires_at ? nlohmann::json(*credential.expires_at) : nlohmann::json(nullptr)},
+                {"upstream", gwUpstreamJson(gw::upstreamOf(credential))}
             });
         }
         return ok(rows.dump(4) + "\n");
@@ -410,6 +490,8 @@ CommandResult handleCredsList(const CommandCall& call) {
             << " scope=" << credential.scope_mode
             << " local_budget=" << yesNo(credential.enforce_budget_for_local_requests)
             << " enabled=" << yesNo(credential.enabled);
+        if (const auto upstream = gw::upstreamOf(credential); upstream.source != "local")
+            out << " upstream=" << (upstream.profile ? upstream.profile->name : upstream.source);
         if (credential.last_used_at) out << " last_used=" << *credential.last_used_at;
         if (credential.expires_at) out << " expires=" << *credential.expires_at;
         out << "\n";
@@ -477,7 +559,8 @@ std::string renderCredentialScopes(const db::query::s3::GatewayCredential& crede
 }
 
 CommandResult showCredentialScopes(const CommandCall& call, const db::query::s3::GatewayCredential& credential) {
-    if (!hasFlag(call, "json")) return ok(renderCredentialScopes(credential));
+    const auto upstream = gw::upstreamOf(credential);
+    if (!hasFlag(call, "json")) return ok(renderCredentialScopes(credential) + gwRenderUpstream(upstream));
     const auto defaultRole = db::query::s3::Gateway::getCredentialDefaultVaultRole(credential.id);
     nlohmann::json selectedVaults = nlohmann::json::array();
     for (const auto& selectedVault : db::query::s3::Gateway::listCredentialSelectedVaults(credential.id))
@@ -506,7 +589,8 @@ CommandResult showCredentialScopes(const CommandCall& call, const db::query::s3:
             {"enabled", defaultRole->enabled}
         } : nlohmann::json(nullptr)},
         {"selected_vaults", selectedVaults},
-        {"role_assignments", roleAssignments}
+        {"role_assignments", roleAssignments},
+        {"upstream", gwUpstreamJson(upstream)}
     }.dump(4) + "\n");
 }
 
@@ -533,8 +617,15 @@ CommandResult handleCredsScope(const CommandCall& call) {
         req.principal_id = userOption(call);
         req.default_role_id = defaultRoleIdFromOptions(call, "s3-gateway creds scope set");
         if (!optVals(call, "selected-vault").empty()) req.selected_vault_ids = selectedVaultIdsFromOptions(call);
-        (void)gw::updateScope(call.user, ref, req);
-        return ok("S3 gateway credential scope updated.\n");
+        // What the credential's CreateBucket creates is its own setting: given alone, the scope stays as it is.
+        const auto upstream = gwUpstreamFromOptions(call);
+        const bool scopeChange = req.scope_mode || req.principal_id || req.description || req.expires_at ||
+                                 req.enforce_budget_for_local_requests || req.selected_vault_ids || req.default_role_id;
+        if (scopeChange || !upstream) (void)gw::updateScope(call.user, ref, req);
+        if (!upstream) return ok("S3 gateway credential scope updated.\n");
+        const auto updated = gw::setCredentialUpstream(call.user, ref, *upstream);
+        return ok(std::string(scopeChange ? "S3 gateway credential scope updated.\n" : "") +
+                  "S3 gateway credential '" + updated.name + "' updated.\n" + gwRenderUpstream(gw::upstreamOf(updated)));
     }
 
     if (action == "allow-vault") {
@@ -1006,6 +1097,146 @@ CommandResult handleGatewayBudget(const CommandCall& call) {
     return invalid(call.constructFullArgs(), "Unknown s3-gateway budget subcommand: '" + std::string(sub) + "'");
 }
 
+// ---- vh s3-gateway upstream ... -------------------------------------------------------------------------------------
+
+gw::ProfileRef gwProfileRef(const std::string& value) { return gw::ProfileRef{value}; }
+
+std::variant<unsigned int, std::string> gwApiKeyRef(const std::string& nameOrId) {
+    if (const auto id = parseUInt(nameOrId)) return *id;
+    return nameOrId;
+}
+
+std::string gwRenderProfile(const gw::UpstreamProfile& profile) {
+    std::ostringstream out;
+    out << "upstream profile " << profile.name << " (ID " << profile.id << ")"
+        << (vh::config::Registry::get().s3_gateway.default_upstream_profile == profile.name ? " [server default]" : "") << "\n";
+    out << "  " << gwProfileSettings(profile) << "\n";
+    if (profile.description && !profile.description->empty()) out << "  description: " << *profile.description << "\n";
+    return out.str();
+}
+
+std::optional<bool> gwEncryptFromFlags(const CommandCall& call) {
+    if (hasFlag(call, "encrypt") && hasFlag(call, "no-encrypt"))
+        throw ops::Invalid("--encrypt and --no-encrypt are mutually exclusive");
+    if (hasFlag(call, "no-encrypt")) return false;
+    if (hasFlag(call, "encrypt")) return true;
+    return std::nullopt;
+}
+
+CommandResult handleGwUpstreamList(const CommandCall& call) {
+    return runOp("s3-gateway upstream list", [&] { return gw::listUpstreamProfiles(call.user); },
+                 [&](const std::vector<gw::UpstreamProfile>& profiles) {
+        const auto& cfg = vh::config::Registry::get().s3_gateway;
+        if (hasFlag(call, "json")) {
+            nlohmann::json rows = nlohmann::json::array();
+            for (const auto& profile : profiles) rows.push_back(gwProfileJson(profile));
+            return nlohmann::json{{"profiles", rows},
+                                  {"default_profile", cfg.default_upstream_profile.empty()
+                                                          ? nlohmann::json(nullptr) : nlohmann::json(cfg.default_upstream_profile)},
+                                  {"reapply_default", cfg.reapply_upstream_profile_changes}}.dump(4) + "\n";
+        }
+        std::ostringstream out;
+        if (profiles.empty()) out << "No upstream profiles. Create one with: vh s3-gateway upstream create <name> --api-key <key>\n";
+        for (const auto& profile : profiles) out << gwRenderProfile(profile);
+        out << "server default: " << (cfg.default_upstream_profile.empty() ? "none" : cfg.default_upstream_profile)
+            << " (s3_gateway.default_upstream_profile)\n";
+        out << "buckets follow profile changes by default: " << yesNo(cfg.reapply_upstream_profile_changes) << "\n";
+        return out.str();
+    });
+}
+
+CommandResult handleGwUpstreamShow(const CommandCall& call) {
+    if (call.positionals.empty()) return usage(call.constructFullArgs());
+    return runOp("s3-gateway upstream show", [&] { return gw::getUpstreamProfile(call.user, gwProfileRef(call.positionals[0])); },
+                 [&](const gw::UpstreamProfile& profile) {
+        const auto users = db::query::s3::Gateway::listCredentialsUsingProfile(profile.id);
+        const auto buckets = db::query::s3::Gateway::listBucketsOfProfile(profile.id);
+        if (hasFlag(call, "json")) {
+            auto j = gwProfileJson(profile);
+            j["credentials"] = nlohmann::json::array();
+            for (const auto& c : users) j["credentials"].push_back({{"id", c.id}, {"name", c.name}, {"access_key", c.access_key}});
+            j["buckets"] = nlohmann::json::array();
+            for (const auto& b : buckets)
+                j["buckets"].push_back({{"bucket_name", b.binding.bucket_name}, {"vault_id", b.binding.vault_id}});
+            return j.dump(4) + "\n";
+        }
+        std::ostringstream out;
+        out << gwRenderProfile(profile);
+        out << "  credentials:";
+        if (users.empty()) out << " none";
+        for (const auto& c : users) out << " " << c.name;
+        out << "\n  buckets created from it:";
+        if (buckets.empty()) out << " none";
+        for (const auto& b : buckets) out << " " << b.binding.bucket_name;
+        out << "\n";
+        return out.str();
+    });
+}
+
+CommandResult handleGwUpstreamCreate(const CommandCall& call) {
+    if (call.positionals.empty()) return usage(call.constructFullArgs());
+    return runOp("s3-gateway upstream create", [&] {
+        const auto apiKey = optVal(call, "api-key");
+        if (!apiKey || apiKey->empty()) throw ops::Invalid("--api-key is required");
+        gw::CreateProfile req{.name = call.positionals[0], .api_key = gwApiKeyRef(*apiKey)};
+        req.encrypt_upstream = gwEncryptFromFlags(call);
+        req.sync_strategy = optVal(call, std::vector<std::string>{"sync-strategy", "strategy"});
+        req.conflict_policy = optVal(call, std::vector<std::string>{"on-sync-conflict", "conflict"});
+        req.bucket_prefix = optVal(call, "bucket-prefix");
+        req.description = optVal(call, "description");
+        return gw::createUpstreamProfile(call.user, req);
+    }, [&](const gw::UpstreamProfile& profile) {
+        if (hasFlag(call, "json")) return gwProfileJson(profile).dump(4) + "\n";
+        return "Created " + gwRenderProfile(profile) +
+               "Use it for a credential: vh s3-gateway creds scope <credential> set --upstream " + profile.name + "\n";
+    });
+}
+
+CommandResult handleGwUpstreamUpdate(const CommandCall& call) {
+    if (call.positionals.empty()) return usage(call.constructFullArgs());
+    return runOp("s3-gateway upstream update", [&] {
+        gw::UpdateProfile req;
+        if (const auto apiKey = optVal(call, "api-key"); apiKey && !apiKey->empty()) req.api_key = gwApiKeyRef(*apiKey);
+        req.encrypt_upstream = gwEncryptFromFlags(call);
+        req.sync_strategy = optVal(call, std::vector<std::string>{"sync-strategy", "strategy"});
+        req.conflict_policy = optVal(call, std::vector<std::string>{"on-sync-conflict", "conflict"});
+        if (hasKey(call, "bucket-prefix")) req.bucket_prefix = optVal(call, "bucket-prefix").value_or("");
+        if (hasKey(call, "description")) req.description = optVal(call, "description");
+        return gw::updateUpstreamProfile(call.user, gwProfileRef(call.positionals[0]), req);
+    }, [&](const gw::UpdatedProfile& updated) {
+        if (hasFlag(call, "json")) {
+            nlohmann::json reapplied = nlohmann::json::array();
+            for (const auto& r : updated.reapplied)
+                reapplied.push_back(ws::handler::S3GatewayJson::reappliedBucket(r.bucket_name, r.vault_id, r.applied, r.detail));
+            return nlohmann::json{{"profile", gwProfileJson(updated.profile)}, {"reapplied", reapplied}}.dump(4) + "\n";
+        }
+        std::ostringstream out;
+        out << "Updated " << gwRenderProfile(updated.profile);
+        for (const auto& r : updated.reapplied)
+            out << "  bucket " << r.bucket_name << " (vault " << r.vault_id << "): "
+                << (r.applied ? "sync settings updated" : "unchanged: " + r.detail) << "\n";
+        return out.str();
+    });
+}
+
+CommandResult handleGwUpstreamDelete(const CommandCall& call) {
+    if (call.positionals.empty()) return usage(call.constructFullArgs());
+    return runOp("s3-gateway upstream delete",
+                 [&] { gw::deleteUpstreamProfile(call.user, gwProfileRef(call.positionals[0])); },
+                 [&] { return "Deleted upstream profile " + call.positionals[0] + ".\n"; });
+}
+
+CommandResult handleGwUpstream(const CommandCall& call) {
+    if (call.positionals.empty()) return usage(call.constructFullArgs());
+    const auto [sub, subcall] = descend(call);
+    if (isCommandMatch({"s3-gateway", "upstream", "list"}, sub)) return handleGwUpstreamList(subcall);
+    if (isCommandMatch({"s3-gateway", "upstream", "show"}, sub)) return handleGwUpstreamShow(subcall);
+    if (isCommandMatch({"s3-gateway", "upstream", "create"}, sub)) return handleGwUpstreamCreate(subcall);
+    if (isCommandMatch({"s3-gateway", "upstream", "update"}, sub)) return handleGwUpstreamUpdate(subcall);
+    if (isCommandMatch({"s3-gateway", "upstream", "delete"}, sub)) return handleGwUpstreamDelete(subcall);
+    return invalid(call.constructFullArgs(), "Unknown s3-gateway upstream subcommand: '" + std::string(sub) + "'");
+}
+
 CommandResult handleS3Gateway(const CommandCall& call) {
     if (call.positionals.empty() || hasKey(call, "help") || hasKey(call, "h"))
         return usage(call.constructFullArgs());
@@ -1018,6 +1249,7 @@ CommandResult handleS3Gateway(const CommandCall& call) {
         if (isGatewayMatch("disable", sub)) return handleDisable(subcall);
         if (isGatewayMatch("creds", sub)) return handleCreds(subcall);
         if (isGatewayMatch("bucket", sub)) return handleBucket(subcall);
+        if (isGatewayMatch("upstream", sub)) return handleGwUpstream(subcall);
         if (isGatewayMatch("budget", sub) || sub == "budget") return handleGatewayBudget(subcall);
         return invalid(call.constructFullArgs(), "Unknown s3-gateway subcommand: '" + std::string(sub) + "'");
     } catch (const std::exception& e) {

@@ -67,10 +67,10 @@ std::optional<std::string> probeExisting(padmin::AdminClient& admin, const std::
     }
 }
 
-bool listsEmpty(padmin::AdminClient& admin, const std::string& bucket) {
-    return admin.listObjects(bucket, {}, 1).objects.empty();
 }
 
+bool listsEmpty(padmin::AdminClient& admin, const std::string& bucket) {
+    return admin.listObjects(bucket, {}, 1).objects.empty();
 }
 
 std::string newOperationToken() { return randomLower(32); }
@@ -107,9 +107,9 @@ Lease createManaged(padmin::AdminClient& admin, const BucketIdentity& id, const 
     if (!claim) {
         const auto known = BucketQuery::getByIdentity(id.provider, *id.account_ref, id.bucket);
         if (known && known->is_protected) throw BucketProtected(id);
-        throw ProvisionConflict("bucket '" + id.bucket + "' already exists" +
-                                (known ? " (Vaulthalla knows it as " + model::to_string(known->ownership) + ")" : "") +
-                                "; a new vault can only adopt an existing bucket, never take it over");
+        throw BucketExists("bucket '" + id.bucket + "' already exists" +
+                           (known ? " (Vaulthalla knows it as " + model::to_string(known->ownership) + ")" : "") +
+                           "; a new vault can only adopt an existing bucket, never take it over");
     }
 
     Lease lease{.row = claim->bucket, .token = token, .created = false};
@@ -144,7 +144,7 @@ Lease createManaged(padmin::AdminClient& admin, const BucketIdentity& id, const 
                                         "or clean it up instead");
             } else {
                 giveUp("bucket already exists");
-                throw ProvisionConflict("bucket '" + id.bucket + "' already exists; adopt it instead of creating it");
+                throw BucketExists("bucket '" + id.bucket + "' already exists; adopt it instead of creating it");
             }
         } else {
             try {
@@ -154,7 +154,7 @@ Lease createManaged(padmin::AdminClient& admin, const BucketIdentity& id, const 
                 giveUp("bucket name taken: " + std::string(e.what()));
                 // BucketAlreadyExists is someone else's bucket; BucketAlreadyOwnedByYou (and a bare 409) is this account's.
                 if (e.code == "BucketAlreadyExists") throw ProvisionConflict(takenElsewhere(id.bucket));
-                throw ProvisionConflict("bucket '" + id.bucket + "' already exists (" + e.code + "); adopt it instead");
+                throw BucketExists("bucket '" + id.bucket + "' already exists (" + e.code + "); adopt it instead");
             }
             // AWS us-east-1 answers 200 to CreateBucket on a bucket the account already owns: a bucket that lists
             // anything existed before this call. (Residual race: an *empty* bucket the same account created between

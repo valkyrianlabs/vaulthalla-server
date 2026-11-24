@@ -62,6 +62,9 @@ protected:
                 if (key.starts_with("enc/")) return std::unordered_map<std::string, std::string>{{"x-amz-meta-vh-encrypted", "true"}};
                 return std::unordered_map<std::string, std::string>{{"Content-Length", "1"}};
             });
+        // A suite earlier in the same process may have left its own protection set in place (guard::setForTesting
+        // makes reload() a no-op until it is cleared); these tests need the database's.
+        storage::upstream::guard::clearForTesting();
         storage::upstream::guard::reload();
     }
 

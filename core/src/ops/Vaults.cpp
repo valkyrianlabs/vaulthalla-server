@@ -395,6 +395,10 @@ VaultPtr create(const Actor& actor, const Create& req) {
         if (req.type == VaultType::S3) {
             const auto s3 = std::static_pointer_cast<S3Vault>(vault);
             if (ticket.mode != upstream::BucketMode::Create && bucketHoldsData(*s3)) {
+                // "Adopt only while empty" (the S3 gateway's CreateBucket): objects that arrived since the
+                // provisioner listed the bucket are no informed adoption.
+                if (req.s3->provision && req.s3->provision->mode == upstream::BucketMode::CreateOrAdoptEmpty)
+                    throw Conflict("bucket '" + s3->bucket + "' holds objects; it is only used while empty");
                 // An accepted adoption is the informed acceptance: its confirmation text carried the waiver.
                 const bool accepted = req.accept_waiver || (ticket.active() && ticket.mode == upstream::BucketMode::Adopt);
                 if (!accepted) throw NeedsConfirmation("encryption_waiver", waiverTextFor(*s3));

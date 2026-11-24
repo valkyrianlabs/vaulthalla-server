@@ -12,6 +12,8 @@
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "log/Redact.hpp"
+#include "ops/Error.hpp"
+#include "ops/S3Gateway.hpp"
 #include "protocols/s3/Error.hpp"
 #include "rbac/permission/admin/S3Gateway.hpp"
 #include "rbac/permission/admin/Vaults.hpp"
@@ -23,6 +25,7 @@
 #include "storage/Manager.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "storage/s3/Controller.hpp"
+#include "storage/s3/provider/admin/Admin.hpp"
 #include "sync/model/Action.hpp"
 #include "sync/model/LocalPolicy.hpp"
 #include "sync/model/RemotePolicy.hpp"
@@ -308,7 +311,8 @@ ResolvedBucket ObjectStore::createBucket(
     const std::string& bucket,
     const AuthContext& auth,
     const std::string& mode,
-    const uintmax_t quotaBytes) const {
+    const uintmax_t quotaBytes,
+    const std::string& locationConstraint) const {
     if (db::query::s3::Gateway::resolveBucket(bucket))
         return headBucket(bucket, auth);
     const auto access = accessFromAuth(auth);
@@ -318,6 +322,31 @@ ResolvedBucket ObjectStore::createBucket(
         throw accessDenied(bucket);
     if (access && access->credential_id != 0 && !hasGatewayBucketManagement(auth.user))
         throw accessDenied(bucket);
+
+    // An upstream profile (the credential's, the server default it follows, or the one this request names) puts the
+    // bucket's vault over an upstream bucket; the ops layer authorizes the principal for that as for any S3 vault.
+    try {
+        if (const auto profile = ops::s3_gateway::profileForCreate(
+                auth.credential, {.location_constraint = locationConstraint, .signing_region = auth.signing_region})) {
+            (void)ops::s3_gateway::createProfileBucket(
+                auth.user, *profile, bucket,
+                auth.credential_id != 0 ? std::make_optional(auth.credential_id) : std::nullopt);
+            return resolveBucket(bucket, auth);
+        }
+    } catch (const ops::Denied& e) {
+        throw S3Error{"AccessDenied", e.what(), http::status::forbidden, bucket};
+    } catch (const ops::Conflict& e) {
+        // The name is taken: by another account's bucket, by a bucket that holds objects, or by a vault.
+        throw S3Error{"BucketAlreadyExists", e.what(), http::status::conflict, bucket};
+    } catch (const ops::NeedsConfirmation& e) {
+        throw S3Error{"OperationAborted", e.what(), http::status::conflict, bucket};
+    } catch (const ops::Error& e) {
+        throw invalidArgument(e.what(), bucket);
+    } catch (const storage::s3::provider::admin::ProviderError& e) {
+        // The provider failed, not the request: an S3 client retries a 503.
+        throw S3Error{"ServiceUnavailable", std::string("The upstream provider did not create the bucket: ") + e.what(),
+                      http::status::service_unavailable, bucket};
+    }
     return createBucket(bucket, auth.user, auth.user->id, mode, quotaBytes);
 }
 

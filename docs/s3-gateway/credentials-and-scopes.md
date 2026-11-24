@@ -134,6 +134,24 @@ vh s3-gateway creds scope backup set --enforce-budget-for-local-requests
 vh s3-gateway creds scope backup set --no-enforce-budget-for-local-requests
 ```
 
+## What A Credential's CreateBucket Creates
+
+By default a bucket an S3 client creates with a gateway credential is a local vault. A credential can instead create its buckets in a provider account, through an [upstream profile](/s3-gateway/buckets#upstream-profiles):
+
+```bash
+vh s3-gateway creds scope backup set --upstream vl-b2            # an upstream profile
+vh s3-gateway creds scope backup set --upstream server-default   # the server's default profile
+vh s3-gateway creds scope backup set --upstream local            # local vaults again
+vh s3-gateway creds scope backup set --allow-upstream r2-edge    # a profile its client may also select, by region
+vh s3-gateway creds scope backup set --reapply off               # its buckets keep their sync settings when the profile changes
+vh s3-gateway creds scope backup show
+vh s3-gateway creds scope backup show --json
+```
+
+`show` reports the setting under `new buckets`, and under `upstream` with `--json`: the source (`local`, `profile` or `server_default`), the profile with its provider credential, encryption, sync strategy, conflict policy and bucket prefix, whether the credential's buckets follow later changes of the profile, and the allowlist (`may also select`, `allowed_profiles`): the other profiles a client may [name per request](/s3-gateway/buckets#selecting-a-profile-per-request). A profile that is neither the credential's own nor on its allowlist is out of its reach.
+
+These settings can let a credential create buckets, and so spend, on a provider account. Giving a credential a profile, as its own or on its allowlist, needs management of the credential plus `admin.upstream.provision` and permission to use the profile's provider credential, both for the person making the change and for the credential's principal. Going back to `local`, shortening the allowlist, and `--reapply`, need only management of the credential.
+
 ## Web Console Workflow
 
 In the console's **S3 gateway** page:
@@ -146,6 +164,9 @@ In the console's **S3 gateway** page:
 6. For `global`, choose a default vault role; selected vaults are hidden because gateway bucket bindings define the vault set.
 7. Add default path overrides when every selected/bound vault should share the rule.
 8. Add per-vault role exceptions or per-vault path overrides only when one vault should differ.
-7. Revoke keys that should no longer authenticate downstream S3 clients.
+9. Under **New buckets**, choose what a `CreateBucket` made with the key creates: a local vault, an upstream profile, or the server default.
+10. Revoke keys that should no longer authenticate downstream S3 clients.
+
+Upstream profiles are created and edited on the page's **Upstream** tab.
 
 The web console exposes **Count local/cache hits against gateway request budgets** for the same `enforce_budget_for_local_requests` setting.

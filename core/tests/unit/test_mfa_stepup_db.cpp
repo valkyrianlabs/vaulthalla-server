@@ -188,6 +188,7 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
         {"email.provider.secret.set", "needs the secrets manager's sealed master"},
         {"s3.gateway.credentials.create", "needs s3gw_master (sealed)"},
         {"s3.gateway.credentials.scope.update", "needs a credential"},
+        {"s3.gateway.credentials.upstream.set", "needs a credential"},
         {"s3.gateway.credentials.roles.assign", "needs a credential"},
         {"s3.gateway.credentials.roles.revoke", "needs a credential"},
         {"s3.gateway.credentials.roles.overrides.add", "needs a credential"},

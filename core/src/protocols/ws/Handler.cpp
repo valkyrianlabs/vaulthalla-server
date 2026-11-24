@@ -371,6 +371,11 @@ void Handler::registerS3GatewayHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("s3.gateway.credentials.roles.overrides.list", &handler::S3Gateway::credentialsRoleOverridesList);
     r->registerPayload("s3.gateway.credentials.roles.overrides.add", &handler::S3Gateway::credentialsRoleOverridesAdd);
     r->registerPayload("s3.gateway.credentials.roles.overrides.remove", &handler::S3Gateway::credentialsRoleOverridesRemove);
+    r->registerPayload("s3.gateway.credentials.upstream.set", &handler::S3Gateway::credentialsUpstreamSet);
+    r->registerPayload("s3.gateway.upstreamProfiles.list", &handler::S3Gateway::upstreamProfilesList);
+    r->registerPayload("s3.gateway.upstreamProfiles.create", &handler::S3Gateway::upstreamProfilesCreate);
+    r->registerPayload("s3.gateway.upstreamProfiles.update", &handler::S3Gateway::upstreamProfilesUpdate);
+    r->registerPayload("s3.gateway.upstreamProfiles.delete", &handler::S3Gateway::upstreamProfilesDelete);
     r->registerPayload("s3.gateway.buckets.list", &handler::S3Gateway::bucketsList);
     r->registerPayload("s3.gateway.buckets.bind", &handler::S3Gateway::bucketsBind);
     r->registerPayload("s3.gateway.buckets.unbind", &handler::S3Gateway::bucketsUnbind);

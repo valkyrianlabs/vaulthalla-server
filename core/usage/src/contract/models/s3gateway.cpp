@@ -50,7 +50,42 @@ std::vector<WsModel> s3GatewayModels() {
          str("description").nullable(),
          s3gwModelEpoch("created_at"),
          s3gwModelEpoch("last_used_at").nullable(),
-         s3gwModelEpoch("expires_at").nullable()}));
+         s3gwModelEpoch("expires_at").nullable(),
+         object("upstream", "S3GatewayCredentialUpstream")
+             .desc("What a CreateBucket made with this credential creates.")}));
+
+    out.push_back(model(
+        "S3GatewayUpstreamProfile",
+        "An upstream profile: the API key and vault settings a gateway CreateBucket applies. "
+        "S3GatewayJson::upstreamProfile (ws/handler/S3Gateway.cpp).",
+        {uinteger("id"),
+         str("name").desc("Region-shaped; S3 clients send it as LocationConstraint or sign with it to select the profile."),
+         uinteger("api_key_id"),
+         str("api_key_name").nullable().desc("Null when the key can no longer be read."),
+         str("provider").nullable().desc("The key's provider label."),
+         boolean("encrypt_upstream"),
+         str("sync_strategy").oneOf({"cache", "sync", "mirror"}),
+         str("conflict_policy").oneOf({"keep_local", "keep_remote", "keep_newest", "ask"}),
+         str("bucket_prefix").desc("The upstream bucket is <bucket_prefix><gateway bucket>."),
+         str("description").nullable(),
+         boolean("server_default").desc("This profile is s3_gateway.default_upstream_profile."),
+         s3gwModelCreatedBy(),
+         s3gwModelEpoch("created_at"),
+         s3gwModelEpoch("updated_at")}));
+
+    out.push_back(model(
+        "S3GatewayCredentialUpstream",
+        "What a credential's CreateBucket creates. S3GatewayJson::credentialUpstream (ws/handler/S3Gateway.cpp).",
+        {str("source").oneOf({"local", "profile", "server_default"})
+             .desc("local: a local vault. profile: the credential's own profile. server_default: the server's."),
+         object("profile", "S3GatewayUpstreamProfile").nullable()
+             .desc("The profile a CreateBucket would use now; null for local, or when `problem` says why."),
+         str("problem").nullable().desc("Why there is no profile although the source asks for one."),
+         boolean("reapply").nullable().desc("The credential's own choice; null follows the server's setting."),
+         boolean("reapply_effective"),
+         objectArray("allowed_profiles", "S3GatewayUpstreamProfile")
+             .desc("The profiles a request made with this credential may name (LocationConstraint or signing "
+                   "region) besides `profile`. Any other profile is refused.")}));
 
     out.push_back(model(
         "S3GatewayVaultRef",
@@ -135,7 +170,10 @@ std::vector<WsModel> s3GatewayModels() {
          boolean("api_exclusive"),
          s3gwModelCreatedBy(),
          s3gwModelEpoch("created_at"),
-         s3gwModelEpoch("updated_at")}));
+         s3gwModelEpoch("updated_at"),
+         uinteger("created_by_credential_id").nullable()
+             .desc("The gateway credential whose CreateBucket made the bucket through an upstream profile."),
+         uinteger("upstream_profile_id").nullable().desc("The upstream profile the bucket was created from.")}));
 
     return out;
 }

@@ -137,6 +137,18 @@ export const SECTIONS: SectionDef[] = [
         },
       },
       { key: 'default_api_exclusive', label: 'New buckets are gateway-only', type: bool },
+      {
+        key: 'default_upstream_profile',
+        label: 'Default upstream profile',
+        hint: 'Used by keys set to follow the server default when they create a bucket. Empty: none. Profiles are on the S3 gateway page.',
+        type: { kind: 'text', mono: true, placeholder: 'vl-b2' },
+      },
+      {
+        key: 'reapply_upstream_profile_changes',
+        label: 'Buckets follow their profile',
+        hint: 'A changed sync strategy or conflict policy of an upstream profile also applies to the buckets created from it, unless a key says otherwise.',
+        type: bool,
+      },
     ],
     groups: [
       {

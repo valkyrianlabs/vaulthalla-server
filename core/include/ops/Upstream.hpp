@@ -154,7 +154,10 @@ struct AdmissionReport {
 [[nodiscard]] AdmissionReport adoptPreflight(const Actor& actor, const KeyRef& key, const std::string& bucket,
                                              unsigned int maxObjects = 10000, unsigned int sampleHeads = 16);
 
-enum class BucketMode { Existing, Create, Adopt };
+// CreateOrAdoptEmpty (the S3 gateway's CreateBucket; no surface spells it): create the bucket, or adopt this account's
+// own bucket of that name while it holds no object. A bucket that holds objects, or a name another account holds, is
+// a Conflict and nothing is changed.
+enum class BucketMode { Existing, Create, Adopt, CreateOrAdoptEmpty };
 [[nodiscard]] BucketMode bucketModeFromString(const std::string& s);   // existing | create | adopt; throws Invalid
 
 // Carried by ops::vaults::Create (S3Spec::provision). Existing = today's behaviour (no admin calls at all).
@@ -173,7 +176,7 @@ struct Provision {
 // the bucket name to bind. On any failure after a bucket was created, compensates (an empty bucket this attempt
 // created is deleted; anything else is left and marked failed) and rethrows.
 struct ProvisionTicket {
-    BucketMode mode = BucketMode::Existing;
+    BucketMode mode = BucketMode::Existing;          // what happened: CreateOrAdoptEmpty resolves to Create or Adopt
     std::string bucket;
     int64_t upstream_bucket_id = 0;
     std::string operation_token;
@@ -188,6 +191,10 @@ struct ProvisionTicket {
 std::vector<std::string> finishProvision(const Actor& actor, const ProvisionTicket& ticket, unsigned int vaultId,
                                          const Provision& req);
 void abortProvision(const ProvisionTicket& ticket, const std::string& reason) noexcept;
+
+// The key, once the actor passes what provisioning a bucket with it would check (provision + the key's Consume) and
+// the key can administer its provider (an adapter exists and administration is enabled). Nothing is sent upstream.
+[[nodiscard]] api_keys::APIKeyPtr requireProvisioner(const Actor& actor, const KeyRef& key);
 
 // ---- events --------------------------------------------------------------------------------------------------------
 

@@ -21,7 +21,11 @@
 //    vault-role permission over that principal on that vault, and the principal must already reach the vault;
 //    a granted role may not exceed what the principal can do, and only admins grant role administration;
 //  - global credentials and their policy need manage_credentials; buckets need manage_buckets plus vault edit;
-//    budgets need manage_budgets (plus vault edit for a key/vault budget).
+//    budgets need manage_budgets (plus vault edit for a key/vault budget);
+//  - upstream profiles (what a gateway CreateBucket creates, migration 154) need manage_buckets plus what creating
+//    a bucket with the profile's API key needs (admin.upstream.provision and the key's Consume); pointing a
+//    credential at a profile needs management of that credential plus the same two, for the actor and for the
+//    credential's principal. The principal is checked again on every CreateBucket: a credential never exceeds it.
 // protocols::s3::CredentialManager and db::query::s3::Gateway underneath are trusted and never authorize.
 namespace vh::ops::s3_gateway {
 
@@ -30,6 +34,7 @@ using Assignment = db::query::s3::CredentialVaultRoleAssignment;
 using DefaultRole = db::query::s3::CredentialDefaultVaultRole;
 using SelectedVault = db::query::s3::CredentialSelectedVault;
 using Bucket = db::query::s3::BucketBinding;
+using UpstreamProfile = db::query::s3::UpstreamProfile;
 using Override = rbac::permission::Override;
 using Policy = storage::s3::pricing::PriceBudgetPolicy;
 
@@ -108,6 +113,68 @@ struct CreateRemoteCacheBucket {
     std::optional<std::string> name{};
     std::optional<std::string> description{};
     bool accept_waiver{false};
+};
+
+// An upstream profile as the caller named it: by id or by name.
+using ProfileRef = std::variant<uint32_t, std::string>;
+
+struct CreateProfile {
+    std::string name;                               // region-shaped ("vl-b2"), immutable, never "local" or a real region
+    std::variant<unsigned int, std::string> api_key;   // id or name; must be enabled for provider administration
+    std::optional<bool> encrypt_upstream{};         // default: encrypt
+    std::optional<std::string> sync_strategy{};     // cache | sync | mirror; default vaults.s3.default_remote_sync_strategy
+    std::optional<std::string> conflict_policy{};   // keep_local | keep_remote | keep_newest | ask; default likewise
+    std::optional<std::string> bucket_prefix{};     // the upstream bucket is <prefix><gateway bucket>
+    std::optional<std::string> description{};
+};
+
+// Absent fields stay as they are. The name never changes.
+struct UpdateProfile {
+    std::optional<std::variant<unsigned int, std::string>> api_key{};
+    std::optional<bool> encrypt_upstream{};
+    std::optional<std::string> sync_strategy{};
+    std::optional<std::string> conflict_policy{};
+    std::optional<std::string> bucket_prefix{};
+    std::optional<std::optional<std::string>> description{};
+};
+
+// A bucket created from a profile, after a change of the profile's sync settings.
+struct ReappliedBucket {
+    std::string bucket_name;
+    uint32_t vault_id{};
+    bool applied{false};
+    std::string detail;     // why not, when it wasn't
+};
+
+struct UpdatedProfile {
+    UpstreamProfile profile;
+    std::vector<ReappliedBucket> reapplied;   // empty unless the sync strategy or conflict policy changed
+};
+
+// What a credential's CreateBucket creates. source: local | profile | server_default.
+struct CredentialUpstream {
+    std::string source{"local"};
+    std::optional<UpstreamProfile> profile{};   // the profile a CreateBucket would use now
+    std::string problem{};                      // why there is none although the source asks for one
+    std::optional<bool> reapply{};              // the credential's own choice; unset = the server's setting
+    bool reapply_effective{true};
+    // The profiles a request made with this credential may name (LocationConstraint or signing region), besides the
+    // one above. A profile outside both is refused: the key is bounded in which upstream accounts it can reach.
+    std::vector<UpstreamProfile> allowed{};
+};
+
+// Absent fields stay as they are.
+struct SetCredentialUpstream {
+    std::optional<std::string> source{};        // local | profile | server_default
+    std::optional<ProfileRef> profile{};        // implies source profile
+    std::optional<std::optional<bool>> reapply{};
+    std::optional<std::vector<ProfileRef>> allowed{};   // replaces the allowlist; empty: none
+};
+
+// What a gateway request said about where its bucket belongs.
+struct CreateHints {
+    std::string location_constraint;   // CreateBucketConfiguration.LocationConstraint
+    std::string signing_region;        // the SigV4 credential scope's region
 };
 
 enum class BudgetScope { Key, KeyVault };
@@ -198,6 +265,40 @@ Bucket createLocalBucket(const Actor& actor, const CreateLocalBucket& req);
 // Creates the S3 vault through ops::vaults (key Consume, encryption waiver), then binds it; a failed bind removes
 // the vault again.
 Bucket createRemoteCacheBucket(const Actor& actor, const CreateRemoteCacheBucket& req);
+
+// ------------------------------------------------------------------------------------------------- upstream profiles
+
+// Visible with admin.s3_gateway view, manage_buckets or manage_credentials, or admin.upstream.provision.
+[[nodiscard]] std::vector<UpstreamProfile> listUpstreamProfiles(const Actor& actor);
+[[nodiscard]] UpstreamProfile getUpstreamProfile(const Actor& actor, const ProfileRef& profile);
+UpstreamProfile createUpstreamProfile(const Actor& actor, const CreateProfile& req);
+// A changed sync strategy or conflict policy is re-applied to the buckets created from the profile whose creating
+// credential asks for it (CredentialUpstream::reapply_effective), with the actor's own sync-settings permission on
+// each vault. The API key, encryption and prefix only ever apply to buckets created afterwards.
+UpdatedProfile updateUpstreamProfile(const Actor& actor, const ProfileRef& profile, const UpdateProfile& req);
+// Refused while a credential or the server default names it. Buckets created from it are untouched.
+void deleteUpstreamProfile(const Actor& actor, const ProfileRef& profile);
+// The server default (s3_gateway.default_upstream_profile), when it names an existing profile.
+[[nodiscard]] std::optional<UpstreamProfile> serverDefaultProfile();
+
+[[nodiscard]] CredentialUpstream credentialUpstream(const Actor& actor, const Ref& credential);
+// Trusted: the same answer for a credential already resolved (the gateway, and the surfaces' credential JSON).
+[[nodiscard]] CredentialUpstream upstreamOf(const Credential& credential);
+Credential setCredentialUpstream(const Actor& actor, const Ref& credential, const SetCredentialUpstream& req);
+
+// The profile a gateway CreateBucket uses, or none for a local vault. In order: a LocationConstraint naming a profile
+// ("local" forces a local vault; anything else, a region, is ignored), a signing region naming a profile, the
+// credential's profile, the server default when the credential opted in. A profile the request names must be the
+// credential's own or on its allowlist, else Denied. Trusted (no actor): the gateway calls it for an authenticated
+// credential. Throws Invalid when the credential asks for a profile that isn't there, so a bucket meant for an
+// upstream account is never silently created as a local vault.
+[[nodiscard]] std::optional<UpstreamProfile> profileForCreate(const Credential& credential, const CreateHints& hints);
+// A gateway bucket over the profile: the upstream bucket <prefix><name> is created (or adopted while it is empty),
+// the S3 vault gets the profile's settings, and the bucket is bound in remote_cache mode. `actor` is the
+// credential's principal and needs everything creating that vault by hand would: manage_buckets, vault Create,
+// admin.upstream.provision and the key's Consume. A failed bind removes the vault again.
+Bucket createProfileBucket(const Actor& actor, const UpstreamProfile& profile, const std::string& bucketName,
+                           std::optional<uint32_t> credentialId);
 
 // ------------------------------------------------------------------------------------------------- budgets
 

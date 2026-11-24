@@ -74,6 +74,84 @@ export interface PrincipalRef {
   email: string | null
 }
 
+// An upstream profile: what a CreateBucket through the gateway creates (s3.gateway.upstreamProfiles.*).
+export interface UpstreamProfile {
+  id: number
+  name: string
+  api_key_id: number | null
+  api_key_name: string | null
+  provider: string | null
+  encrypt_upstream: boolean | null
+  sync_strategy: string | null
+  conflict_policy: string | null
+  bucket_prefix: string
+  description: string | null
+  server_default: boolean
+}
+
+export const toProfile = (input: unknown): UpstreamProfile => {
+  const d = rec(input)
+  return {
+    id: num(d.id) ?? 0,
+    name: str(d.name) ?? '',
+    api_key_id: num(d.api_key_id),
+    api_key_name: str(d.api_key_name),
+    provider: str(d.provider),
+    encrypt_upstream: bool(d.encrypt_upstream),
+    sync_strategy: str(d.sync_strategy),
+    conflict_policy: str(d.conflict_policy),
+    bucket_prefix: typeof d.bucket_prefix === 'string' ? d.bucket_prefix : '',
+    description: str(d.description),
+    server_default: bool(d.server_default) ?? false,
+  }
+}
+
+export type UpstreamSource = 'local' | 'profile' | 'server_default'
+
+// What a key's CreateBucket creates. `source` null: the server didn't say (an older daemon).
+export interface CredentialUpstream {
+  source: UpstreamSource | null
+  profile: UpstreamProfile | null
+  problem: string | null
+  reapply: boolean | null
+  reapply_effective: boolean | null
+  // The profiles a request made with the key may name besides its own.
+  allowed: UpstreamProfile[]
+}
+
+const toUpstream = (input: unknown): CredentialUpstream => {
+  const d = rec(input)
+  const source = d.source === 'local' || d.source === 'profile' || d.source === 'server_default' ? d.source : null
+  return {
+    source,
+    profile: d.profile && typeof d.profile === 'object' ? toProfile(d.profile) : null,
+    problem: str(d.problem),
+    reapply: bool(d.reapply),
+    reapply_effective: bool(d.reapply_effective),
+    allowed: Array.isArray(d.allowed_profiles) ? d.allowed_profiles.map(toProfile) : [],
+  }
+}
+
+export const upstreamLabel = (u: CredentialUpstream): string =>
+  u.source === null ? '—'
+  : u.source === 'local' ? 'Local vault'
+  : u.profile ? `${u.profile.name}${u.source === 'server_default' ? ' (server default)' : ''}`
+  : 'Server default (not set)'
+
+// The server's rule for a profile name (ops::s3_gateway requireProfileName); real region names are refused there.
+export const profileNameProblem = (name: string): string | null => {
+  if (!name) return null
+  if (name === 'local' || name === 'server-default') return `“${name}” is reserved.`
+  if (!/^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(name))
+    return 'Use 1 to 32 lowercase letters, digits and hyphens, starting and ending with a letter or digit.'
+  return null
+}
+
+export const bucketPrefixProblem = (prefix: string): string | null =>
+  !prefix || /^[a-z0-9][a-z0-9.-]{0,31}$/.test(prefix) ?
+    null
+  : 'Use up to 32 lowercase letters, digits, hyphens and dots, starting with a letter or digit.'
+
 export interface GatewayCredential {
   id: number
   name: string
@@ -87,6 +165,7 @@ export interface GatewayCredential {
   created_at: string | null
   last_used_at: string | null
   expires_at: string | null
+  upstream: CredentialUpstream
 }
 
 export const toCredential = (input: unknown): GatewayCredential => {
@@ -105,6 +184,7 @@ export const toCredential = (input: unknown): GatewayCredential => {
     created_at: str(d.created_at),
     last_used_at: str(d.last_used_at),
     expires_at: str(d.expires_at),
+    upstream: toUpstream(d.upstream),
   }
 }
 

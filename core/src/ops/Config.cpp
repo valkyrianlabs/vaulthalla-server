@@ -6,6 +6,7 @@
 #include "notifications/AccountSecurity.hpp"
 
 #include "config/Registry.hpp"
+#include "db/query/s3/Gateway.hpp"
 #include "email/Message.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
@@ -124,6 +125,12 @@ void validateSettings(const nlohmann::json& settings) {
     requireNonEmpty(settings, {"email", "ses", "region"}, "email.ses.region");
     try {
         const Config next(settings);
+        // A default that names no profile would fail every CreateBucket of the credentials that follow it.
+        if (const auto& profile = next.s3_gateway.default_upstream_profile;
+            !profile.empty() && profile != vh::config::Registry::get().s3_gateway.default_upstream_profile &&
+            !db::query::s3::Gateway::getUpstreamProfileByName(profile))
+            throw Invalid("s3_gateway.default_upstream_profile: there is no upstream profile named '" + profile +
+                          "' (vh s3-gateway upstream list)");
         validateEmail(next);
         // Which executables the daemon runs is not a console/CLI setting: the operator edits config.yaml (and the
         // runner only executes root-owned helpers in root-owned directories either way).
