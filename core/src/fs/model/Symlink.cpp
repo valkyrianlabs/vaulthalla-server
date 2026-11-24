@@ -3,6 +3,8 @@
 
 #include <nlohmann/json.hpp>
 #include <pqxx/result>
+#include <pqxx/transaction_base>
+#include <unordered_map>
 
 using namespace vh::fs::model;
 
@@ -29,12 +31,16 @@ void vh::fs::model::to_json(nlohmann::json& j, const std::vector<std::shared_ptr
     for (const auto& symlink : symlinks) j.push_back(*symlink);
 }
 
-std::vector<std::shared_ptr<Symlink>> vh::fs::model::symlinks_from_pq_res(const pqxx::result& res) {
+std::vector<std::shared_ptr<Symlink>> vh::fs::model::symlinks_from_pq_res(const pqxx::result& res, pqxx::transaction_base& txn) {
     std::vector<std::shared_ptr<Symlink>> symlinks;
+    symlinks.reserve(res.size());
+    std::unordered_map<unsigned int, pqxx::result> chains;
     for (const auto& row : res) {
         if (const auto parentId = row["parent_id"].as<std::optional<unsigned int>>()) {
-            const auto parentChain = db::query::fs::Entry::collectParentChain(*parentId);
-            symlinks.push_back(std::make_shared<Symlink>(row, parentChain));
+            auto chain = chains.find(*parentId);
+            if (chain == chains.end())
+                chain = chains.emplace(*parentId, db::query::fs::Entry::collectParentChain(txn, *parentId)).first;
+            symlinks.push_back(std::make_shared<Symlink>(row, chain->second));
         } else symlinks.push_back(std::make_shared<Symlink>(row, pqxx::result{}));
     }
     return symlinks;

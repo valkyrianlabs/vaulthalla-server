@@ -340,7 +340,7 @@ std::vector<std::shared_ptr<::vh::fs::model::File>> RemoteAttach::liveFiles(cons
         const auto res = txn.exec("SELECT fs.*, f.* FROM files f JOIN fs_entry fs ON f.fs_entry_id = fs.id "
                                   "WHERE fs.vault_id = $1 ORDER BY f.fs_entry_id",
                                   pqxx::params{vaultId});
-        return ::vh::fs::model::files_from_pq_res(res);
+        return ::vh::fs::model::files_from_pq_res(res, txn);
     });
 }
 

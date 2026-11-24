@@ -20,5 +20,6 @@ namespace vh::fs::model {
 
     void from_json(const nlohmann::json &j, Directory &d);
 
-    std::vector<std::shared_ptr<Directory> > directories_from_pq_res(const pqxx::result &res);
+    // Parent chains read in `txn` (see files_from_pq_res).
+    std::vector<std::shared_ptr<Directory> > directories_from_pq_res(const pqxx::result &res, pqxx::transaction_base &txn);
 }

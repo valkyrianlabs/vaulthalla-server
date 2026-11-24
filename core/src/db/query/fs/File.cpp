@@ -246,7 +246,7 @@ std::vector<File::FilePtr> File::listFilesInDir(
                              : txn.exec(pqxx::prepped{"list_files_in_dir"},
                                                  pqxx::params{vaultId, patterns.like, patterns.not_like});
 
-        return vh::fs::model::files_from_pq_res(res);
+        return vh::fs::model::files_from_pq_res(res, txn);
     });
 }
 
@@ -377,7 +377,7 @@ std::vector<File::FilePtr> File::getFilesOlderThanKeyVersion(unsigned int vaultI
     return Transactions::exec("File::getFilesOlderThanKeyVersion", [&](pqxx::work& txn) {
         const auto res = txn.exec(pqxx::prepped{"get_files_older_than_key_version"}, pqxx::params{vaultId, keyVersion});
         if (res.empty()) return std::vector<FilePtr>();
-        return vh::fs::model::files_from_pq_res(res);
+        return vh::fs::model::files_from_pq_res(res, txn);
     });
 }
 
@@ -394,7 +394,7 @@ std::vector<File::FilePtr> File::getNLargestFiles(unsigned int vaultId, unsigned
     return Transactions::exec("File::getNLargestFile", [&](pqxx::work& txn) {
         const auto res = txn.exec(pqxx::prepped{"get_n_largest_files"}, pqxx::params{vaultId, n});
         if (res.empty()) return std::vector<FilePtr>();
-        return vh::fs::model::files_from_pq_res(res);
+        return vh::fs::model::files_from_pq_res(res, txn);
     });
 }
 
@@ -402,7 +402,7 @@ std::vector<File::FilePtr> File::getAllFiles(unsigned int vaultId) {
     return Transactions::exec("File::getAllFiles", [&](pqxx::work& txn) {
         const auto res = txn.exec(pqxx::prepped{"get_all_files"}, pqxx::params{vaultId});
         if (res.empty()) return std::vector<FilePtr>();
-        return vh::fs::model::files_from_pq_res(res);
+        return vh::fs::model::files_from_pq_res(res, txn);
     });
 }
 
