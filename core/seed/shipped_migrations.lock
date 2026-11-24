@@ -107,3 +107,4 @@ current    c8104c8de7c979996fdb55dd1b9735a1fcbebba21848f8c2c23501f230916629  152
 current    260fa393a2cfb3e29b56cfa3d1f0436c8eb219bba03b0c3a218b820008c608bb  153_backblaze_b2_identity.sql  unreleased
 current    7df892fbeeb1bb9f87e6d683dd4816e2fd2a6da7b05ddb02d5eff8bc6875c76f  154_s3_gateway_upstream_profiles.sql  unreleased
 current    58c57aaf7f0fb758af338f597705963e91f607b76340b9a6abb3f9a4b5c0f931  155_vault_read_grants.sql  unreleased
+current    e85b1cc82af979fe8ed9a526ac0d257a82b5e208cd9eb1f359a58dbed7375523  156_b2_provider_versioning.sql  unreleased

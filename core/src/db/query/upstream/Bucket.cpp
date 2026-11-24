@@ -284,8 +284,8 @@ void Bucket::recordVersioningEnabled(const int64_t id, const std::optional<uint3
 
 void Bucket::recordRetention(const int64_t id, const std::string& mode, const std::optional<unsigned int> days,
                              const std::optional<uint32_t> userId) {
-    if (mode != "unset" && mode != "days" && mode != "indefinite")
-        throw std::invalid_argument("noncurrent retention mode must be unset, days or indefinite");
+    if (mode != "unset" && mode != "days" && mode != "indefinite" && mode != "latest")
+        throw std::invalid_argument("noncurrent retention mode must be unset, days, indefinite or latest");
     if ((mode == "days") != days.has_value())
         throw std::invalid_argument("noncurrent retention days go with mode 'days' only");
     Transactions::exec("upstream::Bucket::recordRetention", [&](pqxx::work& txn) {

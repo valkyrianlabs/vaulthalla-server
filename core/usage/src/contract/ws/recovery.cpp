@@ -131,7 +131,9 @@ std::vector<WsCommandUsage> recoveryCommands() {
         "Change a vault's recovery settings. mode provider_versioning needs disclosure_token from "
         "vault.recovery.disclosure ('recovery_versioning_disclosure'); unpriced costs need accept_unpriced "
         "('recovery_versioning_unpriced'); a shorter retention needs accept_retention_shortening "
-        "('recovery_retention_shorten'); the vault's unmanaged bucket needs accept_adoption ('upstream_adoption').",
+        "('recovery_retention_shorten') and a data.destroy step-up; the vault's unmanaged bucket needs accept_adoption "
+        "('upstream_adoption'). On Backblaze B2, mode off or local_snapshots also makes the bucket keep only the latest "
+        "version, asked with 'recovery_retention_shorten' (and the step-up) when that deletes history that exists now.",
         {vaultId(), str("mode").opt().oneOf({"off", "local_snapshots", "provider_versioning"}), retention().opt(),
          uinteger("snapshot_quota_bytes").opt().desc("0 = no snapshot quota."),
          str("cost_alert_monthly").opt().desc("Decimal amount in the catalog currency; \"\" clears it."),
@@ -166,8 +168,9 @@ std::vector<WsCommandUsage> recoveryCommands() {
         {vaultId(), retention().opt()}, {object("disclosure", "RecoveryDisclosure")}, recoveryRefusals(), 60s,
         "recovery.disclosure"));
     out.push_back(recoveryCommand("vault.recovery.suspend",
-        "Suspend versioning on the vault's bucket; existing versions are kept and nothing is deleted. A refusal with "
-        "data.code 'recovery_versioning_suspend' asks for confirmation: resend with confirm.",
+        "Suspend versioning on the vault's bucket (AWS S3); existing versions are kept and nothing is deleted. A "
+        "refusal with data.code 'recovery_versioning_suspend' asks for confirmation: resend with confirm. Backblaze B2 "
+        "can't suspend (invalid): set mode off to keep only the latest version.",
         {vaultId(), boolean("confirm").opt()}, {object("status", "RecoveryStatus")},
         recoveryRefusals(), 60s, "recovery.suspend"));
     out.back().confirmations = {{.code = "recovery_versioning_suspend",

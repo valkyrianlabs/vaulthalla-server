@@ -2,6 +2,7 @@
 
 #include "ops/Actor.hpp"
 #include "ops/APIKeys.hpp"
+#include "recovery/Model.hpp"
 #include "storage/s3/provider/admin/Admin.hpp"
 
 #include <cstdint>
@@ -170,6 +171,12 @@ struct Provision {
     bool events = false;                           // subscribe for event-driven sync
     std::string events_prefix{};
     bool accept_adoption = false;                  // Adopt: else NeedsConfirmation{ADOPTION_CONFIRM}
+    // Backblaze B2 (every bucket keeps every version): what a bucket this creates keeps, set right after the vault
+    // exists (ops::recovery::detail::applyNewBucketHistory). nullopt = only the latest version (the owner's default:
+    // versioning off); days or indefinite = provider versioning with that retention (an S3 gateway upstream profile's
+    // versioning default). Applied on Create, and on an empty bucket CreateOrAdoptEmpty adopted; an explicitly adopted
+    // bucket keeps its rules (vh vault recovery set changes them, with acceptance). Ignored for other providers.
+    std::optional<vh::recovery::ProviderRetention> keep_history{};
 };
 
 // Called by ops::vaults::create before the vault is added (authorization of the vault itself stays there). Returns

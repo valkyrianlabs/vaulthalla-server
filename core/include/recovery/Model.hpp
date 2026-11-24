@@ -173,9 +173,28 @@ struct LocalVersioningPatch {
     [[nodiscard]] bool empty() const { return !enabled && !keep_last && !max_age_days && !quota_bytes; }
 };
 
+// What a provider can do for provider versioning (recovery::provider::capabilitiesOf), so status and refusals say it
+// instead of failing part way. AWS S3: everything, with a 15-minute propagation window. Backblaze B2: always
+// versioned (no enable, no suspend); retention N days or indefinite and history off (keep only the latest version)
+// through its lifecycle rules; restores by transfer only. Cloudflare R2 and the rest: nothing.
+struct ProviderCapabilities {
+    bool always_versioned{false};    // every bucket keeps versions and that can't be switched off (B2)
+    bool enable{false};              // versioning is turned on with a request (PutBucketVersioning Enabled)
+    bool suspend{false};             // ... and can be suspended
+    bool retention_days{false};      // old versions are deleted N days after they stop being current
+    bool retention_indefinite{false};
+    bool history_off{false};         // mode off keeps only the latest version on the provider (B2: a lifecycle rule)
+    bool list_versions{false};       // ListObjectVersions
+    bool restore_copy{false};        // restore by CopyObject from a version id
+    bool restore_transfer{false};    // restore by GET ?versionId, re-seal and PUT
+    unsigned int propagation_minutes{0};   // after enabling, before every write is versioned
+    std::vector<std::string> unsupported;  // "operation: why", for what is false above
+};
+
 struct ProviderVersioningState {
     bool supported{false};
     std::string unsupported_reason;
+    ProviderCapabilities capabilities;
     std::optional<std::string> provider, bucket, region, storage_class;
     std::string bucket_state{"unknown"};         // managed | adopted | unmanaged | protected | unknown
     std::string status{"unknown"};               // unversioned | enabled | suspended | unknown
@@ -183,11 +202,16 @@ struct ProviderVersioningState {
     std::optional<std::time_t> enabled_at, settles_at, checked_at;
     bool settled{false};                         // enabled and past the provider's propagation period
     std::optional<bool> object_lock, mfa_delete;
-    std::string retention_mode{"unset"};         // unset | days | indefinite (what Vaulthalla set)
+    // unset | days | indefinite | latest (what Vaulthalla set; latest = only the latest version is kept, the old ones go
+    // a day after they are replaced: Backblaze B2 with the vault's mode off)
+    std::string retention_mode{"unset"};
     std::optional<unsigned int> retention_days;
     // Other applications' lifecycle rules that expire noncurrent versions (id: days), and the shortest that applies.
     std::vector<std::string> foreign_noncurrent_rules;
     std::optional<unsigned int> effective_noncurrent_days;
+    // Vaulthalla's own lifecycle rules on the bucket as last read ("vaulthalla-managed: 'o/', old versions deleted 30
+    // days after they are replaced"); empty when none or not read (status --refresh reads them).
+    std::vector<std::string> vaulthalla_rules;
     std::vector<std::string> warnings;
 };
 

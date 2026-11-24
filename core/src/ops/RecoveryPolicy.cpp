@@ -130,9 +130,33 @@ void polAudit(const Actor& actor, const std::string& action, const pol::VaultBuc
 // Why provider versioning can't be used with this vault's provider at all, without a request ("" = it can).
 std::string polProviderGap(const pol::VaultBucket& vb) {
     if (!vb.key) return "the vault's API key no longer exists";
-    if (vb.identity.provider == "cloudflare-r2") return padmin::kR2VersioningUnsupported;
-    if (vb.identity.provider != "aws-s3") return "provider versioning is supported on AWS S3 buckets only";
-    return {};
+    return vh::recovery::provider::unsupportedReason(vb.identity.provider);
+}
+
+// Backblaze B2: every bucket keeps versions, lifecycle rules decide for how long (recovery/provider/Capabilities.hpp).
+bool polIsB2(const pol::VaultBucket& vb) { return vb.identity.provider == "backblaze-b2"; }
+
+vault::model::StorageLayout polLayout(const uint32_t vaultId) {
+    const auto& deps = runtime::Deps::get();
+    if (deps.storageManager)
+        if (const auto s3 = std::dynamic_pointer_cast<vault::model::S3Vault>(deps.storageManager->getVault(vaultId)))
+            return s3->storage_layout;
+    return vault::model::StorageLayout::PathV0;
+}
+
+// Where Vaulthalla's rules go on the vault's bucket, and how the bucket is read for it. AWS: as before (the owned
+// rule where it is, the manifest rule, the whole bucket); B2: scoped by the vault's layout (opaque_v1: "o/", never
+// a rule under .vaulthalla/).
+vh::recovery::provider::RuleScope polScope(const pol::VaultBucket& vb) {
+    return vh::recovery::provider::ruleScopeFor(vb.identity.provider, polLayout(vb.vault_id));
+}
+
+pol::VaultView polView(const pol::VaultBucket& vb) {
+    if (!polIsB2(vb)) return {};
+    const auto layout = polLayout(vb.vault_id);
+    return {.data_prefix = vh::recovery::provider::dataPrefixFor(layout),
+            .protect_metadata = layout == vault::model::StorageLayout::OpaqueV1,
+            .warn_current_expiry = true};
 }
 
 struct PolProvider {
@@ -193,6 +217,8 @@ padmin::Versioning polRecordedVersioning(const pol::VaultBucket& vb) {
     return padmin::Versioning::Unknown;
 }
 
+// The provider retention Vaulthalla recorded for provider versioning (days or indefinite). "latest" (B2 history off)
+// is not a retention to carry into provider versioning: it is never a hidden default.
 std::optional<vh::recovery::ProviderRetention> polRecordedRetention(const pol::VaultBucket& vb) {
     if (!vb.versioning) return std::nullopt;
     if (vb.versioning->retention_mode == "days" && vb.versioning->retention_days)
@@ -201,10 +227,14 @@ std::optional<vh::recovery::ProviderRetention> polRecordedRetention(const pol::V
     return std::nullopt;
 }
 
-// What history is kept now: Vaulthalla's retention, or, on a bucket that already keeps versions without one, all of it.
+bool polKeepsOnlyLatest(const pol::VaultBucket& vb) { return vb.versioning && vb.versioning->retention_mode == "latest"; }
+
+// What history is kept now: Vaulthalla's retention (B2 history off: a day), or, on a bucket that already keeps
+// versions without one (every B2 bucket), all of it.
 std::optional<vh::recovery::ProviderRetention> polCurrentRetention(const pol::VaultBucket& vb, const padmin::Versioning status) {
     if (const auto r = polRecordedRetention(vb)) return r;
-    if (status == padmin::Versioning::Enabled || status == padmin::Versioning::Suspended)
+    if (polKeepsOnlyLatest(vb)) return vh::recovery::ProviderRetention{.indefinite = false, .days = pol::kLatestOnlyDays};
+    if (polIsB2(vb) || status == padmin::Versioning::Enabled || status == padmin::Versioning::Suspended)
         return vh::recovery::ProviderRetention{.indefinite = true, .days = 0};
     return std::nullopt;
 }
@@ -309,6 +339,11 @@ std::string polRetentionText(const std::optional<vh::recovery::ProviderRetention
     return r->indefinite ? "kept indefinitely" : std::to_string(r->days) + " days";
 }
 
+std::string polRetentionText(const pol::VaultBucket& vb, const std::optional<vh::recovery::ProviderRetention>& r) {
+    if (polKeepsOnlyLatest(vb)) return "only the latest version (old ones deleted after a day)";
+    return polRetentionText(r);
+}
+
 void polFillProviderState(vh::recovery::Status& st, const pol::VaultBucket& vb, const vh::recovery::Mode mode,
                           const std::optional<pol::RetentionResult>& lifecycleView) {
     auto& p = st.provider;
@@ -321,6 +356,7 @@ void polFillProviderState(vh::recovery::Status& st, const pol::VaultBucket& vb, 
         if (const auto tier = engine->resolvedStorageTier()) p.storage_class = tier->id;
     p.unsupported_reason = polProviderGap(vb);
     p.supported = p.unsupported_reason.empty();
+    p.capabilities = vh::recovery::provider::capabilitiesOf(vb.identity.provider);
     p.bucket_state = vb.state();
     if (vb.versioning) {
         const auto& v = *vb.versioning;
@@ -334,24 +370,52 @@ void polFillProviderState(vh::recovery::Status& st, const pol::VaultBucket& vb, 
         p.retention_mode = v.retention_mode;
         p.retention_days = v.retention_days;
     }
+    // Every Backblaze B2 bucket is versioned, whether or not Vaulthalla has read it yet.
+    if (p.capabilities.always_versioned && (p.status == "unknown" || p.status == "unversioned")) p.status = "enabled";
     const auto now = polNow();
     p.settled = p.status == "enabled" && (!p.settles_at || now >= *p.settles_at);
     if (lifecycleView) {
         p.foreign_noncurrent_rules = lifecycleView->foreign_rules;
         p.effective_noncurrent_days = lifecycleView->effective_days;
+        p.vaulthalla_rules = lifecycleView->vaulthalla_rules;
         for (const auto& w : lifecycleView->warnings) p.warnings.push_back(w);
     } else if (p.retention_mode == "days") {
         p.effective_noncurrent_days = p.retention_days;
+    } else if (p.retention_mode == "latest") {
+        p.effective_noncurrent_days = pol::kLatestOnlyDays;
     }
 
     if (!p.supported) return;
+    const bool b2 = polIsB2(vb);
     if (p.status == "enabled" && !p.settled && p.settles_at)
         p.warnings.push_back("versioning was turned on recently and is still propagating: until " +
                              std::to_string(*p.settles_at) + " (epoch) the provider may not version every write");
-    if ((p.status == "enabled" || p.status == "suspended") && mode != vh::recovery::Mode::ProviderVersioning)
+    if (b2) {
+        const bool pv = mode == vh::recovery::Mode::ProviderVersioning;
+        if (!pv && p.retention_mode != "latest")
+            p.warnings.push_back("Backblaze B2 keeps every old version and deleted file of this bucket although this "
+                                 "vault's recovery mode is " + vh::recovery::to_string(mode) +
+                                 ": they accrue storage costs until a lifecycle rule removes them (vh vault recovery "
+                                 "set " + std::to_string(vb.vault_id) + " --mode " +
+                                 (mode == vh::recovery::Mode::LocalSnapshots ? "local-snapshots" : "off") +
+                                 " keeps only the latest version)");
+        if (pv && (p.retention_mode == "unset" || p.retention_mode == "latest"))
+            p.warnings.emplace_back("provider versioning has no retention recorded for this Backblaze B2 bucket: set "
+                                    "one with vh vault recovery set --retention");
+        if (lifecycleView && p.retention_mode != "unset" && p.retention_mode != "indefinite" &&
+            lifecycleView->vaulthalla_rules.empty())
+            p.warnings.push_back("Vaulthalla's lifecycle rule is not on the bucket as Vaulthalla wrote it (changed or "
+                                 "removed in the Backblaze console?): run vh vault recovery set " +
+                                 std::to_string(vb.vault_id) + " --mode " +
+                                 (pv ? std::string("provider-versioning --retention ") +
+                                           (p.retention_days ? std::to_string(*p.retention_days) + "d" : "indefinite")
+                                     : std::string(mode == vh::recovery::Mode::LocalSnapshots ? "local-snapshots" : "off")) +
+                                 " to write it again");
+    } else if ((p.status == "enabled" || p.status == "suspended") && mode != vh::recovery::Mode::ProviderVersioning) {
         p.warnings.push_back("the bucket keeps object versions although this vault's recovery mode is " +
                              vh::recovery::to_string(mode) +
                              ": old versions still accrue storage costs (suspend versioning to stop new ones)");
+    }
     if (p.status == "suspended")
         p.warnings.emplace_back("versioning is suspended: existing versions are kept (and billed), new writes are not "
                                 "versioned");
@@ -406,6 +470,7 @@ Status polBuildStatus(const Actor& actor, const uint32_t vaultId, const bool ref
     }
 
     std::optional<pol::RetentionResult> lifecycleView;
+    const auto view = polView(*vb);
     if (refreshProvider && polProviderGap(*vb).empty()) {
         if (!polMayReadBucketConfig(actor, *vb))
             throw Denied("re-reading the bucket needs admin.upstream.view and view on the vault's API key");
@@ -420,7 +485,7 @@ Status polBuildStatus(const Actor& actor, const uint32_t vaultId, const bool ref
                 if (vb->row && vb->row->region) admin->setKnownRegion(vb->bucket, *vb->row->region);
                 const auto config = polMapped([&] { return admin->inspect(vb->bucket); });
                 polRecordCheck(*vb, pol::to_string(config.versioning), config.mfa_delete, config.object_lock);
-                if (config.lifecycle_readable) lifecycleView = pol::describeRetention(config.lifecycle);
+                if (config.lifecycle_readable) lifecycleView = pol::describeRetention(config.lifecycle, view);
                 else st.provider.warnings.emplace_back("the bucket's lifecycle rules can't be read with this credential");
                 vb = pol::bucketForVault(vaultId);
             }
@@ -429,8 +494,10 @@ Status polBuildStatus(const Actor& actor, const uint32_t vaultId, const bool ref
     polFillProviderState(st, *vb, st.mode, lifecycleView);
 
     // Costs can't be estimated / the catalog isn't verified: worth knowing before (and after) turning versioning on.
-    if (st.provider.supported && (st.mode == vh::recovery::Mode::ProviderVersioning || st.provider.status == "enabled" ||
-                                  st.provider.status == "suspended")) {
+    // A B2 bucket that keeps only the latest version (mode off) has no versioning costs to estimate.
+    const bool keepsHistory = polIsB2(*vb) ? st.provider.retention_mode != "latest"
+                                           : (st.provider.status == "enabled" || st.provider.status == "suspended");
+    if (st.provider.supported && (st.mode == vh::recovery::Mode::ProviderVersioning || keepsHistory)) {
         try {
             const auto report = rcost::reportForVault(vaultId, {}, polNow());
             if (!report.priced)
@@ -457,6 +524,68 @@ Status status(const Actor& actor, const uint32_t vaultId, const bool refreshProv
     const auto vault = polRequireVault(vaultId);
     polRequireSync(actor, vaultId, PolSyncPerm::View, vault->name);
     return polBuildStatus(actor, vaultId, refreshProvider);
+}
+
+namespace {
+
+// Adopts the vault's own unmanaged bucket (accept_adoption given): the admission preflight (provision + key Consume),
+// no other vault on it and no other vault's index in it, then the record. vb is re-read.
+void polAdopt(const Actor& actor, const uint32_t vaultId, pol::VaultBucket& vb, std::vector<std::string>& warnings) {
+    const auto admission = upstream::adoptPreflight(actor, upstream::KeyRef{vb.api_key_id}, vb.bucket);
+    for (const auto& b : storage::upstream::bindingsFor(vb.identity))
+        if (b.vault_id != vaultId)
+            throw Conflict("bucket '" + vb.bucket + "' can't be adopted: it is also used by vault '" + b.vault_name +
+                           "' (ID " + std::to_string(b.vault_id) + ")");
+    if (admission.has_vaulthalla_manifest &&
+        !(admission.manifest_vault_id && *admission.manifest_vault_id == vaultId) &&
+        !db::query::sync::RemoteObjectIndex::getManifestETag(vaultId, sync::model::remote_manifest::INDEX_V1_KEY))
+        throw Conflict("bucket '" + vb.bucket + "' can't be adopted: it holds another Vaulthalla vault's index");
+    upstream::detail::adoptBoundBucket(actor, vb.api_key_id, vaultId, vb.bucket);
+    for (const auto& w : admission.warnings) warnings.push_back(w);
+    auto refreshed = pol::bucketForVault(vaultId);
+    if (!refreshed || !refreshed->row) throw std::runtime_error("the adopted bucket's record is missing");
+    vb = std::move(*refreshed);
+}
+
+// Backblaze B2 history off: what an update to a mode other than provider_versioning does to the bucket.
+struct PolHistoryOff {
+    bool shortens{false};       // history that exists now is deleted sooner (always, unless it already was a day)
+    std::string question;       // the RETENTION_SHORTEN text
+};
+
+// nullopt: nothing to send (not B2, or the bucket already keeps only the latest version), or Vaulthalla may not change
+// the bucket here; then the vault's preference still changes and a warning says why the bucket didn't (status keeps
+// saying it). Only a bucket Vaulthalla manages or adopted, or the vault's own unmanaged bucket with accept_adoption,
+// is written, never a protected one, and only by someone who could change its lifecycle rule. No request is made.
+std::optional<PolHistoryOff> polPlanHistoryOff(const Actor& actor, const uint32_t vaultId, const Update& req,
+                                               std::vector<std::string>& warnings) {
+    const auto vb = pol::bucketForVault(vaultId);
+    if (!vb || !vb->key || !polIsB2(*vb) || polKeepsOnlyLatest(*vb)) return std::nullopt;
+    const auto skip = [&](const std::string& why) -> std::optional<PolHistoryOff> {
+        warnings.push_back("bucket '" + vb->bucket + "' still keeps every old version (Backblaze B2): " + why);
+        return std::nullopt;
+    };
+    if (!padmin::supportsAdmin(*vb->key) || !vb->key->admin_enabled)
+        return skip("API key '" + vb->key->name + "' is not enabled for provider administration, so Vaulthalla can't set "
+                    "its lifecycle rule (vh upstream admin enable " + vb->key->name + ")");
+    if (vb->isProtected()) return skip("the bucket is protected, so Vaulthalla leaves it as it is");
+    if (!rbac::resolver::Admin::has<PolUpPerm>({.user = actor, .permission = PolUpPerm::Configure}) ||
+        !rbac::resolver::Admin::has<PolKeyPerm>({.user = actor, .permission = PolKeyPerm::Consume, .api_key_id = vb->api_key_id}))
+        return skip("keeping only the latest version needs admin.upstream.configure and use of the vault's API key");
+    if (vb->state() == "unmanaged" && !req.accept_adoption)
+        return skip("the bucket isn't managed by Vaulthalla; adopt it in the same step (--adopt-bucket) to keep only the "
+                    "latest version there");
+    PolHistoryOff plan;
+    const auto current = polCurrentRetention(*vb, padmin::Versioning::Enabled);
+    plan.shortens = polShortens(current, {.indefinite = false, .days = pol::kLatestOnlyDays});
+    plan.question = "With recovery mode " + vh::recovery::to_string(req.mode.value_or(vh::recovery::Mode::Off)) +
+                    ", Backblaze B2 bucket '" + vb->bucket + "' keeps only the latest version of each file: every old "
+                    "version, and every version of a deleted file, is permanently deleted a day after it is replaced or "
+                    "deleted, including the history that exists now (kept now: " + polRetentionText(*vb, current) +
+                    "). Accept to apply it.";
+    return plan;
+}
+
 }
 
 // ---- update --------------------------------------------------------------------------------------------------------
@@ -504,14 +633,48 @@ Status update(const Actor& actor, const uint32_t vaultId, const Update& req) {
     const bool retentionChange = newMode == vh::recovery::Mode::ProviderVersioning && req.provider_retention.has_value();
     std::optional<std::string> providerRetentionSet;
 
+    // Backblaze B2 keeps every version unless a rule removes them: a mode other than provider_versioning, asked for
+    // in this update, means the provider keeps only the latest version (planned here, written below).
+    const auto offPlan = req.mode && newMode != vh::recovery::Mode::ProviderVersioning
+                             ? polPlanHistoryOff(actor, vaultId, req, warnings)
+                             : std::optional<PolHistoryOff>{};
+    const bool offCut = offPlan && offPlan->shortens;
+
     // With a provider change the provider's shortening question (below, before anything is sent) carries this one too,
     // so one acceptance never covers a consequence that wasn't shown.
-    if (!(entering || retentionChange) && !localCut.empty() && !req.accept_retention_shortening)
-        throw NeedsConfirmation(RETENTION_SHORTEN, localCut);
+    if (!(entering || retentionChange) && (offCut || !localCut.empty()) && !req.accept_retention_shortening) {
+        std::string text = offCut ? offPlan->question : std::string{};
+        if (!localCut.empty()) text += (text.empty() ? "" : " ") + localCut;
+        throw NeedsConfirmation(RETENTION_SHORTEN, text);
+    }
+
+    if (offPlan) {
+        // #359: history the provider deletes sooner is data.destroy, after its acceptance and right before the write.
+        if (offCut) auth::stepup::require(auth::stepup::Family::DataDestroy, "vault.recovery.update:" + std::to_string(vaultId));
+        auto ctx = polAuthorizeProvider(actor, vaultId, "recovery.history.off");
+        auto& vb = ctx.vb;
+        if (vb.state() == "unmanaged") polAdopt(actor, vaultId, vb, warnings);
+        if (!vb.row) throw Conflict("bucket '" + vb.bucket + "' has no Vaulthalla record; adopt it first");
+        const auto previous = polCurrentRetention(vb, padmin::Versioning::Enabled);
+        try {
+            const auto applied = polMapped([&] { return pol::applyLatestOnly(*ctx.admin, vb.bucket, polScope(vb), polView(vb)); });
+            polRecordCheck(vb, "enabled", std::nullopt, std::nullopt);
+            db::query::upstream::Bucket::recordRetention(vb.row->id, "latest", std::nullopt, actor->id);
+            for (const auto& w : applied.warnings) warnings.push_back(w);
+            providerRetentionSet = (previous ? previous->str() : std::string("unset")) + " -> latest";
+            polAudit(actor, "recovery.history.off", vb, PolOutcome::Ok,
+                     {{"previous", previous ? previous->str() : std::string("unset")}, {"written", applied.written},
+                      {"prefix", polScope(vb).prefix.value_or("")}, {"foreign_rules", applied.foreign_rules}});
+        } catch (const std::exception& e) {
+            polAudit(actor, "recovery.history.off", vb, PolOutcome::Failed, {{"error", e.what()}});
+            throw;
+        }
+    }
 
     if (entering || retentionChange) {
         auto ctx = polAuthorizeProvider(actor, vaultId, "recovery.versioning.enable");
         auto& vb = ctx.vb;
+        const auto caps = vh::recovery::provider::capabilitiesOf(vb.identity.provider);
         const bool unmanaged = vb.state() == "unmanaged";
         if (unmanaged && !req.accept_adoption)
             throw NeedsConfirmation(BUCKET_ADOPTION,
@@ -549,38 +712,27 @@ Status update(const Actor& actor, const uint32_t vaultId, const Update& req) {
         const bool providerCut = polShortens(current, *target);
         if ((providerCut || !localCut.empty()) && !req.accept_retention_shortening) {
             std::string text = providerCut
-                ? "Shortening the retention of bucket '" + vb.bucket + "' from " + polRetentionText(current) + " to " +
+                ? "Shortening the retention of bucket '" + vb.bucket + "' from " + polRetentionText(vb, current) + " to " +
                       polRetentionText(target) + " makes the provider permanently delete older noncurrent versions "
                       "sooner, including history that exists now. Accept to shorten it."
                 : std::string{};
             if (!localCut.empty()) text += (text.empty() ? "" : " ") + localCut;
             throw NeedsConfirmation(RETENTION_SHORTEN, text);
         }
+        // #359: a retention that makes the provider delete history sooner is data.destroy, after its acceptance and
+        // right before anything is written.
+        if (providerCut)
+            auth::stepup::require(auth::stepup::Family::DataDestroy, "vault.recovery.update:" + std::to_string(vaultId));
 
-        if (unmanaged) {
-            // The admission preflight (provision + key Consume), then the bucket is adopted for this vault.
-            const auto admission = upstream::adoptPreflight(actor, upstream::KeyRef{vb.api_key_id}, vb.bucket);
-            for (const auto& b : storage::upstream::bindingsFor(vb.identity))
-                if (b.vault_id != vaultId)
-                    throw Conflict("bucket '" + vb.bucket + "' can't be adopted: it is also used by vault '" + b.vault_name +
-                                   "' (ID " + std::to_string(b.vault_id) + ")");
-            if (admission.has_vaulthalla_manifest &&
-                !(admission.manifest_vault_id && *admission.manifest_vault_id == vaultId) &&
-                !db::query::sync::RemoteObjectIndex::getManifestETag(vaultId, sync::model::remote_manifest::INDEX_V1_KEY))
-                throw Conflict("bucket '" + vb.bucket + "' can't be adopted: it holds another Vaulthalla vault's index");
-            upstream::detail::adoptBoundBucket(actor, vb.api_key_id, vaultId, vb.bucket);
-            for (const auto& w : admission.warnings) warnings.push_back(w);
-            auto refreshed = pol::bucketForVault(vaultId);
-            if (!refreshed || !refreshed->row) throw std::runtime_error("the adopted bucket's record is missing");
-            vb = std::move(*refreshed);
-        }
+        if (unmanaged) polAdopt(actor, vaultId, vb, warnings);
         if (!vb.row) throw Conflict("bucket '" + vb.bucket + "' has no Vaulthalla record; adopt it first");
         const auto rowId = vb.row->id;
 
-        // Enable only when it isn't on already (never a second PutBucketVersioning), then read it back.
+        // Enable only when it isn't on already (never a second PutBucketVersioning), then read it back. A provider
+        // whose buckets are always versioned (B2) is never asked.
         bool put = false;
         pol::ReadBack readBack;
-        if (state.status != padmin::Versioning::Enabled) {
+        if (!caps.always_versioned && state.status != padmin::Versioning::Enabled) {
             try {
                 readBack = polMapped([&] { return pol::putAndConfirm(*ctx.admin, vb.bucket, padmin::Versioning::Enabled); });
             } catch (const std::exception& e) {
@@ -592,7 +744,7 @@ Status update(const Actor& actor, const uint32_t vaultId, const Update& req) {
                 warnings.push_back("the provider accepted versioning for bucket '" + vb.bucket + "' but hasn't confirmed it "
                                    "after " + std::to_string(readBack.reads) + " read(s); it will show once it propagates");
         }
-        const auto settles = polNow() + std::chrono::duration_cast<std::chrono::seconds>(pol::kPropagation).count();
+        const auto settles = polNow() + static_cast<std::time_t>(caps.propagation_minutes) * 60;
         db::query::upstream::Bucket::recordVersioningEnabled(rowId, put ? std::make_optional(actor->id) : std::nullopt, put,
                                                              settles);
         if (state.mfa_delete) polRecordCheck(vb, "enabled", state.mfa_delete, std::nullopt);
@@ -601,9 +753,12 @@ Status update(const Actor& actor, const uint32_t vaultId, const Update& req) {
                   {"previous", pol::to_string(state.status)}, {"retention", target->str()},
                   {"priced", report.priced}, {"accepted_unpriced", !report.priced}});
 
-        // Retention: Vaulthalla's lifecycle rule (+ the manifest-versions rule); every foreign rule stays as it was.
+        // Retention: Vaulthalla's lifecycle rule (+ the manifest-versions rule where the layout allows one); every
+        // foreign rule stays as it was.
         try {
-            const auto applied = polMapped([&] { return pol::applyRetention(*ctx.admin, vb.bucket, *target, true); });
+            const auto applied = polMapped([&] {
+                return pol::applyRetention(*ctx.admin, vb.bucket, *target, true, polScope(vb), polView(vb));
+            });
             db::query::upstream::Bucket::recordRetention(rowId, target->indefinite ? "indefinite" : "days",
                                                          target->indefinite ? std::nullopt : std::make_optional(target->days),
                                                          actor->id);
@@ -672,6 +827,69 @@ Status update(const Actor& actor, const uint32_t vaultId, const Update& req) {
     return st;
 }
 
+// ---- a new bucket's history (Backblaze B2) ---------------------------------------------------------------------------
+
+std::vector<std::string> detail::applyNewBucketHistory(const Actor& actor, const uint32_t vaultId,
+                                                       const std::optional<ProviderRetention>& keep) {
+    std::vector<std::string> warnings;
+    std::optional<pol::VaultBucket> vb;
+    try {
+        vb = pol::bucketForVault(vaultId);
+    } catch (const std::exception& e) {
+        warnings.push_back(std::string("the new bucket's history setting could not be applied: ") + e.what());
+        return warnings;
+    }
+    if (!vb || !vb->key || !vb->row || !polIsB2(*vb)) return warnings;
+    const auto what = keep ? "provider versioning with a retention of " + polRetentionText(keep)
+                           : std::string("keeping only the latest version");
+    const auto failed = [&](const std::string& why) {
+        warnings.push_back("bucket '" + vb->bucket + "' was created, but " + what + " was not set up (" + why +
+                           "): Backblaze B2 keeps every old version until it is; see vh vault recovery status " +
+                           std::to_string(vaultId) + " --refresh");
+        polAudit(actor, keep ? "recovery.retention.set" : "recovery.history.off", *vb, PolOutcome::Failed,
+                 {{"error", why}, {"new_bucket", true}});
+        return warnings;
+    };
+    if (vb->isProtected()) return failed("the bucket is protected");
+    try {
+        const auto& manager = runtime::Deps::get().apiKeyManager;
+        if (!manager) return failed("the API key manager is not available");
+        auto admin = padmin::adminFor(manager->getAPIKey(vb->api_key_id));
+        if (!admin) return failed("provider administration is not available for this API key");
+        const auto scope = polScope(*vb);
+        const auto view = polView(*vb);
+        const auto rowId = vb->row->id;
+        pol::RetentionResult applied;
+        if (!keep) {
+            applied = pol::applyLatestOnly(*admin, vb->bucket, scope, view);
+            polRecordCheck(*vb, "enabled", std::nullopt, std::nullopt);
+            db::query::upstream::Bucket::recordRetention(rowId, "latest", std::nullopt, actor ? std::make_optional(actor->id)
+                                                                                                : std::nullopt);
+        } else {
+            applied = pol::applyRetention(*admin, vb->bucket, *keep, true, scope, view);
+            db::query::upstream::Bucket::recordVersioningEnabled(rowId, std::nullopt, false, polNow());
+            db::query::upstream::Bucket::recordRetention(rowId, keep->indefinite ? "indefinite" : "days",
+                                                         keep->indefinite ? std::nullopt : std::make_optional(keep->days),
+                                                         actor ? std::make_optional(actor->id) : std::nullopt);
+            auto policy = rq::Policy::get(vaultId);
+            policy.vault_id = vaultId;
+            policy.mode = vh::recovery::Mode::ProviderVersioning;
+            if (actor) policy.updated_by = actor->id;
+            rq::Policy::upsert(policy);
+            vh::recovery::local::invalidatePolicy(vaultId);
+        }
+        for (const auto& w : applied.warnings) warnings.push_back(w);
+        polAudit(actor, keep ? "recovery.retention.set" : "recovery.history.off", *vb, PolOutcome::Ok,
+                 {{"retention", keep ? keep->str() : std::string("latest")}, {"written", applied.written},
+                  {"prefix", scope.prefix.value_or("")}, {"new_bucket", true}});
+        log::Registry::audit()->info("[ops::recovery] new Backblaze B2 bucket '{}' of vault {}: {}", vb->bucket, vaultId,
+                                     keep ? "provider versioning, " + keep->str() : std::string("only the latest version kept"));
+    } catch (const std::exception& e) {
+        return failed(e.what());
+    }
+    return warnings;
+}
+
 // ---- disclosure ----------------------------------------------------------------------------------------------------
 
 Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
@@ -690,12 +908,14 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
     // MFA delete and lifecycle) and its details disclosed; otherwise the figures use the recorded versioning state and
     // no request is made.
     const bool bucketDetails = polMayReadBucketConfig(actor, vb);
+    const bool b2 = polIsB2(vb);
+    const auto scope = polScope(vb);
     std::optional<padmin::BucketConfiguration> config;
     std::optional<pol::RetentionResult> described;
     if (bucketDetails) {
         config = polMapped([&] { return ctx.admin->inspect(vb.bucket); });
         polRecordCheck(vb, pol::to_string(config->versioning), config->mfa_delete, config->object_lock);
-        if (config->lifecycle_readable) described = pol::describeRetention(config->lifecycle);
+        if (config->lifecycle_readable) described = pol::describeRetention(config->lifecycle, polView(vb));
     }
     const auto versioning = config ? config->versioning : polRecordedVersioning(vb);
 
@@ -710,14 +930,23 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
     rcost::noteAlert(d.report, now);
 
     auto& c = d.consequences;
-    if (versioning == padmin::Versioning::Enabled)
-        c.push_back("Bucket '" + vb.bucket + "' already keeps versions: Vaulthalla will not change that, only record it and "
-                    "set the retention.");
-    else
-        c.push_back("Turning versioning on for bucket '" + vb.bucket + "' can't be undone: AWS can only suspend it later, "
-                    "and versions that exist keep being billed until they expire or are deleted.");
-    c.emplace_back("AWS takes up to 15 minutes before every write is versioned; until then Vaulthalla shows the bucket as "
-                   "propagating and doesn't rely on versions for recovery.");
+    const std::string where = scope.prefix && !scope.prefix->empty() ? " under '" + *scope.prefix + "' (the vault's files)"
+                                                                     : std::string{};
+    if (b2) {
+        c.push_back("Backblaze B2 bucket '" + vb.bucket + "' keeps object versions already (every B2 bucket does, and "
+                    "that can't be switched off): Vaulthalla only sets how long, with a Backblaze lifecycle rule" + where +
+                    ". Choosing mode off later keeps only the latest version again.");
+        c.emplace_back("Nothing has to propagate on B2: old versions count as recovery history from now on.");
+    } else {
+        if (versioning == padmin::Versioning::Enabled)
+            c.push_back("Bucket '" + vb.bucket + "' already keeps versions: Vaulthalla will not change that, only record it "
+                        "and set the retention.");
+        else
+            c.push_back("Turning versioning on for bucket '" + vb.bucket + "' can't be undone: AWS can only suspend it "
+                        "later, and versions that exist keep being billed until they expire or are deleted.");
+        c.emplace_back("AWS takes up to 15 minutes before every write is versioned; until then Vaulthalla shows the bucket "
+                       "as propagating and doesn't rely on versions for recovery.");
+    }
     if (!target)
         c.emplace_back("No retention chosen yet: choose one (30d, 90d, 365d or indefinite) to enable versioning.");
     else if (target->indefinite)
@@ -725,14 +954,19 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
                        "is set.");
     else
         c.push_back("The provider permanently deletes each old version " + std::to_string(target->days) +
-                    " days after it stops being current (lifecycle rule '" +
+                    " days after it stops being current" + where + " (lifecycle rule '" +
                     std::string(storage::upstream::lifecycle::kOwnedRuleId) + "'); history older than that can't be "
-                    "recovered.");
+                    "recovered." + (b2 ? " A deleted file's versions go the same way, then its hide marker." : ""));
     c.emplace_back("Every old version is a full copy billed at the storage class rate; storage classes with a minimum "
                    "storage duration or object size bill at least that much per version.");
-    c.push_back("Vaulthalla also expires old copies of its own index (" +
-                std::string(storage::upstream::lifecycle::kManifestRulePrefix) + ", rule '" +
-                std::string(storage::upstream::lifecycle::kManifestRuleId) + "') after 1 day.");
+    if (scope.manifest_rule)
+        c.push_back("Vaulthalla also expires old copies of its own index (" +
+                    std::string(storage::upstream::lifecycle::kManifestRulePrefix) + ", rule '" +
+                    std::string(storage::upstream::lifecycle::kManifestRuleId) + "') after 1 day.");
+    else
+        c.push_back("No rule touches " + std::string(storage::upstream::lifecycle::kManifestRulePrefix) +
+                    ": this vault's encrypted manifest keeps its older roots there as versions and removes the ones it "
+                    "no longer needs itself.");
     if (!bucketDetails)
         c.emplace_back("The bucket's configuration (object lock, MFA delete, other applications' lifecycle rules) was not "
                        "read: it needs admin.upstream.view and view on the vault's API key. The figures assume no other "
@@ -744,6 +978,8 @@ Disclosure versioningDisclosure(const Actor& actor, const uint32_t vaultId,
                         for (const auto& r : described->foreign_rules) s += (s.empty() ? "" : ", ") + r;
                         return s;
                     }() + "); Vaulthalla keeps them unchanged, and the shortest one wins.");
+    if (b2 && described)
+        for (const auto& w : described->warnings) c.push_back("Warning: " + w);
     if (config && config->object_lock && *config->object_lock)
         c.emplace_back("Object lock is enabled on this bucket: versioning can never be suspended and locked versions can't "
                        "be removed early.");
@@ -774,6 +1010,9 @@ Status suspendVersioning(const Actor& actor, const uint32_t vaultId, const bool 
     requireActor(actor);
     const auto vault = polRequireVault(vaultId);
     polRequireSync(actor, vaultId, PolSyncPerm::Edit, vault->name);
+    // Backblaze B2 can't suspend: refused before anything else, with what to do instead.
+    if (const auto known = pol::bucketForVault(vaultId); known && polIsB2(*known))
+        throw Invalid(vh::recovery::provider::kB2SuspendUnsupported);
     auto ctx = polAuthorizeProvider(actor, vaultId, "recovery.versioning.suspend");
     const auto& vb = ctx.vb;
     if (vb.state() == "unmanaged" || !vb.row)

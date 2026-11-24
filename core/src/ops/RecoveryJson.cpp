@@ -141,9 +141,24 @@ void to_json(nlohmann::json& j, const LocalVersioningPolicy& v) {
          {"quota_bytes", rjOpt(v.quota_bytes)}};
 }
 
+void to_json(nlohmann::json& j, const ProviderCapabilities& v) {
+    j = {{"always_versioned", v.always_versioned},
+         {"enable", v.enable},
+         {"suspend", v.suspend},
+         {"retention_days", v.retention_days},
+         {"retention_indefinite", v.retention_indefinite},
+         {"history_off", v.history_off},
+         {"list_versions", v.list_versions},
+         {"restore_copy", v.restore_copy},
+         {"restore_transfer", v.restore_transfer},
+         {"propagation_minutes", v.propagation_minutes},
+         {"unsupported", v.unsupported}};
+}
+
 void to_json(nlohmann::json& j, const ProviderVersioningState& v) {
     j = {{"supported", v.supported},
          {"unsupported_reason", v.unsupported_reason},
+         {"capabilities", v.capabilities},
          {"provider", rjOpt(v.provider)},
          {"bucket", rjOpt(v.bucket)},
          {"region", rjOpt(v.region)},
@@ -161,6 +176,7 @@ void to_json(nlohmann::json& j, const ProviderVersioningState& v) {
          {"retention_days", rjOpt(v.retention_days)},
          {"foreign_noncurrent_rules", v.foreign_noncurrent_rules},
          {"effective_noncurrent_days", rjOpt(v.effective_noncurrent_days)},
+         {"vaulthalla_rules", v.vaulthalla_rules},
          {"warnings", v.warnings}};
 }
 

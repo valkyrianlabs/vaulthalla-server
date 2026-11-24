@@ -1724,6 +1724,76 @@ TEST_F(SqlDeployerHistoryDb, VaultReadGrantsMigration155IsAdditiveAndIdempotent)
     });
 }
 
+// 156 (Backblaze B2 provider versioning) on a 155-era database: noncurrent_retention_mode gains 'latest' (no days, like
+// 'indefinite'), every existing row still passes the widened check, and s3_gateway_upstream_profile gains a nullable
+// versioning (off | indefinite | <N>d up to 36500, NULL = off); running it again changes nothing.
+TEST_F(SqlDeployerHistoryDb, B2ProviderVersioningMigration156IsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        const std::string file = "156_b2_provider_versioning.sql";
+        txn.exec("ALTER TABLE s3_gateway_upstream_profile DROP COLUMN IF EXISTS versioning");
+        txn.exec("ALTER TABLE upstream_bucket DROP CONSTRAINT IF EXISTS upstream_bucket_noncurrent_retention_check");
+        txn.exec("ALTER TABLE upstream_bucket ADD CONSTRAINT upstream_bucket_noncurrent_retention_check "
+                 "CHECK ((noncurrent_retention_mode = 'days' AND noncurrent_retention_days BETWEEN 1 AND 36500) "
+                 "OR (noncurrent_retention_mode IN ('unset', 'indefinite') AND noncurrent_retention_days IS NULL))");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
+
+        const auto fails = [&](const std::string& sql) {
+            pqxx::subtransaction sub(txn);
+            try {
+                sub.exec(sql);
+            } catch (const std::exception&) {
+                return true;
+            }
+            return false;
+        };
+        const auto bucket = txn.exec("INSERT INTO upstream_bucket (provider, account_ref, bucket, ownership, "
+                                     "noncurrent_retention_mode, noncurrent_retention_days) VALUES ('backblaze-b2', "
+                                     "'s3.us-west-004.backblazeb2.com', 'claude-test-156', 'managed', 'days', 30) "
+                                     "RETURNING id").one_field_ref().as<int64_t>();
+        EXPECT_TRUE(fails("UPDATE upstream_bucket SET noncurrent_retention_mode = 'latest', noncurrent_retention_days = NULL "
+                          "WHERE id = " + std::to_string(bucket)))
+            << "before 156 there is no 'latest'";
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, file));
+        EXPECT_EQ(report.applied.size(), 1u) << "only 156 was missing";
+        EXPECT_EQ(recordedHash(txn, file), currentHash(file));
+        EXPECT_TRUE(columnExists(txn, "s3_gateway_upstream_profile", "versioning"));
+
+        const auto id = std::to_string(bucket);
+        EXPECT_FALSE(fails("UPDATE upstream_bucket SET noncurrent_retention_mode = 'latest', noncurrent_retention_days = NULL "
+                           "WHERE id = " + id));
+        EXPECT_TRUE(fails("UPDATE upstream_bucket SET noncurrent_retention_mode = 'latest', noncurrent_retention_days = 1 "
+                          "WHERE id = " + id)) << "latest carries no days";
+        EXPECT_FALSE(fails("UPDATE upstream_bucket SET noncurrent_retention_mode = 'days', noncurrent_retention_days = 30 "
+                           "WHERE id = " + id)) << "what was valid stays valid";
+
+        const auto keyOwner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_156_user', 'x') "
+                                       "RETURNING id").one_field_ref().as<int>();
+        const auto apiKey = txn.exec("INSERT INTO api_keys (user_id, name, provider, access_key, encrypted_secret_access_key, "
+                                     "iv, region, endpoint) VALUES ($1, 'claude_test_156_key', 'Backblaze B2', 'k', "
+                                     "'\\x00'::bytea, '\\x00'::bytea, 'us-west-004', "
+                                     "'https://s3.us-west-004.backblazeb2.com') RETURNING id",
+                                     pqxx::params{keyOwner});
+        int seq = 0;
+        const auto profile = [&](const std::string& versioning) {
+            return "INSERT INTO s3_gateway_upstream_profile (name, api_key_id, sync_strategy, conflict_policy, versioning) "
+                   "VALUES ('claude-test-156-" + std::to_string(++seq) + "', " +
+                   std::to_string(apiKey.one_field_ref().as<int>()) + ", 'cache', 'keep_local', " + versioning + ")";
+        };
+        for (const auto* ok : {"NULL", "'off'", "'indefinite'", "'30d'", "'1d'", "'36500d'"})
+            EXPECT_FALSE(fails(profile(ok))) << ok;
+        for (const auto* bad : {"'0d'", "'36501d'", "'30'", "'forever'", "''", "'d'"})
+            EXPECT_TRUE(fails(profile(bad))) << bad;
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / file)));
+    });
+}
+
 TEST_F(SqlDeployerHistoryDb, RecoveryRecipientsMigrationIsAdditiveIdempotentAndCustomerOnly) {
     inRolledBackTxn([](pqxx::work& txn) {
         txn.exec("DROP TABLE IF EXISTS vault_key_envelope");

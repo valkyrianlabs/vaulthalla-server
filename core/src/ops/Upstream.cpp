@@ -1,4 +1,5 @@
 #include "ops/Upstream.hpp"
+#include "ops/Recovery.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "storage/upstream/Names.hpp"
 #include "sync/events/Subscriptions.hpp"
@@ -886,6 +887,18 @@ std::vector<std::string> finishProvision(const Actor& actor, const ProvisionTick
             auditRecord(actor, "lifecycle.set", id, ticket.api_key_id, vaultId, bmodel::AuditOutcome::Failed, {{"error", e.what()}});
         }
     }
+    // Backblaze B2 keeps every version unless a rule says otherwise: a bucket Vaulthalla created (or the empty one
+    // the gateway adopted) starts with what its creator chose, by default only the latest version.
+    if (id.provider == "backblaze-b2") {
+        if (ticket.mode == BucketMode::Create || req.mode == BucketMode::CreateOrAdoptEmpty) {
+            for (auto& w : ops::recovery::detail::applyNewBucketHistory(actor, vaultId, req.keep_history))
+                warnings.push_back(std::move(w));
+        } else {
+            warnings.push_back("bucket '" + row->bucket + "' was adopted with its lifecycle rules as they are: Backblaze B2 "
+                               "keeps every old version until a rule removes them (vh vault recovery set " +
+                               std::to_string(vaultId) + " --mode off keeps only the latest version)");
+        }
+    }
     if (req.events)
         if (const auto w = detail::subscribeNewVault(actor, vaultId, req.events_prefix, ticket.mode == BucketMode::Adopt))
             warnings.push_back(*w);
@@ -986,9 +999,9 @@ BucketRow detach(const Actor& actor, const KeyRef& ref, const std::string& bucke
     try {
         LifecyclePatch clear;
         clear.clear = true;
-        // Every vaulthalla-* rule goes: the owned rule and the manifest-versions rule file recovery manages. A provider
-        // whose lifecycle Vaulthalla can't reach (Backblaze B2) never got a rule of ours: nothing to remove.
-        if (!lifecycleGap(*key)) lifecycleRemoved = applyLifecycle(*client, *key, bucket, clear, true);
+        // Every vaulthalla-* rule goes: the owned rule and the manifest-versions rule file recovery manages (on
+        // Backblaze B2 too, through its native API: the bucket then keeps every version again, as B2 does).
+        if (client->supportsLifecycle()) lifecycleRemoved = applyLifecycle(*client, *key, bucket, clear, true);
     } catch (const NeedsConfirmation&) {
         throw;
     } catch (const std::exception& e) {

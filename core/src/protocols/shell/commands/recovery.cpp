@@ -602,7 +602,8 @@ std::string formatStatus(const model::Status& s) {
         out << "not available" << (p.unsupported_reason.empty() ? "" : " (" + p.unsupported_reason + ")") << "\n";
     } else {
         out << p.status;
-        if (p.status == "enabled") out << (p.settled ? ", settled" : ", propagating until " + rcWhen(p.settles_at));
+        if (p.capabilities.always_versioned) out << " (always, on this provider)";
+        else if (p.status == "enabled") out << (p.settled ? ", settled" : ", propagating until " + rcWhen(p.settles_at));
         if (p.enabled_by_vaulthalla) out << " (enabled by Vaulthalla " << rcWhen(p.enabled_at) << ")";
         out << "\n";
     }
@@ -612,8 +613,10 @@ std::string formatStatus(const model::Status& s) {
     if (p.supported) {
         out << "    Retention: "
             << (p.retention_mode == "days" && p.retention_days ? std::to_string(*p.retention_days) + " days"
+                : p.retention_mode == "latest"                 ? std::string("latest version only (old versions go after a day)")
                                                                : p.retention_mode)
             << "\n";
+        for (const auto& r : p.vaulthalla_rules) out << "    Vaulthalla's rule: " << r << "\n";
         if (!p.foreign_noncurrent_rules.empty()) {
             out << "    Other applications' old-version expiry:";
             for (const auto& r : p.foreign_noncurrent_rules) out << " " << r;

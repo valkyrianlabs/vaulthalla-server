@@ -119,6 +119,11 @@ rc::Status fullStatus() {
     s.provider.retention_days = 30;
     s.provider.foreign_noncurrent_rules = {"expire-old: 90"};
     s.provider.effective_noncurrent_days = 30;
+    s.provider.vaulthalla_rules = {"vaulthalla-managed: prefix 'o/', old versions deleted 30 days after they stop being current"};
+    s.provider.capabilities = {.always_versioned = true, .enable = false, .suspend = false, .retention_days = true,
+                               .retention_indefinite = true, .history_off = true, .list_versions = true,
+                               .restore_copy = false, .restore_transfer = true, .propagation_minutes = 0,
+                               .unsupported = {"suspend: always versioned"}};
     s.provider.warnings = {"propagating"};
     s.snapshots = {.count = 2, .stored_bytes = 100, .plaintext_bytes = 90};
     s.versions = {.count = 3, .stored_bytes = 300, .plaintext_bytes = 280};
