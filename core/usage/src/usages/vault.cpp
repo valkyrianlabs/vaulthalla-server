@@ -1296,6 +1296,172 @@ static std::shared_ptr<CommandUsage> sync(const std::weak_ptr<CommandUsage>& par
     return cmd;
 }
 
+// ---- vault read grants (ops/ReadGrants.hpp; migration 155) --------------------------------------------------------
+
+static const Positional readGrantPos = Positional::Alias("grant", "The read grant's id (vh vault read-grant list)", "grant",
+                                                         contract::gen::ref("vault.read_grant", {"grant_id"}));
+static const Positional readGrantRecipientPos = Positional::Alias(
+    "fingerprint", "The recipient key's full 40-hex fingerprint", "fingerprint",
+    contract::gen::ref("vault.read_grant.recipient", {"fingerprint"}));
+
+static std::shared_ptr<CommandUsage> read_grant_issue(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"issue", "create"};
+    cmd->effect = CommandEffect::Write;
+    cmd->description =
+        "Issue a read grant for a vault: a new S3 gateway credential that can only read this vault, and (for a vault "
+        "with an upstream bucket whose objects are stored readable) a new read-only provider key restricted to that "
+        "bucket (Backblaze B2: listBuckets, listFiles, readFiles), minted with the API key the vault already uses. "
+        "Both, with everything a client needs to use them, are printed as one OpenPGP message encrypted to the pinned "
+        "recipient(s), and only that way: no secret is stored, logged or shown in plaintext. Needs the vault "
+        "permission vault.sync.action.read_grants and reading the vault yourself; no step-up (only the recipient can "
+        "read the result). A local vault, or one that encrypts its objects upstream, gets a grant only with "
+        "--gateway-only. At most vaults.read_grants.max_per_vault grants per vault that are not revoked (default 4).";
+    cmd->positionals = {vaultPos};
+    cmd->optional = {owner,
+                     Optional::ManyToOne("recipient", "A pinned recipient's fingerprint (vh vault read-grant recipient "
+                                         "list); give it twice to encrypt to two recipients",
+                                         {"recipient"}, "fingerprint")
+                         .withGen("fingerprint", contract::gen::ref("vault.read_grant.recipient", {"fingerprint"}))};
+    cmd->optional_flags = {jsonFlag,
+                           Flag::Alias("gateway_only", "Issue the S3 gateway half alone (a local vault, or one that "
+                                       "encrypts its objects upstream)", "gateway-only")};
+    cmd->examples = {
+        {"vh vault read-grant issue finance --recipient A6A1752984DFB0DB38DD235D2096C49D7A8F000A --json",
+         "Issue a read grant for vault 'finance', encrypted to the pinned recipient; the JSON carries the grant id and "
+         "the armored message."},
+        {"vh vault read-grant issue 12 --recipient A6A1752984DFB0DB38DD235D2096C49D7A8F000A "
+         "--recipient 0123456789ABCDEF0123456789ABCDEF01234567",
+         "Encrypt the grant to two pinned recipients (the orchestrator and the client's own key)."},
+        {"vh vault read-grant issue photos --recipient A6A1752984DFB0DB38DD235D2096C49D7A8F000A --gateway-only",
+         "A local vault: only the S3 gateway half."}
+    };
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> read_grant_list(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"list", "ls"};
+    cmd->effect = CommandEffect::Read;
+    cmd->description = "List read grants: of one vault, or of every vault where you hold vault.sync.action.read_grants. "
+                       "Ids only (the gateway credential, the upstream key), never a secret. Revoked grants with --all.";
+    cmd->optional = {owner,
+                     Optional::ManyToOne("vault", "Only this vault's grants (name or ID)", {"vault"}, "vault")
+                         .withGen("vault", contract::gen::ref("vault", {"id", "name"}))};
+    cmd->optional_flags = {jsonFlag, Flag::Alias("all", "Include revoked grants", "all")};
+    cmd->examples = {{"vh vault read-grant list --vault finance", "Read grants of vault 'finance'."},
+                     {"vh vault read-grant list --json", "Every read grant you manage, as JSON."}};
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> read_grant_show(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"show", "info"};
+    cmd->effect = CommandEffect::Read;
+    cmd->description = "Show one read grant. --ciphertext prints the OpenPGP message it was issued as again (still "
+                       "readable only by its recipients), e.g. when the issuing call's answer was lost.";
+    cmd->positionals = {readGrantPos};
+    cmd->optional_flags = {jsonFlag, Flag::Alias("ciphertext", "Print the armored OpenPGP message", "ciphertext")};
+    cmd->examples = {{"vh vault read-grant show 79y1x7s0pkawdszr14d2pf2dbr --ciphertext",
+                      "The grant's OpenPGP message again."}};
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> read_grant_revoke(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"revoke", "remove", "rm"};
+    cmd->effect = CommandEffect::Destructive;
+    cmd->description = "Revoke a read grant: deletes its S3 gateway credential and its upstream key (Backblaze B2 "
+                       "b2_delete_key). If the provider refuses or fails, the grant stays 'revocation_incomplete', the "
+                       "command fails, and running it again retries.";
+    cmd->positionals = {readGrantPos};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh vault read-grant revoke 79y1x7s0pkawdszr14d2pf2dbr", "Revoke that read grant."}};
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> read_grant_recipient_list(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"list", "ls"};
+    cmd->effect = CommandEffect::Read;
+    cmd->description = "List the pinned read-grant recipients (OpenPGP public keys, by fingerprint). Removed ones with "
+                       "--all.";
+    cmd->optional_flags = {jsonFlag, Flag::Alias("all", "Include removed recipients", "all")};
+    cmd->examples = {{"vh vault read-grant recipient list", "The pinned recipients."}};
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> read_grant_recipient_add(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"add", "pin"};
+    cmd->effect = CommandEffect::Write;
+    cmd->description =
+        "Pin a read-grant recipient: an OpenPGP public key, by its full 40-hex fingerprint. The key comes from a file "
+        "or standard input (--key-file, read by vh on your side) or from a keyserver by that fingerprint (--keyserver "
+        "https://keys.example.com: /vks/v1/by-fingerprint/<FPR> is fetched); either way it must hash to the "
+        "fingerprint you give, or nothing is pinned. A user ID or e-mail address is never enough. Refused for a key "
+        "that is revoked, expired or has no valid encryption subkey. Super admins only, with a step-up of family "
+        "secrets (the host CLI is exempt); agents are refused.";
+    cmd->optional = {Optional::ManyToOne("fingerprint", "The key's full 40-hex fingerprint", {"fingerprint"}, "fingerprint")
+                         .withGen("fingerprint", contract::gen::constant("A6A1752984DFB0DB38DD235D2096C49D7A8F000A")),
+                     Optional::ManyToOne("key_file", "The armored public key (- for standard input)", {"key-file"},
+                                         "path")
+                         .withGen("path", contract::gen::constant("recipient.asc")),
+                     Optional::ManyToOne("keyserver", "Fetch the key from this keyserver by its fingerprint (https)",
+                                         {"keyserver"}, "url")
+                         .withGen("url", contract::gen::constant("https://keys.valkyrianlabs.com")),
+                     Optional::ManyToOne("label", "A name you recognize the key by", {"label"}, "label")
+                         .withGen("label", contract::gen::constant("Sentinel"))};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {
+        {"vh vault read-grant recipient add --fingerprint A6A1752984DFB0DB38DD235D2096C49D7A8F000A --keyserver "
+         "https://keys.valkyrianlabs.com --label Sentinel",
+         "Pin Sentinel's key, fetched from the keyserver by its fingerprint."},
+        {"vh vault read-grant recipient add --fingerprint A6A1752984DFB0DB38DD235D2096C49D7A8F000A --key-file "
+         "sentinel.asc --label Sentinel",
+         "Pin the key in sentinel.asc (--key-file - reads standard input, e.g. piped from gpg --export --armor)."}
+    };
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> read_grant_recipient_remove(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"remove", "rm", "unpin"};
+    cmd->effect = CommandEffect::Destructive;
+    cmd->description = "Unpin a read-grant recipient: no new grant is encrypted to it. Grants already issued to it are "
+                       "not revoked (the command says how many there are). Super admins only, with a step-up of family "
+                       "secrets.";
+    cmd->positionals = {readGrantRecipientPos};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh vault read-grant recipient remove A6A1752984DFB0DB38DD235D2096C49D7A8F000A",
+                      "Stop issuing grants to that key."}};
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> read_grant_recipient(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"recipient", "recipients"};
+    cmd->pluralAliasImpliesList = true;
+    cmd->description = "The OpenPGP public keys read grants may be encrypted to, pinned by fingerprint.";
+    cmd->examples = {{"vh vault read-grant recipient list", "The pinned recipients."}};
+    cmd->subcommands = {read_grant_recipient_list(cmd->weak_from_this()), read_grant_recipient_add(cmd->weak_from_this()),
+                        read_grant_recipient_remove(cmd->weak_from_this())};
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> read_grant(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"read-grant", "read-grants"};
+    cmd->pluralAliasImpliesList = true;
+    cmd->description = "Vault read grants: read-only S3 gateway and upstream credentials for a vault, handed to a backup "
+                       "orchestrator only as an OpenPGP message encrypted to a pinned recipient.";
+    cmd->examples = {{"vh vault read-grant list", "Every read grant you manage."}};
+    cmd->subcommands = {read_grant_issue(cmd->weak_from_this()), read_grant_list(cmd->weak_from_this()),
+                        read_grant_show(cmd->weak_from_this()), read_grant_revoke(cmd->weak_from_this()),
+                        read_grant_recipient(cmd->weak_from_this())};
+    return cmd;
+}
+
 static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"vault", "v"};
@@ -1323,6 +1489,7 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
     const auto remoteCmd = vault_remote(cmd->weak_from_this());
     const auto syncCmd = sync(cmd->weak_from_this()); // executable (manual sync) + has subcommands
     const auto recoveryCmd = recovery_book::vaultRecovery(cmd->weak_from_this());
+    const auto readGrantCmd = read_grant(cmd->weak_from_this());
 
     // ---- helpers to pluck children by alias from a parent we just built ----
     auto findChild = [](const std::shared_ptr<CommandUsage>& parentCmd, std::string_view alias)
@@ -1479,7 +1646,8 @@ static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& par
         storageCmd,
         remoteCmd,
         syncCmd,
-        recoveryCmd
+        recoveryCmd,
+        readGrantCmd
     };
 
     return cmd;

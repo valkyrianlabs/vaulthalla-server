@@ -355,6 +355,23 @@ vh-recovery kit show kit.json
 
 Unencrypted key exports are dangerous. Prefer `--recipient` and `--output`.
 
+## Vault Read Grants
+
+```bash
+vh vault read-grant recipient add --fingerprint <fingerprint> --key-file <file|-> | --keyserver <https-url> [--label <text>]
+vh vault read-grant recipient list [--all]
+vh vault read-grant recipient remove <fingerprint>
+vh vault read-grant issue <vault> --recipient <fingerprint> [--recipient <fingerprint>] [--gateway-only] [--json]
+vh vault read-grant list [--vault <vault>] [--all] [--json]
+vh vault read-grant show <grant> [--ciphertext]
+vh vault read-grant revoke <grant>
+```
+
+A read grant is a read-only S3 gateway credential plus a read-only upstream key (Backblaze B2) for one vault, returned
+only as an OpenPGP message encrypted to pinned recipients. Pinning a recipient is for super admins (step-up of family
+secrets; agents refused); issuing needs `vault.sync.action.read_grants` on the vault. See
+[Vault Read Grants](/vaults/read-grants).
+
 ## Vault Format
 
 ```bash

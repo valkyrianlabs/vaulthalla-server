@@ -1641,6 +1641,89 @@ TEST_F(SqlDeployerHistoryDb, S3GatewayUpstreamProfilesMigration154IsAdditiveAndI
     });
 }
 
+// 155 (vault read grants) on a 154-era database (v1.25.0): three new tables and the read_grants permission row, nothing
+// else touched; the schema refuses what ops::read_grants relies on never existing (a short fingerprint, two live pins
+// of one key, a revoked row without revoked_at, an unknown state); a deleted vault leaves the grant row so its upstream
+// key can still be revoked; running it again changes nothing.
+TEST_F(SqlDeployerHistoryDb, VaultReadGrantsMigration155IsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        const std::string file = "155_vault_read_grants.sql";
+        txn.exec("DROP TABLE IF EXISTS vault_read_grant_recipient");
+        txn.exec("DROP TABLE IF EXISTS vault_read_grant");
+        txn.exec("DROP TABLE IF EXISTS read_grant_recipient");
+        txn.exec("DELETE FROM permission WHERE name = 'vault.sync.action.read_grants'");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
+        const auto rolesBefore = txn.exec("SELECT count(*), coalesce(sum(get_bit(sync_permissions, 31 - 11)), 0) "
+                                          "FROM vault_role").one_row();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, file));
+        EXPECT_EQ(report.applied.size(), 1u) << "only 155 was missing";
+        EXPECT_EQ(recordedHash(txn, file), currentHash(file));
+        for (const auto* table : {"read_grant_recipient", "vault_read_grant", "vault_read_grant_recipient"})
+            EXPECT_TRUE(columnExists(txn, table, "fingerprint") || columnExists(txn, table, "grant_id")) << table;
+        EXPECT_EQ(txn.exec("SELECT bit_position FROM permission WHERE name = 'vault.sync.action.read_grants' "
+                           "AND category = 'vault'").one_field_ref().as<int>(), 11);
+        const auto rolesAfter = txn.exec("SELECT count(*), coalesce(sum(get_bit(sync_permissions, 31 - 11)), 0) "
+                                         "FROM vault_role").one_row();
+        EXPECT_EQ(rolesAfter[0].as<int>(), rolesBefore[0].as<int>());
+        EXPECT_EQ(rolesAfter[1].as<int>(), rolesBefore[1].as<int>()) << "no role is granted read_grants by the migration";
+
+        const auto userId = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_155_user', 'x') "
+                                     "RETURNING id").one_field_ref().as<int>();
+        const auto vaultId = txn.exec("INSERT INTO vault (type, name, owner_id, mount_point, uid) "
+                                      "VALUES ('local', 'claude_test_155_vault', $1, '0123456789ABCDEFGHJKMNPQRSTVWX155', "
+                                      "gen_random_uuid()) RETURNING id", pqxx::params{userId}).one_field_ref().as<int>();
+        const auto fails = [&](const std::string& sql, const pqxx::params& params) {
+            pqxx::subtransaction sub(txn);
+            try {
+                sub.exec(sql, params);
+            } catch (const std::exception&) {
+                return true;
+            }
+            return false;
+        };
+        const std::string fpr = "A6A1752984DFB0DB38DD235D2096C49D7A8F000A";
+        const auto pin = std::string("INSERT INTO read_grant_recipient (fingerprint, algorithm, public_key, source, "
+                                     "pinned_by_name) VALUES ($1, 'ed25519/cv25519', 'k', $2, 'test')");
+        EXPECT_TRUE(fails(pin, pqxx::params{"2096C49D7A8F000A", "input"})) << "a key id is not a fingerprint";
+        EXPECT_TRUE(fails(pin, pqxx::params{"a6a1752984dfb0db38dd235d2096c49d7a8f000a", "input"})) << "upper case only";
+        EXPECT_TRUE(fails(pin, pqxx::params{fpr, "email"})) << "a key is never pinned by its address";
+        const auto recipientId = txn.exec(pin + " RETURNING id", pqxx::params{fpr, "keyserver"}).one_field_ref().as<int>();
+        EXPECT_TRUE(fails(pin, pqxx::params{fpr, "input"})) << "one live pin per fingerprint";
+        txn.exec("UPDATE read_grant_recipient SET removed_at = now() WHERE id = $1", pqxx::params{recipientId});
+        const auto repinned = txn.exec(pin + " RETURNING id", pqxx::params{fpr, "input"}).one_field_ref().as<int>();
+
+        const auto grant = std::string("INSERT INTO vault_read_grant (grant_id, vault_id, vault_name, state, "
+                                       "issued_by_name, revoked_at) VALUES ($1, $2, 'v', $3, 'test', $4) RETURNING id");
+        EXPECT_TRUE(fails(grant, pqxx::params{"short", vaultId, "issuing", std::optional<std::string>{}}));
+        EXPECT_TRUE(fails(grant, pqxx::params{"0123456789abcdefghjkmnpqrs", vaultId, "pending", std::optional<std::string>{}}));
+        EXPECT_TRUE(fails(grant, pqxx::params{"0123456789abcdefghjkmnpqrs", vaultId, "revoked", std::optional<std::string>{}}))
+            << "revoked means revoked_at";
+        const auto grantRow = txn.exec(grant, pqxx::params{"0123456789abcdefghjkmnpqrs", vaultId, "active",
+                                                           std::optional<std::string>{}}).one_field_ref().as<int>();
+        txn.exec("INSERT INTO vault_read_grant_recipient (grant_row_id, recipient_id, fingerprint) VALUES ($1, $2, $3)",
+                 pqxx::params{grantRow, repinned, fpr});
+        EXPECT_TRUE(fails("DELETE FROM read_grant_recipient WHERE id = $1", pqxx::params{repinned}))
+            << "a recipient a grant was encrypted to stays";
+        txn.exec("DELETE FROM vault WHERE id = $1", pqxx::params{vaultId});
+        const auto kept = txn.exec("SELECT vault_id IS NULL, vault_name, state FROM vault_read_grant WHERE id = $1",
+                                   pqxx::params{grantRow}).one_row();
+        EXPECT_TRUE(kept[0].as<bool>()) << "the grant outlives its vault, so its upstream key can still be revoked";
+        EXPECT_EQ(kept[2].as<std::string>(), "active");
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / file)));
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM vault_read_grant WHERE id = $1", pqxx::params{grantRow})
+                      .one_field_ref().as<int>(), 1);
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM permission WHERE name = 'vault.sync.action.read_grants'")
+                      .one_field_ref().as<int>(), 1);
+    });
+}
+
 TEST_F(SqlDeployerHistoryDb, RecoveryRecipientsMigrationIsAdditiveIdempotentAndCustomerOnly) {
     inRolledBackTxn([](pqxx::work& txn) {
         txn.exec("DROP TABLE IF EXISTS vault_key_envelope");

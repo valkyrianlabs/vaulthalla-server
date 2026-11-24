@@ -227,6 +227,40 @@ day through the Sentinel session: "Yes I like your idea of an allowlist"). Opera
   `SqlDeployerHistoryDb.S3GatewayUpstreamProfilesMigration154…`, `ContractModels` (profile + credential upstream).
 - **Not built:** a hostname per profile (`vl-b2.s3.example.com`), and a live Backblaze run of the gateway flow (the adapter itself is live-tested, see below).
 
+## Vault read grants (migration 155, built 2026-11-24)
+
+For a backup orchestrator (Sentinel): one vault's read credentials, through the gateway and straight from the
+upstream bucket, delivered only as OpenPGP ciphertext. Operator docs: `docs/vaults/read-grants.md`.
+
+- **Code:** `ops/ReadGrants.{hpp,cpp}` (the only authorizing layer), `db/query/vault/ReadGrants`, CLI
+  `protocols/shell/commands/vault/readgrants.cpp` + `usage/src/usages/vault.cpp` (`vh vault read-grant issue|list|show|
+  revoke`, `… recipient list|add|remove`; `--key-file` travels as `client_input`), OpenPGP `crypto/openpgp/Gpg`
+  (system gpg: throwaway `--homedir`, `--no-options --no-autostart --batch`, `--recipient-file`, input over a socket;
+  `inspect` parses `--show-keys --with-colons`), provider `AdminClient::{supportsReadKeys,createReadKey,deleteReadKey}`
+  (default CapabilityMissing `kReadKeysUnsupported`; `B2Admin` over the native API v4: `b2_authorize_account` (parent
+  must list `writeKeys`, else CapabilityMissing before anything is requested), `b2_list_buckets` for the id,
+  `b2_create_key` with `kReadKeyCapabilities()` = listBuckets, listFiles, readFiles and `bucketIds = [id]`,
+  `b2_delete_key`). No ws surface yet.
+- **Model:** `read_grant_recipient` (fingerprint CHAR(40) upper hex, one live pin per fingerprint, armored key as
+  pinned, source input|keyserver), `vault_read_grant` (state issuing|active|revocation_incomplete|revoked; ids of the
+  gateway credential and the provider key, never secrets; the armored message; FKs SET NULL so a deleted vault/key/
+  credential keeps the row), `vault_read_grant_recipient`. Permission `vault.sync.action.read_grants` = sync action
+  bit 3 (bit 11), outside `SyncActionPermissions::All`: no preset or role carries it.
+- **Who:** pin/remove = super admin + `stepup::require(Secrets)` (Agent refused; Host exempt) and MCP exclusions;
+  issue/list/show/revoke = the vault permission (super admins implicitly) + the issuer can List and Read `/`; no
+  step-up. The gateway credential's principal is the issuer (vault_allowlist, built-in `reader`, the vault selected).
+- **Invariants:** issue refuses a local vault and an `encrypt_upstream` vault unless `gateway_only`, a provider without
+  read keys or a key without `admin_enabled`, a vault without a gateway bucket binding, an unpinned/unusable
+  recipient, and past `vaults.read_grants.max_per_vault` (reserve row under `pg_advisory_xact_lock`). Order: reserve
+  → gateway credential (recorded) → provider key (recorded) → encrypt → activate; any failure deletes what was made
+  and the row (a failed key delete leaves it `revocation_incomplete`). Revoke: gateway credential, then provider key;
+  a provider failure marks `revocation_incomplete` and throws Refused. `ops::api_keys::remove` refuses a key with live
+  grants.
+- **Tests:** `OpenPgpGpg.*` (DB-free, skips without gpg), `ReadGrantsB2.*` (transport seam), `ReadGrantsDb.*`
+  (db-only, fake account with read keys: `upstream_admin_fakes.hpp`), `SqlDeployerHistoryDb.VaultReadGrantsMigration155…`.
+  Keys: `tests/helpers/openpgp_keys.hpp` (throwaway keyring per run). Not verified live: B2 native calls (v4 response
+  shape of `allowed.capabilities`, whether a key without `readBuckets` can HeadBucket via the S3 API).
+
 ## Provider facts (verified live 2026-10-15)
 
 - Backblaze B2 bucket administration over the S3-compatible API (2026-11-23, us-west-004, account-wide test key,

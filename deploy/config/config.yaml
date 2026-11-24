@@ -244,6 +244,11 @@ vaults:
   # its bucket; whatever is newer then uploads with the vault's first sync pass.
   remote_attach:
     max_passes: 3                              # 1 to 20
+  # Vault read grants (`vh vault read-grant`): read-only S3 gateway and upstream credentials for a backup orchestrator,
+  # returned only encrypted to a pinned OpenPGP recipient.
+  read_grants:
+    max_per_vault: 4                           # 1 to 32 grants per vault that are not revoked yet
+    gateway_endpoint: ""                       # The S3 gateway URL written into grants (e.g. https://s3.example.com); empty: the direct listener
 
 
 # === ⚡ Caching & Previews ===

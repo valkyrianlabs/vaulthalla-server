@@ -802,6 +802,28 @@ struct convert<VaultsRemoteAttachConfig> {
 };
 
 template<>
+struct convert<VaultsReadGrantsConfig> {
+    static Node encode(const VaultsReadGrantsConfig& rhs) {
+        Node node;
+        node["max_per_vault"] = rhs.max_per_vault;
+        node["gateway_endpoint"] = rhs.gateway_endpoint;
+        return node;
+    }
+
+    static bool decode(const Node& node, VaultsReadGrantsConfig& rhs) {
+        if (!node.IsMap()) return false;
+        rhs.max_per_vault = node["max_per_vault"].as<uint32_t>(rhs.max_per_vault);
+        if (rhs.max_per_vault < 1 || rhs.max_per_vault > 32)
+            throw std::invalid_argument("vaults.read_grants.max_per_vault must be 1..32");
+        rhs.gateway_endpoint = node["gateway_endpoint"].as<std::string>(rhs.gateway_endpoint);
+        if (!rhs.gateway_endpoint.empty() && !rhs.gateway_endpoint.starts_with("https://") &&
+            !rhs.gateway_endpoint.starts_with("http://"))
+            throw std::invalid_argument("vaults.read_grants.gateway_endpoint must be an http:// or https:// URL");
+        return true;
+    }
+};
+
+template<>
 struct convert<VaultsConfig> {
     static Node encode(const VaultsConfig& rhs) {
         Node node;
@@ -811,6 +833,7 @@ struct convert<VaultsConfig> {
         node["format_conversion"] = rhs.format_conversion;
         node["layout_migration"] = rhs.layout_migration;
         node["remote_attach"] = rhs.remote_attach;
+        node["read_grants"] = rhs.read_grants;
         return node;
     }
 
@@ -825,6 +848,7 @@ struct convert<VaultsConfig> {
             YAML::convert<VaultsLayoutMigrationConfig>::decode(node["layout_migration"], rhs.layout_migration);
         if (node["remote_attach"])
             YAML::convert<VaultsRemoteAttachConfig>::decode(node["remote_attach"], rhs.remote_attach);
+        if (node["read_grants"]) YAML::convert<VaultsReadGrantsConfig>::decode(node["read_grants"], rhs.read_grants);
         return true;
     }
 };

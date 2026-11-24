@@ -318,6 +318,17 @@ struct VaultsRemoteAttachConfig {
     uint32_t max_passes = 3;
 };
 
+// vaults.read_grants.*: vault read grants (ops/ReadGrants.hpp, `vh vault read-grant`). Read from config.yaml, not the
+// settings API.
+struct VaultsReadGrantsConfig {
+    // 1..32: grants a vault may hold that are not revoked yet, so a loop can't mint provider keys without bound
+    // (Backblaze B2 accounts have a key limit).
+    uint32_t max_per_vault = 4;
+    // The S3 gateway URL written into a grant, as clients reach it (the published HTTPS name, e.g.
+    // https://s3.example.com). Empty: the direct listener, http://<s3_gateway.host>:<s3_gateway.port>.
+    std::string gateway_endpoint{};
+};
+
 // vaults.* retention (#162). Durations are config duration strings ("30s", "5m", "12h", "90d", "2w"; util.hpp). A
 // window applies to vaults deleted after it changes: each deletion records its own purge and key-retention deadlines.
 struct VaultsConfig {
@@ -329,6 +340,7 @@ struct VaultsConfig {
     VaultsFormatConversionConfig format_conversion;
     VaultsLayoutMigrationConfig layout_migration;
     VaultsRemoteAttachConfig remote_attach;
+    VaultsReadGrantsConfig read_grants;
 };
 
 enum class EmailProviderKind {

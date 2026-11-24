@@ -32,8 +32,8 @@ Phase 1 (packaging/upgrade/release hardening) results and how candidates are pro
 Phase 2 (one CLI/web operation layer, security fixes, v1.8.0 candidate) lab matrix and open items: `.claude/context/phase2-results.md`.
 Web console overhaul + dogfood (design system, data layer, budgets, e2e suites, bugs filed): `.claude/context/web-dogfood-results.md`.
 macOS port (seams, Mac build/test, clang/libc++ gotchas): `.claude/context/macos.md`.
-Upstream control plane (S3/R2 bucket administration, protection locks, event-driven sync; #237/#96):
-`.claude/context/upstream-control-plane.md`.
+Upstream control plane (S3/R2 bucket administration, protection locks, event-driven sync; #237/#96; vault read
+grants, migration 155): `.claude/context/upstream-control-plane.md`.
 File recovery (local snapshots, local versioning, AWS provider versioning, cost disclosure; migration 111):
 `.claude/context/recovery.md`.
 Vault key backup and restoration (key check, `vault.keys.*`, `vh vault keys status|export|import`; Desktop S2/S6):

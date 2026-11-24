@@ -42,6 +42,7 @@ static CommandResult handle_vault(const CommandCall& call) {
     if (isVaultMatch("remote", sub)) return handle_vault_remote(subcall);
     if (isVaultMatch("role", sub)) return handle_vault_role(subcall);
     if (isVaultMatch("recovery", sub)) return handle_vault_recovery(subcall);
+    if (isVaultMatch("read-grant", sub)) return handle_vault_read_grant(subcall);
 
     return invalid(call.constructFullArgs(), "Unknown vault subcommand: '" + std::string(sub) + "'");
 }

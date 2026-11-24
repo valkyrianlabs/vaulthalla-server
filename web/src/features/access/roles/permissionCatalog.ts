@@ -85,6 +85,7 @@ const LEAF_LABELS: Record<string, string> = {
   'action.trigger': 'Run a sync',
   'action.sign_waiver': 'Sign encryption waiver',
   'action.resolve_conflicts': 'Resolve sync conflicts',
+  'action.read_grants': 'Issue vault read grants',
   assign: 'Assign roles',
   modify: 'Change roles',
   revoke: 'Revoke roles',

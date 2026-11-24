@@ -86,6 +86,9 @@ namespace vh::protocols::shell::commands::vault {
     CommandResult handle_vault_leave(const CommandCall &call);
     CommandResult handle_vault_replica(const CommandCall &call);
 
+    // readgrants.cpp: `vh vault read-grant issue|list|show|revoke|recipient …` (ops::read_grants).
+    CommandResult handle_vault_read_grant(const CommandCall &call);
+
     // helpers.cpp
     std::optional<unsigned int> parsePositiveUint(const std::string &s, const char *errLabel, std::string &errOut);
 

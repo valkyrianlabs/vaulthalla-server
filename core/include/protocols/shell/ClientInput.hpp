@@ -2,8 +2,9 @@
 
 // A document the `vh` client reads on the caller's side and attaches to its request, so the daemon never opens a path
 // the caller names: `vh vault keys import <vault> --file <path|->` (a key export) or `--recovery-kit <path|->` (a
-// recovery kit, #370), and `vh vault recover --kit <path|-> --export <path|->` (#371: both, bundled as one JSON
-// document, kBundleType). Header-only, shared by the client (core/main/cli.cpp) and the daemon (shell/Server.cpp).
+// recovery kit, #370), `vh vault recover --kit <path|-> --export <path|->` (#371: both, bundled as one JSON
+// document, kBundleType), and `vh vault read-grant recipient add --key-file <path|->` (an OpenPGP public key).
+// Header-only, shared by the client (core/main/cli.cpp) and the daemon (shell/Server.cpp).
 //
 //   request frame: {..., "input": {"v": 1, "text": "<the file's contents>"}}
 //
@@ -82,6 +83,22 @@ inline std::string lower(std::string_view s) {
         else if (p.bundle.empty())
             p.error = "usage: vh vault recover --api-key <key> --bucket <bucket> --kit <kit.json|-> [--export "
                       "<keys.json|->] [--into <name>] [--dry-run]  (or --vault-uid <uid> --from-cloud)";
+        return p;
+    }
+    // `vh vault read-grant recipient add --key-file <path|->`: the recipient's public key.
+    if ((a == "vault" || a == "vaults" || a == "v") && (b == "read-grant" || b == "read-grants") &&
+        (c == "recipient" || c == "recipients") && argv.size() >= 4 &&
+        (detail::lower(argv[3]) == "add" || detail::lower(argv[3]) == "pin")) {
+        for (std::size_t i = 4; i < argv.size(); ++i) {
+            if (argv[i] != "--key-file") continue;
+            if (i + 1 >= argv.size() || argv[i + 1].empty()) {
+                p.active = true;
+                p.error = "--key-file needs a file name (or - for stdin)";
+                return p;
+            }
+            p.active = true;
+            p.path = argv[i + 1];
+        }
         return p;
     }
     if (!(a == "vault" || a == "vaults" || a == "v") || !(b == "key" || b == "keys" || b == "k") || c != "import")

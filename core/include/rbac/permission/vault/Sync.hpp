@@ -34,6 +34,7 @@ struct Sync final : Module<uint32_t> {
     [[nodiscard]] bool canTriggerSync() const noexcept { return action.canTrigger(); }
     [[nodiscard]] bool canSignWaiver() const noexcept { return action.canSignWaiver(); }
     [[nodiscard]] bool canResolveConflicts() const noexcept { return action.canResolveConflicts(); }
+    [[nodiscard]] bool canManageReadGrants() const noexcept { return action.canManageReadGrants(); }
 
     [[nodiscard]] PackedPermissionExportT<Mask> exportPermissions() const {
         return packAndExportPerms(
