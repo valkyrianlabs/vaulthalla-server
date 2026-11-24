@@ -11,7 +11,7 @@ export async function gotoS3Gateway(page: Page) {
 }
 
 // The page is tabbed (Keys, Buckets, Budgets, Client setup); credential details open in a side sheet.
-export async function openTab(page: Page, name: 'Keys' | 'Buckets' | 'Budgets' | 'Client setup') {
+export async function openTab(page: Page, name: 'Keys' | 'Buckets' | 'Upstream' | 'Budgets' | 'Client setup') {
   await closeSheet(page)
   await page.getByRole('tab', { name, exact: true }).click()
 }

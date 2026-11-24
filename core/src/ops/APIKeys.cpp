@@ -2,6 +2,7 @@
 #include "auth/stepup/StepUp.hpp"
 
 #include "db/query/identities/User.hpp"
+#include "db/query/s3/Gateway.hpp"
 #include "db/query/upstream/Subscription.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "db/query/vault/BucketCapability.hpp"
@@ -204,6 +205,16 @@ APIKeyPtr remove(const Actor& actor, const Ref& ref) {
     if (const auto n = db::query::upstream::Subscription::countActiveUsingKey(key->id); n > 0)
         throw Conflict("API key '" + key->name + "' operates " + std::to_string(n) +
                        " event subscription(s); turn event-driven sync off for those vaults first");
+
+    // An S3 gateway upstream profile creates buckets with this key (migration 154, ON DELETE RESTRICT): without it the
+    // profile's credentials would go back to creating local vaults, silently.
+    if (const auto profiles = db::query::s3::Gateway::listUpstreamProfilesUsingKey(key->id); !profiles.empty()) {
+        std::string names;
+        for (const auto& profile : profiles) names += (names.empty() ? "" : ", ") + profile.name;
+        throw Conflict("API key '" + key->name + "' is used by S3 gateway upstream profile" +
+                       (profiles.size() == 1 ? " " : "s ") + names + "; delete or repoint " +
+                       (profiles.size() == 1 ? "it" : "them") + " first (vh s3-gateway upstream)");
+    }
 
     auth::stepup::require(auth::stepup::Family::Secrets);
     try {

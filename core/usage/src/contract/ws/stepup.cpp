@@ -80,6 +80,7 @@ std::vector<WsStepUp> stepUpTable() {
         {"email.provider.secret.set", "secrets", false, ""},
         {"s3.gateway.credentials.create", "secrets", false, ""},
         {"s3.gateway.credentials.scope.update", "secrets", false, ""},
+        {"s3.gateway.credentials.upstream.set", "secrets", false, ""},
         {"s3.gateway.credentials.roles.assign", "secrets", false, ""},
         {"s3.gateway.credentials.roles.revoke", "secrets", false, ""},
         {"s3.gateway.credentials.roles.overrides.add", "secrets", false, ""},

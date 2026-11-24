@@ -1702,7 +1702,10 @@ Rules the families hold (keep them in ops, never re-add them in a handler):
 - **S3 gateway:** the scope rule that was `CredentialManager::validateScopeMutation` is `requireScopeMutation` in ops;
   `CredentialManager` and `db::query::s3::Gateway` are trusted primitives. Vault names resolve owner-scoped or uniquely,
   never to the first match. Overrides need an explicit effect and pattern. Remote-cache buckets are created through
-  `ops::vaults::create` (Consume, waiver) and rolled back if the bind fails.
+  `ops::vaults::create` (Consume, waiver) and rolled back if the bind fails. The gateway's own CreateBucket
+  (`ObjectStore::createBucket(auth)`) is a surface too: it resolves an upstream profile and calls
+  `ops::s3_gateway::createProfileBucket` (upstream-control-plane.md, "S3 gateway upstream profiles"); with no profile
+  it makes a local vault as before.
 - **Health:** `stats::model::SystemHealth::snapshot()` takes a bounded live DB probe; an unreachable database is
   critical there, so `vh status` and `stats.system.health` report the same severity.
 - **Lists:** `ListQueryParams::sort` must be a column name (`isSortColumn`); it lands in ORDER BY.

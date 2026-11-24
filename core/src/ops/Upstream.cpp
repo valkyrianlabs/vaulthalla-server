@@ -795,8 +795,10 @@ ProvisionTicket beginProvision(const Actor& actor, const unsigned int apiKeyId, 
                                                                            std::nullopt));
     }
 
-    if (req.mode == BucketMode::Create) {
+    if (req.mode == BucketMode::Create || req.mode == BucketMode::CreateOrAdoptEmpty) {
+        const bool adoptEmpty = req.mode == BucketMode::CreateOrAdoptEmpty;
         auto bucket = requestedBucket;
+        if (adoptEmpty && bucket.empty()) throw Invalid("name the bucket to create");
         if (bucket.empty() || req.generate_name)
             bucket = mapped([&] { return provision::generateBucketName(vaultName, *client); });
         const auto id = identityOf(key, bucket);
@@ -804,15 +806,29 @@ ProvisionTicket beginProvision(const Actor& actor, const unsigned int apiKeyId, 
         const auto region = req.region && !req.region->empty() ? req.region : std::optional<std::string>(defaultRegion(*key));
         if (region && !region->empty()) requireValidRegion(*key, *region);
         try {
+            bool adopted = false;
             const auto lease = mapped([&] {
-                return provision::createManaged(*client, id, region && !region->empty() ? region : std::nullopt, key->id);
+                try {
+                    return provision::createManaged(*client, id, region && !region->empty() ? region : std::nullopt, key->id);
+                } catch (const provision::BucketExists&) {
+                    if (!adoptEmpty) throw;
+                }
+                // This account's own bucket: taken only while it holds nothing. A mirror would delete what it holds,
+                // and an encrypting vault would leave it unreadable to whoever wrote it.
+                if (!provision::listsEmpty(*client, bucket))
+                    throw Conflict("bucket '" + bucket + "' already exists in this provider account and holds objects; "
+                                   "it is only used while empty. Bind it deliberately instead: create a vault that adopts "
+                                   "it (vh vault create --s3 --bucket-mode adopt), then vh s3-gateway bucket bind");
+                adopted = true;
+                return provision::beginAdopt(*client, id, key->id);
             });
+            ticket.mode = adopted ? BucketMode::Adopt : BucketMode::Create;
             ticket.bucket = bucket;
             ticket.upstream_bucket_id = lease.row.id;
             ticket.operation_token = lease.token;
             ticket.created = lease.created;
-            auditRecord(actor, "bucket.create", id, key->id, std::nullopt, bmodel::AuditOutcome::Ok,
-                        {{"region", region.value_or("")}, {"vault", vaultName}});
+            auditRecord(actor, adopted ? "bucket.adopt" : "bucket.create", id, key->id, std::nullopt, bmodel::AuditOutcome::Ok,
+                        {{"region", region.value_or("")}, {"vault", vaultName}, {"adopted_empty", adopted}});
             return ticket;
         } catch (const Conflict& e) {
             auditRecord(actor, "bucket.create", id, key->id, std::nullopt, bmodel::AuditOutcome::Refused, {{"reason", e.what()}});
@@ -837,6 +853,12 @@ ProvisionTicket beginProvision(const Actor& actor, const unsigned int apiKeyId, 
     ticket.operation_token = lease.token;
     auditRecord(actor, "bucket.adopt", id, key->id, std::nullopt, bmodel::AuditOutcome::Ok, {{"vault", vaultName}});
     return ticket;
+}
+
+api_keys::APIKeyPtr requireProvisioner(const Actor& actor, const KeyRef& ref) {
+    auto key = authorize(actor, ref, UpPerm::Provision, KeyPerm::Consume);
+    if (const auto why = unsupportedReason(*key); !why.empty()) throw Invalid(why);
+    return key;
 }
 
 std::vector<std::string> finishProvision(const Actor& actor, const ProvisionTicket& ticket, const unsigned int vaultId,

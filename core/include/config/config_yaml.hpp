@@ -200,6 +200,8 @@ struct convert<S3GatewayConfig> {
         node["allow_virtual_hosted_style"] = rhs.allow_virtual_hosted_style;
         node["default_bucket_mode"] = rhs.default_bucket_mode;
         node["default_api_exclusive"] = rhs.default_api_exclusive;
+        node["default_upstream_profile"] = rhs.default_upstream_profile;
+        node["reapply_upstream_profile_changes"] = rhs.reapply_upstream_profile_changes;
         node["multipart"] = rhs.multipart;
         node["synthetic_local_request_cost_usd"] = rhs.synthetic_local_request_cost_usd;
         return node;
@@ -218,6 +220,8 @@ struct convert<S3GatewayConfig> {
         rhs.allow_virtual_hosted_style = node["allow_virtual_hosted_style"].as<bool>(true);
         rhs.default_bucket_mode = node["default_bucket_mode"].as<std::string>("local");
         rhs.default_api_exclusive = node["default_api_exclusive"].as<bool>(true);
+        rhs.default_upstream_profile = node["default_upstream_profile"].as<std::string>("");
+        rhs.reapply_upstream_profile_changes = node["reapply_upstream_profile_changes"].as<bool>(true);
         // default_remote_* are read by loadConfig as deprecated aliases of vaults.s3.*.
         if (node["multipart"]) rhs.multipart = node["multipart"].as<S3GatewayMultipartConfig>();
         if (node["synthetic_local_request_cost_usd"])

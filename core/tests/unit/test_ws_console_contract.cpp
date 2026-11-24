@@ -150,6 +150,7 @@ TEST(WsS3GatewayPayloads, BareIdIsRefusedAsInvalidNamingTheExplicitField) {
     // The credential-scoped commands: a bare id used to be read as the credential id.
     using Handler = json (*)(const json&, const std::shared_ptr<protocols::ws::Session>&);
     for (const Handler handler : {&S3Gateway::credentialsScopeUpdate,
+                                  &S3Gateway::credentialsUpstreamSet,
                                   &S3Gateway::credentialsDefaultRoleGet,
                                   &S3Gateway::credentialsDefaultRoleSet,
                                   &S3Gateway::credentialsDefaultRoleClear,
@@ -183,6 +184,12 @@ TEST(WsS3GatewayPayloads, BareIdIsRefusedAsInvalidNamingTheExplicitField) {
     }
 
     EXPECT_TRUE(names(messageFor([&] { return S3Gateway::credentialsRevoke(json{{"id", 7}}, s); }), "access_key"));
+
+    // Upstream profiles: a bare id is never read as the profile.
+    for (const Handler handler : {&S3Gateway::upstreamProfilesUpdate, &S3Gateway::upstreamProfilesDelete})
+        EXPECT_TRUE(names(messageFor([&] { return handler(json{{"id", 7}}, s); }), "profile_id"));
+    EXPECT_TRUE(names(messageFor([&] { return S3Gateway::upstreamProfilesCreate(json{{"id", 7}, {"name", "vl-b2"}}, s); }),
+                      "name"));
 }
 
 class DashboardSeverityTest : public vh::test::db::Suite {

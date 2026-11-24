@@ -388,6 +388,28 @@ std::optional<std::string> parseEncodingType(const std::map<std::string, std::st
     throw invalidArgument("encoding-type must be url when specified", it->second);
 }
 
+// CreateBucketConfiguration.LocationConstraint of a CreateBucket body, or empty (no body, or none given). A PUT body
+// arrives spooled; this one is a few hundred bytes of XML.
+std::string parseLocationConstraint(const std::shared_ptr<crypto::ScratchFile>& spooled, const std::string& buffered) {
+    constexpr uint64_t kMaxBody = 64 * 1024;
+    const auto malformed = [] {
+        return S3Error{"MalformedXML", "The CreateBucketConfiguration is not well-formed XML", http::status::bad_request};
+    };
+    std::string body;
+    if (spooled) {
+        if (spooled->size() > kMaxBody) throw malformed();
+        body.resize(spooled->size());
+        body.resize(spooled->read(0, {reinterpret_cast<uint8_t*>(body.data()), body.size()}));
+    } else {
+        if (buffered.size() > kMaxBody) throw malformed();
+        body = buffered;
+    }
+    if (body.find_first_not_of(" \t\r\n") == std::string::npos) return {};
+    pugi::xml_document doc;
+    if (!doc.load_string(body.c_str())) throw malformed();
+    return doc.child("CreateBucketConfiguration").child("LocationConstraint").text().as_string();
+}
+
 // The listing parameters of a bucket GET. Prefix, delimiter and the position parameters are key text: one that is
 // not (bytes that aren't UTF-8, a NUL) can't name a key, and is refused here instead of failing in the database.
 xml::ListObjectsRequest parseListObjectsRequest(const std::map<std::string, std::string>& query, const bool v2) {
@@ -1013,7 +1035,11 @@ Router::Response Router::routeAuthenticated(
 
     if (parsed.key.empty()) {
         if (request.method() == http::verb::put) {
-            objects_.createBucket(parsed.bucket, auth, config::Registry::get().s3_gateway.default_bucket_mode);
+            // A bucket subresource PUT (?versioning, ?tagging, ...) is answered as before; only a plain CreateBucket
+            // carries a CreateBucketConfiguration.
+            objects_.createBucket(parsed.bucket, auth, config::Registry::get().s3_gateway.default_bucket_mode, 0,
+                                  parsed.query.empty() ? parseLocationConstraint(payload.file, request.body())
+                                                       : std::string{});
             return makeResponse(request, http::status::ok, {});
         }
         if (request.method() == http::verb::head) {

@@ -560,8 +560,19 @@ vh s3-gateway creds role override remove backup --vault archive 42
 vh s3-gateway creds role revoke backup --vault archive
 vh s3-gateway bucket create-local archive
 vh s3-gateway bucket bind archive --vault 12 --mode local
+vh s3-gateway upstream create vl-b2 --api-key b2-main --no-encrypt --sync-strategy mirror --on-sync-conflict keep_local
+vh s3-gateway upstream list
+vh s3-gateway upstream show vl-b2
+vh s3-gateway upstream update vl-b2 --bucket-prefix acme-
+vh s3-gateway upstream delete vl-b2
+vh s3-gateway creds scope backup set --upstream vl-b2
+vh s3-gateway creds scope backup set --upstream vl-b2 --allow-upstream r2-edge
+vh s3-gateway creds scope backup set --upstream server-default --reapply off
+vh s3-gateway creds scope backup set --upstream local
 vh s3-gateway budget set-key backup --monthly 5 --mode enforce --currency USD
 ```
+
+`vh s3-gateway upstream` manages upstream profiles: what a `CreateBucket` through the gateway creates in a provider account. `creds scope <credential> set --upstream <profile>|server-default|local` chooses it for one credential, and `creds scope <credential> show` reads it back (with `--json`, under `upstream`). See [Upstream Profiles](/s3-gateway/buckets#upstream-profiles).
 
 Gateway authorization is RBAC-native. `user_access` inherits the principal user's Vaulthalla RBAC. `vault_allowlist` uses selected vaults plus a key-level default vault role and optional per-vault exceptions. `global` requires an admin principal and a key-level default vault role. Boolean credential scope flags and `creds scope allow-vault` remain compatibility shorthand only.
 

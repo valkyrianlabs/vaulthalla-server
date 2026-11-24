@@ -78,6 +78,8 @@ s3_gateway:
   allow_virtual_hosted_style: true
   default_bucket_mode: local          # local | remote_cache | remote_proxy
   default_api_exclusive: true
+  default_upstream_profile: ""        # Upstream profile for credentials that opted into the server default (vh s3-gateway upstream)
+  reapply_upstream_profile_changes: true   # A profile's changed sync settings also apply to the buckets created from it
   multipart:
     min_part_size_mb: 5
     abort_after_days: 7

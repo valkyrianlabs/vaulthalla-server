@@ -25,6 +25,9 @@ struct AuthContext {
     std::string scope_mode{"user_access"};
     bool enforce_budget_for_local_requests{false};
     bool dev_context{false};
+    // The region of the request's SigV4 credential scope. Any is accepted; one that names an upstream profile selects
+    // it for a CreateBucket (ops::s3_gateway::profileForCreate).
+    std::string signing_region{};
 };
 
 // ---- SigV4 request authentication (vl-sigv4) ---------------------------------------------------------------------

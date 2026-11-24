@@ -106,6 +106,26 @@ std::vector<WsField> s3gwWith(std::vector<WsField> base, const std::vector<WsFie
     return base;
 }
 
+// ---- upstream profiles ----------------------------------------------------------------------------------------
+
+// The profile a command acts on: profile_id, or its name.
+std::vector<WsField> s3gwProfileRef() {
+    return {uinteger("profile_id").opt().gen(gen::ref("s3_upstream_profile", {"id"}))
+                .desc("The upstream profile. profile_id or profile (its name) is required."),
+            str("profile").opt().desc("The upstream profile by name.")};
+}
+
+// What a profile applies to the vaults created through it; all optional on both create and update.
+std::vector<WsField> s3gwProfileSettings() {
+    return {boolean("encrypt_upstream").opt().desc("Encrypt objects before upload. Create: defaults to true."),
+            str("sync_strategy").opt().oneOf({"cache", "sync", "mirror"})
+                .desc("Create: defaults to vaults.s3.default_remote_sync_strategy."),
+            str("conflict_policy").opt().oneOf({"keep_local", "keep_remote", "keep_newest", "ask"})
+                .desc("Create: defaults to vaults.s3.default_remote_conflict_policy."),
+            str("bucket_prefix").opt().desc("The upstream bucket is <prefix><gateway bucket>; \"\" for none."),
+            str("description").opt().nullable().desc("null or \"\" clears it.")};
+}
+
 // ---- budget payloads (gateway credential budgets only) --------------------------------------------------------
 
 WsField s3gwBudgetScope() {
@@ -205,6 +225,74 @@ std::vector<WsCommandUsage> s3GatewayCommands() {
                            boolean("enforce_budget_for_local_requests").opt(), s3gwVaultScopes()}),
                  s3gwWith(s3gwSelectedVaultIds(), s3gwDefaultRoleRef())),
         {s3gwCredential()}));
+
+    out.push_back(s3gwCommand(
+        "s3.gateway.credentials.upstream.set",
+        "Choose what a credential's CreateBucket creates: a vault over an upstream profile (source profile, with "
+        "profile_id or profile), over the server's default profile (server_default), or a local vault (local). Needs "
+        "management of the credential plus admin.upstream.provision and Consume on the profile's API key, for the "
+        "caller and for the credential's principal. Absent members stay as they are; nothing to change is 'invalid'.",
+        s3gwWith(s3gwWith(s3gwCredentialRef(),
+                          {str("source").opt().oneOf({"local", "profile", "server_default"})
+                               .desc("Defaults to profile when a profile is named.")}),
+                 s3gwWith(s3gwProfileRef(),
+                          {boolean("reapply").opt().nullable()
+                               .desc("Whether a change of the profile's sync settings also applies to the buckets this "
+                                     "credential created; null follows s3_gateway.reapply_upstream_profile_changes."),
+                           arrayOf("allowed_profile_ids", alt({"integer"}).min(0).desc("A profile id.")).opt()
+                               .desc("Replaces the allowlist: the profiles a request made with this credential may "
+                                     "name besides its own. [] clears it."),
+                           arrayOf("allowed_profiles", alt({"string"}).desc("A profile name.")).opt()
+                               .desc("The same, by name; both lists are joined.")})),
+        {s3gwCredential()}));
+
+    // ---- upstream profiles ----
+    {
+        auto list = s3gwCommand(
+            "s3.gateway.upstreamProfiles.list",
+            "The upstream profiles (what a gateway CreateBucket creates), the server default and the server's re-apply "
+            "setting.",
+            {},
+            {objectArray("profiles", "S3GatewayUpstreamProfile"),
+             str("default_profile").nullable().desc("s3_gateway.default_upstream_profile, or null when unset."),
+             boolean("reapply_default").desc("s3_gateway.reapply_upstream_profile_changes.")});
+        list.input = "none";
+        out.push_back(std::move(list));
+    }
+
+    out.push_back(s3gwCommand(
+        "s3.gateway.upstreamProfiles.create",
+        "Create an upstream profile over an API key that is enabled for provider administration. Needs "
+        "admin.s3_gateway.manage_buckets, admin.upstream.provision and Consume on the key. The name is what S3 clients "
+        "send as a region to select the profile, and never changes.",
+        s3gwWith({str("name").gen(gen::pattern("vh-{a}{a}{a}{9}{9}"))
+                      .desc("1 to 32 lowercase letters, digits and hyphens; not 'local' and not a provider region."),
+                  uinteger("api_key_id").opt().nullable().gen(gen::ref("api_key", {"id"}))
+                      .desc("The upstream API key: api_key_id or api_key (name) is required."),
+                  str("api_key").opt().nullable().desc("The upstream API key by name.")},
+                 s3gwProfileSettings()),
+        {object("profile", "S3GatewayUpstreamProfile")}));
+
+    out.push_back(s3gwCommand(
+        "s3.gateway.upstreamProfiles.update",
+        "Change a profile; absent members stay as they are. A changed sync strategy or conflict policy is re-applied "
+        "to the buckets created from the profile whose credential (or the server) asks for it; `reapplied` says what "
+        "happened to each. The API key, encryption and prefix only apply to buckets created afterwards.",
+        s3gwWith(s3gwWith(s3gwProfileRef(),
+                          {uinteger("api_key_id").opt().nullable().gen(gen::ref("api_key", {"id"})),
+                           str("api_key").opt().nullable().desc("The upstream API key by name.")}),
+                 s3gwProfileSettings()),
+        {object("profile", "S3GatewayUpstreamProfile"),
+         objectArray("reapplied", "", {str("bucket_name"), uinteger("vault_id"), boolean("applied"),
+                                       str("detail").nullable().desc("Why the bucket was left as it is.")})},
+        {}, 60s));
+
+    out.push_back(s3gwCommand(
+        "s3.gateway.upstreamProfiles.delete",
+        "Delete a profile no credential uses and that is not the server default ('conflict' otherwise). Buckets "
+        "created from it are untouched.",
+        s3gwProfileRef(),
+        {boolean("deleted")}));
 
     // ---- default vault role ----
     out.push_back(s3gwCommand(

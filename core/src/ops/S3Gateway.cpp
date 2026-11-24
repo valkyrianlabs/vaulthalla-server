@@ -16,6 +16,7 @@
 #include "protocols/s3/ObjectStore.hpp"
 #include "rbac/fs/glob/model/Pattern.hpp"
 #include "rbac/permission/admin/S3Gateway.hpp"
+#include "rbac/permission/admin/Upstream.hpp"
 #include "rbac/permission/admin/Vaults.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
 #include "rbac/permission/vault/Roles.hpp"
@@ -25,6 +26,8 @@
 #include "runtime/Deps.hpp"
 #include "runtime/Manager.hpp"
 #include "storage/Manager.hpp"
+#include "storage/upstream/Names.hpp"
+#include "sync/model/RemotePolicy.hpp"
 #include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
 
@@ -369,11 +372,19 @@ Bucket requireBucket(const std::string& name) {
 
 // Binds a vault that was just created for the bucket; a failed bind takes the vault back out.
 Bucket bindNewVault(const ops::vaults::VaultPtr& vault, const std::string& bucketName, const bool apiExclusive,
-                    const std::string& mode, const Actor& actor) {
+                    const std::string& mode, const Actor& actor,
+                    const std::optional<uint32_t> credentialId = std::nullopt,
+                    const std::optional<uint32_t> profileId = std::nullopt) {
     try {
-        db::query::s3::Gateway::bindBucket({
-            .vault_id = vault->id, .bucket_name = bucketName, .api_exclusive = apiExclusive, .mode = mode,
-            .created_by = actor->id});
+        Bucket binding;
+        binding.vault_id = vault->id;
+        binding.bucket_name = bucketName;
+        binding.api_exclusive = apiExclusive;
+        binding.mode = mode;
+        binding.created_by = actor->id;
+        binding.created_by_credential_id = credentialId;
+        binding.upstream_profile_id = profileId;
+        db::query::s3::Gateway::bindBucket(binding);
         return requireBucket(bucketName);
     } catch (...) {
         try {
@@ -383,6 +394,99 @@ Bucket bindNewVault(const ops::vaults::VaultPtr& vault, const std::string& bucke
         throw;
     }
 }
+
+// ------------------------------------------------------------------------------------------------- upstream profiles
+
+using UpPerm = rbac::permission::admin::UpstreamPermissions;
+
+bool canSeeProfiles(const Actor& actor) {
+    return hasGw(actor, GwPerm::View) || hasGw(actor, GwPerm::ManageBuckets) || hasGw(actor, GwPerm::ManageCredentials) ||
+           rbac::resolver::Admin::has<UpPerm>({.user = actor, .permission = UpPerm::Provision});
+}
+
+bool lowerOrDigit(const char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); }
+
+// A profile's name travels as a region: in CreateBucketConfiguration.LocationConstraint and in the SigV4 scope.
+void requireProfileName(const std::string& name) {
+    const bool shaped = !name.empty() && name.size() <= 32 && lowerOrDigit(name.front()) && lowerOrDigit(name.back()) &&
+                        std::ranges::all_of(name, [](const char c) { return lowerOrDigit(c) || c == '-'; });
+    if (!shaped)
+        throw Invalid("an upstream profile name is 1 to 32 lowercase letters, digits and hyphens, starting and ending "
+                      "with a letter or digit (S3 clients send it as a region): '" + name + "'");
+    if (name == "local" || name == "server-default")
+        throw Invalid("'" + name + "' is reserved: it is how a credential or a CreateBucket asks for " +
+                      (name == "local" ? "a local vault" : "the server's default profile"));
+    if (storage::upstream::validAwsRegion(name) || storage::upstream::validB2Region(name) ||
+        storage::upstream::validR2LocationHint(name))
+        throw Invalid("'" + name + "' reads as a provider region: every client that signs with it would select this "
+                      "profile without meaning to. Choose a name of your own, such as 'vl-b2'");
+}
+
+// The prefix becomes the start of an upstream bucket name; the provider's own rules are applied to the whole name
+// when a bucket is created.
+std::string requireBucketPrefix(const std::string& prefix) {
+    if (prefix.empty()) return prefix;
+    const bool shaped = prefix.size() <= 32 && lowerOrDigit(prefix.front()) &&
+                        std::ranges::all_of(prefix, [](const char c) { return lowerOrDigit(c) || c == '-' || c == '.'; });
+    if (!shaped)
+        throw Invalid("a bucket prefix is up to 32 lowercase letters, digits, hyphens and dots, starting with a letter "
+                      "or digit: '" + prefix + "'");
+    return prefix;
+}
+
+std::string requireStrategy(const std::string& value) {
+    try {
+        return sync::model::to_string(sync::model::strategyFromString(value));
+    } catch (const std::exception&) {
+        throw Invalid("sync strategy must be cache, sync or mirror, got '" + value + "'");
+    }
+}
+
+std::string requireConflictPolicy(const std::string& value) {
+    try {
+        return sync::model::to_string(sync::model::rsConflictPolicyFromString(value));
+    } catch (const std::exception&) {
+        throw Invalid("conflict policy must be keep_local, keep_remote, keep_newest or ask, got '" + value + "'");
+    }
+}
+
+UpstreamProfile requireProfile(const ProfileRef& ref) {
+    std::optional<UpstreamProfile> found;
+    if (const auto* id = std::get_if<uint32_t>(&ref)) {
+        found = db::query::s3::Gateway::getUpstreamProfile(*id);
+        if (!found) throw NotFound("upstream profile not found: " + std::to_string(*id));
+        return *found;
+    }
+    const auto& value = std::get<std::string>(ref);
+    found = db::query::s3::Gateway::getUpstreamProfileByName(value);
+    if (!found) {
+        uint32_t id = 0;
+        if (const auto [end, ec] = std::from_chars(value.data(), value.data() + value.size(), id);
+            ec == std::errc{} && end == value.data() + value.size())
+            found = db::query::s3::Gateway::getUpstreamProfile(id);
+    }
+    if (!found) throw NotFound("upstream profile not found: " + value);
+    return *found;
+}
+
+// What creating a bucket with the profile's key needs, of whoever sets the profile up or points a credential at it.
+void requireProvisionerOf(const Actor& actor, const uint32_t apiKeyId) {
+    (void)ops::upstream::requireProvisioner(actor, ops::upstream::KeyRef{static_cast<unsigned int>(apiKeyId)});
+}
+
+// Profile changes go to the audit trail by profile and key id, with the settings a CreateBucket would apply.
+audit::OnSuccess profileAudited(const Actor& actor, const std::string& action, const std::string& verb,
+                                const UpstreamProfile& profile) {
+    return vh::audit::OnSuccess(
+        {.action = action, .actor_id = actor->id, .actor = actor->name(), .vault_id = std::nullopt,
+         .details = {{"profile_id", profile.id}, {"api_key_id", profile.api_key_id},
+                     {"encrypt_upstream", profile.encrypt_upstream}, {"sync_strategy", profile.sync_strategy},
+                     {"conflict_policy", profile.conflict_policy}}},
+        "[s3] " + actor->name() + " " + verb + " S3 gateway upstream profile '" + profile.name + "' (profile " +
+            std::to_string(profile.id) + ")");
+}
+
+bool reapplyByDefault() { return vh::config::Registry::get().s3_gateway.reapply_upstream_profile_changes; }
 
 // ------------------------------------------------------------------------------------------------- budgets
 
@@ -866,6 +970,257 @@ Bucket createRemoteCacheBucket(const Actor& actor, const CreateRemoteCacheBucket
         .accept_waiver = req.accept_waiver
     });
     return bindNewVault(vault, req.bucket_name.value_or(vault->slug), true, "remote_cache", actor);
+}
+
+// ------------------------------------------------------------------------------------------------- upstream profiles
+
+std::vector<UpstreamProfile> listUpstreamProfiles(const Actor& actor) {
+    requireActor(actor);
+    if (!canSeeProfiles(actor)) throw Denied("an admin.s3_gateway permission is required to view upstream profiles");
+    return db::query::s3::Gateway::listUpstreamProfiles();
+}
+
+UpstreamProfile getUpstreamProfile(const Actor& actor, const ProfileRef& profile) {
+    requireActor(actor);
+    if (!canSeeProfiles(actor)) throw Denied("an admin.s3_gateway permission is required to view upstream profiles");
+    return requireProfile(profile);
+}
+
+std::optional<UpstreamProfile> serverDefaultProfile() {
+    const auto& name = vh::config::Registry::get().s3_gateway.default_upstream_profile;
+    if (name.empty()) return std::nullopt;
+    return db::query::s3::Gateway::getUpstreamProfileByName(name);
+}
+
+UpstreamProfile createUpstreamProfile(const Actor& actor, const CreateProfile& req) {
+    requireActor(actor);
+    requireGw(actor, GwPerm::ManageBuckets, "manage_buckets", "create S3 gateway upstream profiles");
+    requireProfileName(req.name);
+    if (db::query::s3::Gateway::getUpstreamProfileByName(req.name))
+        throw Conflict("an upstream profile named '" + req.name + "' already exists");
+    const auto key = ops::upstream::requireProvisioner(actor, req.api_key);
+
+    const auto& defaults = vh::config::Registry::get().vaults.s3;
+    UpstreamProfile profile;
+    profile.name = req.name;
+    profile.api_key_id = key->id;
+    profile.encrypt_upstream = req.encrypt_upstream.value_or(true);
+    profile.sync_strategy = requireStrategy(req.sync_strategy.value_or(defaults.default_remote_sync_strategy));
+    profile.conflict_policy = requireConflictPolicy(req.conflict_policy.value_or(defaults.default_remote_conflict_policy));
+    profile.bucket_prefix = requireBucketPrefix(req.bucket_prefix.value_or(""));
+    profile.description = req.description;
+    profile.created_by = actor->id;
+
+    profile.id = db::query::s3::Gateway::createUpstreamProfile(profile);
+    const auto audited = profileAudited(actor, "s3.upstream_profile.create", "created", profile);
+    return requireProfile(ProfileRef{profile.id});
+}
+
+UpdatedProfile updateUpstreamProfile(const Actor& actor, const ProfileRef& ref, const UpdateProfile& req) {
+    requireActor(actor);
+    requireGw(actor, GwPerm::ManageBuckets, "manage_buckets", "change S3 gateway upstream profiles");
+    auto profile = requireProfile(ref);
+    if (!req.api_key && !req.encrypt_upstream && !req.sync_strategy && !req.conflict_policy && !req.bucket_prefix &&
+        !req.description)
+        throw Invalid("nothing to update: give a setting to change");
+
+    const auto before = profile;
+    // The key the profile ends up with, whether or not it changed: the profile decides what is created with it.
+    if (req.api_key) profile.api_key_id = ops::upstream::requireProvisioner(actor, *req.api_key)->id;
+    else requireProvisionerOf(actor, profile.api_key_id);
+    if (req.encrypt_upstream) profile.encrypt_upstream = *req.encrypt_upstream;
+    if (req.sync_strategy) profile.sync_strategy = requireStrategy(*req.sync_strategy);
+    if (req.conflict_policy) profile.conflict_policy = requireConflictPolicy(*req.conflict_policy);
+    if (req.bucket_prefix) profile.bucket_prefix = requireBucketPrefix(*req.bucket_prefix);
+    if (req.description) profile.description = *req.description;
+
+    const auto audited = profileAudited(actor, "s3.upstream_profile.update", "changed", profile);
+    if (!db::query::s3::Gateway::updateUpstreamProfile(profile))
+        throw NotFound("upstream profile not found: " + profile.name);
+
+    UpdatedProfile out;
+    out.profile = requireProfile(ProfileRef{profile.id});
+    if (before.sync_strategy == profile.sync_strategy && before.conflict_policy == profile.conflict_policy) return out;
+
+    // The buckets created from this profile follow it, where their creating credential (or the server) says so. Each
+    // vault's sync settings change with the actor's own permission there; one refusal doesn't stop the rest.
+    for (const auto& [binding, credentialReapply] : db::query::s3::Gateway::listBucketsOfProfile(profile.id)) {
+        ReappliedBucket result{.bucket_name = binding.bucket_name, .vault_id = binding.vault_id, .applied = false, .detail = {}};
+        if (!credentialReapply.value_or(reapplyByDefault())) {
+            result.detail = credentialReapply ? "its credential keeps existing buckets as they are"
+                                              : "s3_gateway.reapply_upstream_profile_changes is off";
+        } else {
+            try {
+                (void)ops::vaults::updateSync(actor, binding.vault_id,
+                                              {.strategy = profile.sync_strategy, .conflict_policy = profile.conflict_policy});
+                result.applied = true;
+            } catch (const std::exception& e) {
+                result.detail = e.what();
+            }
+        }
+        out.reapplied.push_back(std::move(result));
+    }
+    return out;
+}
+
+void deleteUpstreamProfile(const Actor& actor, const ProfileRef& ref) {
+    requireActor(actor);
+    requireGw(actor, GwPerm::ManageBuckets, "manage_buckets", "delete S3 gateway upstream profiles");
+    const auto profile = requireProfile(ref);
+    if (const auto users = db::query::s3::Gateway::listCredentialsUsingProfile(profile.id); !users.empty()) {
+        std::string names;
+        for (const auto& c : users) names += (names.empty() ? "" : ", ") + c.name;
+        throw Conflict("upstream profile '" + profile.name + "' is used by " + std::to_string(users.size()) +
+                       (users.size() == 1 ? " credential: " : " credentials: ") + names +
+                       ". Take it off them first (vh s3-gateway creds scope <credential> set --upstream local, "
+                       "--allow-upstream none)");
+    }
+    if (vh::config::Registry::get().s3_gateway.default_upstream_profile == profile.name)
+        throw Conflict("upstream profile '" + profile.name + "' is the server default "
+                       "(s3_gateway.default_upstream_profile); clear that setting first");
+    const auto audited = profileAudited(actor, "s3.upstream_profile.delete", "deleted", profile);
+    if (!db::query::s3::Gateway::deleteUpstreamProfile(profile.id))
+        throw NotFound("upstream profile not found: " + profile.name);
+}
+
+CredentialUpstream upstreamOf(const Credential& credential) {
+    CredentialUpstream out;
+    if (credential.id != 0) out.allowed = db::query::s3::Gateway::listCredentialAllowedProfiles(credential.id);
+    out.reapply = credential.upstream_reapply;
+    out.reapply_effective = credential.upstream_reapply.value_or(reapplyByDefault());
+    if (credential.upstream_profile_id) {
+        out.source = "profile";
+        out.profile = db::query::s3::Gateway::getUpstreamProfile(*credential.upstream_profile_id);
+        if (!out.profile) out.problem = "the credential's upstream profile no longer exists";
+    } else if (credential.upstream_server_default) {
+        out.source = "server_default";
+        const auto& name = vh::config::Registry::get().s3_gateway.default_upstream_profile;
+        out.profile = serverDefaultProfile();
+        if (name.empty()) out.problem = "no server default is set (s3_gateway.default_upstream_profile)";
+        else if (!out.profile) out.problem = "the server default upstream profile '" + name + "' does not exist";
+    }
+    return out;
+}
+
+CredentialUpstream credentialUpstream(const Actor& actor, const Ref& credential) {
+    return upstreamOf(getCredential(actor, credential));
+}
+
+Credential setCredentialUpstream(const Actor& actor, const Ref& ref, const SetCredentialUpstream& req) {
+    const auto credential = getCredential(actor, ref);
+    const auto audited = s3Audited(actor, "s3.credential.upstream", "changed what an S3 gateway credential's CreateBucket "
+                                   "creates", credential);
+    if (!req.source && !req.profile && !req.reapply && !req.allowed)
+        throw Invalid("nothing to update: give an upstream source or a setting");
+    requireActFor(actor, credential.principal_user_id);
+
+    // Whoever lets a credential reach an upstream account must be able to create buckets there themselves, and so
+    // must the principal the credential acts as (the gateway checks the principal again on every CreateBucket).
+    const auto requireReach = [&](const UpstreamProfile& target) {
+        requireProvisionerOf(actor, target.api_key_id);
+        if (credential.principal_user_id == actor->id) return;
+        const auto principal = requireUser(credential.principal_user_id, "principal");
+        try {
+            requireProvisionerOf(principal, target.api_key_id);
+        } catch (const Error& e) {
+            throw Invalid("the credential's principal " + principal->name() + " could not create buckets with upstream "
+                          "profile '" + target.name + "': " + e.what());
+        }
+    };
+
+    auto profileId = credential.upstream_profile_id;
+    bool serverDefault = credential.upstream_server_default;
+    if (req.source || req.profile) {
+        auto source = req.source.value_or("profile");
+        std::ranges::transform(source, source.begin(), [](const unsigned char c) {
+            return c == '-' ? '_' : static_cast<char>(std::tolower(c));
+        });
+        if (source != "local" && source != "profile" && source != "server_default")
+            throw Invalid("upstream source must be local, profile or server-default");
+        if (req.profile && source != "profile") throw Invalid("a profile only goes with the profile source");
+        if (source == "profile" && !req.profile) throw Invalid("name the upstream profile");
+        profileId = source == "profile" ? std::make_optional(requireProfile(*req.profile).id) : std::nullopt;
+        serverDefault = source == "server_default";
+
+        const auto target = profileId ? db::query::s3::Gateway::getUpstreamProfile(*profileId)
+                                      : serverDefault ? serverDefaultProfile() : std::nullopt;
+        if (target) {
+            requireReach(*target);
+        } else if (serverDefault && !rbac::resolver::Admin::has<UpPerm>({.user = actor, .permission = UpPerm::Provision})) {
+            throw Denied("this needs the admin.upstream.provision permission");
+        }
+    }
+    const auto reapply = req.reapply ? *req.reapply : credential.upstream_reapply;
+
+    std::optional<std::vector<uint32_t>> allowed;
+    if (req.allowed) {
+        allowed.emplace();
+        std::set<uint32_t> already;
+        for (const auto& held : db::query::s3::Gateway::listCredentialAllowedProfiles(credential.id)) already.insert(held.id);
+        for (const auto& ref : *req.allowed) {
+            const auto profile = requireProfile(ref);
+            // Keeping a profile the credential already had is not a new grant.
+            if (!already.contains(profile.id)) requireReach(profile);
+            if (std::ranges::find(*allowed, profile.id) == allowed->end()) allowed->push_back(profile.id);
+        }
+    }
+
+    auth::stepup::require(auth::stepup::Family::Secrets);
+    db::query::s3::Gateway::setCredentialUpstream(credential.id, profileId, serverDefault, reapply);
+    if (allowed) db::query::s3::Gateway::replaceCredentialAllowedProfiles(credential.id, *allowed, actor->id);
+    return reload(credential);
+}
+
+std::optional<UpstreamProfile> profileForCreate(const Credential& credential, const CreateHints& hints) {
+    // The request first: an explicit LocationConstraint, then the region the client signed with.
+    if (hints.location_constraint == "local") return std::nullopt;
+    const auto upstream = upstreamOf(credential);
+    for (const auto* named : {&hints.location_constraint, &hints.signing_region}) {
+        if (named->empty()) continue;
+        auto profile = db::query::s3::Gateway::getUpstreamProfileByName(*named);
+        if (!profile) continue;
+        // A key reaches only the upstream accounts it was given: its own profile and its allowlist. (An unsigned
+        // dev-mode request has no credential to bound.)
+        const bool own = upstream.profile && upstream.profile->id == profile->id;
+        const bool listed = std::ranges::any_of(upstream.allowed, [&](const UpstreamProfile& a) { return a.id == profile->id; });
+        if (credential.id != 0 && !own && !listed)
+            throw Denied("this credential may not use upstream profile '" + profile->name + "': it is neither its own "
+                         "profile nor on its allowlist (vh s3-gateway creds scope <credential> set --allow-upstream)");
+        return profile;
+    }
+
+    if (upstream.source == "local") return std::nullopt;
+    if (!upstream.profile)
+        throw Invalid("this credential creates its buckets upstream, but " + upstream.problem);
+    return upstream.profile;
+}
+
+Bucket createProfileBucket(const Actor& actor, const UpstreamProfile& profile, const std::string& bucketName,
+                           const std::optional<uint32_t> credentialId) {
+    requireActor(actor);
+    requireGw(actor, GwPerm::ManageBuckets, "manage_buckets", "create upstream-backed S3 gateway buckets");
+    requireBucketName(bucketName);
+    requireBucketFree(bucketName);
+    // Through the vault op: the key's Consume, admin.upstream.provision and vault Create are the actor's to hold, and
+    // a bucket this attempt created is taken back (while empty) if the vault can't be made.
+    const auto vault = ops::vaults::create(actor, {
+        .name = bucketName,
+        .type = vault::model::VaultType::S3,
+        .description = "S3 gateway bucket " + bucketName + " (upstream profile " + profile.name + ")",
+        .s3 = ops::vaults::S3Spec{
+            .api_key_id = profile.api_key_id,
+            .bucket = profile.bucket_prefix + bucketName,
+            .encrypt_upstream = profile.encrypt_upstream,
+            .provision = ops::upstream::Provision{.mode = ops::upstream::BucketMode::CreateOrAdoptEmpty}},
+        .sync = {
+            .strategy = profile.sync_strategy,
+            .conflict_policy = profile.conflict_policy,
+            .max_remote_index_age = std::optional<std::chrono::seconds>{std::chrono::hours(24)},
+            .s3_budget_preset = std::string{"balanced"}
+        }
+    });
+    return bindNewVault(vault, bucketName, vh::config::Registry::get().s3_gateway.default_api_exclusive, "remote_cache",
+                        actor, credentialId, profile.id);
 }
 
 // ------------------------------------------------------------------------------------------------- budgets

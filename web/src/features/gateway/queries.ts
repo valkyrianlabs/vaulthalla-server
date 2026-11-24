@@ -11,6 +11,7 @@ import {
   toCredential,
   toDefaultRole,
   toOverride,
+  toProfile,
   toSelectedVault,
   toStatus,
 } from '@/features/gateway/model'
@@ -34,6 +35,9 @@ const CREDENTIAL_SCOPE: Command[] = [
 ]
 export const refreshCredentials = () => invalidate(...CREDENTIAL_SCOPE)
 export const refreshBuckets = () => invalidate('s3.gateway.buckets.list', 'storage.vault.list')
+// A profile change can alter what a key creates and the sync settings of the buckets created from it.
+export const refreshProfiles = () =>
+  invalidate('s3.gateway.upstreamProfiles.list', 's3.gateway.credentials.list', 's3.gateway.buckets.list', 'storage.vault.list')
 export const refreshGatewayBudgets = () =>
   invalidate('s3.gateway.budget.policy.list', 's3.gateway.budget.status', 's3.gateway.budget.ledger.list')
 export const refreshGateway = () =>
@@ -41,6 +45,7 @@ export const refreshGateway = () =>
     's3.gateway.status',
     ...CREDENTIAL_SCOPE,
     's3.gateway.buckets.list',
+    's3.gateway.upstreamProfiles.list',
     's3.gateway.budget.policy.list',
     's3.gateway.budget.status',
     's3.gateway.budget.ledger.list',
@@ -55,6 +60,16 @@ export const useGatewayCredentials = (enabled = true) =>
     { include_disabled: true },
     { enabled, select: data => (data.credentials ?? []).map(toCredential) },
   )
+
+export const useUpstreamProfiles = (enabled = true) =>
+  useWs('s3.gateway.upstreamProfiles.list', null, {
+    enabled,
+    select: data => ({
+      profiles: (data.profiles ?? []).map(toProfile),
+      default_profile: data.default_profile ?? null,
+      reapply_default: data.reapply_default ?? null,
+    }),
+  })
 
 export const useBuckets = (enabled = true) =>
   useWs('s3.gateway.buckets.list', null, { enabled, select: data => (data.buckets ?? []).map(toBucket) })

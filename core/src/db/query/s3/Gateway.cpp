@@ -53,7 +53,26 @@ GatewayCredential credentialFromRow(pqxx::row_ref row) {
         .description = row["description"].as<std::optional<std::string>>(),
         .created_at = ts(row, "created_at"),
         .last_used_at = optionalTs(row, "last_used_at"),
-        .expires_at = optionalTs(row, "expires_at")
+        .expires_at = optionalTs(row, "expires_at"),
+        .upstream_profile_id = row["upstream_profile_id"].as<std::optional<uint32_t>>(),
+        .upstream_server_default = row["upstream_server_default"].as<bool>(),
+        .upstream_reapply = row["upstream_reapply"].as<std::optional<bool>>()
+    };
+}
+
+UpstreamProfile profileFromRow(pqxx::row_ref row) {
+    return {
+        .id = row["id"].as<uint32_t>(),
+        .name = row["name"].as<std::string>(),
+        .api_key_id = row["api_key_id"].as<uint32_t>(),
+        .encrypt_upstream = row["encrypt_upstream"].as<bool>(),
+        .sync_strategy = row["sync_strategy"].as<std::string>(),
+        .conflict_policy = row["conflict_policy"].as<std::string>(),
+        .bucket_prefix = row["bucket_prefix"].as<std::string>(),
+        .description = row["description"].as<std::optional<std::string>>(),
+        .created_by = row["created_by"].as<std::optional<uint32_t>>(),
+        .created_at = ts(row, "created_at"),
+        .updated_at = ts(row, "updated_at")
     };
 }
 
@@ -274,7 +293,9 @@ BucketBinding bucketFromRow(pqxx::row_ref row) {
         .mode = row["mode"].as<std::string>(),
         .created_by = row["created_by"].as<std::optional<uint32_t>>(),
         .created_at = ts(row, "created_at"),
-        .updated_at = ts(row, "updated_at")
+        .updated_at = ts(row, "updated_at"),
+        .created_by_credential_id = row["created_by_credential_id"].as<std::optional<uint32_t>>(),
+        .upstream_profile_id = row["upstream_profile_id"].as<std::optional<uint32_t>>()
     };
 }
 
@@ -988,6 +1009,142 @@ void Gateway::updateCredentialScopeMode(
     });
 }
 
+std::optional<GatewayCredential> Gateway::getCredentialById(const uint32_t id) {
+    return Transactions::exec("S3Gateway::getCredentialById", [&](pqxx::work& txn) -> std::optional<GatewayCredential> {
+        const auto res = txn.exec("SELECT * FROM s3_gateway_credentials WHERE id = $1", pqxx::params{id});
+        if (res.empty()) return std::nullopt;
+        return credentialFromRow(res.one_row_ref());
+    });
+}
+
+void Gateway::setCredentialUpstream(const uint32_t credentialId, const std::optional<uint32_t> profileId,
+                                    const bool serverDefault, const std::optional<bool> reapply) {
+    Transactions::exec("S3Gateway::setCredentialUpstream", [&](pqxx::work& txn) {
+        txn.exec(
+            "UPDATE s3_gateway_credentials SET upstream_profile_id = $2, upstream_server_default = $3, "
+            "upstream_reapply = $4 WHERE id = $1",
+            pqxx::params{credentialId, profileId, serverDefault, reapply});
+    });
+}
+
+std::vector<GatewayCredential> Gateway::listCredentialsUsingProfile(const uint32_t profileId) {
+    return Transactions::exec("S3Gateway::listCredentialsUsingProfile", [&](pqxx::work& txn) {
+        const auto res = txn.exec(
+            "SELECT * FROM s3_gateway_credentials c WHERE c.upstream_profile_id = $1 OR EXISTS ("
+            "SELECT 1 FROM s3_gateway_credential_upstream_profile a WHERE a.credential_id = c.id AND a.profile_id = $1) "
+            "ORDER BY c.id",
+            pqxx::params{profileId});
+        return db::mapRows(res, credentialFromRow);
+    });
+}
+
+std::vector<UpstreamProfile> Gateway::listCredentialAllowedProfiles(const uint32_t credentialId) {
+    return Transactions::exec("S3Gateway::listCredentialAllowedProfiles", [&](pqxx::work& txn) {
+        return db::mapRows(txn.exec("SELECT p.* FROM s3_gateway_upstream_profile p "
+                                    "JOIN s3_gateway_credential_upstream_profile a ON a.profile_id = p.id "
+                                    "WHERE a.credential_id = $1 ORDER BY p.name",
+                                    pqxx::params{credentialId}),
+                           profileFromRow);
+    });
+}
+
+void Gateway::replaceCredentialAllowedProfiles(const uint32_t credentialId, const std::vector<uint32_t>& profileIds,
+                                               const std::optional<uint32_t> createdBy) {
+    Transactions::exec("S3Gateway::replaceCredentialAllowedProfiles", [&](pqxx::work& txn) {
+        txn.exec("DELETE FROM s3_gateway_credential_upstream_profile WHERE credential_id = $1", pqxx::params{credentialId});
+        for (const auto profileId : profileIds)
+            txn.exec("INSERT INTO s3_gateway_credential_upstream_profile (credential_id, profile_id, created_by) "
+                     "VALUES ($1, $2, $3) ON CONFLICT DO NOTHING",
+                     pqxx::params{credentialId, profileId, createdBy});
+    });
+}
+
+uint32_t Gateway::createUpstreamProfile(const UpstreamProfile& profile) {
+    return Transactions::exec("S3Gateway::createUpstreamProfile", [&](pqxx::work& txn) {
+        return txn.exec(
+            R"SQL(
+                INSERT INTO s3_gateway_upstream_profile
+                    (name, api_key_id, encrypt_upstream, sync_strategy, conflict_policy, bucket_prefix, description,
+                     created_by)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                RETURNING id
+            )SQL",
+            pqxx::params{profile.name, profile.api_key_id, profile.encrypt_upstream, profile.sync_strategy,
+                         profile.conflict_policy, profile.bucket_prefix, profile.description, profile.created_by})
+            .one_field_ref().as<uint32_t>();
+    });
+}
+
+bool Gateway::updateUpstreamProfile(const UpstreamProfile& profile) {
+    return Transactions::exec("S3Gateway::updateUpstreamProfile", [&](pqxx::work& txn) {
+        return txn.exec(
+            R"SQL(
+                UPDATE s3_gateway_upstream_profile
+                SET api_key_id = $2, encrypt_upstream = $3, sync_strategy = $4, conflict_policy = $5,
+                    bucket_prefix = $6, description = $7
+                WHERE id = $1
+            )SQL",
+            pqxx::params{profile.id, profile.api_key_id, profile.encrypt_upstream, profile.sync_strategy,
+                         profile.conflict_policy, profile.bucket_prefix, profile.description})
+            .affected_rows() > 0;
+    });
+}
+
+bool Gateway::deleteUpstreamProfile(const uint32_t id) {
+    return Transactions::exec("S3Gateway::deleteUpstreamProfile", [&](pqxx::work& txn) {
+        return txn.exec("DELETE FROM s3_gateway_upstream_profile WHERE id = $1", pqxx::params{id}).affected_rows() > 0;
+    });
+}
+
+std::optional<UpstreamProfile> Gateway::getUpstreamProfile(const uint32_t id) {
+    return Transactions::exec("S3Gateway::getUpstreamProfile", [&](pqxx::work& txn) -> std::optional<UpstreamProfile> {
+        const auto res = txn.exec("SELECT * FROM s3_gateway_upstream_profile WHERE id = $1", pqxx::params{id});
+        if (res.empty()) return std::nullopt;
+        return profileFromRow(res.one_row_ref());
+    });
+}
+
+std::optional<UpstreamProfile> Gateway::getUpstreamProfileByName(const std::string& name) {
+    return Transactions::exec("S3Gateway::getUpstreamProfileByName", [&](pqxx::work& txn) -> std::optional<UpstreamProfile> {
+        const auto res = txn.exec("SELECT * FROM s3_gateway_upstream_profile WHERE name = $1", pqxx::params{name});
+        if (res.empty()) return std::nullopt;
+        return profileFromRow(res.one_row_ref());
+    });
+}
+
+std::vector<UpstreamProfile> Gateway::listUpstreamProfiles() {
+    return Transactions::exec("S3Gateway::listUpstreamProfiles", [&](pqxx::work& txn) {
+        return db::mapRows(txn.exec("SELECT * FROM s3_gateway_upstream_profile ORDER BY name"), profileFromRow);
+    });
+}
+
+std::vector<UpstreamProfile> Gateway::listUpstreamProfilesUsingKey(const uint32_t apiKeyId) {
+    return Transactions::exec("S3Gateway::listUpstreamProfilesUsingKey", [&](pqxx::work& txn) {
+        return db::mapRows(txn.exec("SELECT * FROM s3_gateway_upstream_profile WHERE api_key_id = $1 ORDER BY name",
+                                    pqxx::params{apiKeyId}),
+                           profileFromRow);
+    });
+}
+
+std::vector<ProfileBucket> Gateway::listBucketsOfProfile(const uint32_t profileId) {
+    return Transactions::exec("S3Gateway::listBucketsOfProfile", [&](pqxx::work& txn) {
+        const auto res = txn.exec(
+            R"SQL(
+                SELECT b.*, c.upstream_reapply AS credential_reapply
+                FROM s3_gateway_bucket b
+                JOIN vault v ON v.id = b.vault_id
+                LEFT JOIN s3_gateway_credentials c ON c.id = b.created_by_credential_id
+                WHERE b.upstream_profile_id = $1 AND v.deleted_at IS NULL
+                ORDER BY b.bucket_name
+            )SQL",
+            pqxx::params{profileId});
+        return db::mapRows(res, [](const pqxx::row_ref row) {
+            return ProfileBucket{.binding = bucketFromRow(row),
+                                 .credential_reapply = row["credential_reapply"].as<std::optional<bool>>()};
+        });
+    });
+}
+
 void Gateway::recordSyncOrigin(
     const uint32_t vaultId,
     const std::string& objectKey,
@@ -1011,8 +1168,9 @@ void Gateway::bindBucket(const BucketBinding& binding) {
     Transactions::exec("S3Gateway::bindBucket", [&](pqxx::work& txn) {
         txn.exec(
             R"SQL(
-                INSERT INTO s3_gateway_bucket (vault_id, bucket_name, api_exclusive, mode, created_by)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO s3_gateway_bucket
+                    (vault_id, bucket_name, api_exclusive, mode, created_by, created_by_credential_id, upstream_profile_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 ON CONFLICT (vault_id) DO UPDATE SET
                     bucket_name = EXCLUDED.bucket_name,
                     api_exclusive = EXCLUDED.api_exclusive,
@@ -1024,7 +1182,9 @@ void Gateway::bindBucket(const BucketBinding& binding) {
                 binding.bucket_name,
                 binding.api_exclusive,
                 binding.mode,
-                binding.created_by
+                binding.created_by,
+                binding.created_by_credential_id,
+                binding.upstream_profile_id
             });
     });
 }

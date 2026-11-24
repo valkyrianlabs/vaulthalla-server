@@ -15,6 +15,11 @@ struct S3Gateway {
     static json credentialsList(const json& payload, const std::shared_ptr<Session>& session);
     static json credentialsRevoke(const json& payload, const std::shared_ptr<Session>& session);
     static json credentialsScopeUpdate(const json& payload, const std::shared_ptr<Session>& session);
+    static json credentialsUpstreamSet(const json& payload, const std::shared_ptr<Session>& session);
+    static json upstreamProfilesList(const json& payload, const std::shared_ptr<Session>& session);
+    static json upstreamProfilesCreate(const json& payload, const std::shared_ptr<Session>& session);
+    static json upstreamProfilesUpdate(const json& payload, const std::shared_ptr<Session>& session);
+    static json upstreamProfilesDelete(const json& payload, const std::shared_ptr<Session>& session);
     static json credentialsDefaultRoleGet(const json& payload, const std::shared_ptr<Session>& session);
     static json credentialsDefaultRoleSet(const json& payload, const std::shared_ptr<Session>& session);
     static json credentialsDefaultRoleClear(const json& payload, const std::shared_ptr<Session>& session);

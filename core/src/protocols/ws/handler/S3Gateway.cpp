@@ -1,6 +1,7 @@
 #include "protocols/ws/handler/S3Gateway.hpp"
 #include "protocols/ws/handler/S3GatewayJson.hpp"
 
+#include "config/Registry.hpp"
 #include "db/query/identities/User.hpp"
 #include "db/query/rbac/role/Vault.hpp"
 #include "db/query/s3/Gateway.hpp"
@@ -23,6 +24,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <variant>
 
 // ws s3.gateway.*: payload parsing and JSON shaping only. Who may do what, and what it changes, is
 // ops::s3_gateway, shared with `vh s3-gateway`.
@@ -31,7 +33,7 @@ namespace vh::protocols::ws::handler {
 // ------------------------------------------------------------------------------------------------- shapes
 
 json S3GatewayJson::credential(const db::query::s3::GatewayCredential& credential,
-                               const std::shared_ptr<identities::User>& principal) {
+                               const std::shared_ptr<identities::User>& principal, json upstream) {
     json principalJson = nullptr;
     if (principal) {
         principalJson = {
@@ -55,8 +57,47 @@ json S3GatewayJson::credential(const db::query::s3::GatewayCredential& credentia
         {"description", credential.description ? json(*credential.description) : json(nullptr)},
         {"created_at", credential.created_at},
         {"last_used_at", credential.last_used_at ? json(*credential.last_used_at) : json(nullptr)},
-        {"expires_at", credential.expires_at ? json(*credential.expires_at) : json(nullptr)}
+        {"expires_at", credential.expires_at ? json(*credential.expires_at) : json(nullptr)},
+        {"upstream", std::move(upstream)}
     };
+}
+
+json S3GatewayJson::upstreamProfile(const db::query::s3::UpstreamProfile& profile,
+                                    const std::shared_ptr<::vh::vault::model::APIKey>& key, const bool serverDefault) {
+    return {
+        {"id", profile.id},
+        {"name", profile.name},
+        {"api_key_id", profile.api_key_id},
+        {"api_key_name", key ? json(key->name) : json(nullptr)},
+        {"provider", key ? json(::vh::vault::model::to_string(key->provider)) : json(nullptr)},
+        {"encrypt_upstream", profile.encrypt_upstream},
+        {"sync_strategy", profile.sync_strategy},
+        {"conflict_policy", profile.conflict_policy},
+        {"bucket_prefix", profile.bucket_prefix},
+        {"description", profile.description ? json(*profile.description) : json(nullptr)},
+        {"server_default", serverDefault},
+        {"created_by", profile.created_by ? json(*profile.created_by) : json(nullptr)},
+        {"created_at", profile.created_at},
+        {"updated_at", profile.updated_at}
+    };
+}
+
+json S3GatewayJson::credentialUpstream(const std::string& source, json profile, const std::string& problem,
+                                       const std::optional<bool> reapply, const bool reapplyEffective, json allowed) {
+    return {
+        {"source", source},
+        {"profile", std::move(profile)},
+        {"problem", problem.empty() ? json(nullptr) : json(problem)},
+        {"reapply", reapply ? json(*reapply) : json(nullptr)},
+        {"reapply_effective", reapplyEffective},
+        {"allowed_profiles", allowed.is_array() ? std::move(allowed) : json::array()}
+    };
+}
+
+json S3GatewayJson::reappliedBucket(const std::string& bucketName, const std::uint32_t vaultId, const bool applied,
+                                    const std::string& detail) {
+    return {{"bucket_name", bucketName}, {"vault_id", vaultId}, {"applied", applied},
+            {"detail", detail.empty() ? json(nullptr) : json(detail)}};
 }
 
 json S3GatewayJson::vault(const std::shared_ptr<::vh::vault::model::Vault>& vault) {
@@ -154,7 +195,9 @@ json S3GatewayJson::bucket(const db::query::s3::BucketBinding& bucket) {
         {"api_exclusive", bucket.api_exclusive},
         {"created_by", bucket.created_by ? json(*bucket.created_by) : json(nullptr)},
         {"created_at", bucket.created_at},
-        {"updated_at", bucket.updated_at}
+        {"updated_at", bucket.updated_at},
+        {"created_by_credential_id", bucket.created_by_credential_id ? json(*bucket.created_by_credential_id) : json(nullptr)},
+        {"upstream_profile_id", bucket.upstream_profile_id ? json(*bucket.upstream_profile_id) : json(nullptr)}
     };
 }
 
@@ -186,8 +229,21 @@ std::uint32_t gwLimitFromPayload(const json& payload, const std::uint32_t fallba
 // ------------------------------------------------------------------------------------------------- JSON
 
 // The shapes are S3GatewayJson's (S3GatewayJson.hpp); these look up what they embed.
+json profileJson(const gw::UpstreamProfile& profile) {
+    return S3GatewayJson::upstreamProfile(profile, db::query::vault::APIKey::getAPIKey(profile.api_key_id),
+                                          vh::config::Registry::get().s3_gateway.default_upstream_profile == profile.name);
+}
+
+json upstreamJson(const gw::CredentialUpstream& upstream) {
+    json allowed = json::array();
+    for (const auto& profile : upstream.allowed) allowed.push_back(profileJson(profile));
+    return S3GatewayJson::credentialUpstream(upstream.source, upstream.profile ? profileJson(*upstream.profile) : json(nullptr),
+                                             upstream.problem, upstream.reapply, upstream.reapply_effective, std::move(allowed));
+}
+
 json credentialJson(const db::query::s3::GatewayCredential& credential) {
-    return S3GatewayJson::credential(credential, vh::identities::manager().user(credential.principal_user_id));
+    return S3GatewayJson::credential(credential, vh::identities::manager().user(credential.principal_user_id),
+                                     upstreamJson(gw::upstreamOf(credential)));
 }
 
 json vaultJson(const std::shared_ptr<::vh::vault::model::Vault>& vault) { return S3GatewayJson::vault(vault); }
@@ -656,6 +712,101 @@ json S3Gateway::bucketsCreateRemoteCache(const json& payload, const std::shared_
         .accept_waiver = payload.value("accept_encryption_waiver", false)
     });
     return {{"bucket", bucketJson(bucket)}};
+}
+
+// ------------------------------------------------------------------------------------------------- upstream profiles
+
+namespace {
+
+constexpr const char* kProfileField = "'profile_id' (or 'profile', its name)";
+
+gw::ProfileRef profileRefFromPayload(const json& payload) {
+    if (const auto id = optionalUInt(payload, "profile_id")) return *id;
+    if (const auto name = optionalString(payload, "profile")) return *name;
+    throw ::vh::ops::Invalid("profile_id or profile is required");
+}
+
+std::optional<std::variant<unsigned int, std::string>> apiKeyRefFromPayload(const json& payload) {
+    if (const auto id = optionalUInt(payload, "api_key_id")) return static_cast<unsigned int>(*id);
+    if (const auto name = optionalString(payload, "api_key")) return *name;
+    return std::nullopt;
+}
+
+std::optional<bool> gwOptionalBool(const json& payload, const char* key) {
+    if (!payload.is_object() || !payload.contains(key) || payload.at(key).is_null()) return std::nullopt;
+    return payload.at(key).get<bool>();
+}
+
+}
+
+json S3Gateway::upstreamProfilesList(const json&, const std::shared_ptr<Session>& session) {
+    json rows = json::array();
+    for (const auto& profile : gw::listUpstreamProfiles(gwActor(session))) rows.push_back(profileJson(profile));
+    const auto& cfg = vh::config::Registry::get().s3_gateway;
+    return {{"profiles", rows},
+            {"default_profile", cfg.default_upstream_profile.empty() ? json(nullptr) : json(cfg.default_upstream_profile)},
+            {"reapply_default", cfg.reapply_upstream_profile_changes}};
+}
+
+json S3Gateway::upstreamProfilesCreate(const json& payload, const std::shared_ptr<Session>& session) {
+    refuseBareId(payload, "'name' for the new profile");
+    const auto apiKey = apiKeyRefFromPayload(payload);
+    if (!apiKey) throw ::vh::ops::Invalid("api_key_id or api_key is required");
+    const auto name = optionalString(payload, "name");
+    if (!name) throw ::vh::ops::Invalid("name is required");
+    return {{"profile", profileJson(gw::createUpstreamProfile(gwActor(session), {
+        .name = *name,
+        .api_key = *apiKey,
+        .encrypt_upstream = gwOptionalBool(payload, "encrypt_upstream"),
+        .sync_strategy = optionalString(payload, "sync_strategy"),
+        .conflict_policy = optionalString(payload, "conflict_policy"),
+        .bucket_prefix = payload.is_object() && payload.contains("bucket_prefix") && payload.at("bucket_prefix").is_string()
+                             ? std::make_optional(payload.at("bucket_prefix").get<std::string>()) : std::nullopt,
+        .description = optionalString(payload, "description")}))}};
+}
+
+json S3Gateway::upstreamProfilesUpdate(const json& payload, const std::shared_ptr<Session>& session) {
+    refuseBareId(payload, kProfileField);
+    gw::UpdateProfile req;
+    req.api_key = apiKeyRefFromPayload(payload);
+    req.encrypt_upstream = gwOptionalBool(payload, "encrypt_upstream");
+    req.sync_strategy = optionalString(payload, "sync_strategy");
+    req.conflict_policy = optionalString(payload, "conflict_policy");
+    // An empty prefix is a value (no prefix), so it is read as given.
+    if (payload.is_object() && payload.contains("bucket_prefix") && payload.at("bucket_prefix").is_string())
+        req.bucket_prefix = payload.at("bucket_prefix").get<std::string>();
+    if (payload.is_object() && payload.contains("description")) req.description = optionalString(payload, "description");
+    const auto updated = gw::updateUpstreamProfile(gwActor(session), profileRefFromPayload(payload), req);
+    json reapplied = json::array();
+    for (const auto& r : updated.reapplied)
+        reapplied.push_back(S3GatewayJson::reappliedBucket(r.bucket_name, r.vault_id, r.applied, r.detail));
+    return {{"profile", profileJson(updated.profile)}, {"reapplied", reapplied}};
+}
+
+json S3Gateway::upstreamProfilesDelete(const json& payload, const std::shared_ptr<Session>& session) {
+    refuseBareId(payload, kProfileField);
+    gw::deleteUpstreamProfile(gwActor(session), profileRefFromPayload(payload));
+    return {{"deleted", true}};
+}
+
+json S3Gateway::credentialsUpstreamSet(const json& payload, const std::shared_ptr<Session>& session) {
+    refuseBareId(payload, kCredentialField);
+    gw::SetCredentialUpstream req;
+    req.source = optionalString(payload, "source");
+    if (optionalUInt(payload, "profile_id") || optionalString(payload, "profile")) req.profile = profileRefFromPayload(payload);
+    // null is a value here: follow the server's setting again.
+    if (payload.is_object() && payload.contains("reapply")) req.reapply = gwOptionalBool(payload, "reapply");
+    // The allowlist is replaced as a whole: ids, or names.
+    for (const auto* key : {"allowed_profile_ids", "allowed_profiles"}) {
+        if (!payload.is_object() || !payload.contains(key) || !payload.at(key).is_array()) continue;
+        if (!req.allowed) req.allowed.emplace();
+        for (const auto& item : payload.at(key)) {
+            if (item.is_number_unsigned()) req.allowed->emplace_back(item.get<std::uint32_t>());
+            else if (item.is_string()) req.allowed->emplace_back(item.get<std::string>());
+            else throw ::vh::ops::Invalid(std::string(key) + " takes profile ids or names");
+        }
+    }
+    return {{"credential", credentialJson(gw::setCredentialUpstream(gwActor(session), credentialRefFromPayload(payload), req))}};
 }
 
 json S3Gateway::budgetPolicyList(const json& payload, const std::shared_ptr<Session>& session) {

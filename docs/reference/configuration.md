@@ -118,6 +118,8 @@ s3_gateway:
   require_sigv4: true
   allow_path_style: true
   allow_virtual_hosted_style: true
+  default_upstream_profile: ""
+  reapply_upstream_profile_changes: true
   multipart:
     min_part_size_mb: 5
     abort_after_days: 7
@@ -145,6 +147,8 @@ aws --endpoint-url https://s3.vaulthalla.example.com s3api list-buckets
 ```
 
 The public S3 hostname is path-style reverse-proxy mode. SigV4 signs ordinary S3 paths such as `/bucket/key`; Nginx preserves the signed URI and marks the request as path-style-only so the router does not infer a bucket from the public host. `s3_gateway.multipart.part_dir` is no longer a valid setting; multipart parts use a Vaulthalla-owned hidden backing path with opaque per-upload directories.
+
+`default_upstream_profile` names the [upstream profile](/s3-gateway/buckets#upstream-profiles) a `CreateBucket` uses for gateway credentials that were set to follow the server default; empty means none, and a credential that follows a default that isn't set gets an error, not a local vault. `reapply_upstream_profile_changes` decides whether a profile's changed sync strategy or conflict policy is also applied to the buckets already created from it, for credentials with no choice of their own.
 
 `synthetic_local_request_cost_usd` is used only for S3 gateway credentials with local/cache budget enforcement enabled. It gives pure local buckets, metadata hits, cache hits, and sync-deferred gateway writes/deletes a nominal gateway-local cost for `gateway_credential` budgets without touching provider/vault/global upstream budgets.
 

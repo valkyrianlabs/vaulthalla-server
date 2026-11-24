@@ -10,19 +10,21 @@ import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/State'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/Tabs'
 import { ArrowsRotateIcon, PlusIcon } from '@/components/ui/icons'
-import type { GatewayCredential } from '@/features/gateway/model'
+import type { GatewayCredential, UpstreamProfile } from '@/features/gateway/model'
 import { refreshGateway, useGatewayCredentials, useGatewayPerms, useGatewayStatus } from '@/features/gateway/queries'
 import { ServicePanel } from '@/features/gateway/ServicePanel'
 import { CredentialsTab } from '@/features/gateway/CredentialsTab'
 import { BucketsTab, BudgetsTab, ClientSetupTab } from '@/features/gateway/tabs'
+import { UpstreamProfilesTab } from '@/features/gateway/UpstreamProfilesTab'
 import type { BucketDialogKind } from '@/features/gateway/BucketDialogs'
 
 // Editors load only when opened.
 const CreateCredentialDialog = dynamic(() => import('@/features/gateway/CreateCredentialDialog'), { ssr: false })
 const CredentialSheet = dynamic(() => import('@/features/gateway/CredentialSheet'), { ssr: false })
 const BucketDialog = dynamic(() => import('@/features/gateway/BucketDialogs'), { ssr: false })
+const UpstreamProfileDialog = dynamic(() => import('@/features/gateway/UpstreamProfileDialog'), { ssr: false })
 
-const TABS = ['keys', 'buckets', 'budgets', 'clients'] as const
+const TABS = ['keys', 'buckets', 'upstream', 'budgets', 'clients'] as const
 type Tab = (typeof TABS)[number]
 
 export const GatewayPage = () => {
@@ -35,6 +37,8 @@ export const GatewayPage = () => {
   const [creating, setCreating] = useState(false)
   const [openId, setOpenId] = useState<number | null>(null)
   const [bucketDialog, setBucketDialog] = useState<BucketDialogKind | null>(null)
+  // The profile being edited; { profile: null } is a new one.
+  const [profileDialog, setProfileDialog] = useState<{ profile: UpstreamProfile | null } | null>(null)
   const fetching = useIsFetching({ predicate: q => String(q.queryKey[0]).startsWith('s3.gateway.') })
   const open = openId !== null ? ((credentials.data ?? []).find(c => c.id === openId) ?? null) : null
 
@@ -87,6 +91,7 @@ export const GatewayPage = () => {
         <TabsList aria-label="S3 gateway sections">
           <TabsTrigger value="keys">Keys</TabsTrigger>
           <TabsTrigger value="buckets">Buckets</TabsTrigger>
+          <TabsTrigger value="upstream">Upstream</TabsTrigger>
           <TabsTrigger value="budgets">Budgets</TabsTrigger>
           <TabsTrigger value="clients">Client setup</TabsTrigger>
         </TabsList>
@@ -95,6 +100,9 @@ export const GatewayPage = () => {
         </TabsContent>
         <TabsContent value="buckets">
           <BucketsTab onDialog={setBucketDialog} />
+        </TabsContent>
+        <TabsContent value="upstream">
+          <UpstreamProfilesTab onEdit={profile => setProfileDialog({ profile })} />
         </TabsContent>
         <TabsContent value="budgets">
           <BudgetsTab onOpenCredential={openCredential} />
@@ -112,6 +120,9 @@ export const GatewayPage = () => {
       : null}
       {bucketDialog ?
         <BucketDialog kind={bucketDialog} onClose={() => setBucketDialog(null)} />
+      : null}
+      {profileDialog ?
+        <UpstreamProfileDialog profile={profileDialog.profile} onClose={() => setProfileDialog(null)} />
       : null}
     </>
   )

@@ -166,6 +166,67 @@ plain storage, but protection locks still apply.
   lifecycle and events for B2 and applies the 6-character / `b2-` rule; `provisionPayload(values, accepted,
   provider)` never sends what core would refuse; the buckets page hides the lifecycle action.
 
+## S3 gateway upstream profiles (migration 154, built 2026-11-23)
+
+What a gateway `CreateBucket` creates. Decided with Cooper 2026-11-23: per gateway credential; an existing bucket is
+adopted only while empty; an optional name prefix, a taken name fails (409); a server default credentials opt into;
+per-request selection by region; re-apply of sync settings optional (server setting, per-credential override);
+setter-and-principal permissions; a per-credential allowlist of the profiles a request may select (approved the same
+day through the Sentinel session: "Yes I like your idea of an allowlist"). Operator docs: `docs/s3-gateway/buckets.md` "Upstream Profiles".
+
+- **Model:** `s3_gateway_upstream_profile` (name, api_key_id ON DELETE RESTRICT, encrypt_upstream, sync_strategy,
+  conflict_policy, bucket_prefix). `s3_gateway_credentials.upstream_profile_id` / `upstream_server_default` (CHECK:
+  never both) / `upstream_reapply` (NULL = server). `s3_gateway_bucket.created_by_credential_id` /
+  `upstream_profile_id` (set only by a profile CreateBucket; a bucket follows the profile it was created from).
+  `s3_gateway_credential_upstream_profile` (credential_id, profile_id; profile ON DELETE RESTRICT): the allowlist.
+  Config: `s3_gateway.default_upstream_profile` (validated in `ops::config::validateSettings`),
+  `s3_gateway.reapply_upstream_profile_changes` (default true).
+- **Names:** a profile name is region-shaped (1-32 `[a-z0-9-]`), immutable, never `local`, `server-default` or
+  anything `validAwsRegion` / `validB2Region` / `validR2LocationHint` accepts: clients send it as
+  `LocationConstraint` or sign with it, and a real region must never select a profile.
+- **Selection** (`ops::s3_gateway::profileForCreate`, trusted): `LocationConstraint` naming a profile (`local` forces a
+  local vault, anything else is ignored) → the SigV4 scope region (`AuthContext::signing_region`) → the credential's
+  profile → the server default if the credential opted in → local. A profile the request names must be the
+  credential's effective profile or on its allowlist (`CredentialUpstream::allowed`), else Denied (403), never local;
+  an unsigned dev-mode request (credential id 0) is not bounded. A credential that asks for a profile that isn't
+  there (deleted default) throws Invalid: never silently local.
+- **Create** (`createProfileBucket`, actor = the credential's principal): `ops::vaults::create` with
+  `upstream::BucketMode::CreateOrAdoptEmpty` (no surface spells it; `bucketModeFromString` doesn't accept it).
+  `beginProvision` runs `provision::createManaged`; on `provision::BucketExists` (this account's bucket, or a row
+  Vaulthalla already knows; a name another account holds stays a plain `ProvisionConflict`) it adopts only if
+  `provision::listsEmpty` (version-aware: `listObjectVersions`, so hidden and non-current versions count), else
+  Conflict. `ops::vaults::create` refuses again if the data plane sees objects
+  (`bucketHoldsData`; skipped in test mode). The ticket's `mode` is what happened (Create or Adopt). Vault name =
+  gateway bucket, upstream bucket = `<prefix><name>`, bound `remote_cache`, `api_exclusive` =
+  `s3_gateway.default_api_exclusive`, `max_remote_index_age` 24 h and budget preset `balanced` as create-remote-cache.
+- **Why "only while empty":** `mirror` + `keep_local` deletes remote objects the vault doesn't hold
+  (`RemotePolicy::deleteRemoteLeftovers`). Residual race: objects written between the emptiness check and the vault's
+  first pass; nothing closes it.
+- **S3 errors** (`ObjectStore::createBucket`): Conflict → 409 `BucketAlreadyExists`, Denied → 403 `AccessDenied`,
+  NeedsConfirmation → 409 `OperationAborted`, other `ops::Error` → 400 `InvalidArgument`, `padmin::ProviderError` →
+  503 `ServiceUnavailable`. `Router` parses the body only for a plain `PUT /bucket` (no query): spooled
+  (`payload.file`) or buffered, ≤ 64 KiB, malformed → 400 `MalformedXML`.
+- **Permissions:** profile CRUD = `manage_buckets` + `upstream::requireProvisioner` (provision + key Consume + the key
+  can administer). `setCredentialUpstream` = credential visibility + `requireActFor` + `requireProvisioner` for the
+  actor and (as Invalid) for the principal, for its own profile and for every profile newly added to the allowlist
+  (keeping or dropping one is no grant); `local`, `reapply` and shortening the allowlist need only the credential. Step-up family secrets.
+  At request time the principal passes the existing gateway checks (admin, not vault_allowlist, manage_buckets) and
+  everything `ops::vaults::create` checks (vault Create, key Consume, provision).
+- **Re-apply:** `updateUpstreamProfile`, when strategy or conflict policy changed: every `listBucketsOfProfile` row
+  whose credential's `upstream_reapply` (else the server setting; also for a credential that is gone) is on gets
+  `ops::vaults::updateSync` as the actor; refusals are per bucket (`ReappliedBucket`), never an abort. Key,
+  encryption and prefix are never re-applied.
+- **Deletes:** a profile is refused while a credential or the server default names it; `ops::api_keys::remove` refuses
+  a key a profile uses.
+- **Surfaces:** CLI `vh s3-gateway upstream list|show|create|update|delete`, `creds scope <c> set --upstream
+  <profile>|server-default|local --reapply on|off|inherit --allow-upstream <profile>|none`; ws `s3.gateway.upstreamProfiles.*`,
+  `s3.gateway.credentials.upstream.set`; JSON shapes `S3GatewayJson::{upstreamProfile,credentialUpstream}` used by
+  both; web `features/gateway/{UpstreamProfilesTab,UpstreamProfileDialog}.tsx` and `UpstreamEditor` in
+  `CredentialSheet.tsx`.
+- **Tests:** `GatewayUpstreamTest.*` (`test_s3_gateway_upstream.cpp`, db-only, fake provider account),
+  `SqlDeployerHistoryDb.S3GatewayUpstreamProfilesMigration154…`, `ContractModels` (profile + credential upstream).
+- **Not built:** a hostname per profile (`vl-b2.s3.example.com`), and a live Backblaze run of the gateway flow (the adapter itself is live-tested, see below).
+
 ## Provider facts (verified live 2026-10-15)
 
 - Backblaze B2 bucket administration over the S3-compatible API (2026-11-23, us-west-004, account-wide test key,

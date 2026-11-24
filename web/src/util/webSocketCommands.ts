@@ -637,6 +637,12 @@ export interface WebSocketCommandMap {
     response: { credential: S3GatewayCredential; secret_access_key: string }
   }
 
+  's3.gateway.credentials.upstream.set': WsContract['s3.gateway.credentials.upstream.set']
+  's3.gateway.upstreamProfiles.list': WsContract['s3.gateway.upstreamProfiles.list']
+  's3.gateway.upstreamProfiles.create': WsContract['s3.gateway.upstreamProfiles.create']
+  's3.gateway.upstreamProfiles.update': WsContract['s3.gateway.upstreamProfiles.update']
+  's3.gateway.upstreamProfiles.delete': WsContract['s3.gateway.upstreamProfiles.delete']
+
   's3.gateway.credentials.list': {
     payload: { include_disabled?: boolean }
     response: { credentials: S3GatewayCredential[] }

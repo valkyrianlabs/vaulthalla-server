@@ -199,6 +199,10 @@ std::vector<WsModel> adminSettingsModels() {
         {boolean("enabled"), str("host"), uinteger("port").max(65535), uinteger("max_connections"),
          uinteger("max_body_size_bytes"), boolean("require_sigv4"), boolean("allow_path_style"),
          boolean("allow_virtual_hosted_style"), str("default_bucket_mode"), boolean("default_api_exclusive"),
+         str("default_upstream_profile").opt().desc("The upstream profile a CreateBucket uses for credentials that "
+                                                    "opted into the server default; empty: none. Absent from older "
+                                                    "clients' settings updates: unchanged."),
+         boolean("reapply_upstream_profile_changes").opt().desc("Absent from older clients' settings updates: unchanged."),
          object("multipart", "S3GatewayMultipartConfig"),
          object("synthetic_local_request_cost_usd", "S3GatewaySyntheticLocalRequestCostConfig")}));
     out.push_back(model("S3GatewayMultipartConfig",

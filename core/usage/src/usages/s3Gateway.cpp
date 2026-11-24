@@ -108,7 +108,15 @@ std::shared_ptr<CommandUsage> creds(const std::weak_ptr<CommandUsage>& parent) {
         Optional::ManyToOne("description", "Credential description", {"description"}, "text"),
         Optional::ManyToOne("default_role", "Default vault role for vault-allowlist credentials",
                             {"default-role", "default-vault-role", "role"}, "role"),
-        Optional::ManyToOne("selected_vault", "Vault ID or name the default role applies to", {"selected-vault"}, "vault")
+        Optional::ManyToOne("selected_vault", "Vault ID or name the default role applies to", {"selected-vault"}, "vault"),
+        Optional::ManyToOne("upstream", "What this credential's CreateBucket creates: an upstream profile's name, "
+                            "'server-default' (the server's default profile), or 'local' (a local vault)",
+                            {"upstream"}, "profile"),
+        Optional::ManyToOne("reapply", "Whether a profile's changed sync settings also apply to the buckets this "
+                            "credential created: on, off, or inherit (the server's setting)", {"reapply"}, "choice"),
+        Optional::ManyToOne("allow_upstream", "A profile a request made with this credential may select by sending "
+                            "its name as the region, besides the credential's own; repeat for several. Replaces the "
+                            "list; 'none' clears it", {"allow-upstream"}, "profile")
     };
     scopeSet->optional_flags = {
         Flag::WithAliases("enforce-budget-for-local-requests", "Count local/cache hits against gateway key budgets", {"enforce-budget-for-local-requests"}),
@@ -117,7 +125,12 @@ std::shared_ptr<CommandUsage> creds(const std::weak_ptr<CommandUsage>& parent) {
     scopeSet->examples = {
         {"vh s3-gateway creds scope backup set --scope vault-allowlist", "Change credential scope mode."},
         {"vh s3-gateway creds scope backup set --enforce-budget-for-local-requests", "Enable synthetic local/cache gateway budget accounting."},
-        {"vh s3-gateway creds scope backup set --no-enforce-budget-for-local-requests", "Disable synthetic local/cache gateway budget accounting."}
+        {"vh s3-gateway creds scope backup set --no-enforce-budget-for-local-requests", "Disable synthetic local/cache gateway budget accounting."},
+        {"vh s3-gateway creds scope backup set --upstream vl-b2",
+         "Make every bucket this credential creates an S3 vault over upstream profile vl-b2."},
+        {"vh s3-gateway creds scope backup set --upstream local", "Go back to local vaults for new buckets."},
+        {"vh s3-gateway creds scope backup set --upstream vl-b2 --allow-upstream r2-edge --allow-upstream aws-archive",
+         "One key for several upstream accounts: vl-b2 by default, the others when the client names them."}
     };
 
     auto allowVault = build(scope->weak_from_this());
@@ -394,6 +407,83 @@ std::shared_ptr<CommandUsage> budget(const std::weak_ptr<CommandUsage>& parent) 
 }
 } // namespace
 
+std::shared_ptr<CommandUsage> upstream(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->aliases = {"upstream", "upstream-profile", "upstream-profiles"};
+    cmd->description = "Manage upstream profiles: what a CreateBucket through the gateway creates. A profile names an "
+                       "upstream API key and the settings of the S3 vault made over it. A credential uses one with "
+                       "`creds scope <credential> set --upstream <profile>`; a client selects one per request by "
+                       "sending its name as the region (LocationConstraint, or the region it signs with).";
+
+    const auto profilePos = Positional::Alias("profile", "Upstream profile name or ID", "profile");
+    const auto settings = [] {
+        return std::vector<Optional>{
+            Optional::ManyToOne("sync_strategy", "Sync strategy of the vaults: cache, sync or mirror",
+                                {"sync-strategy", "strategy"}, "strategy"),
+            Optional::ManyToOne("on_sync_conflict", "Conflict policy: keep_local, keep_remote, keep_newest or ask",
+                                {"on-sync-conflict", "conflict"}, "policy"),
+            Optional::ManyToOne("bucket_prefix", "Prefix of the upstream bucket's name (the upstream bucket is "
+                                "<prefix><gateway bucket>); empty for none", {"bucket-prefix"}, "prefix"),
+            Optional::ManyToOne("description", "Profile description", {"description"}, "text")};
+    };
+    const auto encryptFlags = [] {
+        return std::vector<Flag>{
+            Flag::WithAliases("encrypt", "Encrypt objects before they are uploaded (the default)", {"encrypt"}),
+            Flag::WithAliases("no_encrypt", "Store objects upstream as they are, readable straight from the provider",
+                              {"no-encrypt"}),
+            jsonFlag};
+    };
+
+    auto list = build(cmd->weak_from_this());
+    list->aliases = {"list", "ls"};
+    list->effect = CommandEffect::Read;
+    list->optional_flags = {jsonFlag};
+    list->examples = {{"vh s3-gateway upstream list", "List upstream profiles and the server default."}};
+
+    auto show = build(cmd->weak_from_this());
+    show->aliases = {"show", "info"};
+    show->effect = CommandEffect::Read;
+    show->positionals = {profilePos};
+    show->optional_flags = {jsonFlag};
+    show->examples = {{"vh s3-gateway upstream show vl-b2", "Show one profile and the credentials that use it."}};
+
+    auto create = build(cmd->weak_from_this());
+    create->aliases = {"create", "new", "add"};
+    create->effect = CommandEffect::Write;
+    create->positionals = {Positional::Alias("name", "Profile name, sent by S3 clients as a region (e.g. vl-b2)", "name")};
+    create->required = {Option::Single("api_key", "Upstream API key name or ID, enabled for provider administration",
+                                       "api-key", "api-key")};
+    create->optional = settings();
+    create->optional_flags = encryptFlags();
+    create->examples = {
+        {"vh s3-gateway upstream create vl-b2 --api-key b2-main --no-encrypt --sync-strategy mirror --on-sync-conflict keep_local",
+         "Buckets created through this profile mirror to a Backblaze B2 bucket of the same name, unencrypted."},
+        {"vh s3-gateway upstream create r2-edge --api-key r2-main --bucket-prefix acme-",
+         "Encrypted cache vaults over R2 buckets named acme-<bucket>."}};
+
+    auto update = build(cmd->weak_from_this());
+    update->aliases = {"update", "set", "edit"};
+    update->effect = CommandEffect::Write;
+    update->positionals = {profilePos};
+    update->optional = settings();
+    update->optional.push_back(Optional::ManyToOne("api_key", "Another upstream API key name or ID (new buckets only)",
+                                                   {"api-key"}, "api-key"));
+    update->optional_flags = encryptFlags();
+    update->examples = {{"vh s3-gateway upstream update vl-b2 --sync-strategy sync",
+                         "Change the sync strategy; buckets already created from the profile follow, unless their "
+                         "credential or the server says otherwise."}};
+
+    auto remove = build(cmd->weak_from_this());
+    remove->aliases = {"delete", "remove", "rm"};
+    remove->effect = CommandEffect::Destructive;
+    remove->positionals = {profilePos};
+    remove->examples = {{"vh s3-gateway upstream delete vl-b2",
+                         "Delete a profile no credential uses. Buckets created from it are untouched."}};
+
+    cmd->subcommands = {list, show, create, update, remove};
+    return cmd;
+}
+
 std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
     const auto book = std::make_shared<CommandBook>();
     book->title = "S3 Gateway Commands";
@@ -401,7 +491,8 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
     root->aliases = {"s3-gateway", "s3gw"};
     root->description = "Manage the Vaulthalla S3-compatible gateway.";
     root->subcommands = {status(root->weak_from_this()), enable(root->weak_from_this()), disable(root->weak_from_this()),
-                         creds(root->weak_from_this()), bucket(root->weak_from_this()), budget(root->weak_from_this())};
+                         creds(root->weak_from_this()), bucket(root->weak_from_this()), upstream(root->weak_from_this()),
+                         budget(root->weak_from_this())};
     root->examples = {
         {"vh s3-gateway status", "Show gateway runtime status."},
         {"vh s3-gateway creds create laptop", "Create inbound S3 credentials."},

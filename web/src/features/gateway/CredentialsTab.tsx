@@ -12,7 +12,7 @@ import { confirm } from '@/components/ui/Confirm'
 import { notify } from '@/components/ui/Toast'
 import { BanIcon, EllipsisIcon, KeyIcon, PlusIcon, SlidersIcon } from '@/components/ui/icons'
 import { DASH, formatDateTime, formatRelative, parseDate } from '@/lib/format'
-import { scopeModeLabel, type GatewayCredential } from '@/features/gateway/model'
+import { scopeModeLabel, upstreamLabel, type GatewayCredential } from '@/features/gateway/model'
 import { refreshCredentials, useGatewayCredentials } from '@/features/gateway/queries'
 
 const expired = (c: GatewayCredential) => {
@@ -87,6 +87,16 @@ export const CredentialsTab = ({
       header: 'Access',
       hideBelow: 'sm',
       cell: c => <span className="text-fg-muted">{scopeModeLabel(c.scope_mode)}</span>,
+    },
+    {
+      key: 'upstream',
+      header: 'New buckets',
+      hideBelow: 'lg',
+      cell: c => (
+        <span className={c.upstream.problem ? 'text-warn' : 'text-fg-subtle'} title={c.upstream.problem ?? undefined}>
+          {upstreamLabel(c.upstream)}
+        </span>
+      ),
     },
     {
       key: 'state',
