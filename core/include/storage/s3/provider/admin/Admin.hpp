@@ -15,9 +15,9 @@
 
 // Provider administration for upstream S3 accounts (#237): buckets, lifecycle, event notifications and the queues
 // they feed (#96). One administrative API key per provider account does everything; Vaulthalla splits authority with
-// admin.upstream.* RBAC, not with extra cloud identities. AWS S3, Cloudflare R2 and Backblaze B2 have adapters (B2 for
-// buckets only: its S3-compatible API has no lifecycle or event-notification calls); every other provider answers
-// supportsAdmin() == false and keeps working as plain vault storage.
+// admin.upstream.* RBAC, not with extra cloud identities. AWS S3, Cloudflare R2 and Backblaze B2 have adapters (B2:
+// buckets over its S3-compatible API, lifecycle rules over its native API, no event notifications); every other
+// provider answers supportsAdmin() == false and keeps working as plain vault storage.
 //
 // These are trusted primitives: they never authorize (ops::upstream does) and they never consult protection locks
 // themselves — storage::upstream::guard is called by the adapters for every bucket-scoped request before it is sent.
@@ -94,16 +94,25 @@ inline constexpr const char* kR2VersioningUnsupported =
     "Cloudflare R2 has no object versioning (no version ids, noncurrent versions or delete markers); "
     "use local snapshots or local versioning for file recovery on R2";
 
-// What Backblaze B2's S3-compatible API leaves to its console and native API (probe details, CapabilityMissing).
+// Backblaze B2. Lifecycle rules are read and written through B2's native API (b2_list_buckets, b2_update_bucket), but
+// Vaulthalla writes only the rules that keep or drop a vault's file history (ops::recovery: vh vault recovery set);
+// the general lifecycle command (vh upstream lifecycle, a provisioning --abort-multipart-days) stays refused.
 inline constexpr const char* kB2LifecycleUnsupported =
-    "Backblaze B2 lifecycle rules are set in the Backblaze console or its native API; its S3-compatible API has no "
-    "lifecycle calls, so Vaulthalla neither reads nor changes them";
+    "on Backblaze B2, Vaulthalla sets only the lifecycle rule that keeps or drops a vault's old versions (vh vault "
+    "recovery set); set any other lifecycle rule in the Backblaze console";
 inline constexpr const char* kB2EventsUnsupported =
     "Backblaze B2 event notifications are not available through its S3-compatible API; event-driven sync supports "
     "AWS S3 and Cloudflare R2 vaults only";
+// putVersioning(Suspended), probe detail.
 inline constexpr const char* kB2VersioningFixed =
-    "Backblaze B2 buckets always keep object versions and how long is set by B2 lifecycle rules (Backblaze console or "
-    "native API), so Vaulthalla can't turn versioning on or off, or set its retention, on B2";
+    "Backblaze B2 buckets always keep object versions: versioning can't be suspended or turned off. How long old "
+    "versions stay is a lifecycle rule (daysFromHidingToDeleting), which Vaulthalla sets from the vault's recovery "
+    "mode: off keeps only the latest version, provider versioning keeps them N days or indefinitely";
+// What lets Vaulthalla tell its own B2 lifecycle rules from everyone else's: B2 rules have no id, so the rules
+// Vaulthalla wrote are recorded in the bucket's own bucketInfo under this key, written in the same b2_update_bucket
+// (with ifRevisionIs) as the rules. A rule is Vaulthalla's only when it matches a recorded one exactly (prefix and
+// every day value); anything else, including a recorded rule someone edited in the console, is foreign and kept.
+inline constexpr const char* kB2RuleRecordKey = "vaulthalla-lifecycle";
 
 // Provider-neutral lifecycle rule. Only the fields both a provider and Vaulthalla support are exposed; adapters refuse
 // (Invalid via std::invalid_argument) a field their provider lacks (R2 has no noncurrent versions; neither exposes
@@ -120,6 +129,12 @@ struct LifecycleRule {
     // newer-noncurrent counts): rebuilding it from the fields above would change what it does.
     bool unmodeled{false};
     std::string raw_xml;                                  // foreign rules round-trip verbatim
+    // Backblaze B2 (native API): the rule as b2_list_buckets returned it, a JSON object, written back verbatim when
+    // the rule is foreign. B2 rules have only a prefix and day values, which map onto the fields above:
+    // daysFromHidingToDeleting = expire_noncurrent_days (a version is "hidden" once a newer one is uploaded or a hide
+    // marker covers it), daysFromUploadingToHiding = expire_current_days, daysFromStartingToCancelingUnfinishedLargeFiles
+    // = abort_incomplete_multipart_days. There is no disabled state and no filter beyond the prefix.
+    std::string raw_json;
     [[nodiscard]] bool destructive() const { return expire_current_days || expire_noncurrent_days; }
 };
 
@@ -227,11 +242,13 @@ public:
     virtual void deleteBucket(const std::string& bucket) = 0;
 
     [[nodiscard]] virtual BucketConfiguration inspect(const std::string& bucket) = 0;
-    // Whether lifecycle rules can be read and written at all (B2: false — its S3-compatible API has none). When false,
-    // inspect() answers lifecycle_readable = false and putLifecycle throws CapabilityMissing("lifecycle", …) with
-    // nothing sent (name and guard still checked first).
+    // Whether lifecycle rules can be read and written at all. When false, inspect() answers lifecycle_readable = false
+    // and putLifecycle throws CapabilityMissing("lifecycle", …) with nothing sent (name and guard still checked
+    // first). B2: true, through its native API (b2_list_buckets / b2_update_bucket, see B2Admin).
     [[nodiscard]] virtual bool supportsLifecycle() const { return true; }
-    // Writes the full rule set: callers pass foreign rules back unchanged (merge happens in storage::upstream).
+    // Writes the full rule set: callers pass foreign rules back unchanged (merge happens in storage::upstream). B2: the
+    // write is conditional on the bucket revision this client last read (inspect), so a change made in between is a
+    // ProviderError with http_status 409 (code "conflict"), never overwritten.
     virtual void putLifecycle(const std::string& bucket, const std::vector<LifecycleRule>& rules) = 0;
 
     // Provider (native) object versioning. AWS: true. R2: false — it has none (kR2VersioningUnsupported). B2: true,

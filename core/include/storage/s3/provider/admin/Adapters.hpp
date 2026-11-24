@@ -138,9 +138,18 @@ protected:
 };
 
 // Backblaze B2 through its S3-compatible API (https://s3.<region>.backblazeb2.com): buckets, their versions and
-// object lock. What that API lacks stays with the Backblaze console and native API and is reported, not attempted:
-// lifecycle rules (supportsLifecycle() == false), event notifications (no events adapter), and switching versioning
-// (every B2 bucket is versioned). An account lives in one region, the endpoint's; ListBuckets is not paged.
+// object lock; lifecycle rules and read keys through its native API (b2api v4). Not attempted, and reported: event
+// notifications (no events adapter) and switching versioning (every B2 bucket is versioned). An account lives in one
+// region, the endpoint's; ListBuckets is not paged.
+//
+// Lifecycle (https://www.backblaze.com/docs/cloud-storage-lifecycle-rules): rules are {fileNamePrefix,
+// daysFromHidingToDeleting, daysFromUploadingToHiding, daysFromStartingToCancelingUnfinishedLargeFiles}, select by
+// prefix only, may overlap (the smallest non-null value of every matching rule applies) and have no id. inspect()
+// reads them with b2_list_buckets (with the bucket's id, revision and bucketInfo, cached on this client);
+// putLifecycle() writes the whole list with b2_update_bucket, ifRevisionIs = the revision inspect() read, and the
+// record of Vaulthalla's own rules in bucketInfo[kB2RuleRecordKey] (every other bucketInfo entry kept). A rule is
+// Vaulthalla's (id "vaulthalla-…", foreign = false) only when it equals a recorded one; every other rule is foreign,
+// gets the id "b2:<prefix>" and is written back exactly as read (raw_json).
 class B2Admin final : public S3ApiAdmin {
 public:
     // std::invalid_argument unless the key's endpoint is https://s3.<region>.backblazeb2.com.
@@ -152,9 +161,15 @@ public:
     // 404 → nullopt; 200 → the endpoint's region; 403 → ProviderError (the name belongs to another account, or the
     // application key is restricted to other buckets).
     [[nodiscard]] std::optional<std::string> headBucket(const std::string& bucket) override;
+    // HEAD, ?versioning, ?object-lock (S3 API), then b2_authorize_account (once per client) + b2_list_buckets for the
+    // lifecycle rules. A native failure leaves lifecycle_readable = false with a warning; it never fails the inspect.
     [[nodiscard]] BucketConfiguration inspect(const std::string& bucket) override;
-    [[nodiscard]] bool supportsLifecycle() const override { return false; }
-    // Name + guard checked, then CapabilityMissing("lifecycle"); nothing is sent.
+    [[nodiscard]] bool supportsLifecycle() const override { return true; }
+    // Name + guard checked; rules B2 can't hold (a disabled rule, one without any day value, a day value of 0) are
+    // std::invalid_argument before anything is sent. The application key needs writeBuckets (CapabilityMissing
+    // otherwise, when the authorization lists the key's capabilities). Conditional on the revision of the last
+    // inspect() of this bucket on this client (read now when there was none): a 409 "conflict" means the bucket changed
+    // in between and nothing was written.
     void putLifecycle(const std::string& bucket, const std::vector<LifecycleRule>& rules) override;
     // Enabled: one GetBucketVersioning that must say Enabled (nothing is written: B2 buckets are always versioned).
     // Suspended: target, name and guard checked, then CapabilityMissing("versioning"); nothing is sent.
@@ -191,8 +206,33 @@ private:
     [[nodiscard]] NativeSession authorizeNative();
     [[nodiscard]] nlohmann::json nativeCall(const NativeSession& session, const std::string& api, const nlohmann::json& body);
 
+    // What b2_list_buckets said about a bucket: its id, revision, lifecycle rules and bucketInfo.
+    struct NativeBucket {
+        std::string bucket_id;
+        nlohmann::json revision;                 // echoed as ifRevisionIs
+        nlohmann::json lifecycle_rules = nlohmann::json::array();
+        nlohmann::json bucket_info = nlohmann::json::object();
+    };
+    // The session this client authorized (b2_authorize_account once; a token lives up to 24 hours).
+    [[nodiscard]] const NativeSession& nativeSession();
+    // b2_list_buckets for one bucket by name (cached in buckets_); ProviderError NoSuchBucket when it isn't listed.
+    [[nodiscard]] const NativeBucket& listNativeBucket(const std::string& bucket);
+    void rememberNativeBucket(const std::string& bucket, const nlohmann::json& b);
+
     std::string region_;
+    std::optional<NativeSession> session_;
+    std::map<std::string, NativeBucket> buckets_;
 };
+
+// The B2 lifecycle mapping B2Admin uses, exposed for tests: native rules + the bucketInfo record → LifecycleRules
+// (ours matched against the record, every other rule foreign), and back.
+namespace b2lifecycle {
+[[nodiscard]] std::vector<LifecycleRule> fromNative(const nlohmann::json& rules, const nlohmann::json& bucketInfo);
+// The lifecycleRules array and the bucketInfo (info with the record replaced or, without rules of ours, removed).
+// std::invalid_argument for a rule B2 can't hold.
+[[nodiscard]] std::pair<nlohmann::json, nlohmann::json> toNative(const std::vector<LifecycleRule>& rules,
+                                                                 const nlohmann::json& info);
+}
 
 // S3 → SQS Standard. One queue (+ DLQ) per account and region.
 class AwsEvents final : public EventsClient {

@@ -1575,7 +1575,9 @@ TEST_F(UpstreamProviderTest, B2HeadBucketOutcomes) {
     }
 }
 
-TEST_F(UpstreamProviderTest, B2InspectReadsVersioningAndObjectLockAndLeavesLifecycleAndEventsToBackblaze) {
+TEST_F(UpstreamProviderTest, B2InspectReadsVersioningAndObjectLockAndLeavesEventsToBackblaze) {
+    // This handler answers B2's native API with nothing usable: the lifecycle rules (read natively, test_b2_lifecycle.cpp)
+    // are then reported unreadable, never a failed inspect.
     handler = [](const http::Request& r) {
         if (r.url.find("?versioning") != std::string::npos)
             return upRespond(200, "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>");
@@ -1591,11 +1593,13 @@ TEST_F(UpstreamProviderTest, B2InspectReadsVersioningAndObjectLockAndLeavesLifec
     EXPECT_FALSE(config.lifecycle_readable);
     EXPECT_FALSE(config.notifications_readable);
     EXPECT_TRUE(config.lifecycle.empty());
-    ASSERT_EQ(config.warnings.size(), 1u);
-    EXPECT_NE(config.warnings[0].find("Backblaze"), std::string::npos);
-    EXPECT_TRUE(matching("GET", "?lifecycle").empty()) << "B2's S3-compatible API has no lifecycle call";
+    ASSERT_EQ(config.warnings.size(), 2u);
+    EXPECT_NE(config.warnings[0].find("native API"), std::string::npos) << config.warnings[0];
+    EXPECT_NE(config.warnings[1].find("event notifications"), std::string::npos);
+    EXPECT_TRUE(matching("GET", "?lifecycle").empty()) << "never B2's S3 lifecycle calls (Backblaze: don't mix them)";
     EXPECT_TRUE(matching("GET", "?notification").empty()) << "nor an event-notification call";
-    EXPECT_EQ(sent.size(), 3u) << "HEAD, ?versioning, ?object-lock";
+    EXPECT_EQ(sent.size(), 4u) << "HEAD, ?versioning, ?object-lock, b2_authorize_account";
+    for (const auto& w : config.warnings) EXPECT_EQ(w.find(kUpB2Secret), std::string::npos);
 
     // Object lock on, and an application key that can't read it (cleanup then treats it as unknown).
     handler = [](const http::Request& r) {
@@ -1616,41 +1620,30 @@ TEST_F(UpstreamProviderTest, B2InspectReadsVersioningAndObjectLockAndLeavesLifec
     };
     const auto unreadable = b2.inspect("ultimate-restoration");
     EXPECT_EQ(unreadable.object_lock, std::nullopt);
-    EXPECT_EQ(unreadable.warnings.size(), 2u);
+    EXPECT_EQ(unreadable.warnings.size(), 3u);
 
     handler = [](const http::Request&) { return upRespond(404); };
     EXPECT_THROW((void)b2.inspect("not-there-at-all"), admin::ProviderError);
 }
 
-TEST_F(UpstreamProviderTest, B2LifecycleAndSuspendingVersionsAreMissingCapabilitiesAndSendNothing) {
+TEST_F(UpstreamProviderTest, B2VersioningIsAlwaysOnAndSuspendingItIsAMissingCapabilityThatSendsNothing) {
     handler = [](const http::Request& r) {
         if (r.url.find("?versioning") != std::string::npos)
             return upRespond(200, "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>");
         return upRespond(200);
     };
     admin::B2Admin b2(upB2Key());
-    EXPECT_FALSE(b2.supportsLifecycle());
+    EXPECT_TRUE(b2.supportsLifecycle()) << "through B2's native API (test_b2_lifecycle.cpp)";
     EXPECT_TRUE(b2.supportsVersioning()) << "versions exist (the emptiness check and cleanup list them)";
     EXPECT_TRUE(admin::AwsAdmin(upAwsKey()).supportsLifecycle());
     EXPECT_TRUE(admin::R2Admin(upR2Key()).supportsLifecycle());
 
-    admin::LifecycleRule rule;
-    rule.id = "vaulthalla-managed";
-    rule.abort_incomplete_multipart_days = 7;
-    for (const auto& rules : {std::vector<admin::LifecycleRule>{rule}, std::vector<admin::LifecycleRule>{}}) {
-        try {
-            b2.putLifecycle("valkyrian-labs", rules);
-            FAIL() << "B2 lifecycle must be refused";
-        } catch (const admin::CapabilityMissing& e) {
-            EXPECT_EQ(e.capability, "lifecycle");
-            EXPECT_STREQ(e.what(), admin::kB2LifecycleUnsupported);
-        }
-    }
     try {
         b2.putVersioning("valkyrian-labs", admin::Versioning::Suspended);
         FAIL() << "B2 versioning can't be suspended";
     } catch (const admin::CapabilityMissing& e) {
         EXPECT_EQ(e.capability, "versioning");
+        EXPECT_STREQ(e.what(), admin::kB2VersioningFixed);
     }
     EXPECT_THROW(b2.putVersioning("valkyrian-labs", admin::Versioning::Unversioned), std::invalid_argument);
     EXPECT_TRUE(sent.empty());
@@ -1688,8 +1681,6 @@ TEST_F(UpstreamProviderTest, B2ProbeReportsWhatItsS3ApiLacksAsMissingInsteadOfFa
     EXPECT_TRUE(caps.has("buckets.create"));
     EXPECT_FALSE(upCapability(caps, "buckets.create")->probed) << "checking it would create a bucket";
     for (const auto& [name, detail] : std::vector<std::pair<std::string, std::string>>{
-             {"lifecycle", admin::kB2LifecycleUnsupported},
-             {"versioning", admin::kB2VersioningFixed},
              {"events.queues", admin::kB2EventsUnsupported},
              {"events.notifications", admin::kB2EventsUnsupported}}) {
         const auto cap = upCapability(caps, name);
@@ -1698,8 +1689,20 @@ TEST_F(UpstreamProviderTest, B2ProbeReportsWhatItsS3ApiLacksAsMissingInsteadOfFa
         EXPECT_TRUE(cap->probed) << name << ": known, not a guess";
         EXPECT_EQ(cap->detail, detail) << name;
     }
-    ASSERT_EQ(sent.size(), 1u) << "one ListBuckets and nothing that changes anything";
+    // Versioning: always on (reported, nothing to switch). Lifecycle: through the native API, whose authorization
+    // this handler doesn't answer, so it is reported missing with the reason, never thrown.
+    const auto versioning = upCapability(caps, "versioning");
+    ASSERT_TRUE(versioning.has_value());
+    EXPECT_TRUE(versioning->ok);
+    EXPECT_EQ(versioning->detail, admin::kB2VersioningFixed);
+    const auto lc = upCapability(caps, "lifecycle");
+    ASSERT_TRUE(lc.has_value());
+    EXPECT_FALSE(lc->ok);
+    EXPECT_TRUE(lc->probed);
+    EXPECT_NE(lc->detail.find("native API"), std::string::npos) << lc->detail;
+    ASSERT_EQ(sent.size(), 2u) << "one ListBuckets, one b2_authorize_account, and nothing that changes anything";
     EXPECT_EQ(sent[0].method, "GET");
+    EXPECT_EQ(sent[1].url, admin::B2Admin::kAuthorizeUrl);
 
     // A key restricted to one bucket can't list the account: reported, never thrown.
     handler = [](const http::Request&) {

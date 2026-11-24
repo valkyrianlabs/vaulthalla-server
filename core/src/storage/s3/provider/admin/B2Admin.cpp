@@ -43,11 +43,6 @@ std::optional<std::string> B2Admin::headBucket(const std::string& bucket) {
     return region_;
 }
 
-void B2Admin::putLifecycle(const std::string& bucket, const std::vector<LifecycleRule>&) {
-    requireBucket(bucket);
-    throw CapabilityMissing("lifecycle", kB2LifecycleUnsupported);
-}
-
 void B2Admin::putVersioning(const std::string& bucket, const Versioning target) {
     (void)detail::buildVersioning(target);   // Enabled or Suspended only, as everywhere
     requireBucket(bucket);
@@ -71,10 +66,19 @@ BucketConfiguration B2Admin::inspect(const std::string& bucket) {
         config.warnings.emplace_back("object lock configuration is not readable with this application key "
                                      "(readBucketRetentions); cleanup treats it as unknown");
 
-    config.lifecycle_readable = false;
+    // Lifecycle rules: B2's native API (b2_list_buckets). A failure here leaves the rest of the inspect standing.
+    try {
+        const auto& native = listNativeBucket(bucket);
+        config.lifecycle = b2lifecycle::fromNative(native.lifecycle_rules, native.bucket_info);
+        config.lifecycle_readable = true;
+    } catch (const ProviderError& e) {
+        config.lifecycle_readable = false;
+        config.warnings.push_back(std::string("the bucket's lifecycle rules could not be read through Backblaze's native "
+                                              "API: ") + e.what());
+    }
     config.notifications_readable = false;
-    config.warnings.emplace_back("Backblaze B2 lifecycle rules and event notifications are managed in the Backblaze "
-                                 "console or its native API; Vaulthalla does not read or change them");
+    config.warnings.emplace_back("Backblaze B2 event notifications are managed in the Backblaze console; Vaulthalla "
+                                 "does not read or change them");
     return config;
 }
 
@@ -94,8 +98,27 @@ Capabilities B2Admin::probe() {
     caps.items.push_back({"buckets.create", true, false,
                           "checked when a bucket is created (the application key needs writeBuckets and access to all "
                           "buckets)"});
-    caps.items.push_back({"lifecycle", false, true, kB2LifecycleUnsupported});
-    caps.items.push_back({"versioning", false, true, kB2VersioningFixed});
+    // Lifecycle rules go through the native API with the same key: b2_authorize_account says what the key may do
+    // (b2_list_buckets needs listBuckets, b2_update_bucket writeBuckets). Nothing is changed.
+    try {
+        const auto& session = nativeSession();
+        const auto lacks = [&](const char* c) {
+            return session.capabilities &&
+                   std::ranges::find(*session.capabilities, std::string(c)) == session.capabilities->end();
+        };
+        if (lacks("listBuckets") || lacks("writeBuckets"))
+            caps.items.push_back({"lifecycle", false, true,
+                                  "the application key needs listBuckets and writeBuckets for Vaulthalla to read and set "
+                                  "the lifecycle rule that keeps or drops a vault's old versions"});
+        else
+            caps.items.push_back({"lifecycle", true, session.capabilities.has_value(),
+                                  "through Backblaze's native API (b2_list_buckets, b2_update_bucket); Vaulthalla sets "
+                                  "only the rule for a vault's file history"});
+    } catch (const ProviderError& e) {
+        caps.items.push_back({"lifecycle", false, true,
+                              std::string("Backblaze's native API refused this application key: ") + e.what()});
+    }
+    caps.items.push_back({"versioning", true, true, kB2VersioningFixed});
     caps.items.push_back({"events.queues", false, true, kB2EventsUnsupported});
     caps.items.push_back({"events.notifications", false, true, kB2EventsUnsupported});
     return caps;
@@ -265,6 +288,223 @@ void B2Admin::deleteReadKey(const std::string& keyId) {
     if (keyId.empty()) throw std::invalid_argument("a Backblaze B2 key id is required");
     const auto session = authorizeNative();
     (void)nativeCall(session, "b2_delete_key", {{"applicationKeyId", keyId}});
+}
+
+// ---- lifecycle rules, through B2's native API -----------------------------------------------------------------------
+
+namespace {
+
+constexpr const char* kB2lHide = "daysFromHidingToDeleting";
+constexpr const char* kB2lUpload = "daysFromUploadingToHiding";
+constexpr const char* kB2lCancel = "daysFromStartingToCancelingUnfinishedLargeFiles";
+constexpr const char* kB2lPrefix = "fileNamePrefix";
+
+// A day value as B2 holds it: null (or absent) = not applied, else a whole number of at least one. Anything else is
+// a value this model can't carry (ok = false).
+std::optional<unsigned int> b2lDays(const nlohmann::json& rule, const char* name, bool& ok) {
+    if (!rule.contains(name) || rule[name].is_null()) return std::nullopt;
+    const auto& v = rule[name];
+    if (v.is_number_unsigned() && v.get<uint64_t>() >= 1 && v.get<uint64_t>() <= 100000)
+        return static_cast<unsigned int>(v.get<uint64_t>());
+    if (v.is_number_integer() && v.get<int64_t>() >= 1 && v.get<int64_t>() <= 100000)
+        return static_cast<unsigned int>(v.get<int64_t>());
+    ok = false;
+    return std::nullopt;
+}
+
+nlohmann::json b2lValue(const std::optional<unsigned int>& v) { return v ? nlohmann::json(*v) : nlohmann::json(nullptr); }
+
+nlohmann::json b2lRuleJson(const LifecycleRule& r) {
+    return {{kB2lPrefix, r.prefix},
+            {kB2lHide, b2lValue(r.expire_noncurrent_days)},
+            {kB2lUpload, b2lValue(r.expire_current_days)},
+            {kB2lCancel, b2lValue(r.abort_incomplete_multipart_days)}};
+}
+
+// The rules Vaulthalla recorded in bucketInfo: [{id, fileNamePrefix, the three day values}]. Unreadable = none.
+std::vector<LifecycleRule> b2lRecorded(const nlohmann::json& info) {
+    std::vector<LifecycleRule> out;
+    if (!info.is_object() || !info.contains(kB2RuleRecordKey) || !info[kB2RuleRecordKey].is_string()) return out;
+    nlohmann::json record;
+    try {
+        record = nlohmann::json::parse(info[kB2RuleRecordKey].get<std::string>());
+    } catch (const nlohmann::json::exception&) {
+        return out;
+    }
+    if (!record.is_object() || !record.contains("rules") || !record["rules"].is_array()) return out;
+    for (const auto& r : record["rules"]) {
+        if (!r.is_object() || !r.contains("id") || !r["id"].is_string() || !isOwnedId(r["id"].get<std::string>())) continue;
+        bool ok = true;
+        LifecycleRule rule;
+        rule.id = r["id"].get<std::string>();
+        rule.prefix = r.value(kB2lPrefix, "");
+        rule.expire_noncurrent_days = b2lDays(r, kB2lHide, ok);
+        rule.expire_current_days = b2lDays(r, kB2lUpload, ok);
+        rule.abort_incomplete_multipart_days = b2lDays(r, kB2lCancel, ok);
+        if (ok) out.push_back(std::move(rule));
+    }
+    return out;
+}
+
+bool b2lSame(const LifecycleRule& a, const LifecycleRule& b) {
+    return a.prefix == b.prefix && a.expire_noncurrent_days == b.expire_noncurrent_days &&
+           a.expire_current_days == b.expire_current_days &&
+           a.abort_incomplete_multipart_days == b.abort_incomplete_multipart_days;
+}
+
+// ifRevisionIs takes the revision b2_list_buckets returned (documented as a number, shown as a string in places).
+std::optional<int64_t> b2lRevision(const nlohmann::json& v) {
+    if (v.is_number_integer()) return v.get<int64_t>();
+    if (v.is_string()) {
+        const auto s = v.get<std::string>();
+        if (!s.empty() && s.size() <= 18 && std::ranges::all_of(s, [](const unsigned char c) { return std::isdigit(c) != 0; }))
+            return std::stoll(s);
+    }
+    return std::nullopt;
+}
+
+}  // namespace
+
+namespace b2lifecycle {
+
+std::vector<LifecycleRule> fromNative(const nlohmann::json& rules, const nlohmann::json& bucketInfo) {
+    auto recorded = b2lRecorded(bucketInfo);
+    std::vector<bool> claimed(recorded.size(), false);
+    std::vector<LifecycleRule> out;
+    if (!rules.is_array()) return out;
+    for (const auto& r : rules) {
+        if (!r.is_object()) continue;
+        LifecycleRule rule;
+        bool ok = true;
+        rule.prefix = r.contains(kB2lPrefix) && r[kB2lPrefix].is_string() ? r[kB2lPrefix].get<std::string>() : std::string{};
+        if (!r.contains(kB2lPrefix) || !r[kB2lPrefix].is_string()) ok = false;
+        rule.expire_noncurrent_days = b2lDays(r, kB2lHide, ok);
+        rule.expire_current_days = b2lDays(r, kB2lUpload, ok);
+        rule.abort_incomplete_multipart_days = b2lDays(r, kB2lCancel, ok);
+        for (const auto& [k, v] : r.items())
+            if (k != kB2lPrefix && k != kB2lHide && k != kB2lUpload && k != kB2lCancel && !v.is_null()) ok = false;
+        rule.enabled = true;
+        rule.unmodeled = !ok;
+        rule.raw_json = r.dump();
+        rule.foreign = true;
+        if (ok)
+            for (size_t i = 0; i < recorded.size(); ++i) {
+                if (claimed[i] || !b2lSame(recorded[i], rule)) continue;
+                claimed[i] = true;
+                rule.id = recorded[i].id;
+                rule.foreign = false;
+                break;
+            }
+        if (rule.foreign) rule.id = "b2:" + (rule.prefix.empty() ? std::string("(all files)") : rule.prefix);
+        out.push_back(std::move(rule));
+    }
+    return out;
+}
+
+std::pair<nlohmann::json, nlohmann::json> toNative(const std::vector<LifecycleRule>& rules, const nlohmann::json& info) {
+    auto native = nlohmann::json::array();
+    auto record = nlohmann::json::array();
+    for (const auto& rule : rules) {
+        if (rule.foreign && !rule.raw_json.empty()) {
+            // Another application's rule (or one someone edited in the console): exactly as B2 listed it.
+            try {
+                native.push_back(nlohmann::json::parse(rule.raw_json));
+            } catch (const nlohmann::json::exception&) {
+                throw std::invalid_argument("lifecycle rule '" + rule.id + "' is not a Backblaze B2 rule");
+            }
+            continue;
+        }
+        if (!rule.enabled) throw std::invalid_argument("Backblaze B2 lifecycle rules have no disabled state");
+        if (rule.unmodeled) throw std::invalid_argument("lifecycle rule '" + rule.id + "' can't be written to Backblaze B2");
+        if (!rule.raw_xml.empty()) throw std::invalid_argument("lifecycle rule '" + rule.id + "' is not a Backblaze B2 rule");
+        for (const auto& v : {rule.expire_noncurrent_days, rule.expire_current_days, rule.abort_incomplete_multipart_days})
+            if (v && *v == 0) throw std::invalid_argument("Backblaze B2 lifecycle day values are 1 or more");
+        if (!rule.expire_noncurrent_days && !rule.expire_current_days && !rule.abort_incomplete_multipart_days)
+            throw std::invalid_argument("a Backblaze B2 lifecycle rule needs at least one day value");
+        auto j = b2lRuleJson(rule);
+        native.push_back(j);
+        if (!rule.foreign && isOwnedId(rule.id)) {
+            j["id"] = rule.id;
+            record.push_back(std::move(j));
+        }
+    }
+    auto outInfo = info.is_object() ? info : nlohmann::json::object();
+    if (record.empty()) outInfo.erase(kB2RuleRecordKey);
+    else outInfo[kB2RuleRecordKey] = nlohmann::json{{"v", 1}, {"rules", record}}.dump();
+    return {native, outInfo};
+}
+
+}  // namespace b2lifecycle
+
+const B2Admin::NativeSession& B2Admin::nativeSession() {
+    if (!session_) session_ = authorizeNative();
+    return *session_;
+}
+
+void B2Admin::rememberNativeBucket(const std::string& bucket, const nlohmann::json& b) {
+    NativeBucket nb;
+    nb.bucket_id = b.value("bucketId", "");
+    nb.revision = b.contains("revision") ? b["revision"] : nlohmann::json(nullptr);
+    if (b.contains("lifecycleRules") && b["lifecycleRules"].is_array()) nb.lifecycle_rules = b["lifecycleRules"];
+    if (b.contains("bucketInfo") && b["bucketInfo"].is_object()) nb.bucket_info = b["bucketInfo"];
+    buckets_[bucket] = std::move(nb);
+}
+
+const B2Admin::NativeBucket& B2Admin::listNativeBucket(const std::string& bucket) {
+    requireBucket(bucket);
+    const auto& session = nativeSession();
+    // Every bucket type: without bucketTypes B2 lists only allPublic, allPrivate and snapshot buckets.
+    const auto listed = nativeCall(session, "b2_list_buckets",
+                                   {{"accountId", session.account_id},
+                                    {"bucketName", bucket},
+                                    {"bucketTypes", nlohmann::json::array({"all"})}});
+    if (listed.contains("buckets") && listed["buckets"].is_array())
+        for (const auto& b : listed["buckets"])
+            if (b.is_object() && b.value("bucketName", "") == bucket && !b.value("bucketId", "").empty()) {
+                rememberNativeBucket(bucket, b);
+                return buckets_.at(bucket);
+            }
+    buckets_.erase(bucket);
+    throw ProviderError("b2_list_buckets does not list bucket '" + bucket + "' for this application key", "NoSuchBucket",
+                        404);
+}
+
+void B2Admin::putLifecycle(const std::string& bucket, const std::vector<LifecycleRule>& rules) {
+    requireBucket(bucket);
+    (void)b2lifecycle::toNative(rules, nlohmann::json::object());   // what B2 can't hold is refused before any request
+
+    const auto& session = nativeSession();
+    if (session.capabilities &&
+        std::ranges::find(*session.capabilities, std::string("writeBuckets")) == session.capabilities->end())
+        throw CapabilityMissing("writeBuckets",
+                                "the vault's Backblaze B2 application key may not change bucket '" + bucket +
+                                    "': setting its lifecycle rule needs the writeBuckets capability");
+    if (!buckets_.contains(bucket)) (void)listNativeBucket(bucket);
+    const auto current = buckets_.at(bucket);
+    const auto revision = b2lRevision(current.revision);
+    if (!revision)
+        throw ProviderError("b2_list_buckets gave no revision for bucket '" + bucket +
+                            "': Vaulthalla writes its lifecycle rules only conditionally (ifRevisionIs)");
+    const auto [native, info] = b2lifecycle::toNative(rules, current.bucket_info);
+
+    nlohmann::json answer;
+    try {
+        answer = nativeCall(session, "b2_update_bucket",
+                            {{"accountId", session.account_id},
+                             {"bucketId", current.bucket_id},
+                             {"lifecycleRules", native},
+                             {"bucketInfo", info},
+                             {"ifRevisionIs", *revision}});
+    } catch (const ProviderError& e) {
+        buckets_.erase(bucket);   // whatever happened, the next write reads the bucket again
+        if (e.http_status == 409)
+            throw ProviderError("bucket '" + bucket + "' changed since Vaulthalla read its lifecycle rules (" +
+                                    std::string(e.what()) + "); nothing was written: read it again and retry",
+                                e.code.empty() ? std::string("conflict") : e.code, 409);
+        throw;
+    }
+    if (answer.value("bucketName", bucket) == bucket && answer.contains("bucketId")) rememberNativeBucket(bucket, answer);
+    else buckets_.erase(bucket);
 }
 
 }

@@ -91,7 +91,7 @@ padmin::BucketConfiguration fullConfig() {
     c.mfa_delete = false;
     c.lifecycle = {{.id = "vaulthalla-abort", .enabled = true, .prefix = "",
                     .abort_incomplete_multipart_days = 7, .expire_current_days = 30, .expire_noncurrent_days = 60,
-                    .foreign = false, .unmodeled = false, .raw_xml = {}},
+                    .foreign = false, .unmodeled = false, .raw_xml = {}, .raw_json = {}},
                    theirRule()};
     c.notifications = {{.id = "vaulthalla-events", .destination = "arn:aws:sqs:us-east-2:123456789012:vh-events",
                         .destination_name = "vh-events", .events = {"s3:ObjectCreated:*"}, .prefix = "data/",
