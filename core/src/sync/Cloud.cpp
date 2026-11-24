@@ -377,25 +377,47 @@ void Cloud::sync() {
         estimate.remote_index_objects,
         estimate.archive_tier_downloads_skipped);
     bool remoteExecutionStarted = false;
+    // The operations that succeeded are recorded (remote index, manifest) once, however execution ends: a normal
+    // return, failed operations, the request budget running out after a phase, any exception. The next pass then
+    // plans only what is left; a vault with more to upload than one pass's budget converges over several passes
+    // instead of uploading the same first objects every time. A failed or refused operation never reaches the
+    // index, and a manifest names an object only through it.
+    bool recorded = false;
+    const auto recordCompleted = [&](const bool everyOperationSucceeded) {
+        if (recorded) return;
+        recorded = true;
+        if (everyOperationSucceeded) {
+            cloud->applyRemoteIndexMutation(plan);
+            return;
+        }
+        if (completedActions.empty()) return;
+        log::Registry::sync()->info("[CloudSync] Vault {}: recording the {} remote change(s) that completed",
+                                    engine->vault->id, completedActions.size());
+        cloud->applyRemoteIndexMutation(completedActions);
+    };
     try {
         remoteExecutionStarted = true;
         Executor::run(self, plan);
         event->computeDashboardStats();
-        // The operations that succeeded are recorded (remote index, manifest) even when others failed, so the next
-        // pass retries only the failures. Those never reach the index: a manifest names an object only through it.
-        if (event->num_failed_ops == 0) {
-            cloud->applyRemoteIndexMutation(plan);
-        } else if (!completedActions.empty()) {
-            log::Registry::sync()->warn("[CloudSync] Vault {}: {} operation(s) failed; recording the {} that succeeded",
-                                        engine->vault->id, event->num_failed_ops, completedActions.size());
-            cloud->applyRemoteIndexMutation(completedActions);
-        }
+        recordCompleted(event->num_failed_ops == 0);
         budgetService.commit(
             budgetDecision.reservations,
             budgetPriceEstimate.available
                 ? std::make_optional(budgetPriceEstimate.estimated_cost)
                 : std::optional<std::string>{});
     } catch (...) {
+        // What completed before the stop is recorded; a failure to record (the budget may refuse the manifest PUT
+        // too) is logged and never hides why the pass stopped. Index rows written before it stay.
+        try {
+            if (remoteExecutionStarted) recordCompleted(false);
+        } catch (const std::exception& e) {
+            log::Registry::sync()->warn("[CloudSync] Vault {}: recording the remote changes completed before the pass "
+                                        "stopped did not finish (what reached the index stays; the next pass publishes "
+                                        "it): {}", engine->vault->id, e.what());
+        } catch (...) {
+            log::Registry::sync()->warn("[CloudSync] Vault {}: recording the remote changes completed before the pass "
+                                        "stopped did not finish", engine->vault->id);
+        }
         // Once the executor starts, remote writes may already have happened; committing
         // the reservation is intentionally conservative for the shared budget ledger.
         if (remoteExecutionStarted) budgetService.commit(budgetDecision.reservations, std::nullopt);

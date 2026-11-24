@@ -7,8 +7,12 @@
   a success; scoped, interrupted and replaced tasks are not. Exceptions from startTask and the event save are logged
   and no longer leave runningFlag set. A stage that fails ends the pass; key-rotation exceptions are recorded as
   errors.
-- Sync: after a pass with failed operations, the uploads and remote deletes that succeeded are recorded in the remote
-  index and manifest (Cloud::completedActions).
+- Sync: the uploads and remote deletes that succeeded are recorded in the remote index and manifest once however
+  execution ends (Cloud::sync: normal return, failed operations, a request-budget stop after a phase, any exception;
+  Cloud::completedActions, filled per phase by Executor::run before the budget check, which also waits for the
+  operations already handed out when dispatching throws). A plan larger than the PUT budget converges over passes
+  instead of re-uploading the same objects. Operations refused by the budget are not errors: one warning, the pass is
+  STALLED (Local::processFutures, the Upload/Download/Delete tasks).
 - Sync events: sync_event.upsert and sync_throughput.upsert/accumulate cast their counter parameters to bigint (a pass
   over 2 GiB failed with "out of range for type integer"); Engine::newSyncEvent no longer fails a pass when the
   previous event cannot be saved.

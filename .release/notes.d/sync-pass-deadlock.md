@@ -16,6 +16,11 @@
 - **One failed upload no longer throws away the others.** The uploads and remote deletes that succeeded are recorded
   even when another operation of the pass failed, so the next pass retries only the failures instead of uploading
   everything again.
+- **A vault with more to upload than its request budget allows now catches up.** A pass stopped by its S3 request
+  budget (for example 1,000 PUTs with 1,984 files waiting) used to record none of the uploads it had made, so every
+  pass started over with the same files, adding a new version of each on a versioned bucket. Each pass now keeps what
+  it uploaded and the next one continues with the rest. Operations the budget refused are reported once, as a stall
+  with the budget's reason, instead of one error per file.
 - **Large passes are recorded.** A pass that moved more than 2 GiB failed to save its statistics (`value "…" is out
   of range for type integer`), and its vault then refused every later pass until a restart.
 - **`database.pool_size` is used.** It was read and ignored: every install ran with 4 database connections, and

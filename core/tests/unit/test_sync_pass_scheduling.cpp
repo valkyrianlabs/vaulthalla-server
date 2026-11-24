@@ -51,6 +51,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <set>
 #include <future>
 #include <memory>
 #include <string>
@@ -368,6 +369,94 @@ TEST_F(SyncPassSchedulingDb, AFailedUploadIsRetriedAloneAndTheTaskBacksOff) {
     expectRescheduled(task, queued, before, interval);
     EXPECT_TRUE(indexed(v, "/b.txt"));
     EXPECT_TRUE(plannedUploads(v).empty());
+}
+
+// More to upload than one pass's PUT budget (production: 1,984 pending, budget 1,000): each pass uploads what the
+// budget allows, records it although the budget stopped the pass, and the next pass uploads only the rest. On a
+// versioned bucket every object ends with exactly one version: nothing recorded is uploaded again.
+TEST_F(SyncPassSchedulingDb, APlanLargerThanThePutBudgetConvergesWithoutUploadingAnythingTwice) {
+    auto v = test_support::versioned::makeCloudVault(superUser, "spb", Versioning::Enabled, true);
+    const auto task = std::make_shared<sync::Cloud>(v.engine);
+    (*task)();
+    ASSERT_EQ(task->event->status, Status::SUCCESS) << task->event->error_message;
+
+    constexpr int kFiles = 8;
+    constexpr uint64_t kPutBudget = 3;
+    std::vector<std::string> keys;
+    for (int i = 0; i < kFiles; ++i) {
+        write(v, "/p" + std::to_string(i) + ".txt", "pending " + std::to_string(i));
+        keys.push_back(v.engine->objectKeyOf(*db::query::fs::File::getFileByPath(v.id(), "/p" + std::to_string(i) + ".txt")));
+    }
+    const auto uploaded = [&] {
+        std::set<std::string> out;
+        for (const auto& key : keys) {
+            const auto versions = v.bucket->history(key).size();
+            EXPECT_LE(versions, 1u) << key << " was uploaded again";
+            if (versions > 0) out.insert(key);
+        }
+        return out;
+    };
+
+    v.engine->remote_policy()->s3_request_budget.max_put_requests = kPutBudget;
+    std::set<std::string> before;
+    int passes = 0;
+    while (uploaded().size() < keys.size() && passes < 8) {
+        ++passes;
+        (*task)();
+        const auto after = uploaded();
+        EXPECT_TRUE(std::ranges::includes(after, before));
+        EXPECT_GT(after.size(), before.size()) << "pass " << passes << " uploaded nothing new ("
+                                               << sync::model::Event::toString(task->event->status) << ")";
+        EXPECT_LE(after.size() - before.size(), kPutBudget) << "pass " << passes;
+        EXPECT_NE(task->event->status, Status::ERROR) << "a budget stop is a stall: " << task->event->error_message;
+        EXPECT_EQ(task->consecutiveFailures, 0u);
+        if (after.size() < keys.size()) {
+            EXPECT_EQ(task->event->status, Status::STALLED);
+            const auto left = plannedUploads(v);
+            EXPECT_EQ(left.size(), keys.size() - after.size()) << "the next pass plans only what is left";
+        }
+        before = after;
+    }
+    v.engine->remote_policy()->s3_request_budget.max_put_requests.reset();
+    EXPECT_EQ(uploaded().size(), keys.size()) << "after " << passes << " passes";
+    EXPECT_LE(passes, (kFiles + static_cast<int>(kPutBudget) - 1) / static_cast<int>(kPutBudget) + 1);
+    EXPECT_TRUE(plannedUploads(v).empty());
+
+    (*task)();   // with the budget lifted: nothing to upload, the manifest catches up
+    EXPECT_EQ(task->event->status, Status::SUCCESS) << task->event->error_message;
+    for (const auto& key : keys) EXPECT_EQ(v.bucket->history(key).size(), 1u) << key;
+}
+
+// The pass stops in a later phase (here: the GET budget refuses the download that follows the uploads), by an
+// exception out of Executor::run: the uploads it completed are recorded all the same and not planned again.
+TEST_F(SyncPassSchedulingDb, APassStoppedAfterItsUploadsRecordsThem) {
+    const auto v = vault();
+    const auto task = std::make_shared<sync::Cloud>(v.engine);
+    (*task)();
+    ASSERT_EQ(task->event->status, Status::SUCCESS) << task->event->error_message;
+
+    write(v, "/up1.txt", "one");
+    write(v, "/up2.txt", "two");
+    // A remote-only object (another writer's): a sync-strategy pass downloads it, after its uploads.
+    auto remote = std::make_shared<fs::model::File>();
+    remote->vault_id = v.id();
+    remote->path = "/remote.txt";
+    remote->name = "remote.txt";
+    remote->size_bytes = 6;
+    remote->updated_at = std::time(nullptr);
+    (void)v.bucket->seed("remote.txt", std::string("remote"));
+    remote->remote_etag = v.bucket->current("remote.txt")->etag;
+    db::query::sync::RemoteObjectIndex::upsertFile(v.id(), remote, "manifest");
+
+    v.engine->remote_policy()->s3_request_budget.max_get_requests = 0;
+    (*task)();
+    v.engine->remote_policy()->s3_request_budget.max_get_requests.reset();
+    EXPECT_EQ(task->event->status, Status::STALLED) << task->event->error_message;
+    EXPECT_NE(task->event->stall_reason.find("GET"), std::string::npos) << task->event->stall_reason;
+    EXPECT_TRUE(task->event->error_message.empty()) << "refused operations are not errors: " << task->event->error_message;
+    EXPECT_TRUE(indexed(v, "/up1.txt"));
+    EXPECT_TRUE(indexed(v, "/up2.txt"));
+    EXPECT_TRUE(plannedUploads(v).empty()) << "the uploads before the stop are not planned again";
 }
 
 // A stage that fails ends the pass: nothing after it runs.

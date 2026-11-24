@@ -304,6 +304,7 @@ void Local::newEvent() {
 
 void Local::processFutures() {
     std::size_t failed = 0;
+    std::vector<std::string> failures;
     futureOutcomes.assign(futures.size(), false);
     for (std::size_t i = 0; i < futures.size(); ++i) {
         auto& f = futures[i];
@@ -312,21 +313,36 @@ void Local::processFutures() {
             const auto* ok = std::get_if<bool>(&result);
             if (ok && !*ok) {
                 ++failed;
-                log::Registry::sync()->error("[FSTask] Future failed");
+                failures.emplace_back();
             } else {
                 futureOutcomes[i] = true;
             }
         } catch (const std::exception& e) {
             ++failed;
-            log::Registry::sync()->error("[FSTask] Future failed: {}", e.what());
+            failures.emplace_back(e.what());
         } catch (...) {
             ++failed;
-            log::Registry::sync()->error("[FSTask] Future failed");
+            failures.emplace_back();
         }
     }
     futures.clear();
+    if (failed == 0) return;
 
-    if (failed > 0 && event && event->status != Event::Status::ERROR &&
+    // The request budget ran out: the operations it refused are simply not done (they are planned again next
+    // pass). The phase barrier stops the pass as STALLED with the budget's reason (Executor::run); one line here,
+    // not an error per object, and no ERROR status on top of the stall.
+    if (engine && engine->type() == StorageType::Cloud &&
+        std::static_pointer_cast<CloudEngine>(engine)->s3RequestMetrics().budget_exceeded) {
+        log::Registry::sync()->warn("[FSTask] Vault '{}': {} operation(s) not done: the S3 request budget is used up",
+                                    engine->vault ? engine->vault->id : 0u, failed);
+        return;
+    }
+
+    for (const auto& what : failures) {
+        if (what.empty()) log::Registry::sync()->error("[FSTask] Future failed");
+        else log::Registry::sync()->error("[FSTask] Future failed: {}", what);
+    }
+    if (event && event->status != Event::Status::ERROR &&
         event->status != Event::Status::STALLED &&
         event->status != Event::Status::CANCELLED) {
         handleError(fmt::format("{} async sync operation(s) failed", failed));
