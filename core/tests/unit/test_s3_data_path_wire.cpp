@@ -239,7 +239,12 @@ protected:
         std::filesystem::create_directories(scratch);
     }
 
-    void TearDown() override { std::filesystem::remove_all(scratch); }
+    void TearDown() override {
+        std::filesystem::remove_all(scratch);
+        // setForTesting overrides the protection set for the whole process, and reload() then keeps the override:
+        // a later suite in the same shard (UpstreamValidationTest) could not protect a bucket any more.
+        vh::storage::upstream::guard::clearForTesting();
+    }
 
     [[nodiscard]] std::string port() const { return std::to_string(server.port()); }
 
@@ -451,5 +456,6 @@ TEST(S3BufferPutDeadline, APutThatGetsNoAnswerFailsAtItsDeadline) {
     EXPECT_GE(took, std::chrono::milliseconds(1900));
     EXPECT_LT(took, std::chrono::seconds(20)) << "bounded by the deadline, not by the stall bound (60 s)";
     ::close(fd);
+    vh::storage::upstream::guard::clearForTesting();   // the override is process-wide (see S3DataPathWire::TearDown)
     static_assert(vh::storage::s3::kManifestRootPutDeadline == std::chrono::seconds(60));
 }
