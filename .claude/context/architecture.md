@@ -890,8 +890,8 @@ handed out as the same `shared_ptr` everywhere (sessions, engines, FUSE, HTTP, S
 publishes a new state into it, so every holder sees a committed change on its next read. Readers take one state per
 logical check (`User::state()`, or `User::authz()` for the user plus its live groups, read under a seqlock so a
 multi-object publication is seen whole or not at all). `authorizing()` is false for deactivated accounts and for
-tombstones (deleted accounts keep their object, with no roles); every resolver, the FUSE identity step and the ws
-router check it. Group membership lives on the member's state (`groups`, `joinedAt`); a group's own state has no
+tombstones (deleted accounts keep their object, with no roles) and for remote accounts (below); every resolver, the
+FUSE identity step and the ws router check it. Group membership lives on the member's state (`groups`, `joinedAt`); a group's own state has no
 member list, so a group-level change reaches members through the canonical group. State never carries a password
 hash. Writes: `createUser/updateUser/deleteUser/setPasswordHash/recordLogin/bindLinuxUid`, group CRUD and
 membership, and `mutate(Touched, fn)` for everything else (vault role assignments, overrides, role templates in
@@ -906,6 +906,22 @@ SQL). Lookups: `preload()` at startup loads everything; misses go to the databas
 remembered negatively until the next publication. The test schema reset calls `Manager::reset()`. Guard:
 `tools/contracts/test_identity_writes_contract.py` (identity row writers only in Manager.cpp, RBAC writers only
 inside `mutate`), `IdentitiesManagerDbTest`.
+
+**Remote accounts (server mirror phase 1b, migrations 158/159; `design/peers/identity.md`).** `users` and `groups` have
+`home_node`, `home_id` and `remote`: a remote row names a person or group of a linked server, for attribution only,
+by its home server's node id and its integer id there (both set on a remote row, both NULL on a local one, unique per
+home server); local ids are unchanged and there is no second, shared id on accounts, groups or roles.
+`UserState`/`GroupState` carry `homeNode`/`homeId`/`remote`; `ws`/JSON shapes do not (yet). `authorizing()` is false
+for a remote account (so every authentication path refuses it: password via `Loader::credentialsByName` (local only)
+and `signin::complete`, passkeys, refresh and session tokens, device sessions, the S3 gateway, connectors; `vh` finds
+no Linux uid for it), a remote group is left out of `User::authz()`, and names/Linux ids index local accounts only
+(`users.name`/`email`, `groups.name` unique `WHERE NOT remote`; `ON CONFLICT (name) WHERE NOT remote`). The database
+refuses a remote account with a password hash, Linux uid, protected flag or without both home columns
+(`users_remote_check`), a local account becoming remote (`vh_remote_account_guard`), and any credential, admin role or
+global policy row naming one (`vh_refuse_remote_account`: refresh_tokens, passkeys, TOTP, recovery codes, devices, S3
+gateway keys, connector and key-backup grants, admin_role_assignments, user_global_vault_policy). The account writers
+refuse to create or edit remote rows; nothing creates them yet (the link's principal stream will). Tests:
+`PermanentIdsDb*`, `RemoteAccounts*`, `SqlDeployerHistoryDb.PermanentIdsMigration158*`.
 
 **HTTP auth hot path.** Media seeking fires many small requests, so `session::Manager` skips the refresh-token DB
 lookup for 30 s after a successful validation of the same in-memory session (`validatedAt_` keyed by jti, dropped
@@ -1140,7 +1156,8 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   (fallbacks: root provider versions; segment provider version → older root → blind range; `blindRebuild` reads
   120-byte headers of `o/` only; `loadForRestore` says "freshness unverified: no checkpoint supplied"), `Store`
   (`storage::s3::ManifestStore` over `s3::Controller`, no `x-amz-meta-*`). `db::query::sync::Manifest` collects the DB into `Content`
-  (assigns `directories.uid` / `symlinks.uid` lazily; trash via `files_trashed.object_uid`; versions and tombstones from
+  (read-only, `SET TRANSACTION READ ONLY`: every folder, symlink and snapshot has its uid from its insert since migration
+  158; trash via `files_trashed.object_uid`, rows without one left out; versions and tombstones from
   `o/<uid>` rows of `upstream_object_version`) and keeps `remote_manifest_state` (manifest_key `.vaulthalla/root`:
   epoch, root hash, ETag, refused root, gc_at) and `remote_manifest_root` (last three roots' sids). The per-vault
   logic is `vl::vaultfmt::manifest::Session` (`Session.hpp`: publish and record, `verifyRemote` in both modes, repair, refusal,
@@ -1183,7 +1200,8 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   `ManifestChainVersionLog*` (test_manifest.cpp), `ManifestVersionLog*` (test_manifest_interleavings.cpp: scheduler,
   faults, broken order), DB `BucketCapabilityDbTest`, `VaultRecoverDb.OnABackblazeLike*`, live `LiveB2.*`.
 - **Manifest applier, items 1-3** (`design/sync/manifest-applier.md`, "As built"; migration 145): snapshot records
-  are named by `uid` (`recovery_snapshot.uid`, given by the collector like `directories.uid`, kept by a restore);
+  are named by `uid` (`recovery_snapshot.uid`, assigned at insert like `directories.uid` since migration 158, kept by a
+  restore);
   `SnapshotRecord::id` is only read from roots written before uids (key `snapshotKey`: uid, or `id:<n>`), so the first
   publish after the upgrade replaces those records with the same snapshots by uid. `<vl/vaultfmt/manifest/Reconcile.hpp>`:
   the pure `reconcile(base, theirs, ours)` (result tree, ordered plan of `Op`s with `ours` for compare-and-set,
@@ -1569,7 +1587,7 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 
 ## Database
 
-- PostgreSQL via libpqxx. The schema is `deploy/psql/000…115_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
+- PostgreSQL via libpqxx. The schema is `deploy/psql/000…159_*.sql`, applied in order (all in ONE transaction by `core/seed/include/SqlDeployer.hpp`) and installed to `/usr/share/vaulthalla/psql`.
   New migrations take the next number and must be idempotent against upgraded installs. SqlDeployer records sha256(raw bytes)
   per file and refuses to start on a mismatch, so **never edit a shipped migration**: 020/060/082 were edited in place and
   bricked upgrades (1.5.x→1.6.x crash loop on 060). Reviewed exceptions live in `kHistoricalMigrationChecksums` (accepted, recorded

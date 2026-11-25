@@ -126,9 +126,11 @@ void vh::db::Connection::initPreparedRecoveryLocal() const {
         extract(epoch FROM s.completed_at)::bigint AS completed_at, s.created_by, s.created_by_name, s.error
     )SQL";
 
+    // $8: the snapshot's uid (libsodium, migration 158), its identity in the manifest.
     conn_->prepare("recovery_snapshot_insert", R"SQL(
-        INSERT INTO recovery_snapshot (vault_id, name, root_path, root_type, root_entry_id, created_by, created_by_name)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO recovery_snapshot (vault_id, name, root_path, root_type, root_entry_id, created_by, created_by_name,
+                                       uid)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::uuid)
         RETURNING id
     )SQL");
 

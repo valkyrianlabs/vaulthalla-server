@@ -139,9 +139,11 @@ namespace vh::identities {
             view.user = state();
             if (view.user->authorizing()) {
                 view.groups.reserve(view.user->groups.size());
+                // A remote group's vault roles take no effect on this server (design/peers/identity.md: an entry
+                // for a remote account does nothing where it is remote).
                 for (const auto &group: view.user->groups) {
                     if (!group) continue;
-                    if (auto gs = group->state(); gs && !gs->deleted) view.groups.push_back(std::move(gs));
+                    if (auto gs = group->state(); gs && !gs->deleted && !gs->remote) view.groups.push_back(std::move(gs));
                 }
             }
             if (seq.load() == before) return view;
@@ -156,6 +158,9 @@ namespace vh::identities {
     bool User::isProtected() const { return state()->isProtected; }
     bool User::systemOnly() const { return state()->systemOnly; }
     bool User::deleted() const { return state()->deleted; }
+    std::optional<std::string> User::homeNode() const { return state()->homeNode; }
+    std::optional<uint32_t> User::homeId() const { return state()->homeId; }
+    bool User::remote() const { return state()->remote; }
 
     bool User::isSuperAdmin() const {
         const auto s = state();
@@ -226,6 +231,10 @@ namespace vh::identities {
         s.meta.deactivated_at = try_as_optional_timestamp(row, "deactivated_at");
 
         s.meta.is_active = try_as_optional<bool>(row, "is_active").value_or(true);
+
+        s.homeNode = try_as_optional_string(row, "home_node");
+        s.homeId = try_as_optional<uint32_t>(row, "home_id");
+        s.remote = try_as_optional<bool>(row, "remote").value_or(false);
         return s;
     }
 

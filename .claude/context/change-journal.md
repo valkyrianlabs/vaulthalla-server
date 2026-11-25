@@ -20,8 +20,9 @@ was an agent's, not Cooper's; this records the reviewed scope).
   descendant). The trash statement deletes the `files` row first, so a delete with no type row left is a file.
 - **Not journaled** (the `WHEN` clauses skip them without calling plpgsql): directory totals, `updated_at`,
   `last_modified_by`, `inode`, `base32_alias`, path-only updates (an ancestor's rename rewrites descendants' paths;
-  their id and parent stay), owner uid/gid, key rotation (IV and key version change together), the vault root, and
-  deletes of a deleted (soft or purged) vault's entries.
+  their id and parent stay), owner uid/gid, key rotation (IV and key version change together), the vault root,
+  deletes of a deleted (soft or purged) vault's entries, and a folder's or symlink's permanent id (`uid`, assigned at
+  insert since migration 158; its backfill of older rows writes no journal row and resets no vault).
 - **Revisions are commit order, without a lock on the write path.** Writers insert with `revision` NULL.
   `ChangeLog::sequence()` takes `fs_change_revision`'s row lock and numbers the committed pending rows in id order
   (batches of 10k). A transaction that commits later is numbered by a later pass, so a reader that has seen R never

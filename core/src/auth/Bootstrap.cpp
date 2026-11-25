@@ -171,7 +171,8 @@ std::optional<std::string> onSuperAdminPasswordChanged() {
 
 bool retireLegacyDefaultPassword() {
     const auto admin = db::Transactions::exec("auth::bootstrap::legacyCheck", [](pqxx::work& txn) {
-        const auto res = txn.exec("SELECT id, password_hash FROM users WHERE name = $1", pqxx::params{std::string{kSuperAdminName}});
+        const auto res = txn.exec("SELECT id, password_hash FROM users WHERE name = $1 AND NOT remote",
+                                  pqxx::params{std::string{kSuperAdminName}});
         return res.empty() ? std::optional<std::pair<unsigned int, std::string>>{}
                            : std::make_optional(std::make_pair(res[0][0].as<unsigned int>(), res[0][1].as<std::string>()));
     });

@@ -1,6 +1,7 @@
 #include "db/query/fs/Directory.hpp"
 #include "db/Transactions.hpp"
 #include "fs/model/Directory.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "db/encoding/u8.hpp"
 #include "fs/model/Path.hpp"
 
@@ -38,8 +39,11 @@ unsigned int Directory::upsertDirectory(const DirPtr& directory) {
         p.append(directory->size_bytes);
         p.append(directory->file_count);
         p.append(directory->subdirectory_count);
+        p.append(vh::crypto::id::toUuid(directory->uid.value_or(vh::crypto::id::newObjectUid())));
 
-        const auto id = txn.exec(pqxx::prepped{"upsert_directory"}, p).one_field_ref().as<unsigned int>();
+        const auto row = txn.exec(pqxx::prepped{"upsert_directory"}, p).one_row();
+        const auto id = row["fs_entry_id"].as<unsigned int>();
+        directory->uid = vh::crypto::id::fromUuid(row["uid"].as<std::string>());
 
         addToAncestorStats(txn, directory->parent_id, 0, 0, exists ? 0 : 1); // a new subdirectory
 
@@ -51,56 +55,6 @@ bool Directory::isDirectoryEmpty(unsigned int id) {
     return Transactions::exec("Directory::isDirectoryEmpty", [&](pqxx::work& txn) -> bool {
         const auto res = txn.exec(pqxx::prepped{"is_dir_empty"}, id);
         return res.one_field_ref().as<bool>();
-    });
-}
-
-void Directory::moveDirectory(const DirPtr& directory, const std::filesystem::path& newPath, unsigned int userId) {
-    if (!directory) throw std::invalid_argument("Directory cannot be null");
-    if (!newPath.string().starts_with("/")) throw std::invalid_argument("New path must start with '/'");
-
-    const auto commonPath = vh::fs::model::common_path_prefix(directory->path, newPath);
-
-    Transactions::exec("Directory::moveDirectory", [&](pqxx::work& txn) {
-        // update parents of the directory up to the common path
-        std::optional<unsigned int> parentId = directory->parent_id;
-        std::filesystem::path path = directory->path;
-        while (parentId && path != commonPath) {
-            pqxx::params stats_params{parentId, -static_cast<int>(directory->size_bytes), -static_cast<int>(directory->file_count), 0};
-            txn.exec(pqxx::prepped{"update_dir_stats"}, stats_params);
-            const auto row = txn.exec(pqxx::prepped{"get_fs_entry_parent_id_and_path"}, parentId).one_row();
-            parentId = row["parent_id"].as<std::optional<unsigned int>>();
-            path = row["path"].as<std::string>();
-        }
-
-        // Update the directory's path and parent_id
-        directory->path = newPath;
-        pqxx::params search_params{userId, to_utf8_string(newPath.parent_path().u8string())};
-        directory->parent_id = txn.exec(pqxx::prepped{"get_fs_entry_id_by_path"}, search_params).one_field_ref().as<unsigned int>();
-        directory->last_modified_by = userId;
-
-        pqxx::params p;
-        p.append(directory->vault_id);
-        p.append(directory->parent_id);
-        p.append(directory->name);
-        p.append(directory->created_by);
-        p.append(directory->last_modified_by);
-        p.append(to_utf8_string(directory->path.u8string()));
-        p.append(directory->size_bytes);
-        p.append(directory->file_count);
-        p.append(directory->subdirectory_count);
-
-        txn.exec(pqxx::prepped{"upsert_directory"}, p);
-
-        // Update parent directories stats
-        parentId = directory->parent_id;
-        path = directory->path;
-        while (parentId && path != commonPath) {
-            pqxx::params stats_params{parentId, directory->size_bytes, directory->file_count, 0}; // Increment size_bytes and file_count
-            txn.exec(pqxx::prepped{"update_dir_stats"}, stats_params);
-            const auto nextRow = txn.exec(pqxx::prepped{"get_fs_entry_parent_id_and_path"}, parentId).one_row();
-            parentId = nextRow["parent_id"].as<std::optional<unsigned int>>();
-            path = nextRow["path"].as<std::string>();
-        }
     });
 }
 

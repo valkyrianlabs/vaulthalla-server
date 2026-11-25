@@ -82,14 +82,15 @@ bool SqlDeployer::filenameExists(pqxx::work& txn, const std::string& filename, s
 
 namespace {
 
-// One table's missing uids, 10,000 rows per statement. Ids and uids travel as array literals (integers and UUID text
-// need no quoting).
-void assignUids(pqxx::work& txn, const std::string& table, const std::string& key, const std::string& column) {
+// One table's missing uids, 10,000 rows per statement: rows whose `column` is NULL and that match `filter` (SQL over
+// the table's own columns). Ids and uids travel as array literals (integers and UUID text need no quoting).
+void assignUids(pqxx::work& txn, const std::string& table, const std::string& key, const std::string& column,
+                const std::string& filter = "TRUE") {
     constexpr int kBatch = 10000;
     std::size_t assigned = 0;
     while (true) {
-        const auto rows = txn.exec(fmt::format("SELECT {0} FROM {1} WHERE {2} IS NULL ORDER BY {0} LIMIT {3}",
-                                               key, table, column, kBatch));
+        const auto rows = txn.exec(fmt::format("SELECT {0} FROM {1} WHERE {2} IS NULL AND ({4}) ORDER BY {0} LIMIT {3}",
+                                               key, table, column, kBatch, filter));
         if (rows.empty()) break;
         std::string ids = "{", uids = "{";
         for (const auto& row : rows) {
@@ -102,7 +103,7 @@ void assignUids(pqxx::work& txn, const std::string& table, const std::string& ke
         }
         ids += '}';
         uids += '}';
-        txn.exec(fmt::format("UPDATE {1} t SET {2} = u.uid FROM unnest($1::int[], $2::uuid[]) AS u(id, uid) "
+        txn.exec(fmt::format("UPDATE {1} t SET {2} = u.uid FROM unnest($1::bigint[], $2::uuid[]) AS u(id, uid) "
                              "WHERE t.{0} = u.id AND t.{2} IS NULL", key, table, column),
                  pqxx::params{ids, uids});
         assigned += rows.size();
@@ -116,6 +117,19 @@ void assignUids(pqxx::work& txn, const std::string& table, const std::string& ke
 void assignObjectUids(pqxx::work& txn) {
     assignUids(txn, "vault", "id", "uid");
     assignUids(txn, "files", "fs_entry_id", "object_uid");
+}
+
+void assignPermanentIds(pqxx::work& txn) {
+    // Folders, symlinks and snapshots of every vault: libsodium, like files. Their triggers (uid immutability, which
+    // allows NULL to a uid; the change journal, on insert or on a symlink's target only) ignore the assignment.
+    assignUids(txn, "directories", "fs_entry_id", "uid");
+    assignUids(txn, "symlinks", "fs_entry_id", "uid");
+    assignUids(txn, "recovery_snapshot", "id", "uid");
+
+    // Trashed files that never recorded their object uid, except on opaque_v1 vaults (158_permanent_ids.sql).
+    assignUids(txn, "files_trashed", "id", "object_uid",
+               "NOT EXISTS (SELECT 1 FROM s3 WHERE s3.vault_id = files_trashed.vault_id "
+               "AND s3.storage_layout = 'opaque_v1')");
 }
 
 SqlDeployReport SqlDeployer::applyDir(pqxx::work& txn, const fs::path& dir) {

@@ -26,7 +26,6 @@ public:
 
     [[nodiscard]] static bool directoryExists(unsigned int vaultId, const std::filesystem::path& relPath);
 
-    static void moveDirectory(const DirPtr& directory, const std::filesystem::path& newPath, unsigned int userId);
 
     static DirPtr getDirectoryByPath(unsigned int vaultId, const std::filesystem::path& relPath);
 

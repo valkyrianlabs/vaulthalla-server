@@ -757,6 +757,7 @@ int Filesystem::copy(const CopyContext& ctx) {
             if (item.source->isDirectory()) {
                 auto dir = std::make_shared<Directory>(*std::static_pointer_cast<Directory>(item.source));
                 stamp(*dir);
+                dir->uid.reset();             // a copy is a new folder: upsertDirectory draws its own uid
                 dir->inode = cache->assignInode(item.to);
                 dir->size_bytes = 0;          // totals arrive with each copied child
                 dir->file_count = 0;
@@ -767,6 +768,7 @@ int Filesystem::copy(const CopyContext& ctx) {
             } else if (item.source->isSymlink()) {
                 auto link = std::make_shared<Symlink>(*std::static_pointer_cast<Symlink>(item.source));
                 stamp(*link);
+                link->uid.reset();            // a copy is a new symlink: upsertSymlink draws its own uid
                 link->inode = cache->getOrAssignInode(item.to);
                 link->size_bytes = link->target.size();
                 link->id = db::query::fs::Symlink::upsertSymlink(link);

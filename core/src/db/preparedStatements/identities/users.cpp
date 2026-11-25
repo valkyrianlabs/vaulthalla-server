@@ -5,7 +5,8 @@ void vh::db::Connection::initPreparedUsers() const {
                    "INSERT INTO users (name, email, password_hash, is_active, linux_uid, last_modified_by) "
                    "VALUES ($1, $2, $3, $4, $5, $6) RETURNING id");
 
-    conn_->prepare("user_exists", "SELECT EXISTS(SELECT 1 FROM users WHERE name = $1) AS exists");
+    // Local accounts: a remote account may share a name with one (migration 158).
+    conn_->prepare("user_exists", "SELECT EXISTS(SELECT 1 FROM users WHERE name = $1 AND NOT remote) AS exists");
 
     // Never the password hash: that is update_user_password's alone.
     conn_->prepare("update_user",
@@ -19,6 +20,7 @@ void vh::db::Connection::initPreparedUsers() const {
 
     conn_->prepare("update_user_last_login", "UPDATE users SET last_login = NOW() WHERE id = $1");
 
-    conn_->prepare("admin_user_exists", "SELECT EXISTS(SELECT 1 FROM users WHERE name = 'admin') AS exists");
+    conn_->prepare("admin_user_exists",
+                   "SELECT EXISTS(SELECT 1 FROM users WHERE name = 'admin' AND NOT remote) AS exists");
 
 }

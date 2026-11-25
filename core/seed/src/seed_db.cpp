@@ -147,7 +147,7 @@ unsigned int upsertBootstrapPrincipal(
                 system_only
             )
             VALUES ($1, $2, $3, TRUE, $4, $5, $6)
-            ON CONFLICT (name) DO UPDATE SET
+            ON CONFLICT (name) WHERE NOT remote DO UPDATE SET
                 email       = COALESCE(users.email, EXCLUDED.email),
                 is_active   = TRUE,
                 linux_uid   = EXCLUDED.linux_uid,
@@ -180,7 +180,7 @@ unsigned int upsertBootstrapAdmin(
                 system_only
             )
             VALUES ('admin', NULL, $1, TRUE, TRUE, FALSE)
-            ON CONFLICT (name) DO UPDATE SET
+            ON CONFLICT (name) WHERE NOT remote DO UPDATE SET
                 is_active   = TRUE,
                 linux_uid   = CASE WHEN users.linux_uid = 0 THEN NULL ELSE users.linux_uid END,
                 protected   = TRUE,
@@ -530,7 +530,8 @@ void vh::seed::reconcileSystemPrincipals() {
     // only for the principals that don't exist yet: after the first boot, none.
     const auto existing = db::Transactions::exec("initdb::existingSystemPrincipals", [](pqxx::work& txn) {
         std::set<std::string> names;
-        for (const auto row : txn.exec("SELECT name FROM users WHERE name IN ('root', 'system', 'admin')"))
+        for (const auto row :
+             txn.exec("SELECT name FROM users WHERE name IN ('root', 'system', 'admin') AND NOT remote"))
             names.insert(row[0].as<std::string>());
         return names;
     });

@@ -1,4 +1,5 @@
 #include "db/query/recovery/Snapshot.hpp"
+#include "crypto/id/ObjectUid.hpp"
 
 #include "db/Rows.hpp"
 #include "db/Transactions.hpp"
@@ -58,7 +59,8 @@ int64_t Snapshot::create(pqxx::work& txn, const NewSnapshot& s) {
     try {
         const auto res = sub.exec(pqxx::prepped{"recovery_snapshot_insert"},
                                   pqxx::params{s.vault_id, s.name, s.root_path, vh::recovery::to_string(s.root_type),
-                                               s.root_entry_id, s.created_by, s.created_by_name});
+                                               s.root_entry_id, s.created_by, s.created_by_name,
+                                               vh::crypto::id::toUuid(vh::crypto::id::newObjectUid())});
         const auto id = res.one_row_ref()["id"].as<int64_t>();
         sub.commit();
         return id;

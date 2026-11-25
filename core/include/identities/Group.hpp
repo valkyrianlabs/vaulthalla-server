@@ -38,6 +38,12 @@ struct GroupState {
 
     RoleAssignments roles{};
 
+    // A remote group (migration 158; see UserState): its home server's node id and its id there. Its vault roles take
+    // no effect here: an authorization view leaves it out (User::authz).
+    std::optional<std::string> homeNode{std::nullopt};
+    std::optional<uint32_t> homeId{std::nullopt};
+    bool remote = false;
+
     bool deleted = false;
     uint64_t revision = 0;
 };
@@ -60,6 +66,7 @@ public:
     [[nodiscard]] std::optional<unsigned int> linuxGid() const;
     [[nodiscard]] std::optional<std::string> description() const;
     [[nodiscard]] bool deleted() const;
+    [[nodiscard]] bool remote() const;
 
     void replaceDetachedState(GroupState next);
 

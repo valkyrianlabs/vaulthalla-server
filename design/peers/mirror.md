@@ -44,7 +44,7 @@ Four code spikes ran before this document was written. Their results shape the d
 2. **Folders and symlinks have no permanent id on local vaults.** `directories.uid` and `symlinks.uid` are nullable
    and are filled only when a manifest is collected for an encrypted bucket vault
    (`deploy/psql/125_manifest_v2.sql:53-56`, `core/src/db/query/sync/Manifest.cpp:65-86`). `files.object_uid` and
-   `vault.uid` are NOT NULL everywhere.
+   `vault.uid` are NOT NULL everywhere. (Resolved in phase 1b: "Permanent ids for every entry" below.)
 3. **Sealed bytes are portable for every vault type.** Every local backing file is ciphertext, including the local
    copies of an S3 vault whose bucket holds plaintext. A VHF1 header binds the vault uid, object uid, key version
    and salt and nothing host-specific. Files still in the older `gcm0` format bind nothing and are not portable
@@ -102,7 +102,8 @@ vault_replication_log (
   state         jsonb   not null,       -- the entry as this transaction left it (below)
   entry_hash    bytea,                  -- of the new state; NULL for a removal
   prev_hash     bytea,                  -- of the state it replaced; NULL for a creation
-  actor_uid     uuid,
+  actor_node    text,                   -- the acting account's home server (NULL: this one) and its id there
+  actor_id      integer,
   origin        text,                   -- a mirror's request id when the change was submitted by it
   primary key (vault_id, term, seq)
 )
@@ -134,6 +135,15 @@ vault_replication_log (
 A migration assigns `directories.uid` and `symlinks.uid` at insert for every vault, backfills existing rows and
 trashed rows, and makes the columns NOT NULL. The lazy assignment in `Manifest::collect` is removed. This is a
 prerequisite for everything below, and it also benefits attach-remote and the manifest.
+
+As built (phase 1b, migrations 158/159): every insert of a folder, symlink or snapshot draws its uid from libsodium
+(`db::query::fs::Directory`, `::Symlink`, `db::query::recovery::Snapshot`, the applier and vault restore, which already
+did); 158's data step backfilled existing rows without touching a uid that was set; 159 made `directories.uid`,
+`symlinks.uid` and `recovery_snapshot.uid` (the snapshots' lazy assignment went too) NOT NULL. `Manifest::collect`
+runs in a read-only transaction. Trashed files: a row without `object_uid` got one, except on an opaque_v1 vault,
+where the bucket names the trashed object by a uid the database no longer holds (rows from before 125); those keep
+NULL, stay out of the manifest as before, and are still restored and purged by path. `files_trashed.object_uid` stays
+nullable for them (deviation from "NOT NULL" for trash).
 
 ## Starting a mirror
 
@@ -229,7 +239,8 @@ each file into memory. A mirror that is unreachable blocks step 2; the core's ad
 
 ## A change made on the mirror
 
-1. **Local.** The mirror checks the person's permission against the shared access list, applies the change locally,
+1. **Local.** The mirror checks that the person is allowed by the link's policy (a super admin of the mirror by
+   default, or an account the core added; `identity.md`) and within the server's role, applies the change locally,
    and records it in `mirror_pending` (vault, entry uid, operation, the generation it was based on, the new
    generation, the actor's uid, the origin). People on the mirror see it at once.
 2. **Contents first.** For a new or changed file the mirror sends the sealed bytes to the core's lane. The core
@@ -238,7 +249,7 @@ each file into memory. A mirror that is unreachable blocks step 2; the core's ad
    had applied, and the operations by uid with the generation each was based on.
 4. **The core executes it** through the operation layer as that person:
    - the peer's vault role is checked first, as a ceiling;
-   - then the person's own permission, from the access list;
+   - then, when the acting account is one the core added to the policy, that account's role;
    - then quota, a name clash (`RenameMode::NoReplace`) and the base generation (`expected_source_id`);
    - a file is committed from the staged bytes (`NewFileContext::sealed`), so the core never has a row for a
      mirror's file without its contents;

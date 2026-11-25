@@ -76,6 +76,14 @@ namespace vh::identities {
         bool isProtected = false;
         bool systemOnly = false;
 
+        // A remote account (migration 158, design/peers/identity.md) names a person of a linked server, for
+        // attribution only: by its home server's node id and its integer id there (users.home_node, home_id; both
+        // set on a remote account, both nullopt on a local one). It never authorizes (authorizing() below), whatever
+        // else the state records.
+        std::optional<std::string> homeNode{std::nullopt};
+        std::optional<uint32_t> homeId{std::nullopt};
+        bool remote = false;
+
         RoleAssignments roles{};
         std::vector<std::shared_ptr<Group>> groups{};          // canonical groups (live state, see Group)
         std::unordered_map<uint32_t, std::time_t> joinedAt{};  // group id -> membership start
@@ -84,9 +92,11 @@ namespace vh::identities {
         bool deleted = false;    // tombstone: the account no longer exists
         uint64_t revision = 0;   // identity_revision the state was read at (0: never persisted)
 
-        // An account that may be authorized at all: exists and is active. Every authorization accessor answers
-        // "no" for anything else, whatever roles the state still records for display.
-        [[nodiscard]] bool authorizing() const noexcept { return !deleted && meta.is_active; }
+        // An account that may be authorized at all: exists, is active and is local (never a remote account). Every
+        // authorization accessor answers "no" for anything else, whatever roles the state still records for display,
+        // and every authentication path (password, passkey, session and refresh token, device, the S3 gateway,
+        // connectors) refuses it: this is the one place a remote account is kept from signing in or acting.
+        [[nodiscard]] bool authorizing() const noexcept { return !deleted && meta.is_active && !remote; }
 
         // Role shape, regardless of whether the account is authorizing (used to judge an account as a target).
         [[nodiscard]] bool hasSuperAdminRole() const;
@@ -138,6 +148,9 @@ namespace vh::identities {
         [[nodiscard]] bool isProtected() const;
         [[nodiscard]] bool systemOnly() const;
         [[nodiscard]] bool deleted() const;
+        [[nodiscard]] std::optional<std::string> homeNode() const;
+        [[nodiscard]] std::optional<uint32_t> homeId() const;
+        [[nodiscard]] bool remote() const;
 
         // Authorization: false / deny-all unless the account is authorizing.
         [[nodiscard]] bool isAdmin() const;

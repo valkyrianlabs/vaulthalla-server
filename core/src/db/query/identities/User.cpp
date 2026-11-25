@@ -34,6 +34,10 @@ namespace vh::db::query::identities {
             if (user.isProtected || user.systemOnly)
                 throw std::runtime_error("protected/system-only user flags are bootstrap-only");
 
+            // Remote accounts are made by the link's principal stream (a later phase), never by an account write.
+            if (user.remote || user.homeNode || user.homeId)
+                throw std::runtime_error("remote accounts are created only by a linked server's directory");
+
             if (user.meta.linux_uid && *user.meta.linux_uid == 0)
                 throw std::runtime_error("linux_uid 0 is reserved for the root principal");
         }
@@ -41,7 +45,7 @@ namespace vh::db::query::identities {
         void guardNormalUserUpdate(pqxx::work& txn, const unsigned int id, const State& user) {
             const auto res = txn.exec(
                 R"SQL(
-                    SELECT u.id, u.protected
+                    SELECT u.id, u.protected, u.remote
                     FROM users u
                     WHERE u.id = $1
                 )SQL",
@@ -53,6 +57,10 @@ namespace vh::db::query::identities {
 
             if (rowBool(res.one_row_ref(), "protected"))
                 throw std::runtime_error("protected users cannot be updated through normal user paths");
+
+            // A remote account is its home server's: it changes only through that server's directory.
+            if (rowBool(res.one_row_ref(), "remote"))
+                throw std::runtime_error("remote accounts change only on their home server");
 
             if (user.isProtected || user.systemOnly)
                 throw std::runtime_error("protected/system-only user flags are bootstrap-only");
@@ -72,12 +80,13 @@ namespace vh::db::query::identities {
                 throw std::runtime_error("protected users cannot be deleted");
         }
 
-        bool systemOnlyUser(pqxx::work& txn, const unsigned int userId) {
+        // System-only and remote accounts never hold a password.
+        bool passwordlessUser(pqxx::work& txn, const unsigned int userId) {
             const auto res = txn.exec(
-                "SELECT system_only FROM users WHERE id = $1",
+                "SELECT system_only, remote FROM users WHERE id = $1",
                 pqxx::params{userId}
             );
-            return !res.empty() && rowBool(res.one_row_ref(), "system_only");
+            return !res.empty() && (rowBool(res.one_row_ref(), "system_only") || rowBool(res.one_row_ref(), "remote"));
         }
     }
 
@@ -137,7 +146,7 @@ namespace vh::db::query::identities {
     bool User::authenticateUser(const std::string &name, const std::string &password) {
         return Transactions::exec("User::authenticateUser", [&](pqxx::work &txn) -> bool {
             const auto res = txn.exec(
-                "SELECT password_hash, system_only FROM users WHERE name = $1",
+                "SELECT password_hash, system_only FROM users WHERE name = $1 AND NOT remote",
                 pqxx::params{name}
             );
 
@@ -151,8 +160,8 @@ namespace vh::db::query::identities {
 
     void User::updateUserPassword(const unsigned int userId, const std::string &passwordHash) {
         Transactions::exec("User::updateUserPassword", [&](pqxx::work &txn) {
-            if (systemOnlyUser(txn, userId))
-                throw std::runtime_error("system-only users cannot receive normal user passwords");
+            if (passwordlessUser(txn, userId))
+                throw std::runtime_error("system-only and remote users cannot receive normal user passwords");
 
             const auto res = txn.exec(
                 pqxx::prepped{"update_user_password"},

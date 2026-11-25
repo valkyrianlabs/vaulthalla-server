@@ -1,11 +1,16 @@
 #pragma once
 
 #include "Entry.hpp"
+#include "crypto/id/ObjectUid.hpp"
+#include <optional>
 #include "db/Fwd.hpp"
 
 namespace vh::fs::model {
     struct Symlink final : Entry {
         std::string target;
+        // symlinks.uid (migration 158): the link's permanent id (see Directory::uid). Drawn by
+        // db::query::fs::Symlink::upsertSymlink when the row is created.
+        std::optional<vh::crypto::id::ObjectUid> uid;
 
         Symlink() = default;
 
