@@ -265,8 +265,8 @@ advertises it while it is off:
   Link a server. `peer.list {all: true}` every 15 s in `PeerTable` (unlinked rows behind "Show unlinked"): name, health
   (`model.ts` `healthText`: Connected with since / who dialled / round trip / version, "other protocol" as a warning,
   Not connected with the last error and next try, unknown while nothing is known, never healthy by guess), node id
-  (12 characters), key (16 hex, copy the full one), "Code compared by" (`compared_by`; `desktop` reads "Desktop or a
-  pinned key", since the server records it whenever `expect_spki` was given), version, linked date. Rename
+  (12 characters), key (16 hex, copy the full one), "Code compared by" (`compared_by`: "A person" or "Desktop", from the
+  channel of the call that made the link, never from whether a key was pinned), version, linked date. Rename
   (`RenamePeerDialog`, lazy, `peer.rename {peer: id}`) and Unlink (`confirm()` saying the other server keeps nothing it
   can use to reconnect, that it is told, and that linking again takes a new pairing; `peer.unlink {peer: id}`).
 - **Accept a link** (`AcceptLinkDialog`, `next/dynamic`, mounted while open): `peer.pairing.open` on mount (this server's

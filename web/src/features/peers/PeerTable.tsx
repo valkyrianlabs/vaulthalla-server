@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/Field'
 import { confirm } from '@/components/ui/Confirm'
 import { notify } from '@/components/ui/Toast'
 import { BanIcon, PenIcon } from '@/components/ui/icons'
-import { COMPARED_BY, COMPARED_BY_HINT, PEERS_COPY } from '@/features/peers/copy'
+import { COMPARED_BY, PEERS_COPY } from '@/features/peers/copy'
 import {
   PEER_READS,
   byStatus,
@@ -129,11 +129,7 @@ export const PeerTable = ({ peers, empty }: { peers: LinkedPeer[]; empty: React.
       key: 'compared',
       header: 'Code compared by',
       sortValue: p => p.compared_by,
-      cell: p => (
-        <span title={COMPARED_BY_HINT[p.compared_by]} data-testid="peer-compared-by">
-          {COMPARED_BY[p.compared_by] ?? p.compared_by}
-        </span>
-      ),
+      cell: p => <span data-testid="peer-compared-by">{COMPARED_BY[p.compared_by] ?? p.compared_by}</span>,
       hideBelow: 'xl',
     },
     {

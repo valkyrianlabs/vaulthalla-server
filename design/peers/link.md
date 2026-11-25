@@ -234,9 +234,9 @@ CLI: `vh peer pair`, `vh peer link <address> [--fingerprint <hex>]`, `vh peer li
 
 ## Audit events
 
-`peer.pairing.open`, `peer.link.request`, `peer.link` (both sides, with the peer's node id and fingerprint and how
-the code was compared: person or Desktop), `peer.link.denied`, `peer.unlink`, `peer.identity.rotate`,
-`peer.connection` (up or down, at most one per minute per peer).
+`peer.pairing.open`, `peer.link.request`, `peer.link` (both sides, with the peer's node id and fingerprint, how
+the code was compared: person or Desktop, and as built whether a key was pinned), `peer.link.denied`, `peer.unlink`,
+`peer.identity.rotate`, `peer.connection` (up or down, at most one per minute per peer).
 
 ## Invariants (each gets a test)
 
@@ -288,7 +288,13 @@ the owner's instruction to build without waiting for review; compatibility polic
   A writes its row only once `peer.pair.status` says approved; if A cannot write it then (a crash, a conflict), B keeps
   a row A doesn't have, and an admin unlinks it on B. B closes the window when it approves.
 - **The brokered check on B** (`expect_spki` on `peer.pairing.approve`) is applied before the code: another key denies
-  the request whatever the code. `compared_by` is `desktop` whenever `expect_spki` was given.
+  the request whatever the code.
+- **`compared_by` follows the channel, not the pin.** It records who compared the code, from the session of the call
+  that made the link on each side (`peer.pairing.approve` on the accepting side; `peer.link.start` on the dialling side,
+  carried on the attempt until its row is written): `desktop` over a full-access device session (the brokered path,
+  where Desktop makes both calls), `person` from the console or the host socket, also when that person pinned the
+  other key. Whether a key was pinned (`expect_spki`) is recorded only in the `peer.link` audit event's details as
+  `pinned`. No column for it.
 - **Who dials.** Both ends dial a live row's endpoints when it has no connection, loopback included (two servers on one
   host); a row with no endpoints yet (the accepting side before the first peer.endpoints) waits to be dialled. Backoff
   1 s to 2 min with full jitter. A newer connection from the same dialler replaces the older one (it reconnected); the

@@ -234,7 +234,7 @@ test.describe.serial('linked servers', () => {
     const office = page.getByRole('row', { name: /office/ })
     await expect(office.getByTestId('peer-health-label')).toHaveText('Not connected')
     await expect(office.getByTestId('peer-health-facts')).toContainText('connection refused · next try ')
-    await expect(office.getByTestId('peer-compared-by')).toHaveText('Desktop or a pinned key')
+    await expect(office.getByTestId('peer-compared-by')).toHaveText('Desktop')
     // Unlinked rows stay listed behind a switch.
     await expect(page.getByRole('row', { name: /old-box/ })).toHaveCount(0)
     await page.getByTestId('peers-show-unlinked').check()

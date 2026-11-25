@@ -6,3 +6,7 @@
   `{enabled}`: the one `peer.*` command that doesn't refuse with `peers_experimental` while the switch is off, so a
   console or Desktop can leave linked servers out. Additive; an agent is refused (`peer_forbidden`, as for every
   `peer.*` command) and `vh peer` stays out of the MCP catalog.
+- Linked servers: a link's `compared_by` now records who compared the code, from the channel of the call that made
+  it on each side (`desktop` over a full-access device session, `person` from the console or `vh`), instead of
+  `desktop` whenever a key was pinned; the `peer.link` audit event carries `pinned` (true when `expect_spki` was
+  given).

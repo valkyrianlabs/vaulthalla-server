@@ -524,8 +524,10 @@ the console reads to leave the Linked servers page out (`web-client.md`, "Linked
   side: `peer.pairing.open|close|pending|approve {expect_spki?}|deny`; the dialling side: `peer.link.start {endpoints,
   expect_spki?}` (a thread per attempt in `LinkService::runAttempt`: dial, request, confirm, code, poll status, write
   its row on approval), `peer.link.status|cancel`. `vh peer pair|pending|approve|deny|link|list|info|rename|unlink`;
-  the console's Linked servers page drives the same commands. `compared_by` is `desktop` whenever `expect_spki` was
-  given, also when a person entered the key (console, `--fingerprint`).
+  the console's Linked servers page drives the same commands. `compared_by` records who compared the code, from the
+  channel of the call that made the link on that side (`peer.pairing.approve` accepting, `peer.link.start` dialling,
+  carried on the `LinkAttempt`): `desktop` over a full-access device session, `person` from the console or the host
+  socket; whether a key was pinned (`expect_spki`) is only in the `peer.link` audit details as `pinned`.
 - **Who may** (`ops::peers`): super admins only; Host free; Web with device.trust on peer.pairing.approve and
   peer.link.start (`stepup::requireForServerLink`); a full-access direct device on RBAC alone (audited
   auth.stepup.grant method device_session, recovery cooldown still applies); Agent (MCP, `vh mcp`, scoped devices,
@@ -543,12 +545,12 @@ the console reads to leave the Linked servers page out (`web-client.md`, "Linked
   switch transaction revokes every live row that did not store it; the links then reconnect under the new key (the
   peer promotes its next pin). `vh secret device-identity rotate --revoke-peers` announces nothing and drops every
   link. Attestation and wrap keys have no rotation path yet (nothing announced for them).
-- **Audit:** peer.pairing.open, peer.link.request (both sides), peer.link (both, compared_by), peer.link.denied,
-  peer.unlink (by this_server | peer), peer.identity.rotate (announced | received), peer.connection (up/down, at most
-  one a minute per peer).
+- **Audit:** peer.pairing.open, peer.link.request (both sides), peer.link (both, compared_by, pinned),
+  peer.link.denied, peer.unlink (by this_server | peer), peer.identity.rotate (announced | received), peer.connection
+  (up/down, at most one a minute per peer).
 - Tests: `PeerCrypto*`, `PeerCards.*`, `PeerEndpoints.*`, `PeerPairingState.*`, `PeerRouting.*`, `PeerSwitch.*`
   (DB-free, `test_peer_crypto.cpp`); `PeerLinkDbTest.*` (the real listener as one end, `test_peer_link_db.cpp`; also
-  `peer.status` either way and to whom);
+  `peer.status` either way and to whom, and `compared_by` by channel with `pinned` in the audit);
   `DeviceIdentityRotationTest.LinkedServersThatHeardOfTheNewKey*`; Tier B `vhh drill peers`
   (`tools/harness/vhh/drill_peers.py`: two daemons pair TOFU and pinned, reconnect after each restarts, rotate,
   unlink).

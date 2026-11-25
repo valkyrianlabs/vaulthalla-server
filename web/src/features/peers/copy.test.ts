@@ -1,14 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { ATTEMPT_TEXT } from './model.ts'
-import { allCopy, COMPARED_BY, COMPARED_BY_HINT, PEERS_COPY } from './copy.ts'
+import { allCopy, COMPARED_BY, PEERS_COPY } from './copy.ts'
 
-const everything = () => [
-  ...allCopy(),
-  ...Object.values(COMPARED_BY),
-  ...Object.values(COMPARED_BY_HINT),
-  ...Object.values(ATTEMPT_TEXT).map(t => t.label),
-]
+const everything = () => [...allCopy(), ...Object.values(COMPARED_BY), ...Object.values(ATTEMPT_TEXT).map(t => t.label)]
 
 test('nothing says or implies that the link carries vaults today', () => {
   // The one sentence about what a link is for puts mirroring in a later release and says it carries nothing else now.
@@ -35,4 +30,8 @@ test('unlinking says what it does and does not do', () => {
 test('the code is compared, never typed, and a wrong one declines', () => {
   assert.match(PEERS_COPY.acceptSteps.join(' '), /wrong code declines the request/)
   assert.match(PEERS_COPY.codeStep('vps'), /click this code/)
+})
+
+test('who compared the code reads as a person or Desktop, nothing in between', () => {
+  assert.deepEqual(COMPARED_BY, { person: 'A person', desktop: 'Desktop' })
 })

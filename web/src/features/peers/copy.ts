@@ -103,16 +103,11 @@ export const PEERS_COPY = {
   notStarted: 'The link was not started',
 } as const
 
-// How the link was checked (the row's compared_by). The server records `desktop` whenever the key was given in advance
-// (expect_spki): by Vaulthalla Desktop's brokered path, or by a person who entered the other server's key here or in
-// `vh peer link --fingerprint`.
+// Who compared the code (the row's compared_by, from the channel of the call that made the link here): a person in the
+// console or at the terminal, or Vaulthalla Desktop brokering the link over its device sessions.
 export const COMPARED_BY: Readonly<Record<'person' | 'desktop', string>> = {
   person: 'A person',
-  desktop: 'Desktop or a pinned key',
-}
-export const COMPARED_BY_HINT: Readonly<Record<'person' | 'desktop', string>> = {
-  person: 'A person compared the six-digit code on both servers.',
-  desktop: 'This server was given the other server’s key in advance, by Vaulthalla Desktop or as the key when linking.',
+  desktop: 'Desktop',
 }
 
 // Every sentence above, flattened (functions called with a sample name), for copy.test.ts.
