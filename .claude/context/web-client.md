@@ -96,7 +96,7 @@
   component. Areas: `files` (FileBrowser over an `FsSource` adapter — vault or share — with capability-driven UI,
   URL-addressed paths, virtualized list/grid, transfer manager), `shares`, `share` (anonymous recipient page),
   `health`, `vaults`, `access`, `account`, `credentials`, `cost`, `gateway`, `notifications`, `settings`, `auth`,
-  `syncConflicts`, `recovery`, `devices`.
+  `syncConflicts`, `recovery`, `devices`, `peers`.
 
 ## Server-owned ws contract
 
@@ -249,6 +249,49 @@ permission bits (D3): any signed-in user, super-admin parts gated with `useCan({
   server key fingerprint (grouped, copyable); `Switch` → `confirm()` → `device.remote.enable|disable`, whose answer
   replaces the cached status.
 
+## Linked servers (`features/peers`, `/linked-servers`; experimental)
+
+The server link (design/peers/link.md, "Three ways to drive it": the web console) for super admins, with the same
+operations as `vh peer`. Experimental and off by default (`peers.experimental` in config.yaml), so the console never
+advertises it while it is off:
+- **The switch:** `signal.ts` (`usePeersAvailability`, in every route's first load via the nav) asks `peer.status` (super
+  admins only, cached 10 min, no retry). It is the one `peer.*` command that answers `{enabled}` while the switch is
+  off; every other one refuses `peers_experimental`. The nav item (System › "Linked servers", `requires: {superAdmin}`,
+  `shownWhen: 'peers'`) shows only while it is on. Opening the URL directly: not a super admin → the typed denied
+  state; switched off (or a server without `peer.status`) → one sentence, "Linked servers aren’t available on this
+  server" (`data-testid="peers-unavailable"`), nothing about turning it on; no other `peer.*` is sent.
+- **Page** (`LinkedServersPage.tsx`): heading with an Experimental badge, one sentence on what a link is for (the
+  trusted connection vault mirroring will use in a later release; it carries nothing else today), Accept a link and
+  Link a server. `peer.list {all: true}` every 15 s in `PeerTable` (unlinked rows behind "Show unlinked"): name, health
+  (`model.ts` `healthText`: Connected with since / who dialled / round trip / version, "other protocol" as a warning,
+  Not connected with the last error and next try, unknown while nothing is known, never healthy by guess), node id
+  (12 characters), key (16 hex, copy the full one), "Code compared by" (`compared_by`; `desktop` reads "Desktop or a
+  pinned key", since the server records it whenever `expect_spki` was given), version, linked date. Rename
+  (`RenamePeerDialog`, lazy, `peer.rename {peer: id}`) and Unlink (`confirm()` saying the other server keeps nothing it
+  can use to reconnect, that it is told, and that linking again takes a new pairing; `peer.unlink {peer: id}`).
+- **Accept a link** (`AcceptLinkDialog`, `next/dynamic`, mounted while open): `peer.pairing.open` on mount (this server's
+  name, key grouped and copyable, advertised addresses, countdown by `server_time` like device pairing; remote
+  connections off → a warning with a link to `/devices/all#remote-connections`), `peer.pairing.pending` every 2 s,
+  each request with name, version, source IP, node id, full key and its three codes; a click sends
+  `peer.pairing.approve {request_id, code}` (the device.trust step-up through the shell's dialog, which names it "Link
+  this server with another server": `models/stepUp.ts` `stepUpAction`); `invalid` = wrong code, declined; `not_found` =
+  expired; Deny = `peer.pairing.deny`. `conflict` on open (another pairing window, device or server) is explained and
+  never closed. `peer.pairing.close` on unmount only if this dialog opened the window and it is still open (the server
+  closes it on approval).
+- **Link a server** (`LinkServerDialog`, `next/dynamic`): Address (host, host:port, [v6], [v6]:port or bare v6, as
+  `peer::parseAddress`; `model.ts` `parseLinkTarget`), Port (default: this server's own device listener port from
+  `device.remote.status`, as `vh peer link` assumes), optional key (`parseFingerprint`: 64 hex, spaces and colons
+  allowed; it becomes `expect_spki`). `peer.link.start` (step-up), then `peer.link.status` every 1.5 s: connecting →
+  awaiting_approval (the code, large, "click this code on this server's request", and the other server's key) →
+  linked / denied / expired / failed (the attempt's own error) / cancelled. Cancel = `peer.link.cancel`; closing the
+  dialog while it runs cancels it too.
+- **Refusals** are shown with the server's words and their `data.code` (`parts.tsx` `PeerError`), never swallowed.
+- Every sentence is in `copy.ts`; `copy.test.ts` keeps any mention of mirroring, syncing or backups out of it except
+  the one purpose sentence. Pure helpers in `model.ts` (`model.test.ts`). `tests/e2e/peers.spec.ts` scripts `peer.*`,
+  `device.remote.status` and `auth.stepup.*` (offline or against a daemon): switched off, not a super admin, list
+  health / rename / unlink, a refusal's code, accept (wrong code, step-up, link), conflict, link (validation, payload,
+  step-up, code, outcome), failure and cancel on close; screenshots at 1280 and 390 px.
+
 ## Vault deletion (#162)
 
 `features/vaults/DeleteVaultDialog.tsx` (lazy, from Settings → Delete vault) is one dialog: it reads
@@ -277,7 +320,7 @@ page, accounts with a vault remove permission) lists `storage.vault.deleted.list
   `PreviewSheet`. Inside them, CodeMirror (`TextEditor.tsx`, per-extension language chunks), react-markdown
   (`MarkdownView.tsx`) and the 3D engine (`ModelViewer.tsx`, the only module allowed to import `@babylonjs/*`)
   are lazy again. Nothing under `preview/` may be imported statically from `FileBrowser`, `entries.ts`, `FileIcon`
-  or the share page (first-load headroom is ~2 KB on `/files`, ~4.3 KB on `/share` as of the resumable-upload change).
+  or the share page (first-load headroom is 0.8 KB on `/files`, 231.2 of 232, and 2.7 KB on `/share` as of the Linked servers page).
 - **HTTP per renderer** (all same-origin with the cookie; `FsSource` builds the URLs, `share=1&path=` on links):
   image `GET /preview?size=1024`; PDF `GET /preview?page=N&size=1536|2048` → blob URL, page count from
   `X-Vaulthalla-Page-Count`; SVG/WebP/video/audio `src=/download/content?disposition=inline` (Range is the
@@ -322,7 +365,8 @@ Typed ws `recovery.*` / `vault.recovery.*` (`models/recovery.ts`, `RECOVERY_CODE
 `/login`, `/files/[vaultId]/[...path]`, `/shares`, `/vaults` (+ `/new`, `/[id]` tabs: overview, access, shares,
 sync, gateway, settings), `/users` (+ `/new`, `/[name]`), `/groups`, `/roles` (+ `/new?type=`, `/[type]/[id]`),
 `/credentials` (+ `/new`, `/[id]`), `/cost`, `/s3-gateway`, `/health` (+ runtime, filesystem, storage, activity),
-`/notifications`, `/settings`, `/sync-conflicts`, `/account`, `/devices` (+ `/all`), `/share/[token]/[...path]` (public, no shell). Old URLs (`/fs`,
+`/notifications`, `/settings`, `/sync-conflicts`, `/account`, `/devices` (+ `/all`), `/linked-servers` (super admins, only
+with `peers.experimental`), `/share/[token]/[...path]` (public, no shell). Old URLs (`/fs`,
 `/dashboard/*`, `/api-keys/*`, `/pricing-budget`, `/operator-email`, `/users/add`, `/vaults/:id/edit|assign`,
 `/roles/admin|vault/*`) redirect (`next.config.ts`).
 

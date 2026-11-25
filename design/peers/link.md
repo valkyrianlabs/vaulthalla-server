@@ -1,7 +1,8 @@
 # Server link: pairing two Vaulthalla servers
 
 Status: phase 1a built (2026-11-25), experimental and off by default (`peers.experimental` in config.yaml): pairing,
-the link, unlinking and the announced identity rotation, without a console page or Desktop's brokered flow. What the
+the link, unlinking and the announced identity rotation, and the console's Linked servers page; not Desktop's brokered
+flow. What the
 build changed or decided is in "As built (phase 1a)" at the end; the rest of this text is the design. It covers how two
 servers pair, how they authenticate each other afterwards, what a linked server may call, and how the link is
 unlinked and rotated. It does not cover what travels over the link for a mirrored vault ([`mirror.md`](mirror.md)) or
@@ -218,7 +219,7 @@ Linking does not require `device_server.remote` on both servers, only that one o
 
 Management, for a person (super admin; console, `vh`, or a full-access Desktop):
 
-`peer.pairing.open` · `peer.pairing.close` · `peer.pairing.pending` · `peer.pairing.approve` · `peer.pairing.deny` ·
+`peer.status` (as built: whether the switch is on) · `peer.pairing.open` · `peer.pairing.close` · `peer.pairing.pending` · `peer.pairing.approve` · `peer.pairing.deny` ·
 `peer.link.start` · `peer.link.status` · `peer.link.cancel` · `peer.list` · `peer.get` · `peer.rename` ·
 `peer.unlink`
 
@@ -305,4 +306,9 @@ the owner's instruction to build without waiting for review; compatibility polic
   dialling side. `cloud::RelayService` keeps its own (it also speaks plain ws to a loopback relay over a
   `beast::tcp_stream`); only its reconnect backoff moved to the shared `concurrency::jitteredBackoff`.
 - **Not built here** (later phases): the principal kind in RBAC tables and vault roles for peers (identity.md, with the
-  mirror), any `peer.mirror.*` or `peer.identity.*` command, bulk lanes, the console page, Desktop's brokered flow.
+  mirror), any `peer.mirror.*` or `peer.identity.*` command, bulk lanes, Desktop's brokered flow.
+- **The console page** (built after phase 1a, same day): `/linked-servers` for super admins, shown only while the switch
+  is on. The console learns the switch from `peer.status {enabled}`, the one management command that answers while it
+  is off (the same callers as the rest), so no page load provokes `peers_experimental` and nothing advertises a
+  switched-off feature; a server without the command leaves the page out too. It drives the commands above, never the
+  wire set.

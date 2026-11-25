@@ -16,8 +16,8 @@ keys or accounts travel over the link yet.
 - **Identity rotation.** `vh secret device-identity rotate` now tells connected linked servers of the new key first
   (signed by the old one), and they keep their links; servers that weren't connected are unlinked and must be linked
   again. `--revoke-peers` is the emergency rotation: it tells no one and drops every link.
-- **Who may.** Super admins only, on the server's `vh`, in the web console (with the device-trust confirmation; no
-  console page yet) or from a fully trusted Vaulthalla Desktop connected directly. Agents, devices with limited
+- **Who may.** Super admins only, on the server's `vh`, in the web console's Linked servers page (with the device-trust
+  confirmation) or from a fully trusted Vaulthalla Desktop connected directly. Agents, devices with limited
   access and connections through Vaulthalla Cloud can't.
 
 Requires migration 157 (a new `peer` table; additive). A linked server's key can never be paired as a device, and a
