@@ -64,13 +64,19 @@ class Router {
     [[nodiscard]] static bool isDevicePairCommand(std::string_view command);
     // Commands only a paired device's own session may run (device.identity.rotate, device.server.identity).
     [[nodiscard]] static bool isDeviceOnlyCommand(std::string_view command);
+    // design/peers/link.md: a link's pairing, sent by the dialling server on a pairing-only connection.
+    [[nodiscard]] static bool isPeerPairCommand(std::string_view command);
+    // design/peers/link.md: all a linked server's session may run (with meta.hello and meta.contract.get): peer.hello,
+    // peer.ping, peer.endpoints, peer.identity.rotate, peer.unlinked. Never runs anywhere else.
+    [[nodiscard]] static bool isPeerWireCommand(std::string_view command);
     // design/cloud/relay.md, wave 2: everything a device session that came through the relay, or a device paired
     // through it, may run: browsing, metadata, downloads and the change feed. An allowlist: a command added later is
     // refused there until it is added here on purpose (UsageContract walks every registered command).
     [[nodiscard]] static bool isRelayedReadCommand(std::string_view command);
     // Scoped devices (design/core/mcp-remote-signin.md): what one never runs whatever its scope: pairing
-    // (device.pair*), approvals (device.approval.*), key-backup grants, key export and import, remote connectors and
-    // scope changes. device.revoke of another device is refused by ops::devices (it needs the payload).
+    // (device.pair*), approvals (device.approval.*), key-backup grants, key export and import, remote connectors,
+    // linked servers (peer.*) and scope changes. device.revoke of another device is refused by ops::devices (it needs
+    // the payload).
     [[nodiscard]] static bool isScopedDeviceForbidden(std::string_view command);
     // Whether a scoped device whose scope is `scope` may run `command` (its effect within the scope, and not forbidden).
     [[nodiscard]] static bool scopedDeviceMayRun(std::string_view command, std::string_view scope);

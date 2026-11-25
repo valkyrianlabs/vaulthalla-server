@@ -146,6 +146,8 @@ std::string_view to_string(const Channel channel) noexcept {
 // Scoped devices: a device with limited access steps up like an agent: never (it can neither answer nor satisfy one).
 namespace stepup_scope_detail {
 Channel channelOf(const std::shared_ptr<protocols::ws::Session>& session) {
+    // A linked server's session runs only the peer wire set, and never steps up (design/peers/link.md).
+    if (session && session->isPeerSession()) return Channel::Agent;
     if (!session || !session->onDeviceListener()) return Channel::Web;
     if (const auto& peer = session->devicePeer(); peer && peer->scoped()) return Channel::Agent;
     return Channel::Device;
@@ -180,6 +182,25 @@ Covered::~Covered() {
 }
 
 // ---- the check -------------------------------------------------------------------------------------------------------
+
+void requireForServerLink(const std::string& target) {
+    auto* scope = Scope::current();
+    if (scope && scope->channel() == Channel::Device && !scope->covered()) {
+        const auto& session = scope->session();
+        const auto& peer = session ? session->devicePeer() : nullptr;
+        if (session && session->user && peer && !peer->readOnly() && !peer->scoped()) {
+            const auto bound = stepUpBoundTarget(Family::DeviceTrust, target);
+            requireNoCooldown(session->user->id, Family::DeviceTrust);
+            audit::record({.action = "auth.stepup.grant", .actor_id = session->user->id, .actor = session->user->name(),
+                           .details = {{"family", "device.trust"}, {"target", stepUpTargetJson(bound)},
+                                       {"channel", "device"}, {"method", "device_session"}}},
+                          "[auth::stepup] a paired device's session confirmed linking a server");
+            scope->markSatisfied(Family::DeviceTrust, bound);
+            return;
+        }
+    }
+    require(Family::DeviceTrust, target);
+}
 
 std::vector<std::string> methods(const identities::User& user, const Family family) {
     std::vector<std::string> out;

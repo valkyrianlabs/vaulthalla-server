@@ -13,6 +13,7 @@
 #include "runtime/Deps.hpp"
 #include "identities/User.hpp"
 #include "device/Peer.hpp"
+#include "peer/Peer.hpp"
 #include "device/ScopeAudit.hpp"
 #include "protocols/device/Scope.hpp"
 #include "log/AuditOrigin.hpp"
@@ -255,6 +256,26 @@ bool Router::isDeviceOnlyCommand(const std::string_view command) {
     return containsCommand(commands, command);
 }
 
+bool Router::isPeerPairCommand(const std::string_view command) {
+    constexpr std::array commands{
+        std::string_view{"peer.pair.request"},
+        std::string_view{"peer.pair.confirm"},
+        std::string_view{"peer.pair.status"}
+    };
+    return containsCommand(commands, command);
+}
+
+bool Router::isPeerWireCommand(const std::string_view command) {
+    constexpr std::array commands{
+        std::string_view{"peer.hello"},
+        std::string_view{"peer.ping"},
+        std::string_view{"peer.endpoints"},
+        std::string_view{"peer.identity.rotate"},
+        std::string_view{"peer.unlinked"}
+    };
+    return containsCommand(commands, command);
+}
+
 bool Router::isRelayedReadCommand(const std::string_view command) {
     constexpr std::array commands{
         std::string_view{"meta.hello"},
@@ -277,7 +298,7 @@ bool Router::isRelayedReadCommand(const std::string_view command) {
 }
 
 bool Router::isScopedDeviceForbidden(const std::string_view command) {
-    for (const std::string_view prefix : {"device.pair", "device.approval.", "device.backup.grant.", "connector."})
+    for (const std::string_view prefix : {"device.pair", "device.approval.", "device.backup.grant.", "connector.", "peer."})
         if (command.starts_with(prefix)) return true;
     constexpr std::array exact{std::string_view{"vault.keys.export"}, std::string_view{"vault.keys.export.confirm"},
                                std::string_view{"vault.keys.import"}, std::string_view{"device.scope.set"}};
@@ -297,9 +318,21 @@ model::Response Router::unknownCommand(std::string&& command, json&& msg) {
 }
 
 Router::CommandAuthDecision Router::classifyCommand(const std::string_view command, const Session& session) {
+    // design/peers/link.md: a linked server, either end of the link. The peer wire set and the protocol handshake,
+    // nothing else, whatever it is ever granted (fail closed: a command added later is refused here until it is added
+    // to isPeerWireCommand on purpose). A pairing connection this server dialled runs nothing it is sent.
+    if (session.isPeerSession()) {
+        const auto& principal = session.peerPrincipal();
+        if (session.closing() || !principal || principal->pairing || principal->peer_id == 0)
+            return CommandAuthDecision::Deny;
+        if (isPeerWireCommand(command) || command == "meta.contract.get" || command == kHelloCommand)
+            return CommandAuthDecision::Allow;
+        return CommandAuthDecision::Deny;
+    }
     // The device listener: who this is was decided at the TLS handshake, never by a token.
     if (session.isDevicePairing()) {
-        if (isDevicePairCommand(command) || command == "meta.contract.get" || command == kHelloCommand)
+        if (isDevicePairCommand(command) || isPeerPairCommand(command) || command == "meta.contract.get" ||
+            command == kHelloCommand)
             return CommandAuthDecision::Allow;
         return CommandAuthDecision::DenyDeviceUnknown;
     }
@@ -313,6 +346,8 @@ Router::CommandAuthDecision Router::classifyCommand(const std::string_view comma
         // Scoped devices: within its scope, and never pairing, approvals, key custody or connectors.
         if (const auto& peer = session.devicePeer(); peer && peer->scoped() && !scopedDeviceMayRun(command, peer->scope))
             return CommandAuthDecision::DenyScope;
+        // A device never speaks for a linked server: the peer wire set and a link's pairing are servers' own.
+        if (isPeerPairCommand(command) || isPeerWireCommand(command)) return CommandAuthDecision::Deny;
         // No password sign-in, refresh tokens or account creation through a device; a device signs out by being
         // unpaired (device.revoke).
         if (isSessionLifecycleCommand(command) && command != "auth.isAuthenticated") return CommandAuthDecision::Deny;
@@ -325,7 +360,9 @@ Router::CommandAuthDecision Router::classifyCommand(const std::string_view comma
             return CommandAuthDecision::Deny;
         return CommandAuthDecision::Allow;
     }
-    if (isDevicePairCommand(command) || isDeviceOnlyCommand(command)) return CommandAuthDecision::Deny;
+    if (isDevicePairCommand(command) || isDeviceOnlyCommand(command) || isPeerPairCommand(command) ||
+        isPeerWireCommand(command))
+        return CommandAuthDecision::Deny;
 
     if (session.isSharePending()) {
         return isPublicShareCommand(command) ? CommandAuthDecision::Allow : CommandAuthDecision::Deny;

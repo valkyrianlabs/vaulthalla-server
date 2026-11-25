@@ -5,6 +5,7 @@
 #include "cloud/RelayProtocol.hpp"
 #include "cloud/Signing.hpp"
 #include "cloud/Storage.hpp"
+#include "concurrency/Backoff.hpp"
 #include "config/Registry.hpp"
 #include "db/query/cloud/Link.hpp"
 #include "db/query/cloud/Relay.hpp"
@@ -791,9 +792,7 @@ std::variant<Admission, TicketFailure> fetchTicket(const storage::Linked& link, 
 
 std::chrono::milliseconds jittered(const unsigned attempt) {
     // Full jitter between 1 s and the cap (1 s, 2 s, 4 s ... 5 min).
-    const auto capSeconds = std::min<int64_t>(kBackoffCap.count() * 60, int64_t{1} << std::min(attempt, 16u));
-    const auto spanMs = static_cast<uint32_t>(std::max<int64_t>(0, capSeconds * 1000 - 1000));
-    return std::chrono::milliseconds(1000 + (spanMs == 0 ? 0 : randombytes_uniform(spanMs + 1)));
+    return concurrency::jitteredBackoff(attempt, std::chrono::seconds(1), kBackoffCap);
 }
 
 std::mutex gLiveMutex;

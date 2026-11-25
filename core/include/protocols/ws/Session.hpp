@@ -11,6 +11,7 @@
 #include "rbac/Actor.hpp"
 #include "device/Fwd.hpp"
 #include "identities/Fwd.hpp"
+#include "peer/Fwd.hpp"
 #include "protocols/ws/Fwd.hpp"
 #include "share/Fwd.hpp"
 
@@ -46,8 +47,21 @@ using json          = nlohmann::json;
 
 // Device and DevicePairing exist only on the device listener (mutual TLS, docs/pairing.md): a Device session is a
 // paired device acting as its user (no tokens; authorized at the TLS handshake), a DevicePairing one a connection
-// whose key is not a live device and may only pair.
-enum class SessionMode { Unauthenticated, Human, SharePending, Share, Device, DevicePairing };
+// whose key is not a live device and may only pair. Peer (design/peers/link.md) is either end of a link between two
+// servers: the accepting end on the device listener (a linked server's key), the dialling end on the connection this
+// server opened. It has no user and runs only the peer wire set (Router::classifyCommand).
+enum class SessionMode { Unauthenticated, Human, SharePending, Share, Device, DevicePairing, Peer };
+
+// The peer link's view of one Peer session (peer::LinkService sets it before the first frame can arrive).
+struct PeerHooks {
+    // A frame answering a request this end sent ({command: "<x>.response", status, requestId}); true when it was one.
+    // Anything else goes to the router.
+    std::function<bool(const nlohmann::json& frame)> onResponse;
+    // The websocket is up (the accepting end: once its handshake finished).
+    std::function<void()> onOpen;
+    // Run once, by the first close().
+    std::function<void()> onClose;
+};
 
 class Session : public std::enable_shared_from_this<Session> {
 public:
@@ -73,12 +87,21 @@ public:
     // session, null a pairing-only one.
     void acceptDevice(std::shared_ptr<TlsTransport> transport, const RequestType& req,
                       std::shared_ptr<const ::vh::device::Peer> peer, std::shared_ptr<identities::User> deviceUser);
+    // design/peers/link.md: the device listener's /ws for a linked server's key (TLS is up, the upgrade request read).
+    void acceptPeer(std::shared_ptr<TlsTransport> transport, const RequestType& req,
+                    std::shared_ptr<const ::vh::peer::Principal> principal, PeerHooks hooks);
+    // The dialling end of a link: `transport` is a client websocket whose TLS and upgrade handshakes this server
+    // completed (the server's key checked against the pin). Reads and writes start at once.
+    void attachPeer(std::shared_ptr<TlsTransport> transport, std::shared_ptr<const ::vh::peer::Principal> principal,
+                    PeerHooks hooks);
     // A Device session with no websocket: the principal of a device-listener HTTP connection (/preview, /download,
     // /upload, /mcp). It is registered with the session manager like any device session, so revocation,
     // revokeSessions and the sweeper close it; `onClose` then ends the HTTP connection.
     [[nodiscard]] static std::shared_ptr<Session> devicePrincipal(std::shared_ptr<const ::vh::device::Peer> peer,
                                                                   std::shared_ptr<identities::User> deviceUser,
                                                                   std::function<void()> onClose);
+    // Tests: a Peer session with no websocket (the router's classification of a linked server's session).
+    [[nodiscard]] static std::shared_ptr<Session> peerForTesting(std::shared_ptr<const ::vh::peer::Principal> principal);
     void send(json message);
     // Tests: answers go to `sink` instead of the socket (a session without one, e.g. a device principal, then sees what
     // the router would have sent it).
@@ -119,6 +142,12 @@ public:
     [[nodiscard]] bool onDeviceListener() const noexcept { return isDeviceSession() || isDevicePairing(); }
     // The connection's device identity (device listener only, else null).
     [[nodiscard]] const std::shared_ptr<const ::vh::device::Peer>& devicePeer() const noexcept { return devicePeer_; }
+    // A link between two servers, either end (never also a device listener mode: onDeviceListener() is false).
+    [[nodiscard]] bool isPeerSession() const noexcept { return mode() == SessionMode::Peer; }
+    // The linked server on the other end (Peer sessions only, else null).
+    [[nodiscard]] const std::shared_ptr<const ::vh::peer::Principal>& peerPrincipal() const noexcept {
+        return peerPrincipal_;
+    }
     // True from the first close() on: nothing more is run for this session.
     [[nodiscard]] bool closing() const noexcept { return closing_.load(std::memory_order_acquire); }
     // The share identity is read and re-set from several threads at once (the socket's strand, HTTP connection
@@ -160,6 +189,8 @@ private:
     // ---- handshake helpers
     void onHeadersRead(const std::shared_ptr<RequestType>& req, const beast::error_code& ec, std::size_t bytesRead);
     void onHandshakeAccepted(const beast::error_code& ec);
+    void setUpPeer(std::shared_ptr<TlsTransport> transport, std::shared_ptr<const ::vh::peer::Principal> principal,
+                   PeerHooks hooks, beast::role_type role);
     void hydrateFromRequest(const RequestType& req);
     void installHandshakeDecorator() const;
 
@@ -197,7 +228,10 @@ private:
     std::string shareSessionToken_;
     bool shareHandshake_{false};
     std::shared_ptr<const ::vh::device::Peer> devicePeer_;
-    std::function<void()> onClose_;  // run once by the first close() (device HTTP principals)
+    std::shared_ptr<const ::vh::peer::Principal> peerPrincipal_;
+    std::function<bool(const nlohmann::json&)> peerResponse_;  // Peer sessions: answers to this end's requests
+    std::function<void()> peerOpen_;
+    std::function<void()> onClose_;  // run once by the first close() (device HTTP principals, Peer sessions)
 
     std::atomic_bool closing_{false};
     std::unique_ptr<ConnectionSlot> connectionSlot_;  // set before accept(); reset by the first close()

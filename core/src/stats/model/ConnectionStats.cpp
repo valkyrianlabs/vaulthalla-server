@@ -46,6 +46,7 @@ std::string sessionModeName(const protocols::ws::SessionMode mode) {
         case SessionMode::Share: return "share";
         case SessionMode::Device: return "device";
         case SessionMode::DevicePairing: return "device_pairing";
+        case SessionMode::Peer: return "peer";
         case SessionMode::Unauthenticated: return "unauthenticated";
     }
     return "unauthenticated";
@@ -92,7 +93,7 @@ void ConnectionStats::count(const std::string& mode, const std::uint64_t ageSeco
         ++activeUnauthenticatedSessions;
         assignMinAge(oldestUnauthenticatedSessionAgeSeconds, ageSeconds);
     }
-    // device, device_pairing: in the total and in sessionsByMode only.
+    // device, device_pairing, peer: in the total and in sessionsByMode only.
 }
 
 void ConnectionStats::finalize() {

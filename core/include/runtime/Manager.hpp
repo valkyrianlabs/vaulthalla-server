@@ -31,6 +31,7 @@ namespace vh::audit { class Trail; }
 namespace vh::notifications { class OperatorEmailService; }
 namespace vh::stats { class SnapshotService; }
 namespace vh::cloud { class StorageService; class RelayService; }
+namespace vh::peer { class LinkService; }
 
 namespace vh::runtime {
 
@@ -63,6 +64,7 @@ public:
     [[nodiscard]] std::shared_ptr<protocols::ProtocolService> getProtocolService() const { return protocolService; }
     [[nodiscard]] std::shared_ptr<protocols::s3::GatewayService> getS3GatewayService() const { return s3GatewayService; }
     [[nodiscard]] std::shared_ptr<protocols::device::Service> getDeviceServer() const { return deviceServer; }
+    [[nodiscard]] std::shared_ptr<peer::LinkService> getPeerLinkService() const { return peerLinkService; }
     [[nodiscard]] std::shared_ptr<protocols::shell::Server> getShellServer() const { return shellServer; }
     [[nodiscard]] std::shared_ptr<protocols::ws::ConnectionLifecycleManager> getConnectionLifecycleManager() const { return connectionLifecycleManager; }
 
@@ -103,6 +105,7 @@ private:
     std::shared_ptr<vault::RemoteAttachService> remoteAttachService;
     std::shared_ptr<cloud::StorageService> cloudStorageService;
     std::shared_ptr<cloud::RelayService> cloudRelayService;
+    std::shared_ptr<peer::LinkService> peerLinkService;
     std::shared_ptr<stats::SnapshotService> statsSnapshotService;
     std::shared_ptr<notifications::OperatorEmailService> operatorEmailService;
     std::shared_ptr<sync::events::Service> upstreamEventService;
