@@ -267,7 +267,8 @@ protected:
             const auto link = txn.exec("INSERT INTO fs_entry (vault_id, parent_id, name, path, mode) "
                                        "VALUES ($1, $2, 'latest', '/Reports/latest', 511) RETURNING id",
                                        pqxx::params{vaultId, reports}).one_field_ref().as<int64_t>();
-            txn.exec("INSERT INTO symlinks (fs_entry_id, target) VALUES ($1, '2026/q3.pdf')", pqxx::params{link});
+            txn.exec("INSERT INTO symlinks (fs_entry_id, target, uid) VALUES ($1, '2026/q3.pdf', $2::uuid)",
+                     pqxx::params{link, crypto::id::toUuid(crypto::id::newObjectUid())});
             for (const auto& [uid, vid, latest] : {std::tuple{q3, std::string("v-2"), true}, std::tuple{q3, std::string("v-1"), false},
                                                    std::tuple{purged, std::string("v-9"), false}})
                 txn.exec("INSERT INTO upstream_object_version (vault_id, object_key, version_id, is_latest, etag, size_bytes, "
@@ -278,9 +279,10 @@ protected:
             txn.exec("INSERT INTO remote_object_index (vault_id, object_key, size_bytes, etag, version_id, source) "
                      "VALUES ($1, $2, 146, '\"e2\"', 'v-2', 'manifest')",
                      pqxx::params{vaultId, "o/" + q3});
-            const auto snap = txn.exec("INSERT INTO recovery_snapshot (vault_id, name, root_path, root_type, state) "
-                                       "VALUES ($1, 'before audit', '/Reports', 'directory', 'ready') RETURNING id",
-                                       pqxx::params{vaultId}).one_field_ref().as<int64_t>();
+            const auto snap = txn.exec("INSERT INTO recovery_snapshot (vault_id, name, root_path, root_type, state, uid) "
+                                       "VALUES ($1, 'before audit', '/Reports', 'directory', 'ready', $2::uuid) RETURNING id",
+                                       pqxx::params{vaultId, crypto::id::toUuid(crypto::id::newObjectUid())})
+                                  .one_field_ref().as<int64_t>();
             const auto blob = txn.exec("INSERT INTO recovery_blob (vault_id, storage_name, key_version, cipher_bytes, "
                                        "  plaintext_bytes) VALUES ($1, $2, 1, 30, 10) RETURNING id",
                                        pqxx::params{vaultId, storageName()})
@@ -388,6 +390,47 @@ TEST_F(ManifestDbTest, ContentRoundTripsDatabaseToBucketToScratchSchema) {
         return out;
     });
     for (const auto& d : diff) ADD_FAILURE() << d;
+}
+
+// Migration 158: describing a vault writes nothing. Every folder, symlink and snapshot had its uid from its insert, so
+// the collector reads them (in a read-only transaction: a write would fail it), and two collects of an unchanged vault
+// are the same manifest content, every uid the row's own.
+TEST_F(ManifestDbTest, CollectWritesNothingAndDescribesAnUnchangedVaultTheSameWay) {
+    seedRichVault();
+    const auto rows = [&] {
+        return db::Transactions::exec("rows", [&](pqxx::work& txn) {
+            std::string out;
+            for (const auto* q : {"SELECT d.* FROM directories d JOIN fs_entry e ON e.id = d.fs_entry_id WHERE e.vault_id = $1",
+                                  "SELECT s.* FROM symlinks s JOIN fs_entry e ON e.id = s.fs_entry_id WHERE e.vault_id = $1",
+                                  "SELECT f.* FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id WHERE e.vault_id = $1",
+                                  "SELECT * FROM fs_entry WHERE vault_id = $1",
+                                  "SELECT * FROM files_trashed WHERE vault_id = $1",
+                                  "SELECT * FROM recovery_snapshot WHERE vault_id = $1"})
+                out += txn.exec(std::string("SELECT COALESCE(md5(string_agg(row_to_json(x)::text, ',' ORDER BY "
+                                            "row_to_json(x)::text)), '-') FROM (") + q + ") x",
+                                pqxx::params{vaultId}).one_field_ref().as<std::string>() + "|";
+            return out;
+        });
+    };
+    const auto before = rows();
+    const auto first = db::query::sync::Manifest::collect(vaultId);
+    const auto second = db::query::sync::Manifest::collect(vaultId);
+    EXPECT_EQ(rows(), before) << "collect wrote to the vault's rows";
+    EXPECT_EQ(first, second);
+
+    const auto dirUids = db::Transactions::exec("dir uids", [&](pqxx::work& txn) {
+        std::set<std::string> out;
+        for (const auto row : txn.exec("SELECT d.uid::text FROM directories d JOIN fs_entry e ON e.id = d.fs_entry_id "
+                                       "WHERE e.vault_id = $1 UNION ALL SELECT s.uid::text FROM symlinks s JOIN "
+                                       "fs_entry e ON e.id = s.fs_entry_id WHERE e.vault_id = $1",
+                                       pqxx::params{vaultId}))
+            out.insert(mf::uidText(crypto::id::fromUuid(row[0].as<std::string>())));
+        return out;
+    });
+    std::set<std::string> described;
+    for (const auto& e : first.entries)
+        if (e.kind == mf::EntryKind::Dir || e.kind == mf::EntryKind::Symlink) described.insert(e.uid);
+    EXPECT_EQ(described, dirUids);
 }
 
 TEST_F(ManifestDbTest, UidsAreAssignedOnceAndTrashKeepsTheObjectUid) {
@@ -706,12 +749,19 @@ TEST_F(ManifestDbTest, AnIncompleteApplyBlocksPublishingUntilThatRootIsRecorded)
     }), pqxx::sql_error);
 }
 
-TEST_F(ManifestDbTest, SnapshotUidsAreAssignedOnceByTheCollectorAndNeverChange) {
+// Migration 158: a snapshot has its uid from its insert (the collector used to give one the first time it listed it).
+TEST_F(ManifestDbTest, SnapshotUidsAreAssignedAtCreationAndNeverChange) {
     seedRichVault();
     const auto first = db::query::sync::Manifest::collect(vaultId);
     const auto second = db::query::sync::Manifest::collect(vaultId);
     ASSERT_EQ(first.snapshots.size(), 1u);
     EXPECT_TRUE(vl::keykit::fromBase32(first.snapshots[0].uid));
+    EXPECT_EQ(first.snapshots[0].uid,
+              db::Transactions::exec("snapshot uid", [&](pqxx::work& txn) {
+                  return mf::uidText(crypto::id::fromUuid(
+                      txn.exec("SELECT uid::text FROM recovery_snapshot WHERE vault_id = $1", pqxx::params{vaultId})
+                          .one_field_ref().as<std::string>()));
+              }));
     EXPECT_FALSE(first.snapshots[0].id) << "the server's own id stays out of the manifest";
     EXPECT_EQ(first.snapshots, second.snapshots);
     EXPECT_ANY_THROW(db::Transactions::exec("rewrite snapshot uid", [&](pqxx::work& txn) {

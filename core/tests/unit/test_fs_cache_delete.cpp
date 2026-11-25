@@ -83,7 +83,7 @@ protected:
                 pqxx::params{"/", aliasFor('R'), seeded.userId, "/", 1}
             ).one_field_ref().as<uint32_t>();
             txn.exec(
-                "INSERT INTO directories (fs_entry_id, subdirectory_count) VALUES ($1, $2)",
+                "INSERT INTO directories (fs_entry_id, subdirectory_count, uid) VALUES ($1, $2, gen_random_uuid())",
                 pqxx::params{seeded.rootId, 1}
             );
 
@@ -92,7 +92,8 @@ protected:
                 "VALUES ($1, $2, $3, $4, $5, $5, $6, $7) RETURNING id",
                 pqxx::params{seeded.vaultId, seeded.rootId, "cache_vault", aliasFor('V'), seeded.userId, "/", 2}
             ).one_field_ref().as<uint32_t>();
-            txn.exec("INSERT INTO directories (fs_entry_id) VALUES ($1)", pqxx::params{seeded.vaultRootId});
+            txn.exec("INSERT INTO directories (fs_entry_id, uid) VALUES ($1, gen_random_uuid())",
+                     pqxx::params{seeded.vaultRootId});
 
             return seeded;
         });

@@ -642,9 +642,10 @@ TEST_F(VaultRecoverDb, ARestoreKeepsEachSnapshotsUid) {
     db::Transactions::exec("snapshot", [&](pqxx::work& txn) {
         const auto fileId = txn.exec("SELECT id FROM fs_entry WHERE vault_id = $1 AND path = '/kept.txt'",
                                      pqxx::params{o.id}).one_field_ref().as<int64_t>();
-        const auto snap = txn.exec("INSERT INTO recovery_snapshot (vault_id, name, root_path, root_type, state) "
-                                   "VALUES ($1, 'before restore', '/', 'directory', 'ready') RETURNING id",
-                                   pqxx::params{o.id}).one_field_ref().as<int64_t>();
+        const auto snap = txn.exec("INSERT INTO recovery_snapshot (vault_id, name, root_path, root_type, state, uid) "
+                                   "VALUES ($1, 'before restore', '/', 'directory', 'ready', $2::uuid) RETURNING id",
+                                   pqxx::params{o.id, crypto::id::toUuid(crypto::id::newObjectUid())})
+                              .one_field_ref().as<int64_t>();
         auto storage = crypto::id::toUuid(crypto::id::newObjectUid());
         std::erase(storage, '-');
         const auto blob = txn.exec("INSERT INTO recovery_blob (vault_id, storage_name, key_version, cipher_bytes, "

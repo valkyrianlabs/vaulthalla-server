@@ -6,6 +6,7 @@
 // bringing it up to the current schema once, which init_tables_if_not_exists() does in other suites too).
 
 #include "seed/include/SqlDeployer.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/Vault.hpp"
 #include "rbac/permission/vault/sync/Action.hpp"
@@ -1161,7 +1162,7 @@ TEST_F(SqlDeployerHistoryDb, ManifestApplierBaseMigrationIsAdditiveAndIdempotent
         EXPECT_TRUE(row[2].as<bool>()) << "no base copy until the next recorded root";
         EXPECT_TRUE(row[3].as<bool>());
         EXPECT_TRUE(txn.exec("SELECT uid IS NULL FROM recovery_snapshot WHERE id = $1", pqxx::params{snap})
-                        .one_field_ref().as<bool>()) << "the collector gives the uid, never PostgreSQL";
+                        .one_field_ref().as<bool>()) << "145 gives no uid (158's data step does), never PostgreSQL";
 
         const auto refused = [&](const std::string& sql) {
             pqxx::subtransaction sub(txn, "check");
@@ -2073,6 +2074,211 @@ TEST_F(SqlDeployerHistoryDb, VaultKeyOriginMigrationIsAdditiveAndIdempotent) {
         ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
         EXPECT_TRUE(again.applied.empty());
         ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "131_vault_key_origin.sql")));
+    });
+}
+
+// 158 + 159 (server mirror phase 1b) on a 157-era database with realistic rows: built-in and ordinary accounts, a
+// group, role templates, a local vault and an opaque_v1 bucket vault with folders, symlinks, files, trash and
+// snapshots, some uids already published (the manifest collector gave the opaque vault's folders theirs). Afterwards
+// every folder, symlink and snapshot has its uid, every uid that was set is unchanged, every account is local and
+// otherwise untouched (no identity log entry, change-journal row or updated_at), the columns are NOT NULL and
+// immutable, and running everything again changes nothing.
+TEST_F(SqlDeployerHistoryDb, PermanentIdsMigration158BackfillsEveryRowKeepsEveryUidAndIsIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        // ---- back to the 157 schema (remote accounts an earlier suite left here first: 157 had none)
+        txn.exec("DELETE FROM users WHERE remote");
+        txn.exec("DELETE FROM groups WHERE remote");
+        for (const auto* t : {"users", "groups"})
+            txn.exec(std::string("DROP TRIGGER IF EXISTS vh_remote_account_guard ON ") + t);
+        for (const auto* t : {"refresh_tokens", "webauthn_credentials", "totp_factors", "recovery_code_batches",
+                              "recovery_codes", "devices", "connector_grants", "key_backup_grants",
+                              "admin_role_assignments", "user_global_vault_policy", "s3_gateway_credentials"})
+            txn.exec(std::string("DROP TRIGGER IF EXISTS vh_refuse_remote_account ON ") + t);
+        txn.exec("DROP FUNCTION IF EXISTS vh_remote_account_guard()");
+        txn.exec("DROP FUNCTION IF EXISTS vh_refuse_remote_account()");
+        txn.exec("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_remote_check");
+        txn.exec("ALTER TABLE groups DROP CONSTRAINT IF EXISTS groups_remote_check");
+        txn.exec("DROP INDEX IF EXISTS users_local_name_key");
+        txn.exec("DROP INDEX IF EXISTS users_local_email_key");
+        txn.exec("DROP INDEX IF EXISTS groups_local_name_key");
+        txn.exec("DROP INDEX IF EXISTS users_remote_home_key");
+        txn.exec("DROP INDEX IF EXISTS groups_remote_home_key");
+        for (const auto* c : {"home_node", "home_id", "remote"}) {
+            txn.exec(std::string("ALTER TABLE users DROP COLUMN IF EXISTS ") + c);
+            txn.exec(std::string("ALTER TABLE groups DROP COLUMN IF EXISTS ") + c);
+        }
+        txn.exec("ALTER TABLE users ADD CONSTRAINT users_name_key UNIQUE (name)");
+        txn.exec("ALTER TABLE users ADD CONSTRAINT users_email_key UNIQUE (email)");
+        txn.exec("ALTER TABLE groups ADD CONSTRAINT groups_name_key UNIQUE (name)");
+        for (const auto* t : {"directories", "symlinks", "recovery_snapshot"})
+            txn.exec(std::string("ALTER TABLE ") + t + " ALTER COLUMN uid DROP NOT NULL");
+        txn.exec("DELETE FROM schema_migrations WHERE filename IN ('158_permanent_ids.sql', "
+                 "'159_permanent_ids_required.sql')");
+        ASSERT_FALSE(columnExists(txn, "users", "remote"));
+
+        // ---- rows as a 157-era install has them
+        txn.exec("SELECT set_config('vaulthalla.bootstrap', 'on', true)");  // the protected flags are bootstrap-only
+        txn.exec("INSERT INTO users (name, password_hash, protected, system_only) VALUES ('root', 'x', TRUE, TRUE), "
+                 "('system', 'x', TRUE, TRUE), ('admin', 'x', TRUE, FALSE) ON CONFLICT (name) DO NOTHING");
+        txn.exec("SELECT set_config('vaulthalla.bootstrap', 'off', true)");
+        const auto owner = txn.exec("INSERT INTO users (name, email, password_hash) VALUES ('claude_test_158_owner', "
+                                    "'claude_test_158@vaulthalla.test', 'x') RETURNING id").one_field_ref().as<int>();
+        txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_158_other', 'x')");
+        const auto group = txn.exec("INSERT INTO groups (name) VALUES ('claude_test_158_group') RETURNING id")
+                               .one_field_ref().as<int>();
+        txn.exec("INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)", pqxx::params{group, owner});
+        for (const auto& role : builtInAdminRoles())
+            txn.exec("INSERT INTO admin_role (name, description, identity_permissions, audit_permissions, "
+                     "settings_permissions, roles_permissions, vaults_permissions, keys_permissions) VALUES ($1, '', "
+                     "B'0'::bit(32), B'0'::bit(8), B'0'::bit(64), B'0'::bit(16), B'0'::bit(32), B'0'::bit(32)) "
+                     "ON CONFLICT (name) DO NOTHING", pqxx::params{role.name});
+        for (const std::string name : {"reader", "power_user", "claude_test_158_custom"})
+            txn.exec("INSERT INTO vault_role (name, description, files_permissions, directories_permissions, "
+                     "sync_permissions, roles_permissions) VALUES ($1, '', B'0'::bit(32), B'0'::bit(32), B'0'::bit(32), "
+                     "B'0'::bit(16)) ON CONFLICT (name) DO NOTHING", pqxx::params{name});
+
+        const auto vault = [&](const std::string& name, const std::string& type) {
+            return txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES ($1, $2, $3, $4, "
+                            "gen_random_uuid()) RETURNING id",
+                            pqxx::params{name, owner, type, name}).one_field_ref().as<int>();
+        };
+        const auto local = vault("claude_test_158_local", "local");
+        const auto opaque = vault("claude_test_158_opaque", "s3");
+        txn.exec("INSERT INTO s3 (vault_id, bucket, encrypt_upstream, storage_layout) VALUES ($1, 'b158', TRUE, "
+                 "'opaque_v1')", pqxx::params{opaque});
+        const auto entry = [&](const int vaultId, const std::optional<int> parent, const std::string& name,
+                               const std::string& path) {
+            return txn.exec("INSERT INTO fs_entry (vault_id, parent_id, name, path) VALUES ($1, $2, $3, $4) RETURNING id",
+                            pqxx::params{vaultId, parent, name, path}).one_field_ref().as<int>();
+        };
+        // The opaque vault published a manifest: its folders and its symlink have the collector's uids.
+        const auto published = [] { return vh::crypto::id::toUuid(vh::crypto::id::newObjectUid()); };
+        const auto opaqueRoot = entry(opaque, std::nullopt, "", "/");
+        const auto opaqueDir = entry(opaque, opaqueRoot, "docs", "/docs");
+        const auto opaqueNew = entry(opaque, opaqueRoot, "new", "/new");   // made after the last publish: no uid yet
+        const auto opaqueLink = entry(opaque, opaqueRoot, "latest", "/latest");
+        const auto opaqueFile = entry(opaque, opaqueDir, "a.txt", "/docs/a.txt");
+        const auto rootUid = published(), dirUid = published(), linkUid = published();
+        txn.exec("INSERT INTO directories (fs_entry_id, uid) VALUES ($1, $2::uuid), ($3, $4::uuid), ($5, NULL)",
+                 pqxx::params{opaqueRoot, rootUid, opaqueDir, dirUid, opaqueNew});
+        txn.exec("INSERT INTO symlinks (fs_entry_id, target, uid) VALUES ($1, 'docs/a.txt', $2::uuid)",
+                 pqxx::params{opaqueLink, linkUid});
+        txn.exec("INSERT INTO files (fs_entry_id, size_bytes, object_uid) VALUES ($1, 1, gen_random_uuid())",
+                 pqxx::params{opaqueFile});
+        // The local vault never published: nothing has a uid.
+        const auto localRoot = entry(local, std::nullopt, "", "/");
+        const auto localDir = entry(local, localRoot, "photos", "/photos");
+        const auto localLink = entry(local, localRoot, "shortcut", "/shortcut");
+        txn.exec("INSERT INTO directories (fs_entry_id) VALUES ($1), ($2)", pqxx::params{localRoot, localDir});
+        txn.exec("INSERT INTO symlinks (fs_entry_id, target) VALUES ($1, 'photos')", pqxx::params{localLink});
+        // Trash: from before 125 on both (no object uid), and one that kept it on the opaque vault.
+        const auto trash = [&](const int vaultId, const std::string& path, const std::optional<std::string>& uid) {
+            return txn.exec("INSERT INTO files_trashed (vault_id, path, backing_path, base32_alias, object_uid) "
+                            "VALUES ($1, $2, '', rpad($2, 33, 'x'), $3::uuid) RETURNING id",
+                            pqxx::params{vaultId, path, uid}).one_field_ref().as<int>();
+        };
+        const auto trashedUid = published();
+        const auto localTrash = trash(local, "/old.jpg", std::nullopt);
+        const auto opaqueTrashOld = trash(opaque, "/docs/old.txt", std::nullopt);
+        const auto opaqueTrashKept = trash(opaque, "/docs/kept.txt", trashedUid);
+        // Snapshots: a published one with its uid, one still being made.
+        const auto snapshotUid = published();
+        const auto snap = [&](const int vaultId, const std::string& state, const std::optional<std::string>& uid) {
+            return txn.exec("INSERT INTO recovery_snapshot (vault_id, root_path, root_type, state, uid) "
+                            "VALUES ($1, '/', 'directory', $2, $3::uuid) RETURNING id",
+                            pqxx::params{vaultId, state, uid}).one_field_ref().as<int64_t>();
+        };
+        const auto readySnap = snap(opaque, "ready", snapshotUid);
+        const auto creatingSnap = snap(local, "creating", std::nullopt);
+        const auto count = [&](const std::string& query) { return txn.exec(query).one_field_ref().as<int64_t>(); };
+        const auto identityLog = count("SELECT count(*) FROM identity_change_log");
+        const auto changeJournal = count("SELECT count(*) FROM fs_change_log");
+        const auto updatedAt = [&] {
+            return txn.exec("SELECT string_agg(id || '=' || updated_at::text, ',' ORDER BY id) FROM users")
+                .one_field_ref().as<std::string>();
+        };
+        const auto updatedBefore = updatedAt();
+
+        // ---- the upgrade
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, "158_permanent_ids.sql"));
+        EXPECT_TRUE(applied(report, "159_permanent_ids_required.sql"));
+        EXPECT_EQ(recordedHash(txn, "158_permanent_ids.sql"), currentHash("158_permanent_ids.sql"));
+
+        for (const auto* t : {"directories", "symlinks", "recovery_snapshot"}) {
+            EXPECT_EQ(count(std::string("SELECT count(*) FROM ") + t + " WHERE uid IS NULL"), 0) << t;
+            EXPECT_EQ(txn.exec("SELECT is_nullable FROM information_schema.columns WHERE table_schema = current_schema() "
+                               "AND table_name = $1 AND column_name = 'uid'", pqxx::params{std::string(t)})
+                          .one_field_ref().as<std::string>(), "NO") << t;
+        }
+        const auto uidOf = [&](const std::string& query, const pqxx::params& params) {
+            return txn.exec(query, params).one_field_ref().as<std::string>();
+        };
+        EXPECT_EQ(uidOf("SELECT uid::text FROM directories WHERE fs_entry_id = $1", pqxx::params{opaqueRoot}), rootUid)
+            << "a published uid never changes";
+        EXPECT_EQ(uidOf("SELECT uid::text FROM directories WHERE fs_entry_id = $1", pqxx::params{opaqueDir}), dirUid);
+        EXPECT_EQ(uidOf("SELECT uid::text FROM symlinks WHERE fs_entry_id = $1", pqxx::params{opaqueLink}), linkUid);
+        EXPECT_EQ(uidOf("SELECT uid::text FROM recovery_snapshot WHERE id = $1", pqxx::params{readySnap}), snapshotUid);
+        EXPECT_EQ(uidOf("SELECT object_uid::text FROM files_trashed WHERE id = $1", pqxx::params{opaqueTrashKept}),
+                  trashedUid);
+        EXPECT_FALSE(txn.exec("SELECT uid FROM recovery_snapshot WHERE id = $1", pqxx::params{creatingSnap})
+                         .one_field_ref().is_null());
+        EXPECT_FALSE(txn.exec("SELECT object_uid FROM files_trashed WHERE id = $1", pqxx::params{localTrash})
+                         .one_field_ref().is_null()) << "a trashed file outside opaque_v1 gets a uid";
+        EXPECT_TRUE(txn.exec("SELECT object_uid FROM files_trashed WHERE id = $1", pqxx::params{opaqueTrashOld})
+                        .one_field_ref().is_null()) << "an opaque_v1 trash row never gets an invented object uid";
+
+        // Accounts, groups and roles get no second id; every existing account and group is local. Folders and
+        // symlinks: raw libsodium bytes.
+        for (const auto* t : {"users", "groups", "vault_role", "admin_role"})
+            EXPECT_FALSE(columnExists(txn, t, "uid")) << t;
+        for (const auto* t : {"users", "groups"})
+            EXPECT_EQ(count(std::string("SELECT count(*) FROM ") + t +
+                            " WHERE remote OR home_node IS NOT NULL OR home_id IS NOT NULL"), 0) << t;
+        EXPECT_GT(count("SELECT count(*) FROM (SELECT d.uid::text AS t FROM directories d JOIN fs_entry e ON "
+                        "e.id = d.fs_entry_id WHERE e.vault_id = " + std::to_string(local) + " UNION ALL SELECT "
+                        "uid::text FROM directories WHERE fs_entry_id = " + std::to_string(opaqueNew) +
+                        " UNION ALL SELECT uid::text FROM symlinks WHERE fs_entry_id = " + std::to_string(localLink) +
+                        ") u WHERE substr(t, 15, 1) <> '4'"), 0)
+            << "folder and symlink uids come from libsodium, not gen_random_uuid()";
+
+        // The backfill touched no identity, access or file history.
+        EXPECT_EQ(count("SELECT count(*) FROM identity_change_log"), identityLog);
+        EXPECT_EQ(count("SELECT count(*) FROM fs_change_log"), changeJournal);
+        EXPECT_EQ(updatedAt(), updatedBefore);
+
+        // From here on: NOT NULL and immutable; accounts insert as before, and identity tracking still sees them.
+        {
+            pqxx::subtransaction noUid(txn, "no_uid");
+            EXPECT_THROW(noUid.exec("INSERT INTO directories (fs_entry_id) VALUES ($1)", pqxx::params{opaqueFile}),
+                         pqxx::not_null_violation);
+        }
+        {
+            pqxx::subtransaction change(txn, "change");
+            EXPECT_THROW(change.exec("UPDATE directories SET uid = gen_random_uuid() WHERE fs_entry_id = $1",
+                                     pqxx::params{opaqueDir}), pqxx::sql_error);
+        }
+        EXPECT_NO_THROW(txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_158_new', 'x')"));
+        txn.exec("UPDATE users SET email = 'claude_test_158_b@vaulthalla.test' WHERE id = $1", pqxx::params{owner});
+        EXPECT_GT(count("SELECT count(*) FROM identity_change_log"), identityLog) << "identity tracking is on";
+
+        const auto snapshot = [&] {
+            return txn.exec("SELECT concat_ws('|', "
+                            "(SELECT string_agg(uid::text, ',' ORDER BY fs_entry_id) FROM directories), "
+                            "(SELECT string_agg(uid::text, ',' ORDER BY fs_entry_id) FROM symlinks), "
+                            "(SELECT string_agg(uid::text, ',' ORDER BY id) FROM recovery_snapshot), "
+                            "(SELECT string_agg(COALESCE(object_uid::text, '-'), ',' ORDER BY id) FROM files_trashed))")
+                .one_field_ref().as<std::string>();
+        };
+        const auto before = snapshot();
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "158_permanent_ids.sql")));
+        ASSERT_NO_THROW(migseed::assignPermanentIds(txn));
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / "159_permanent_ids_required.sql")));
+        EXPECT_EQ(snapshot(), before) << "running 158, its data step and 159 again changes nothing";
     });
 }
 

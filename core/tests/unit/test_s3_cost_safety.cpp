@@ -1698,7 +1698,8 @@ TEST(S3CostSafetyTest, DbFileBackingPathOmitsGlobalRootAlias) {
             pqxx::params{seededVaultId, rootId, "entry_backing_" + suffix, mountAlias, userId}
         ).one_field_ref().as<uint32_t>();
         txn.exec(
-            "INSERT INTO directories (fs_entry_id, size_bytes, file_count, subdirectory_count) VALUES ($1, 4, 1, 1)",
+            "INSERT INTO directories (fs_entry_id, size_bytes, file_count, subdirectory_count, uid) "
+            "VALUES ($1, 4, 1, 1, gen_random_uuid())",
             pqxx::params{vaultEntryId});
 
         const auto dirId = txn.exec(
@@ -1707,7 +1708,8 @@ TEST(S3CostSafetyTest, DbFileBackingPathOmitsGlobalRootAlias) {
             pqxx::params{seededVaultId, vaultEntryId, dirName, dirAlias, userId, "/" + dirName}
         ).one_field_ref().as<uint32_t>();
         txn.exec(
-            "INSERT INTO directories (fs_entry_id, size_bytes, file_count, subdirectory_count) VALUES ($1, 4, 1, 0)",
+            "INSERT INTO directories (fs_entry_id, size_bytes, file_count, subdirectory_count, uid) "
+            "VALUES ($1, 4, 1, 0, gen_random_uuid())",
             pqxx::params{dirId});
 
         const auto fileId = txn.exec(

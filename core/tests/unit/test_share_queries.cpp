@@ -57,7 +57,7 @@ protected:
                 pqxx::params{vaultId, "/", userId, "/"}
             ).one_field_ref().as<uint32_t>();
 
-            txn.exec("INSERT INTO directories (fs_entry_id) VALUES ($1)", pqxx::params{rootEntryId});
+            txn.exec("INSERT INTO directories (fs_entry_id, uid) VALUES ($1, gen_random_uuid())", pqxx::params{rootEntryId});
         });
     }
 
@@ -122,14 +122,14 @@ TEST_F(ShareQueryTest, EntryPathLookupPreservesLegacyVaultMountSegment) {
             "VALUES ($1, NULL, $2, $3, $4, $4, $5, $6) RETURNING id",
             pqxx::params{out.vaultId, "legacy_mount", "legacy-mount-root", userId, "/", 9100}
         ).one_field_ref().as<uint32_t>();
-        txn.exec("INSERT INTO directories (fs_entry_id) VALUES ($1)", pqxx::params{vaultRootId});
+        txn.exec("INSERT INTO directories (fs_entry_id, uid) VALUES ($1, gen_random_uuid())", pqxx::params{vaultRootId});
 
         const auto miscId = txn.exec(
             "INSERT INTO fs_entry (vault_id, parent_id, name, base32_alias, created_by, last_modified_by, path, inode) "
             "VALUES ($1, $2, $3, $4, $5, $5, $6, $7) RETURNING id",
             pqxx::params{out.vaultId, vaultRootId, "misc", "legacy-mount-misc", userId, "/misc", 9101}
         ).one_field_ref().as<uint32_t>();
-        txn.exec("INSERT INTO directories (fs_entry_id) VALUES ($1)", pqxx::params{miscId});
+        txn.exec("INSERT INTO directories (fs_entry_id, uid) VALUES ($1, gen_random_uuid())", pqxx::params{miscId});
 
         out.fileEntryId = txn.exec(
             "INSERT INTO fs_entry (vault_id, parent_id, name, base32_alias, created_by, last_modified_by, path, inode) "
