@@ -11,6 +11,7 @@ import {
   LinkIcon,
   PeopleGroupIcon,
   SackDollarIcon,
+  ServerIcon,
   ShareNodesIcon,
   ShieldKeyholeIcon,
   SlidersIcon,
@@ -28,7 +29,7 @@ export interface NavItem {
   shownWhen?: NavSignal
 }
 
-export type NavSignal = 'syncConflicts' | 'cloudStorage'
+export type NavSignal = 'syncConflicts' | 'cloudStorage' | 'peers'
 
 export interface NavSection {
   label?: string
@@ -99,6 +100,15 @@ export const NAV: NavSection[] = [
         icon: FileShieldIcon,
         requires: { permission: 'admin.audits.view' },
         keywords: 'audit log hipaa compliance events sign-in history',
+      },
+      // Experimental: shown only while the server has linked servers switched on (peer.status), to super admins.
+      {
+        label: 'Linked servers',
+        href: '/linked-servers',
+        icon: ServerIcon,
+        requires: { superAdmin: true },
+        shownWhen: 'peers',
+        keywords: 'peer link pair server experimental',
       },
       { label: 'Notifications', href: '/notifications', icon: EnvelopeIcon, requires: { superAdmin: true }, keywords: 'operator email' },
       { label: 'Settings', href: '/settings', icon: SlidersIcon, requires: { superAdmin: true }, keywords: 'config' },

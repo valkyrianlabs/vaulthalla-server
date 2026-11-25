@@ -18,7 +18,7 @@ import { Field, Input } from '@/components/ui/Field'
 import { InlineError } from '@/components/ui/State'
 import { KeyIcon } from '@/components/ui/icons'
 import { PASSKEY_HINT, PASSKEY_LABEL } from '@/models/mfa'
-import { readStepUp, STEP_UP_ACTION, stepUpWindowText, type StepUpMethod } from '@/models/stepUp'
+import { readStepUp, stepUpAction, stepUpWindowText, type StepUpMethod } from '@/models/stepUp'
 
 interface Ceremony {
   id: string
@@ -151,7 +151,7 @@ export const StepUpDialog = () => {
       <DialogContent
         size="sm"
         title="Confirm it’s you"
-        description={`${STEP_UP_ACTION[request.family]}. ${stepUpWindowText(request)}`}
+        description={`${stepUpAction(request)}. ${stepUpWindowText(request)}`}
         data-testid="stepup-dialog">
         {unavailable ? (
           <div className="space-y-3">
