@@ -59,8 +59,7 @@ std::optional<std::string> normalizedSpki(const std::optional<std::string>& text
 
 // Who may: a super admin who can sign in, on the host socket, the web console or a full-access, directly connected
 // device; never an agent, a scoped device, a relayed device or a linked server (design/peers/link.md).
-void requireLinker(const Actor& actor, const std::string& what) {
-    requireExperimental();
+void requireLinkerRights(const Actor& actor, const std::string& what) {
     requireActor(actor);
     if (actor->systemOnly() || !actor->authorizing()) throw Denied("this account cannot " + what);
     if (!actor->isSuperAdmin()) throw Denied("only super admins may " + what);
@@ -80,6 +79,20 @@ void requireLinker(const Actor& actor, const std::string& what) {
             return;
         }
     }
+}
+
+// Who compared the code: Vaulthalla Desktop when the call came over a device session (requireLinkerRights already
+// refused scoped and relayed ones, so it is a full-access, directly connected device: the brokered path), else a person
+// (the web console, the host socket). Never inferred from whether a key was pinned: a person may pin one too.
+std::string comparedByCaller() {
+    const auto* scope = auth::stepup::Scope::current();
+    return scope && scope->channel() == auth::stepup::Channel::Device ? "desktop" : "person";
+}
+
+// Every management operation but status(): the switch first, then who.
+void requireLinker(const Actor& actor, const std::string& what) {
+    requireExperimental();
+    requireLinkerRights(actor, what);
 }
 
 std::string serverSpkiOrThrow() {
@@ -145,6 +158,11 @@ void requireExperimental() {
                                             "peers.experimental: true in config.yaml and restart the daemon");
 }
 
+bool enabled(const Actor& actor) {
+    requireLinkerRights(actor, "see whether servers can be linked");
+    return vh::config::Registry::get().peers.experimental;
+}
+
 // ---- pairing, the side that opens a window
 
 OpenWindow openWindow(const Actor& actor) {
@@ -197,7 +215,7 @@ Record approve(const Actor& actor, const std::string& requestId, const std::stri
         row = Peers::insert({.node_id = claim.card.node_id, .name = claim.card.name, .spki_sha256 = claim.spki_sha256,
                              .attest_public_keys = claim.card.attest_public_keys,
                              .wrap_public_key = claim.card.wrap_public_key, .endpoints = {}, .approved_by = actor->id,
-                             .compared_by = expect ? "desktop" : "person", .peer_protocol = claim.card.peer_protocol,
+                             .compared_by = comparedByCaller(), .peer_protocol = claim.card.peer_protocol,
                              .product_version = claim.card.product_version});
     } catch (...) {
         pairing.abort(requestId, vh::device::PairingClock::now());
@@ -208,7 +226,8 @@ Record approve(const Actor& actor, const std::string& requestId, const std::stri
                                                 vh::device::WindowKind::Peer);
     audit::record({.action = "peer.link", .actor_id = actor->id, .actor = actor->name(),
                    .details = {{"peer", row.id}, {"node_id", row.node_id}, {"key", row.shortId()},
-                               {"compared_by", row.compared_by}, {"source_ip", claim.source_ip}, {"side", "accepting"}}},
+                               {"compared_by", row.compared_by}, {"pinned", expect.has_value()},
+                               {"source_ip", claim.source_ip}, {"side", "accepting"}}},
                   fmt::format("[peer] {} linked server {} ('{}', key {}) from {}; the code was compared by {}",
                               actor->name(), row.node_id, row.name, row.shortId(), claim.source_ip,
                               row.compared_by == "desktop" ? "Desktop" : "a person"));
@@ -236,7 +255,7 @@ vh::peer::LinkAttempt linkStart(const Actor& actor, const std::vector<vh::peer::
     auth::stepup::requireForServerLink("peer.link.start:" + expect.value_or("tofu") + ":" +
                                        vh::peer::toString(endpoints.front()));
     const auto service = links();
-    const auto id = service->startLink(actor->id, endpoints, expect);
+    const auto id = service->startLink(actor->id, endpoints, expect, comparedByCaller());
     return service->attempt(id).value_or(vh::peer::LinkAttempt{.id = id, .owner_id = actor->id});
 }
 

@@ -458,7 +458,8 @@ TEST(PeerRouting, ScopedRelayedShareAndAgentCallersNeverManageLinks) {
     std::vector<std::string> management;
     for (const auto& c : contract::ws::commands())
         if (c.command.starts_with("peer.") && c.auth == "human") management.push_back(c.command);
-    ASSERT_EQ(management.size(), 12u);
+    ASSERT_EQ(management.size(), 13u) << "the twelve of the design and peer.status";
+    EXPECT_NE(std::ranges::find(management, std::string("peer.status")), management.end());
     // Device principals are registered with the session manager: each is closed at the end.
     const auto full = deviceSession("destructive", false);
     const auto readOnly = deviceSession("read", false);
@@ -504,6 +505,7 @@ TEST(PeerRouting, ScopedRelayedShareAndAgentCallersNeverManageLinks) {
         refusedAs([&] { (void)ops::peers::list(admin); });
         refusedAs([&] { (void)ops::peers::openWindow(admin); });
         refusedAs([&] { (void)ops::peers::linkStart(admin, {{.host = "h", .port = 1, .kind = "manual"}}, std::nullopt); });
+        refusedAs([&] { (void)ops::peers::enabled(admin); });
     }
     for (const auto& session : {readOnly, relayed}) {
         const auth::stepup::Scope device(session);
@@ -544,6 +546,7 @@ TEST(PeerSwitch, OffByDefaultAndEveryOperationSaysSo) {
     off([&] { (void)ops::peers::linkStart(admin, {{.host = "h", .port = 1, .kind = "manual"}}, std::nullopt); });
     off([&] { (void)ops::peers::unlink(admin, "1"); });
     off([&] { (void)ops::peers::pairRequest(vh::device::Peer{}, json::object()); });
+    EXPECT_FALSE(ops::peers::enabled(admin)) << "peer.status answers the switch instead of refusing";
     config::Registry::set(saved);
 }
 

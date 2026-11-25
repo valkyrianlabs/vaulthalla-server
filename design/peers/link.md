@@ -1,7 +1,8 @@
 # Server link: pairing two Vaulthalla servers
 
 Status: phase 1a built (2026-11-25), experimental and off by default (`peers.experimental` in config.yaml): pairing,
-the link, unlinking and the announced identity rotation, without a console page or Desktop's brokered flow. What the
+the link, unlinking and the announced identity rotation, and the console's Linked servers page; not Desktop's brokered
+flow. What the
 build changed or decided is in "As built (phase 1a)" at the end; the rest of this text is the design. It covers how two
 servers pair, how they authenticate each other afterwards, what a linked server may call, and how the link is
 unlinked and rotated. It does not cover what travels over the link for a mirrored vault ([`mirror.md`](mirror.md)) or
@@ -218,7 +219,7 @@ Linking does not require `device_server.remote` on both servers, only that one o
 
 Management, for a person (super admin; console, `vh`, or a full-access Desktop):
 
-`peer.pairing.open` · `peer.pairing.close` · `peer.pairing.pending` · `peer.pairing.approve` · `peer.pairing.deny` ·
+`peer.status` (as built: whether the switch is on) · `peer.pairing.open` · `peer.pairing.close` · `peer.pairing.pending` · `peer.pairing.approve` · `peer.pairing.deny` ·
 `peer.link.start` · `peer.link.status` · `peer.link.cancel` · `peer.list` · `peer.get` · `peer.rename` ·
 `peer.unlink`
 
@@ -233,9 +234,9 @@ CLI: `vh peer pair`, `vh peer link <address> [--fingerprint <hex>]`, `vh peer li
 
 ## Audit events
 
-`peer.pairing.open`, `peer.link.request`, `peer.link` (both sides, with the peer's node id and fingerprint and how
-the code was compared: person or Desktop), `peer.link.denied`, `peer.unlink`, `peer.identity.rotate`,
-`peer.connection` (up or down, at most one per minute per peer).
+`peer.pairing.open`, `peer.link.request`, `peer.link` (both sides, with the peer's node id and fingerprint, how
+the code was compared: person or Desktop, and as built whether a key was pinned), `peer.link.denied`, `peer.unlink`,
+`peer.identity.rotate`, `peer.connection` (up or down, at most one per minute per peer).
 
 ## Invariants (each gets a test)
 
@@ -287,7 +288,13 @@ the owner's instruction to build without waiting for review; compatibility polic
   A writes its row only once `peer.pair.status` says approved; if A cannot write it then (a crash, a conflict), B keeps
   a row A doesn't have, and an admin unlinks it on B. B closes the window when it approves.
 - **The brokered check on B** (`expect_spki` on `peer.pairing.approve`) is applied before the code: another key denies
-  the request whatever the code. `compared_by` is `desktop` whenever `expect_spki` was given.
+  the request whatever the code.
+- **`compared_by` follows the channel, not the pin.** It records who compared the code, from the session of the call
+  that made the link on each side (`peer.pairing.approve` on the accepting side; `peer.link.start` on the dialling side,
+  carried on the attempt until its row is written): `desktop` over a full-access device session (the brokered path,
+  where Desktop makes both calls), `person` from the console or the host socket, also when that person pinned the
+  other key. Whether a key was pinned (`expect_spki`) is recorded only in the `peer.link` audit event's details as
+  `pinned`. No column for it.
 - **Who dials.** Both ends dial a live row's endpoints when it has no connection, loopback included (two servers on one
   host); a row with no endpoints yet (the accepting side before the first peer.endpoints) waits to be dialled. Backoff
   1 s to 2 min with full jitter. A newer connection from the same dialler replaces the older one (it reconnected); the
@@ -305,4 +312,9 @@ the owner's instruction to build without waiting for review; compatibility polic
   dialling side. `cloud::RelayService` keeps its own (it also speaks plain ws to a loopback relay over a
   `beast::tcp_stream`); only its reconnect backoff moved to the shared `concurrency::jitteredBackoff`.
 - **Not built here** (later phases): the principal kind in RBAC tables and vault roles for peers (identity.md, with the
-  mirror), any `peer.mirror.*` or `peer.identity.*` command, bulk lanes, the console page, Desktop's brokered flow.
+  mirror), any `peer.mirror.*` or `peer.identity.*` command, bulk lanes, Desktop's brokered flow.
+- **The console page** (built after phase 1a, same day): `/linked-servers` for super admins, shown only while the switch
+  is on. The console learns the switch from `peer.status {enabled}`, the one management command that answers while it
+  is off (the same callers as the rest), so no page load provokes `peers_experimental` and nothing advertises a
+  switched-off feature; a server without the command leaves the page out too. It drives the commands above, never the
+  wire set.

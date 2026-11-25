@@ -18,7 +18,7 @@ export const InitialPasswordWarning = () => {
       <div className="min-w-0 flex-1 text-fg-muted">
         <p className="font-medium text-fg">The initial super-admin password is still stored in plain text on the server.</p>
         <p className="mt-1">
-          It’s in <code className="rounded bg-black/30 px-1 font-mono text-xs text-fg">{file}</code>. Either{' '}
+          It’s in <code className="rounded bg-black/30 px-1 font-mono text-xs break-all text-fg">{file}</code>. Either{' '}
           <Link href="/account" className="text-accent-text underline-offset-2 hover:underline">
             change your password
           </Link>{' '}

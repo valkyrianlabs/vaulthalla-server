@@ -25,13 +25,17 @@
 // device reached through the Vaulthalla Cloud relay, an agent (MCP, `vh mcp`), a share session or a linked server:
 // ops::Refused("peer_forbidden") here, on top of the router's and the MCP catalog's own refusals.
 //
-// Gate: while peers.experimental is off every operation refuses with ops::Refused("peers_experimental").
+// Gate: while peers.experimental is off every operation but enabled() refuses with ops::Refused("peers_experimental").
 //
 // The wire side (peer.pair.*, peer.identity.rotate, peer.unlinked) takes the connection instead of an actor.
 namespace vh::ops::peers {
 
 // ops::Refused("peers_experimental") unless peers.experimental is on.
 void requireExperimental();
+
+// Whether peers.experimental is on: the one operation that answers with the switch off, so that a console or Desktop
+// can leave linked servers out without provoking a refusal (ws peer.status). The same callers as the rest.
+[[nodiscard]] bool enabled(const Actor& actor);
 
 // ---- pairing, the side that opens a window (B)
 
@@ -55,7 +59,8 @@ struct PendingLinks {
 
 // Number matching: `code` must be the one the dialling server shows. With `expectSpki` (the brokered path: Desktop's
 // pin for the dialling server) the requesting key must be that one. Either mismatch denies the request. Writes the
-// `peer` row (sharing identities). Audited peer.link (compared_by person, or desktop with expect_spki).
+// `peer` row (sharing identities). compared_by follows the caller's channel: desktop over a (full-access) device
+// session, person in the console or on the host socket. Audited peer.link with compared_by and pinned (expectSpki).
 [[nodiscard]] vh::peer::Record approve(const Actor& actor, const std::string& requestId, const std::string& code,
                                        const std::optional<std::string>& expectSpki);
 void deny(const Actor& actor, const std::string& requestId);
@@ -63,8 +68,9 @@ void deny(const Actor& actor, const std::string& requestId);
 // ---- pairing, the dialling side (A)
 
 // Starts dialling `endpoints` (the address an admin typed, or what peer.pairing.open answered on the other server);
-// with `expectSpki` only that key completes the handshake, else trust on first use guarded by the code. Returns the
-// attempt (connecting); peer.link.status shows its code once it has one.
+// with `expectSpki` only that key completes the handshake, else trust on first use guarded by the code. The caller's
+// channel decides the row's compared_by, as for approve(). Returns the attempt (connecting); peer.link.status shows
+// its code once it has one.
 [[nodiscard]] vh::peer::LinkAttempt linkStart(const Actor& actor, const std::vector<vh::peer::Endpoint>& endpoints,
                                               const std::optional<std::string>& expectSpki);
 [[nodiscard]] vh::peer::LinkAttempt linkStatus(const Actor& actor, const std::string& linkId);

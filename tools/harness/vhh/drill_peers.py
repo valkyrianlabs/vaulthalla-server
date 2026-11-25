@@ -11,7 +11,7 @@ Then on (config.yaml appended, both restarted):
   2. the link survives B restarting (killed), then A restarting: it is dialled again and comes back by itself;
   3. A unlinks: B is told and revokes its side too; neither dials or accepts the other again;
   4. the brokered path (expect_spki): A refuses a listener whose key is not the expected one, B refuses a request whose
-     key is not the expected one, and with both keys given the link is made, compared by Desktop;
+     key is not the expected one, and with both keys given the link is made, compared by a person (from `vh`);
   5. A rotates its identity: B is told first (signed by the old key), keeps the link and pins the new key once it sees
      it; then A's emergency rotation (--revoke-peers) drops the link, and B can't reach A under its old pins.
 
@@ -239,8 +239,10 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
         report.check("4: with both keys given the link is made", cp.returncode == 0, (cp.stdout + cp.stderr)[-300:])
         pa = _wait("the link up on A", lambda: _connected(a, node_b))
         pb = _wait("the link up on B", lambda: _connected(b, node_a))
-        report.check("4: compared by Desktop on both sides (expect_spki)",
-                     pa["compared_by"] == "desktop" and pb["compared_by"] == "desktop",
+        # compared_by records who compared, from the caller's channel: both calls came from `vh` (a person), so both
+        # rows read person although both keys were pinned (Desktop's brokered link, over device sessions, reads desktop).
+        report.check("4: pinned at the terminal, compared by a person on both sides (the channel, not the pin)",
+                     pa["compared_by"] == "person" and pb["compared_by"] == "person",
                      json.dumps({"a": pa["compared_by"], "b": pb["compared_by"]}))
 
         # ------------------------------------------------------------------ 5. rotation

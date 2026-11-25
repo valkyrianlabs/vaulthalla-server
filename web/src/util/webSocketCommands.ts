@@ -1004,8 +1004,10 @@ export interface WebSocketCommandMap {
   'device.identity.rotate': WsContract['device.identity.rotate']
   'device.server.identity': WsContract['device.server.identity']
   'device.endpoints': WsContract['device.endpoints']
-  // Linked servers (design/peers/link.md; experimental, off by default). No console page yet; typed here because every
-  // registered command is. peer.pair.* and the wire set (peer.hello ... peer.unlinked) only pass between two servers.
+  // Linked servers (design/peers/link.md; experimental, off by default): the Linked servers page (features/peers).
+  // peer.status answers whether the switch is on (the only one that answers while it is off). peer.pair.* and the wire
+  // set (peer.hello ... peer.unlinked) only pass between two servers; the console never sends them.
+  'peer.status': WsContract['peer.status']
   'peer.pairing.open': WsContract['peer.pairing.open']
   'peer.pairing.close': WsContract['peer.pairing.close']
   'peer.pairing.pending': WsContract['peer.pairing.pending']

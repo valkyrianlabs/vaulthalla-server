@@ -78,6 +78,8 @@ struct LinkAttempt {
     std::string peer_spki_sha256{};
     std::optional<uint32_t> peer_id{};      // linked: the row written here
     std::optional<std::string> expect_spki{};
+    // Who compares the code (person | desktop): from the channel of the peer.link.start call; the row gets it.
+    std::string compared_by{"person"};
     std::string address{};                  // the endpoint that answered
     std::string error{};
     std::time_t created_at{}, updated_at{};
@@ -124,9 +126,10 @@ public:
     // A row changed (linked, endpoints): look again now instead of at the next tick.
     void wake();
 
-    // peer.link.start: returns the attempt's id at once; the attempt runs on a thread of its own.
+    // peer.link.start: returns the attempt's id at once; the attempt runs on a thread of its own. `comparedBy`
+    // (person | desktop) is who compares the code, from the starting call's channel; the row written here gets it.
     [[nodiscard]] std::string startLink(uint32_t ownerId, std::vector<Endpoint> endpoints,
-                                        std::optional<std::string> expectSpki);
+                                        std::optional<std::string> expectSpki, std::string comparedBy);
     [[nodiscard]] std::optional<LinkAttempt> attempt(const std::string& id) const;
     // Stops an attempt that has not finished; false when there is none to stop.
     bool cancelLink(const std::string& id);

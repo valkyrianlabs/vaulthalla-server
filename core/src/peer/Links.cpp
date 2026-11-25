@@ -859,12 +859,13 @@ std::vector<uint32_t> LinkService::announceRotation(const vh::device::ServerIden
 // ---- pairing, the dialling side -------------------------------------------------------------------------------------
 
 std::string LinkService::startLink(const uint32_t ownerId, std::vector<Endpoint> endpoints,
-                                   std::optional<std::string> expectSpki) {
+                                   std::optional<std::string> expectSpki, std::string comparedBy) {
     ensureIo();
     LinkAttempt a;
     a.id = dc::randomHex(8);
     a.owner_id = ownerId;
     a.expect_spki = std::move(expectSpki);
+    a.compared_by = comparedBy == "desktop" ? "desktop" : "person";
     a.created_at = a.updated_at = wallNow();
     {
         std::scoped_lock lock(attemptsMutex_);
@@ -931,6 +932,7 @@ void LinkService::runAttempt(const std::string& id, std::vector<Endpoint> endpoi
     const auto snapshot = attempt(id);
     if (!snapshot) return;
     const auto expect = snapshot->expect_spki;
+    const auto comparedBy = snapshot->compared_by;
     const auto ownerId = snapshot->owner_id;
     const auto identity = vh::device::currentServerIdentity();
     if (!identity) return fail("failed", "the device listener has no server identity yet");
@@ -1090,7 +1092,7 @@ void LinkService::runAttempt(const std::string& id, std::vector<Endpoint> endpoi
             .node_id = theirs.node_id, .name = theirs.name, .spki_sha256 = principal->spki_hex,
             .attest_public_keys = theirs.attest_public_keys, .wrap_public_key = theirs.wrap_public_key,
             .endpoints = endpoints, .approved_by = ownerId == 0 ? std::nullopt : std::optional<uint32_t>(ownerId),
-            .compared_by = expect ? "desktop" : "person", .peer_protocol = theirs.peer_protocol,
+            .compared_by = comparedBy, .peer_protocol = theirs.peer_protocol,
             .product_version = theirs.product_version});
         updateAttempt(id, [&](LinkAttempt& x) {
             x.state = "linked";
@@ -1098,7 +1100,8 @@ void LinkService::runAttempt(const std::string& id, std::vector<Endpoint> endpoi
         });
         audit::record({.action = "peer.link", .actor_id = ownerId,
                        .details = {{"peer", row.id}, {"node_id", row.node_id}, {"key", row.shortId()},
-                                   {"compared_by", row.compared_by}, {"side", "dialling"}}},
+                                   {"compared_by", row.compared_by}, {"pinned", expect.has_value()},
+                                   {"side", "dialling"}}},
                       fmt::format("[peer] linked server {} ('{}', key {}); the code was compared by {}", row.node_id,
                                   row.name, row.shortId(), row.compared_by == "desktop" ? "Desktop" : "a person"));
     } catch (const std::exception& e) {

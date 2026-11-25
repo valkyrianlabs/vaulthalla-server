@@ -40799,6 +40799,46 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
+      "command": "peer.status",
+      "confirmations": [],
+      "description": "Whether linked servers are switched on here (peers.experimental in config.yaml). The one peer.* command that answers while the switch is off, so a console or Desktop can leave linked servers out without provoking peers_experimental. The same callers as the other management commands.",
+      "effect": "read",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "description": "peers.experimental: every other peer.* command refuses while false.",
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
       "command": "peer.unlink",
       "confirmations": [],
       "description": "Unlink a server: the row is revoked (kept for the audit trail), its connections close at once, and it is told (peer.unlinked) if it is connected. Linking it again needs a new pairing.",
@@ -61233,5 +61273,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "965f58905ea791d306bf6136ae93a310ad8c076b070ce871df72a47d959cc7d3"
+  "ws_hash": "18989ea9fb6fbeab1f54bdf40fdd1aa255e93d07632025a9e9f7119ff68690a4"
 }

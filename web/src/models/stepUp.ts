@@ -61,6 +61,11 @@ export const STEP_UP_ACTION: Readonly<Record<StepUpFamily, string>> = {
   'connector.trust': 'Let an app connect to this server remotely',
 }
 
+// The dialog's sentence for one request. Linking two servers asks for the device.trust family too (bound to the
+// request or the address: peer.pairing.approve:… / peer.link.start:…), but trusts a server, not a device.
+export const stepUpAction = (request: Pick<StepUpRequest, 'family' | 'target'>): string =>
+  request.family === 'device.trust' && request.target?.startsWith('peer.') ? 'Link this server with another server' : STEP_UP_ACTION[request.family]
+
 // Target-bound families confirm one exact action, once; the others hold for the grant window.
 export const isTargetBound = (family: StepUpFamily): boolean =>
   family === 'keys' || family === 'device.trust' || family === 'data.destroy' || family === 'connector.trust'
