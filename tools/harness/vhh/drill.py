@@ -620,7 +620,7 @@ Node.key_status_any = _key_status_any
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="vhh drill", description=__doc__.split("\n\n")[0])
-    ap.add_argument("kind", choices=("recover", "migrate", "mirror"))
+    ap.add_argument("kind", choices=("recover", "migrate", "mirror", "peers"))
     ap.add_argument("--build", required=True)
     ap.add_argument("--files", type=int, default=2000)
     ap.add_argument("--s3", choices=("fake", "r2"), default="fake")
@@ -631,6 +631,12 @@ def main(argv: list[str] | None = None) -> int:
     if os.geteuid() != 0:
         print("vhh drill: needs root (private daemon instances): use sudo", file=sys.stderr)
         return 2
+    if a.kind == "peers":
+        from vhh import drill_peers
+        ok, summary = drill_peers.run(Path(a.build).resolve(), keep=a.keep, out=Path(a.out) if a.out else None)
+        print(f"vhh drill peers: {'PASS' if ok else 'FAIL'}: {sum(c['ok'] for c in summary.get('checks', []))}/"
+              f"{len(summary.get('checks', []))} checks; report {a.out or summary.get('report')}")
+        return 0 if ok else 1
     if a.kind == "mirror":
         from vhh import drill_mirror
         ok, summary = drill_mirror.run(Path(a.build).resolve(), keep=a.keep, out=Path(a.out) if a.out else None)
