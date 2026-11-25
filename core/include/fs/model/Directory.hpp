@@ -2,12 +2,18 @@
 
 #include "Entry.hpp"
 #include "db/Fwd.hpp"
+#include "crypto/id/ObjectUid.hpp"
+#include <optional>
 #include <vector>
 
 namespace vh::fs::model {
     struct Directory final : Entry {
         unsigned int file_count{0};
         unsigned int subdirectory_count{0};
+        // directories.uid (migration 158): the folder's permanent id, the same on every server and in the manifest.
+        // Drawn by db::query::fs::Directory::upsertDirectory when the row is created and kept after. Empty on a
+        // folder not yet stored.
+        std::optional<vh::crypto::id::ObjectUid> uid;
 
         Directory() = default;
 

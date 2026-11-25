@@ -56,6 +56,7 @@ struct Credentials {
     std::string passwordHash;
     bool active = true;
     bool systemOnly = false;
+    bool remote = false;   // a remote account has no credentials and never signs in (migration 158)
 };
 
 class Loader {
@@ -70,7 +71,7 @@ public:
 
     static void pruneChangeLog(std::chrono::seconds olderThan);
 
-    // Credential checks never go through cached identity state.
+    // Credential checks never go through cached identity state. By name: the local account of that name only.
     [[nodiscard]] static std::optional<Credentials> credentialsByName(const std::string& name);
     [[nodiscard]] static std::optional<Credentials> credentialsById(uint32_t id);
 };

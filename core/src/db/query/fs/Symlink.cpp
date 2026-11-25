@@ -1,5 +1,6 @@
 #include "db/query/fs/Symlink.hpp"
 
+#include "crypto/id/ObjectUid.hpp"
 #include "db/Transactions.hpp"
 #include "db/encoding/u8.hpp"
 #include "db/query/fs/Directory.hpp"
@@ -33,6 +34,8 @@ unsigned int Symlink::upsertSymlink(const SymlinkPtr& symlink) {
         p.append(symlink->is_hidden);
         p.append(symlink->is_system);
         p.append(symlink->target);
+        if (!symlink->uid) symlink->uid = vh::crypto::id::newObjectUid();   // migration 158: assigned at insert
+        p.append(vh::crypto::id::toUuid(*symlink->uid));
 
         const auto id = txn.exec(pqxx::prepped{"insert_symlink_full"}, p).one_field_ref().as<unsigned int>();
 

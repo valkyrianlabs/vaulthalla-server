@@ -315,12 +315,13 @@ void Manager::apply(IdentitySnapshot&& snap, const bool loadedAll) {
         }
     }
 
-    // Secondary indexes follow the published states.
+    // Secondary indexes follow the published states. Names and Linux ids find local accounts only: a remote account
+    // may share a name with a local one (migration 158) and has no Linux id; it is reached by id.
     next->byUid.clear();
     next->byName.clear();
     for (const auto& [_, u] : next->users) {
         const auto s = u->state();
-        if (s->deleted) continue;
+        if (s->deleted || s->remote) continue;
         next->byName[s->name] = u;
         if (s->meta.linux_uid) next->byUid[*s->meta.linux_uid] = u;
     }
@@ -328,7 +329,7 @@ void Manager::apply(IdentitySnapshot&& snap, const bool loadedAll) {
     next->groupsByName.clear();
     for (const auto& [_, g] : next->groups) {
         const auto s = g->state();
-        if (s->deleted) continue;
+        if (s->deleted || s->remote) continue;
         next->groupsByName[s->name] = g;
         if (s->linux_gid) next->byGid[*s->linux_gid] = g;
     }

@@ -8,6 +8,9 @@
 namespace vh::db::query::identities {
 
 uint32_t Group::createGroup(const vh::identities::GroupState& draft) {
+    // Remote groups are made by the link's principal stream (a later phase), never by a group write.
+    if (draft.remote || draft.homeNode || draft.homeId)
+        throw std::runtime_error("remote groups are created only by a linked server's directory");
     return Transactions::exec("Group::createGroup", [&](pqxx::work& txn) {
         const pqxx::params p{draft.name, draft.description, draft.linux_gid};
 
@@ -22,6 +25,9 @@ uint32_t Group::createGroup(const vh::identities::GroupState& draft) {
 
 void Group::updateGroup(const uint32_t id, const vh::identities::GroupState& next) {
     Transactions::exec("Group::updateGroup", [&](pqxx::work& txn) {
+        const auto remote = txn.exec("SELECT remote FROM groups WHERE id = $1", pqxx::params{id});
+        if (!remote.empty() && remote.one_field_ref().as<bool>())
+            throw std::runtime_error("remote groups change only on their home server");
         const pqxx::params p{id, next.name, next.description, next.linux_gid};
         txn.exec(pqxx::prepped{"update_group"}, p);
         upsertVaultRoles(txn, next.roles.vaults, "group", id);

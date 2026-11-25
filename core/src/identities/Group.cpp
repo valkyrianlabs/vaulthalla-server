@@ -1,6 +1,7 @@
 #include "identities/Group.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
+#include "db/encoding/has.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "protocols/shell/Table.hpp"
 #include "protocols/shell/util/lineHelpers.hpp"
@@ -32,6 +33,7 @@ std::string Group::name() const { return state()->name; }
 std::optional<unsigned int> Group::linuxGid() const { return state()->linux_gid; }
 std::optional<std::string> Group::description() const { return state()->description; }
 bool Group::deleted() const { return state()->deleted; }
+bool Group::remote() const { return state()->remote; }
 
 GroupState groupStateFromRow(pqxx::row_ref gr) {
     GroupState s;
@@ -42,6 +44,10 @@ GroupState groupStateFromRow(pqxx::row_ref gr) {
     s.updated_at = gr["updated_at"].is_null()
                        ? std::nullopt
                        : std::make_optional(parsePostgresTimestamp(gr["updated_at"].as<std::string>()));
+    // Checked first: libpqxx's row[name] is [[gnu::pure]], so a missing column can't be caught under clang.
+    if (hasColumn(gr, "home_node") && !gr["home_node"].is_null()) s.homeNode = gr["home_node"].as<std::string>();
+    if (hasColumn(gr, "home_id") && !gr["home_id"].is_null()) s.homeId = gr["home_id"].as<uint32_t>();
+    if (hasColumn(gr, "remote") && !gr["remote"].is_null()) s.remote = gr["remote"].as<bool>();
     return s;
 }
 

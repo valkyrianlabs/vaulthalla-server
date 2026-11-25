@@ -313,19 +313,24 @@ void File::markRemoteFileAsTrashed(
     const auto path = to_utf8_string(normalized.u8string());
     const auto base32Alias = vh::crypto::id::Generator({.namespace_token = path + ":" + std::to_string(std::time(nullptr))}).generate();
 
+    // The trashed object was never a files row, so it has no object uid: it gets a fresh one (its identity in the
+    // trash, migration 158), except on an opaque_v1 vault, whose bucket names objects by a uid this row cannot know.
     Transactions::exec("File::markRemoteFileAsTrashed", [&](pqxx::work& txn) {
         txn.exec(
             R"SQL(
                 INSERT INTO files_trashed
-                    (vault_id, path, backing_path, base32_alias, size_bytes, trashed_at, trashed_by)
-                SELECT $1, $2, '', $3, $4, NOW(), $5
+                    (vault_id, path, backing_path, base32_alias, size_bytes, trashed_at, trashed_by, object_uid)
+                SELECT $1, $2, '', $3, $4, NOW(), $5,
+                       CASE WHEN EXISTS (SELECT 1 FROM s3 WHERE s3.vault_id = $1 AND s3.storage_layout = 'opaque_v1')
+                            THEN NULL ELSE $6::uuid END
                 WHERE NOT EXISTS (
                     SELECT 1
                     FROM files_trashed
                     WHERE vault_id = $1 AND path = $2 AND deleted_at IS NULL
                 )
             )SQL",
-            pqxx::params{vaultId, path, base32Alias, sizeBytes, userId});
+            pqxx::params{vaultId, path, base32Alias, sizeBytes, userId,
+                         vh::crypto::id::toUuid(vh::crypto::id::newObjectUid())});
     });
 }
 

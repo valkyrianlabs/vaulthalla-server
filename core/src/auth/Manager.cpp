@@ -140,6 +140,7 @@ std::shared_ptr<User> Manager::changePassword(const uint32_t userId, const std::
     const auto credentials = db::query::identities::Loader::credentialsById(userId);
     if (!credentials) throw std::runtime_error("User not found: " + std::to_string(userId));
     if (credentials->systemOnly) throw std::runtime_error("System-only users cannot change passwords");
+    if (credentials->remote) throw std::runtime_error("Remote accounts have no password on this server");
 
     const auto name = user->name();
     if (!hash::verifyPassword(oldPassword, credentials->passwordHash)) throw std::runtime_error(
@@ -158,6 +159,7 @@ std::shared_ptr<User> Manager::changePassword(const uint32_t userId, const std::
 std::shared_ptr<User> Manager::resetPassword(const uint32_t userId, const std::string& newPassword) {
     const auto user = getUser(userId);
     if (user->systemOnly()) throw std::runtime_error("System-only users cannot receive normal user passwords");
+    if (user->remote()) throw std::runtime_error("Remote accounts have no password on this server");
 
     vh::identities::manager().setPasswordHash(userId, hashNewPassword(newPassword));
 

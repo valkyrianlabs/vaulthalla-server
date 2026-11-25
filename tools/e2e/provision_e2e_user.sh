@@ -388,7 +388,7 @@ upserted_user AS (
   INSERT INTO users (name, email, password_hash, is_active)
   SELECT :'e2e_user', :'e2e_email', :'password_hash', TRUE
   WHERE EXISTS (SELECT 1 FROM admin_role_row)
-  ON CONFLICT (name) DO UPDATE SET
+  ON CONFLICT (name) WHERE NOT remote DO UPDATE SET
     email = COALESCE(users.email, EXCLUDED.email),
     password_hash = EXCLUDED.password_hash,
     is_active = TRUE,

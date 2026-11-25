@@ -74,6 +74,9 @@ inline bool isAcceptedHistoricalChecksum(const std::string_view filename, const 
 //  - 122_storage_layout.sql: every existing vault and file gets its uid from libsodium (assignObjectUids), before
 //    123_object_uids_required.sql makes the columns NOT NULL. PostgreSQL must not generate them: its UUIDs carry
 //    version bits, and spec 01 §4.1 names the CSPRNG.
+//  - 158_permanent_ids.sql: every existing folder, symlink and snapshot gets a libsodium uid, and every trashed file
+//    outside an opaque_v1 vault its missing object uid (assignPermanentIds), before 159_permanent_ids_required.sql
+//    makes them NOT NULL.
 struct MigrationDataStep {
     std::string_view filename;
     void (*run)(pqxx::work&);
@@ -83,8 +86,13 @@ struct MigrationDataStep {
 // batches. Rows that already have one are left alone.
 void assignObjectUids(pqxx::work& txn);
 
+// Gives every folder, symlink and snapshot without a uid one, and trashed files their missing object uid (see
+// 158_permanent_ids.sql). Rows that have one are left alone, so running it again changes nothing.
+void assignPermanentIds(pqxx::work& txn);
+
 inline constexpr std::array kMigrationDataSteps{
     MigrationDataStep{"122_storage_layout.sql", &assignObjectUids},
+    MigrationDataStep{"158_permanent_ids.sql", &assignPermanentIds},
 };
 
 struct ReconciledMigration {

@@ -48,7 +48,7 @@ void sortUnique(std::vector<uint32_t>& v) {
 
 constexpr auto kUserColumns =
     "SELECT id, linux_uid, name, email, created_at, last_login, last_modified_by, updated_at, is_active, "
-    "protected, system_only, password_changed_at FROM users";
+    "protected, system_only, password_changed_at, home_node, home_id, remote FROM users";
 
 constexpr auto kAdminRoles = R"SQL(
     SELECT
@@ -137,7 +137,8 @@ constexpr auto kOverrides = R"SQL(
     ORDER BY vpo.assignment_id, p.bit_position, vpo.glob_path
 )SQL";
 
-constexpr auto kGroupColumns = "SELECT id, linux_gid, name, description, created_at, updated_at FROM groups";
+constexpr auto kGroupColumns =
+    "SELECT id, linux_gid, name, description, created_at, updated_at, home_node, home_id, remote FROM groups";
 
 // The current revision, or 0 on a database without migration 108.
 uint64_t readRevision(pqxx::work& txn) {
@@ -158,17 +159,23 @@ IdentitySnapshot Loader::load(const IdentitySelection& sel) {
         std::vector<uint32_t> userIds = sel.userIds;
         std::vector<uint32_t> groupIds = sel.groupIds;
         if (!sel.all) {
+            // Names and Linux ids resolve to local accounts only: a remote account may share a name with a local
+            // one (migration 158) and has no Linux id. Remote accounts are reached by id.
             if (sel.userName)
-                for (const auto& row : txn.exec("SELECT id FROM users WHERE name = $1", pqxx::params{*sel.userName}))
+                for (const auto& row : txn.exec("SELECT id FROM users WHERE name = $1 AND NOT remote",
+                                                pqxx::params{*sel.userName}))
                     userIds.push_back(row[0].as<uint32_t>());
             if (sel.linuxUid)
-                for (const auto& row : txn.exec("SELECT id FROM users WHERE linux_uid = $1", pqxx::params{*sel.linuxUid}))
+                for (const auto& row : txn.exec("SELECT id FROM users WHERE linux_uid = $1 AND NOT remote",
+                                                pqxx::params{*sel.linuxUid}))
                     userIds.push_back(row[0].as<uint32_t>());
             if (sel.groupName)
-                for (const auto& row : txn.exec("SELECT id FROM groups WHERE name = $1", pqxx::params{*sel.groupName}))
+                for (const auto& row : txn.exec("SELECT id FROM groups WHERE name = $1 AND NOT remote",
+                                                pqxx::params{*sel.groupName}))
                     groupIds.push_back(row[0].as<uint32_t>());
             if (sel.linuxGid)
-                for (const auto& row : txn.exec("SELECT id FROM groups WHERE linux_gid = $1", pqxx::params{*sel.linuxGid}))
+                for (const auto& row : txn.exec("SELECT id FROM groups WHERE linux_gid = $1 AND NOT remote",
+                                                pqxx::params{*sel.linuxGid}))
                     groupIds.push_back(row[0].as<uint32_t>());
             sortUnique(userIds);
             sortUnique(groupIds);
@@ -329,20 +336,24 @@ std::optional<Credentials> credentials(pqxx::work& txn, const pqxx::result& res)
     c.passwordHash = row["password_hash"].as<std::string>();
     c.active = opt<bool>(row["is_active"]).value_or(true);
     c.systemOnly = opt<bool>(row["system_only"]).value_or(false);
+    c.remote = opt<bool>(row["remote"]).value_or(false);
     return c;
 }
 }
 
 std::optional<Credentials> Loader::credentialsByName(const std::string& name) {
+    // A name signs in to the local account that holds it, never to a remote account of the same name.
     return Transactions::exec("identities::Loader::credentialsByName", [&](pqxx::work& txn) {
-        return credentials(txn, txn.exec("SELECT id, password_hash, is_active, system_only FROM users WHERE name = $1",
+        return credentials(txn, txn.exec("SELECT id, password_hash, is_active, system_only, remote FROM users "
+                                         "WHERE name = $1 AND NOT remote",
                                          pqxx::params{name}));
     });
 }
 
 std::optional<Credentials> Loader::credentialsById(const uint32_t id) {
     return Transactions::exec("identities::Loader::credentialsById", [&](pqxx::work& txn) {
-        return credentials(txn, txn.exec("SELECT id, password_hash, is_active, system_only FROM users WHERE id = $1",
+        return credentials(txn, txn.exec("SELECT id, password_hash, is_active, system_only, remote FROM users "
+                                         "WHERE id = $1",
                                          pqxx::params{id}));
     });
 }

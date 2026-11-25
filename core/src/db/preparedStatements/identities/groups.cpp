@@ -88,7 +88,7 @@ void vh::db::Connection::initPreparedGroups() const {
             SELECT EXISTS(
                 SELECT 1
                 FROM groups g
-                WHERE g.name = $1
+                WHERE g.name = $1 AND NOT g.remote
             ) AS exists
         )SQL"
     );

@@ -1,4 +1,5 @@
 #include "fs/model/Directory.hpp"
+#include "db/encoding/has.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "db/query/fs/Entry.hpp"
 
@@ -13,7 +14,10 @@ using namespace vh::db::encoding;
 Directory::Directory(pqxx::row_ref row, const pqxx::result& parentRows)
     : Entry(row, parentRows),
       file_count(row["file_count"].as<unsigned int>()),
-      subdirectory_count(row["subdirectory_count"].as<unsigned int>()) {}
+      subdirectory_count(row["subdirectory_count"].as<unsigned int>()),
+      uid(try_get<std::string>(row, "uid").transform([](const std::string& text) {
+          return vh::crypto::id::fromUuid(text);
+      })) {}
 
 void vh::fs::model::to_json(nlohmann::json& j, const Directory& d) {
     to_json(j, static_cast<const Entry&>(d));

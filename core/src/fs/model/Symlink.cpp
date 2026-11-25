@@ -1,4 +1,5 @@
 #include "fs/model/Symlink.hpp"
+#include "db/encoding/has.hpp"
 #include "db/query/fs/Entry.hpp"
 
 #include <nlohmann/json.hpp>
@@ -10,7 +11,10 @@ using namespace vh::fs::model;
 
 Symlink::Symlink(pqxx::row_ref row, const pqxx::result& parentRows)
     : Entry(row, parentRows),
-      target(row["target"].as<std::string>()) {
+      target(row["target"].as<std::string>()),
+      uid(vh::db::encoding::try_get<std::string>(row, "uid").transform([](const std::string& text) {
+          return vh::crypto::id::fromUuid(text);
+      })) {
     size_bytes = target.size();
 }
 

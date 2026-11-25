@@ -273,9 +273,10 @@ RecoverResult Recover::apply(const RecoverInput& in) {
                                       ? "directory"
                                       : "file";
             uint64_t bytes = 0;
-            // The snapshot keeps its uid (a record from before uids gets one at the first publish).
-            const auto snapUid = s.uid.empty() ? std::optional<std::string>()
-                                               : std::optional(vh::crypto::id::toUuid(mf::parseUid(s.uid, "bad_snapshot", "snapshot uid")));
+            // The snapshot keeps its uid; a record from before snapshot uids gets a fresh one here (migration 158: every
+            // snapshot has one from its insert on).
+            const auto snapUid = s.uid.empty() ? vh::crypto::id::toUuid(vh::crypto::id::newObjectUid())
+                                               : vh::crypto::id::toUuid(mf::parseUid(s.uid, "bad_snapshot", "snapshot uid"));
             const auto sid = txn.exec("INSERT INTO recovery_snapshot (vault_id, name, root_path, root_type, root_entry_id, "
                                       "state, file_count, directory_count, plaintext_bytes, created_at, completed_at, uid) "
                                       "VALUES ($1, $2, $3, $4, $5, 'ready', $6, 0, 0, "

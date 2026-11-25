@@ -62,13 +62,14 @@ void vh::db::Connection::initPreparedDirectories() const {
         "    updated_at = NOW() "
         "  RETURNING id "
         ") "
-        "INSERT INTO directories (fs_entry_id, size_bytes, file_count, subdirectory_count) "
-        "SELECT id, $14, $15, $16 FROM inserted "
+        // $17: the folder's uid for a new row (migration 158); an existing row keeps its own, which is returned.
+        "INSERT INTO directories (fs_entry_id, size_bytes, file_count, subdirectory_count, uid) "
+        "SELECT id, $14, $15, $16, $17::uuid FROM inserted "
         "ON CONFLICT (fs_entry_id) DO UPDATE SET "
         "  size_bytes = EXCLUDED.size_bytes, "
         "  file_count = EXCLUDED.file_count, "
         "  subdirectory_count = EXCLUDED.subdirectory_count "
-        "RETURNING fs_entry_id"
+        "RETURNING fs_entry_id, uid::text AS uid"
     );
 
     conn_->prepare("list_dirs_in_dir_by_parent_id",

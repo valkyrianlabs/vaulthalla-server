@@ -60,31 +60,6 @@ std::optional<T> optNum(const pqxx::field_ref& f) {
 
 std::string uidFromUuid(const pqxx::field_ref& f) { return mf::uidText(crypto::id::fromUuid(f.as<std::string>())); }
 
-// Gives every directory and symlink of the vault without a uid one (libsodium, never PostgreSQL), like
-// SqlDeployer's assignUids does for files.
-void assignTreeUids(pqxx::work& txn, const uint32_t vaultId, const std::string& table) {
-    const auto rows = txn.exec(fmt::format("SELECT t.fs_entry_id FROM {} t JOIN fs_entry e ON e.id = t.fs_entry_id "
-                                           "WHERE e.vault_id = $1 AND t.uid IS NULL",
-                                           table),
-                               pqxx::params{vaultId});
-    if (rows.empty()) return;
-    std::string ids = "{", uids = "{";
-    for (pqxx::result::size_type i = 0; i < rows.size(); ++i) {
-        if (i) {
-            ids += ',';
-            uids += ',';
-        }
-        ids += rows[i][0].c_str();
-        uids += crypto::id::toUuid(crypto::id::newObjectUid());
-    }
-    ids += '}';
-    uids += '}';
-    txn.exec(fmt::format("UPDATE {} t SET uid = u.uid FROM unnest($1::int[], $2::uuid[]) AS u(id, uid) "
-                         "WHERE t.fs_entry_id = u.id AND t.uid IS NULL",
-                         table),
-             pqxx::params{ids, uids});
-}
-
 std::string parentPath(const std::string& path) {
     const auto slash = path.find_last_of('/');
     if (slash == std::string::npos || slash == 0) return "/";
@@ -357,6 +332,9 @@ vl::vaultfmt::manifest::Content Manifest::collect(const uint32_t vaultId, const 
     using namespace manifest_query_detail;
     const auto nodeId = device::Devices::nodeId();
     return Transactions::exec("Manifest::collect", [&](pqxx::work& txn) {
+        // Read-only: every folder, symlink and snapshot has its uid from its insert (migration 158), so describing a
+        // vault writes nothing (it used to assign missing uids here, the first time it listed an entry).
+        txn.exec("SET TRANSACTION READ ONLY");
         mf::Content c;
         c.producer = {nodeId, vaultId, std::string("vaulthalla ") + VH_VERSION};
 
@@ -545,8 +523,6 @@ vl::vaultfmt::manifest::Content Manifest::collect(const uint32_t vaultId, const 
         }
 
         // ---- the tree
-        assignTreeUids(txn, vaultId, "directories");
-        assignTreeUids(txn, vaultId, "symlinks");
         const auto rows = txn.exec(
             fmt::format("SELECT e.id, e.parent_id, e.name, e.path, e.mode, e.owner_uid, e.group_gid, {}, {}, "
                         "       (p.id IS NULL OR p.vault_id IS DISTINCT FROM e.vault_id) AS is_root, "
@@ -667,16 +643,8 @@ vl::vaultfmt::manifest::Content Manifest::collect(const uint32_t vaultId, const 
             if (!row[1].is_null()) c.entries.push_back(mf::entryFromJson(nlohmann::json::parse(row[1].as<std::string>())));
         }
 
-        // ---- snapshots, by uid (migration 145): one is given here the first time it is listed (libsodium), like
-        // directories; recovery_snapshot.id is this server's and stays out of the manifest.
-        {
-            const auto missing = txn.exec("SELECT id FROM recovery_snapshot WHERE vault_id = $1 AND state = 'ready' "
-                                          "AND uid IS NULL",
-                                          pqxx::params{vaultId});
-            for (const auto row : missing)
-                txn.exec("UPDATE recovery_snapshot SET uid = $2::uuid WHERE id = $1 AND uid IS NULL",
-                         pqxx::params{row[0].as<int64_t>(), crypto::id::toUuid(crypto::id::newObjectUid())});
-        }
+        // ---- snapshots, by uid (migrations 145, 158: assigned at insert); recovery_snapshot.id is this server's and
+        // stays out of the manifest.
         std::map<uint64_t, mf::SnapshotRecord> snapshots;
         for (const auto row : txn.exec(
                  fmt::format("SELECT id, uid, name, root_path, {} FROM recovery_snapshot WHERE vault_id = $1 AND "
