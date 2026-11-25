@@ -1,6 +1,8 @@
 # Accounts, ownership and audits across linked servers
 
-Status: design, phase 0 of the server mirror plan (2026-11-25); nothing here is implemented. It covers how two
+Status: design, phase 0 of the server mirror plan (2026-11-25), partly superseded by Cooper's decision of the same day
+(below; superseded paragraphs are marked). Phase 1b (folder and symlink ids, the remote-account groundwork) is built:
+migrations 158/159, see the "As built (phase 1b)" notes; the rest is not implemented. It covers how two
 linked servers refer to the same person, who owns a mirrored vault, who may use and administer it, how two existing
 servers become one deployment, and how audits stay effective. The link is in [`link.md`](link.md); what travels for a
 vault's files is in [`mirror.md`](mirror.md).
@@ -16,6 +18,12 @@ vault's files is in [`mirror.md`](mirror.md).
 - **A mirror can detach without the core's consent** (Cooper, 2026-11-25), so the permission for it cannot live in
   anything the core governs.
 - **Audits must stay effective** (Cooper, 2026-11-25).
+- **The mirror's permissions are a role held by the mirror server** (Cooper, 2026-11-25, superseding parts of this
+  document). The role is a default per link, overridable per vault, and acts as a ceiling. Who may use the vault on
+  the mirror is the mirror's own local RBAC under that ceiling. Per-person access lists managed from the core, shared
+  role rows and grant forwarding are dropped from the first version. No account is matched across servers for
+  permission: an account of another server is named for attribution only (an owner, "last modified by", an audit
+  line), as a remote account. Paragraphs this replaces are marked **(superseded 2026-11-25)**.
 - **Decided in this design** (Claude, 2026-11-25, under the standing instruction of 2026-11-14 to decide, build and
   log; entries in the decisions log on Cooper's Desktop; Cooper has not reviewed them and may overturn any): the two
   sharing depths, "accounts are never matched by name", and the local effect of removals. They are marked
@@ -34,17 +42,32 @@ vault's files is in [`mirror.md`](mirror.md).
   server's attestation key and naming its node id (`audit_head`, `deploy/psql/117_audit_trail.sql`).
 - Built-in principals are flagged `protected` or `system_only` (`deploy/psql/083`).
 
-## Permanent ids
+## How an account is named across servers
 
-Every user, group, vault role and admin role gets `uid UUID NOT NULL UNIQUE`, assigned at creation and never
-changed. Users and groups also get `home_node`: the node id of the server the account belongs to.
+An account (or group) of another server is named by its home server's node id and its integer id there
+(`home_node`, `home_id`), with its name alongside for display. Local integer ids are unchanged, stay the only key on
+their own server, and nothing is assigned to existing accounts. There is no second, shared id on accounts, groups or
+roles (Cooper, 2026-11-25): a mirror's permissions apply to the mirror server as a ceiling, not to individual
+accounts, so no account is ever matched across servers for permission, and a server's own id is already a stable
+name once the server is said.
 
-- Local integer ids stay as they are, as internal keys. No foreign key changes.
-- Everything that crosses the link names a principal as `{uid, kind, name, home_node}`. A server resolves the uid to
-  its own integer id, creating a remote account (below) when it has none.
-- **Built-in principals** get fixed, well-known uids derived from their role, so they are the same on every server
-  without being exchanged.
-- The migration only adds columns and fills them with fresh random uids.
+- Everything that crosses the link names a principal as `{home_node, home_id, kind, name}`. The receiving server
+  looks the pair up among its remote accounts and creates one when it has none.
+- Built-in accounts are named like any other: the other server's `root`, `system` and `admin` appear as remote
+  accounts, shown qualified ("admin (vps)"). Nothing makes them the same as this server's own.
+- Roles get no id that crosses the link: custom roles differ and built-in roles can be edited, so nothing guarantees
+  that two servers' roles are the same.
+
+### As built (phase 1b, migrations 158/159)
+
+- **Columns.** `home_node TEXT`, `home_id INTEGER` and `remote BOOLEAN NOT NULL DEFAULT FALSE` on `users` and
+  `groups`. A remote row has `home_node` and `home_id` both set, a local row both NULL, and `(home_node, home_id)`
+  is unique among remote rows of each table. Existing rows are local and unchanged.
+- **Folder and symlink ids.** `directories.uid`, `symlinks.uid` and `recovery_snapshot.uid` are assigned at insert
+  for every vault and NOT NULL (`mirror.md`, "Permanent ids for every entry").
+- **Two files, not one.** 158 adds the remote-account columns and rules, its deployer data step backfills folders,
+  symlinks, snapshots and trash in the same transaction, and 159 checks that nothing was missed before it adds NOT
+  NULL: the pattern of 122/123 for `vault.uid` and `files.object_uid`, because the backfill has to run between them.
 
 ## Sharing depth
 
@@ -53,13 +76,14 @@ Each link has one depth (`peer.sharing`, `link.md`), raised from the first to th
 | | `identities` | `full` (a deployment mirror) |
 |---|---|---|
 | For | Mirroring chosen vaults between servers that keep their own accounts | One Vaulthalla on two machines |
-| Shared | The people, groups and roles a mirrored vault refers to | Every account, group, role, assignment, share, shared setting and credential |
+| Shared | The people and groups a mirrored vault's files name, for attribution (superseded 2026-11-25: no roles or access lists) | Every account, group, role, assignment, share, shared setting and credential |
 | The other server's people appear as | Remote accounts | Ordinary accounts that sign in on either server |
 
 ### Remote accounts
 
-A remote account is a row in `users` (or `groups`) with `home_node` set to the peer and `remote = true`. It exists so
-that an owner, an access-list entry, "last modified by" and an audit line can name a real person.
+A remote account is a row in `users` (or `groups`) with `remote = true`, `home_node` set to the peer and `home_id` to
+its id there. It exists so that an owner, "last modified by" and an audit line can name a real person: for
+attribution only (Cooper, 2026-11-25), never for permission.
 
 - It **cannot sign in**: it has no password hash, no factors and no sessions, and every authentication path refuses
   it at the one place identities are loaded for authorisation.
@@ -70,13 +94,28 @@ that an owner, an access-list entry, "last modified by" and an audit line can na
   that names it.
 - Raising the link to `full` fills the same rows in with credentials. There is no second kind of account.
 
+As built (phase 1b): `UserState::authorizing()` is false for a remote account, which is the one check every
+authentication path and every resolver already make (password sign-in also only ever looks up local names; a remote
+group is left out of a member's authorization view). The database refuses a remote account with a password hash, a
+Linux uid or gid, a protected or system-only flag, or without both `home_node` and `home_id` (`users_remote_check`,
+`groups_remote_check`), a local account or group becoming remote, and every credential, admin-role or global-policy
+row naming a remote account (`vh_refuse_remote_account`). `users.name`, `users.email` and `groups.name` are unique
+among local rows only (design decision: email and group names narrow too, for the same reason as user names). The
+account writes refuse to create or edit a remote row; nothing creates one yet. A vault role assignment naming one
+takes no effect.
+
 ## A mirrored vault's owner and access list
 
-- **Owner.** One owner, the same uid on both servers: the vault's owner on its core. `vault.owner_id` on the mirror
-  points at the local row for that uid, a remote account if the person cannot sign in there.
+**(Superseded 2026-11-25, except the owner.)** The mirror's permissions are now a role held by the mirror server, a
+ceiling over the mirror's own local RBAC (see "Decided and given"); the access-list, "who decides" and "changing it"
+text below is kept for the record and is not the first version's design.
+
+- **Owner.** One owner, the vault's owner on its core, named by `(home_node, home_id)`. `vault.owner_id` on the
+  mirror points at the local row for it, a remote account if the person has no account there.
 - **Access list.** `vault_role_assignments` and `vault_permission_overrides` for a mirrored vault are shared vault
-  state, identical on both servers, and so are the role templates they use. A shared role is edited on the core and
-  is read-only on the mirror.
+  state, identical on both servers. An access-list entry travels as the person plus the role that person has on the
+  core, by name and with its actual permissions; the mirror stores what it was told for that vault and never matches
+  it to one of its own roles. When the core edits the role, the affected entries are sent again.
 - **The peer in the access list.** `vault_role_assignments.subject_type` gains `peer`. The mirror server holds a vault
   role on every vault it mirrors. That role is the ceiling on what the core accepts from it: a mirror people work on
   holds a writing role, a standby holds a reading one and can submit nothing.
@@ -121,8 +160,9 @@ state in which nobody on the surviving server may act.
 
 ## Attribution
 
-- `fs_entry.created_by` and `last_modified_by` travel as uids and are stored as the local row for that uid.
-- A change submitted from the mirror names the acting person's uid. The core records that person, not the peer, as
+- `fs_entry.created_by` and `last_modified_by` travel as `(home_node, home_id)` and are stored as the local row for
+  that pair (a remote account where the person has none).
+- A change submitted from the mirror names the acting person by the mirror's node id and the account's id there. The core records that person, not the peer, as
   the one who changed the file; the peer is recorded as how the change arrived.
 
 ## Deployment mirror (`full`)
@@ -134,14 +174,14 @@ core is, by default, the same server.
 
 | Item | Shared | How |
 |---|---|---|
-| Users, groups, memberships, admin and vault roles, assignments, global vault policies | Yes | By uid, in `identity_change_log` order |
+| Users, groups, memberships, admin and vault roles, assignments, global vault policies | Yes | In `identity_change_log` order; how a row is identified across the two directories (and roles shared as rows) is designed with the join (phase 4), not before |
 | Password hashes | Yes | As stored: self-contained Argon2id strings with no host secret in them (`core/src/crypto/util/hash.cpp:54-65`) |
 | TOTP seeds | Yes | Sealed under a host secret with the local user id in the AAD (`deploy/psql/120_mfa_factors.sql`); unsealed, wrapped to the peer's wrap key, and sealed again there under its own secret and id |
 | MFA recovery codes | Yes | Their hashes use a host pepper (`mfa_pepper`); the pepper is wrapped to the peer once, at the join |
 | Passkeys | The credential rows, yes | Usable on a server only if both are served under the same `auth.webauthn.rp_id`. The join says so when they differ |
 | Storage API keys, S3 gateway access keys | Yes | Secrets wrapped to the peer's wrap key |
 | Share links | Yes | The share-token pepper is wrapped to the peer at the join, so a link resolves on either host name |
-| Paired devices | Yes | The `devices` rows by owner uid. The core tells each connected device the mirror's fingerprint and endpoints over its authenticated session, and the device adds the node without pairing again |
+| Paired devices | Yes | The `devices` rows by owner. The core tells each connected device the mirror's fingerprint and endpoints over its authenticated session, and the device adds the node without pairing again |
 | Shared settings | Yes | Each setting is classified `shared` or `machine` in the settings schema; only `shared` ones travel |
 | Sessions, refresh tokens, the JWT secret | No | Signing in is per server |
 | The server's own keys, TLS, paths, ports, host names, listener and endpoint settings | No | Machine settings |
@@ -169,32 +209,35 @@ takes on the base's directory. It is never an automatic merge of two directories
 
    | Resolution | Effect |
    |---|---|
-   | *Same as* a base account | The local row takes the base account's uid. Its vaults, files, roles and history follow, because they refer to the row. The base's name, email and credentials replace the local ones |
-   | *Add* | The account becomes a shared account under its own uid. Refused while its name or email collides with a base account |
+   | *Same as* a base account | The local row becomes the base account. Its vaults, files, roles and history follow, because they refer to the row. The base's name, email and credentials replace the local ones |
+   | *Add* | The account becomes a shared account. Refused while its name or email collides with a base account |
    | *Remove* | The account is deactivated. Vaults it owns must be given an owner first |
 
 3. **Accounts are never matched by name or email alone (design decision).** Two servers can each have a "cooper" who are
    different people, and matching them would hand one person the other's vaults. The join proposes a match only on
    evidence:
-   - built-in principals, by their well-known uid;
+   - the built-in system principal (`system`), by its flags (system-only, protected): it never signs in and holds
+     nothing a person acts through. `admin` and `root` are proposed only on the evidence below, like any account;
    - a Desktop paired with both servers, which shows that one person controls its account on each;
    - an explicit choice by the super admin running the join.
 4. **Roles** with the same name and the same permissions are offered as the same role; any other clash is renamed.
 5. **Settings.** The base's shared settings replace the joining server's. The plan lists each difference.
-6. **Commit.** After approval, the uids are assigned, the base's directory streams in, secrets are wrapped across,
+6. **Commit.** After approval, the accounts are joined, the base's directory streams in, secrets are wrapped across,
    and the link's depth becomes `full`. Every step is resumable; a failure leaves the link at `identities` with
    nothing half-shared.
 7. **Vaults.** Each vault of either server becomes a mirrored vault with its current server as its core. The join
    ends by offering to move every core to the base.
 
-A server with only its built-in accounts and no vaults joins without questions.
+A server with only its built-in accounts and no vaults joins with one question: whether its `admin` (and `root`) is
+the base's, on the evidence above.
 
 ## Audits
 
 - **One ordered record per vault.** The core's trail holds every change to a mirrored vault, each naming the person
-  by uid, the server they acted on, and the origin there (web, CLI, device).
-- **New on every event:** `actor_uid` beside `actor_id`. For a change that arrived over the link, `origin` reads
-  `peer <node> for <uid> via <origin there>`, and the details carry the originating server's event sequence number.
+  by the server they acted on and their id and name there, and the origin there (web, CLI, device).
+- **The chain format does not change.** An event for a change that arrived over the link names the peer, the
+  account's id there and its name in `origin` and the details, and the details carry the originating server's event
+  sequence number. Built with the link's mirror work, not in phase 1b.
 - **Each server sends its trail to its peer.** Events travel with the signed chain heads that exist today. The
   receiver verifies the hash chain and the head signatures against the attestation key it pinned at pairing, and
   stores them read-only as that server's trail (`peer_audit_event`). Either console shows both trails, merged by
@@ -221,10 +264,11 @@ A server with only its built-in accounts and no vaults joins without questions.
 
 ## Work items
 
-1. Migration: `uid` and `home_node`, well-known uids, `remote`, `subject_type = 'peer'`, `mirror_local_denial`,
-   `actor_uid`, `peer_audit_event`.
+1. Migration: `home_node`, `home_id`, `remote`, `subject_type = 'peer'`, `mirror_local_denial`, `peer_audit_event`.
+   (Built: `home_node`, `home_id`, `remote`, in 158/159. The rest needs the link; `mirror_local_denial` and
+   per-person access lists are superseded, 2026-11-25.)
 2. Identity loading: remote accounts refused for authentication in one place; the resolver's rule for mirrored
-   vaults; local denials.
+   vaults; local denials. (Built: the first.)
 3. The principal record and its stream (`peer.identity.*`), ahead of first use.
 4. Shared access lists and roles for mirrored vaults, on the submit-and-confirm path of `mirror.md`.
 5. Audit: the new fields, the trail exchange with withheld events as hashes, verification, the merged view.

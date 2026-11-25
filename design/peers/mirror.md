@@ -44,7 +44,7 @@ Four code spikes ran before this document was written. Their results shape the d
 2. **Folders and symlinks have no permanent id on local vaults.** `directories.uid` and `symlinks.uid` are nullable
    and are filled only when a manifest is collected for an encrypted bucket vault
    (`deploy/psql/125_manifest_v2.sql:53-56`, `core/src/db/query/sync/Manifest.cpp:65-86`). `files.object_uid` and
-   `vault.uid` are NOT NULL everywhere.
+   `vault.uid` are NOT NULL everywhere. (Resolved in phase 1b: "Permanent ids for every entry" below.)
 3. **Sealed bytes are portable for every vault type.** Every local backing file is ciphertext, including the local
    copies of an S3 vault whose bucket holds plaintext. A VHF1 header binds the vault uid, object uid, key version
    and salt and nothing host-specific. Files still in the older `gcm0` format bind nothing and are not portable
@@ -134,6 +134,15 @@ vault_replication_log (
 A migration assigns `directories.uid` and `symlinks.uid` at insert for every vault, backfills existing rows and
 trashed rows, and makes the columns NOT NULL. The lazy assignment in `Manifest::collect` is removed. This is a
 prerequisite for everything below, and it also benefits attach-remote and the manifest.
+
+As built (phase 1b, migrations 158/159): every insert of a folder, symlink or snapshot draws its uid from libsodium
+(`db::query::fs::Directory`, `::Symlink`, `db::query::recovery::Snapshot`, the applier and vault restore, which already
+did); 158's data step backfilled existing rows without touching a uid that was set; 159 made `directories.uid`,
+`symlinks.uid` and `recovery_snapshot.uid` (the snapshots' lazy assignment went too) NOT NULL. `Manifest::collect`
+runs in a read-only transaction. Trashed files: a row without `object_uid` got one, except on an opaque_v1 vault,
+where the bucket names the trashed object by a uid the database no longer holds (rows from before 125); those keep
+NULL, stay out of the manifest as before, and are still restored and purged by path. `files_trashed.object_uid` stays
+nullable for them (deviation from "NOT NULL" for trash).
 
 ## Starting a mirror
 
