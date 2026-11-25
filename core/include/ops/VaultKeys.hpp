@@ -295,7 +295,7 @@ void requireKeyMaterialAccess(const Actor& actor, Channel channel, const std::st
 
 // Test seam: called after each step of a salvage pass's per-file protocol (sync::rotation's Step, as an int so this
 // header stays light); throwing sync::rotation::SimulatedCrash from it simulates a crash there. Empty: none.
-using SalvageStepHook = std::function<void(int step, const std::shared_ptr<fs::model::File>& file)>;
+using SalvageStepHook = std::function<void(int step, const std::shared_ptr<vh::fs::model::File>& file)>;
 void setSalvageStepHookForTesting(SalvageStepHook hook);
 // Test seam: called with the vault's engine once a salvage pass has it, before any file is touched (tests install a
 // fake bucket and a price gate there). Empty: none.
