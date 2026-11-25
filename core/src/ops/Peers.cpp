@@ -59,8 +59,7 @@ std::optional<std::string> normalizedSpki(const std::optional<std::string>& text
 
 // Who may: a super admin who can sign in, on the host socket, the web console or a full-access, directly connected
 // device; never an agent, a scoped device, a relayed device or a linked server (design/peers/link.md).
-void requireLinker(const Actor& actor, const std::string& what) {
-    requireExperimental();
+void requireLinkerRights(const Actor& actor, const std::string& what) {
     requireActor(actor);
     if (actor->systemOnly() || !actor->authorizing()) throw Denied("this account cannot " + what);
     if (!actor->isSuperAdmin()) throw Denied("only super admins may " + what);
@@ -80,6 +79,12 @@ void requireLinker(const Actor& actor, const std::string& what) {
             return;
         }
     }
+}
+
+// Every management operation but status(): the switch first, then who.
+void requireLinker(const Actor& actor, const std::string& what) {
+    requireExperimental();
+    requireLinkerRights(actor, what);
 }
 
 std::string serverSpkiOrThrow() {
@@ -143,6 +148,11 @@ void requireExperimental() {
     if (!vh::config::Registry::get().peers.experimental)
         throw Refused("peers_experimental", "linked servers are experimental and off on this server: set "
                                             "peers.experimental: true in config.yaml and restart the daemon");
+}
+
+bool enabled(const Actor& actor) {
+    requireLinkerRights(actor, "see whether servers can be linked");
+    return vh::config::Registry::get().peers.experimental;
 }
 
 // ---- pairing, the side that opens a window

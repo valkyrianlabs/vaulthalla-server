@@ -25,13 +25,17 @@
 // device reached through the Vaulthalla Cloud relay, an agent (MCP, `vh mcp`), a share session or a linked server:
 // ops::Refused("peer_forbidden") here, on top of the router's and the MCP catalog's own refusals.
 //
-// Gate: while peers.experimental is off every operation refuses with ops::Refused("peers_experimental").
+// Gate: while peers.experimental is off every operation but enabled() refuses with ops::Refused("peers_experimental").
 //
 // The wire side (peer.pair.*, peer.identity.rotate, peer.unlinked) takes the connection instead of an actor.
 namespace vh::ops::peers {
 
 // ops::Refused("peers_experimental") unless peers.experimental is on.
 void requireExperimental();
+
+// Whether peers.experimental is on: the one operation that answers with the switch off, so that a console or Desktop
+// can leave linked servers out without provoking a refusal (ws peer.status). The same callers as the rest.
+[[nodiscard]] bool enabled(const Actor& actor);
 
 // ---- pairing, the side that opens a window (B)
 

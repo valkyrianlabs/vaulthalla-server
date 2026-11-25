@@ -68,6 +68,10 @@ json peerLinkedJson(const peers::Linked& l) {
 
 }
 
+json Peers::status(const std::shared_ptr<Session>& session) {
+    return {{"enabled", peers::enabled(peerActorOf(session))}};
+}
+
 json Peers::pairingOpen(const std::shared_ptr<Session>& session) {
     const auto opened = peers::openWindow(peerActorOf(session));
     return {{"window", peerWindowJson(opened.window)}, {"server_time", peerServerTime()}, {"node_id", opened.node_id},

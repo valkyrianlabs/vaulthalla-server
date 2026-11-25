@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '965f58905ea791d306bf6136ae93a310ad8c076b070ce871df72a47d959cc7d3'
+export const WS_CONTRACT_HASH = '18989ea9fb6fbeab1f54bdf40fdd1aa255e93d07632025a9e9f7119ff68690a4'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
@@ -5833,6 +5833,15 @@ export interface WsContract {
     }
   }
   /**
+   * Whether linked servers are switched on here (peers.experimental in config.yaml). The one peer.* command
+   * that answers while the switch is off, so a console or Desktop can leave linked servers out without
+   * provoking peers_experimental. The same callers as the other management commands.
+   */
+  'peer.status': {
+    payload: null
+    response: { enabled: boolean }
+  }
+  /**
    * Unlink a server: the row is revoked (kept for the audit trail), its connections close at once, and it is
    * told (peer.unlinked) if it is connected. Linking it again needs a new pairing.
    */
@@ -8566,6 +8575,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.pairing.pending',
   'peer.ping',
   'peer.rename',
+  'peer.status',
   'peer.unlink',
   'peer.unlinked',
   'permission.get',
@@ -9026,6 +9036,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.pairing.pending': 15000,
   'peer.ping': 15000,
   'peer.rename': 15000,
+  'peer.status': 15000,
   'peer.unlink': 15000,
   'peer.unlinked': 15000,
   'permission.get': 15000,

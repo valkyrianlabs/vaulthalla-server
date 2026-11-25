@@ -519,6 +519,31 @@ TEST_F(PeerLinkDbTest, WithTheSwitchOffALinkedKeyIsNoPeerAndNothingAnswers) {
     (void)ops::peers::unlink(super, std::to_string(linked.row.id));
 }
 
+// peer.status reports the switch, on or off, without the peers_experimental refusal every other command answers, so
+// the console can leave linked servers out; it is still a super admin's (and a person's) question.
+TEST_F(PeerLinkDbTest, TheStatusAnswersTheSwitchEitherWayToTheSameCallers) {
+    EXPECT_EQ(handler::Peers::status(console(super)), json({{"enabled", true}}));
+    setExperimental(false);
+    EXPECT_EQ(handler::Peers::status(console(super)), json({{"enabled", false}})) << "answered, not refused";
+    EXPECT_THROW((void)handler::Peers::pairingPending(console(super)), ops::Refused) << "the rest still refuse";
+
+    const auto name = "pl_user_" + tag();
+    const auto plain = test::identities::createUser(name, db::query::rbac::role::Admin::get("unprivileged"),
+                                                    name + "@vaulthalla.test");
+    EXPECT_THROW((void)handler::Peers::status(console(plain)), ops::Denied) << "only super admins";
+    {
+        const auth::stepup::Scope agent(auth::stepup::Channel::Agent);
+        try {
+            (void)ops::peers::enabled(super);
+            ADD_FAILURE() << "an agent read the switch";
+        } catch (const ops::Refused& e) {
+            EXPECT_EQ(e.code, "peer_forbidden");
+        }
+    }
+    setExperimental(true);
+    EXPECT_TRUE(ops::peers::enabled(super));
+}
+
 
 // Who may make a link: the console steps up (device.trust, bound to the target), a full-access Desktop connected
 // directly does not (RBAC alone, decision 2), nor does the host; a device reached through the relay never gets there.
