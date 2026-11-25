@@ -44,7 +44,7 @@ Key32 wrapPublicKey() {
     if (c.publicKey && c.sealedFor == here) return *c.publicKey;
 
     if (sodium_init() < 0) throw std::runtime_error("libsodium cannot initialize");
-    crypto::secrets::KeyProvider provider(wrapSlotName());
+    vh::crypto::secrets::KeyProvider provider(wrapSlotName());
     // Linked servers pinned the public half: a lost key is never replaced behind their backs.
     provider.initGuarded([]() -> std::optional<std::string> {
         const auto live = db::query::peer::Peers::countLive();

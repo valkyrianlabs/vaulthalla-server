@@ -140,7 +140,7 @@ std::shared_ptr<vh::peer::LinkService> links() {
 }
 
 void requireExperimental() {
-    if (!config::Registry::get().peers.experimental)
+    if (!vh::config::Registry::get().peers.experimental)
         throw Refused("peers_experimental", "linked servers are experimental and off on this server: set "
                                             "peers.experimental: true in config.yaml and restart the daemon");
 }
