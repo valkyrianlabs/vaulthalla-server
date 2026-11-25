@@ -1,0 +1,146 @@
+[unit] building vh_unit_tests in /srv/vaulthalla-mirror-spike/build-itest
+[unit] re-configuring /srv/vaulthalla-mirror-spike/build-itest: the set of source files changed
+[unit] database vh_harness_unit_20261125t164028_771450; running /srv/vaulthalla-mirror-spike/build-itest/core/vh_unit_tests --gtest_filter=MirrorSpikeDb.*
+[2026-11-25 09:40:29.675] [info] [LogRegistry] Initialized
+Note: Google Test filter = MirrorSpikeDb.*
+[==========] Running 2 tests from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 2 tests from MirrorSpikeDb
+[warning] [vaulthalla] [bootstrap] Initial web console password for 'admin' written to /tmp/vh-unit-PEl2Ix/vh_test_mirror_spike_db_771648_234825605103167_0/backing/super_admin_initial_password (readable by root). Change it with 'vh setup set-super-admin-password', or keep it and delete that file.
+[info] [vaulthalla] [initdb] Created system user with linux_uid=112
+[info] [vaulthalla] [initdb] Root directory initialized successfully
+[ RUN      ] MirrorSpikeDb.ReconcileOverLocalVaultCollects
+[spike] ---- base (local vault collect) (12 entries, 1 keys, 0 snapshots)
+[spike]   file      top.txt          uid=1sp29bxw parent=wgjbtfqd gen=- obj=- kv=1 size=3 hash=9ed45a4b8456 mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       A                uid=248s5596 parent=wgjbtfqd gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      c.jpg            uid=4af0gswr parent=jhv9n27k gen=- obj=- kv=1 size=1 hash=92852cc34d28 mime=application/octet-stream mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       Docs             uid=79ewk5b1 parent=wgjbtfqd gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      notes.txt        uid=gfdt6se8 parent=79ewk5b1 gen=- obj=- kv=1 size=5 hash=a5f3d32447d7 mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       Photos           uid=jhv9n27k parent=wgjbtfqd gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      report.txt       uid=ntfx7h8w parent=79ewk5b1 gen=- obj=- kv=1 size=9 hash=aeaf8e4f7573 mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      b.jpg            uid=pjjesa1t parent=jhv9n27k gen=- obj=- kv=1 size=1 hash=895e8c930fdf mime=application/octet-stream mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       B                uid=r92x3g34 parent=wgjbtfqd gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   symlink   latest           uid=saaf8vhy parent=79ewk5b1 gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=report.txt trashed=no versions=0
+[spike]   file      a.jpg            uid=vn0srcxr parent=jhv9n27k gen=- obj=- kv=1 size=1 hash=0104d197d889 mime=application/octet-stream mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       <root>           uid=wgjbtfqd parent=- gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike] ---- ours (after local changes) (13 entries, 1 keys, 0 snapshots)
+[spike]   file      new.txt          uid=106ywdww parent=wgjbtfqd gen=- obj=- kv=1 size=8 hash=619df630334d mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      top2.txt         uid=1sp29bxw parent=wgjbtfqd gen=- obj=- kv=1 size=3 hash=9ed45a4b8456 mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       A                uid=248s5596 parent=r92x3g34 gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      c.jpg            uid=4af0gswr parent=jhv9n27k gen=- obj=- kv=1 size=1 hash=92852cc34d28 mime=application/octet-stream mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       Docs             uid=79ewk5b1 parent=wgjbtfqd gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      notes.txt        uid=gfdt6se8 parent=jhv9n27k gen=- obj=- kv=1 size=5 hash=a5f3d32447d7 mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       Photos           uid=jhv9n27k parent=wgjbtfqd gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      report.txt       uid=ntfx7h8w parent=79ewk5b1 gen=- obj=- kv=1 size=14 hash=2a457c0eeb93 mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      b.jpg            uid=pjjesa1t parent=jhv9n27k gen=- obj=- kv=- size=1 hash=- mime=- mtime=- target=- trashed=yes versions=0
+[spike]   dir       B                uid=r92x3g34 parent=wgjbtfqd gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   symlink   latest           uid=saaf8vhy parent=79ewk5b1 gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=report.txt trashed=no versions=0
+[spike]   file      a.jpg            uid=vn0srcxr parent=jhv9n27k gen=- obj=- kv=1 size=1 hash=0104d197d889 mime=application/octet-stream mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       <root>           uid=wgjbtfqd parent=- gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike] ---- theirs (hand-edited base) (12 entries, 1 keys, 0 snapshots)
+[spike]   file      top.txt          uid=1sp29bxw parent=wgjbtfqd gen=- obj=- kv=1 size=3 hash=9ed45a4b8456 mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       A                uid=248s5596 parent=wgjbtfqd gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      theirs-only.txt  uid=6561vq7c parent=79ewk5b1 gen=- obj=- kv=1 size=10 hash=theirs-new-h mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       Docs             uid=79ewk5b1 parent=wgjbtfqd gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      notes.txt        uid=gfdt6se8 parent=79ewk5b1 gen=- obj=- kv=1 size=5 hash=a5f3d32447d7 mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       Photos           uid=jhv9n27k parent=wgjbtfqd gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      b.jpg            uid=pjjesa1t parent=jhv9n27k gen=- obj=- kv=1 size=12 hash=theirs-b-has mime=application/octet-stream mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       B                uid=r92x3g34 parent=248s5596 gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   symlink   latest           uid=saaf8vhy parent=79ewk5b1 gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=notes.txt trashed=no versions=0
+[spike]   file      a.jpg            uid=vn0srcxr parent=jhv9n27k gen=- obj=- kv=1 size=11 hash=theirs-a-has mime=application/octet-stream mtime=2026-11-20T00:00:00Z target=- trashed=no versions=0
+[spike]   dir       <root>           uid=wgjbtfqd parent=- gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      new.txt          uid=z8p2dhcj parent=wgjbtfqd gen=- obj=- kv=1 size=10 hash=theirs-new-h mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike] ---- plan (6 ops)
+[spike]   create theirs-only.txt
+[spike]   restore b.jpg
+[spike]   create new.txt
+[spike]   set_attributes latest
+[spike]   replace_content a.jpg
+[spike]   delete c.jpg
+[spike] ---- conflicts (4)
+[spike]   edit_beats_delete report.txt: edited here, deleted by the head: kept
+[spike]   edit_beats_trash b.jpg: edited by the head, deleted here: restored from the head
+[spike]   cycle_not_applied B: the head's move would close a directory cycle: ours kept
+[spike]   name_clash new.txt: another entry is named "new.txt" in its folder: renamed
+[spike] ---- result (14 entries, 1 keys, 0 snapshots)
+[spike]   file      new.txt          uid=106ywdww parent=wgjbtfqd gen=- obj=- kv=1 size=8 hash=619df630334d mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      top2.txt         uid=1sp29bxw parent=wgjbtfqd gen=- obj=- kv=1 size=3 hash=9ed45a4b8456 mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       A                uid=248s5596 parent=r92x3g34 gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      theirs-only.txt  uid=6561vq7c parent=79ewk5b1 gen=- obj=- kv=1 size=10 hash=theirs-new-h mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       Docs             uid=79ewk5b1 parent=wgjbtfqd gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      notes.txt        uid=gfdt6se8 parent=jhv9n27k gen=- obj=- kv=1 size=5 hash=a5f3d32447d7 mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       Photos           uid=jhv9n27k parent=wgjbtfqd gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      report.txt       uid=ntfx7h8w parent=79ewk5b1 gen=- obj=- kv=1 size=14 hash=2a457c0eeb93 mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      b.jpg            uid=pjjesa1t parent=jhv9n27k gen=- obj=- kv=1 size=12 hash=theirs-b-has mime=application/octet-stream mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       B                uid=r92x3g34 parent=wgjbtfqd gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   symlink   latest           uid=saaf8vhy parent=79ewk5b1 gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=notes.txt trashed=no versions=0
+[spike]   file      a.jpg            uid=vn0srcxr parent=jhv9n27k gen=- obj=- kv=1 size=11 hash=theirs-a-has mime=application/octet-stream mtime=2026-11-20T00:00:00Z target=- trashed=no versions=0
+[spike]   dir       <root>           uid=wgjbtfqd parent=- gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      new.txt (z8p2dhcj) uid=z8p2dhcj parent=wgjbtfqd gen=- obj=- kv=1 size=10 hash=theirs-new-h mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[       OK ] MirrorSpikeDb.ReconcileOverLocalVaultCollects (113 ms)
+[ RUN      ] MirrorSpikeDb.ApplierOnALocalVault
+[spike] publish of the local vault's collect as the base: ok
+[spike] apply: recorded=1 union_base=0 applied=5 skipped=0 deferred=0 kept=2 conflicts=4
+[spike]   conflict: edit_beats_trash edited by the head, deleted here: restored from the head
+[spike]   conflict: edit_beats_delete edited here, deleted by the head: kept
+[spike]   conflict: cycle_not_applied the head's move would close a directory cycle: ours kept
+[spike]   conflict: name_clash another entry is named "new.txt" in its folder: renamed
+[spike]   op: move new.txt (ytdq5egb)
+[spike]   op: create new.txt
+[spike]   op: restore b.jpg
+[spike]   op: create theirs-only.txt
+[spike]   op: set_attributes latest
+[spike]   op: replace_content a.jpg
+[spike]   op: delete c.jpg
+[spike] ---- rows after the apply
+[spike]   /Photos/a.jpg: size=1 iv=set kv=1 backing=present read="a"
+[spike]   /Photos/b.jpg: size=12 iv=EMPTY kv=0 backing=MISSING read=<throws: File content not found: /Photos/b.jpg>
+[spike]   /Photos/c.jpg: size=1 iv=set kv=1 backing=present read="c"
+[spike]   /Docs/report.txt: size=14 iv=set kv=1 backing=present read="report v2 ours"
+[spike]   /new.txt: size=10 iv=EMPTY kv=0 backing=MISSING read=<throws: File content not found: /new.txt>
+[spike]   /Docs/theirs-only.txt: size=10 iv=EMPTY kv=0 backing=MISSING read=<throws: File content not found: /Docs/theirs-only.txt>
+[spike]   /top2.txt: size=3 iv=set kv=1 backing=present read="top"
+[spike]   /Photos/notes.txt: size=5 iv=set kv=1 backing=present read="notes"
+[spike]   /new.txt (ytdq5egb): size=8 iv=set kv=1 backing=present read="ours new"
+[spike] ---- collect after the apply (15 entries, 1 keys, 0 snapshots)
+[spike]   file      top2.txt         uid=18zp3xy9 parent=hgx13x0w gen=- obj=- kv=1 size=3 hash=55d89ecbb6bb mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   symlink   latest           uid=2542bm3v parent=vycqm6m9 gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=notes.txt trashed=no versions=0
+[spike]   file      notes.txt        uid=890q5zpp parent=kvexbpqb gen=- obj=- kv=1 size=5 hash=d2c701f81584 mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       B                uid=8d5w5dv8 parent=hgx13x0w gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      a.jpg            uid=910m9tf5 parent=kvexbpqb gen=- obj=- kv=1 size=1 hash=b58923ebf632 mime=application/octet-stream mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      new.txt          uid=fbtrsz3w parent=hgx13x0w gen=- obj=- kv=- size=10 hash=theirs-new-h mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       A                uid=g53pwvgj parent=8d5w5dv8 gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       <root>           uid=hgx13x0w parent=- gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       Photos           uid=kvexbpqb parent=hgx13x0w gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      b.jpg            uid=m3ks4qzj parent=kvexbpqb gen=- obj=- kv=- size=12 hash=theirs-b-has mime=application/octet-stream mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      report.txt       uid=nncjd0nw parent=vycqm6m9 gen=- obj=- kv=1 size=14 hash=a57b8b32bb06 mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      theirs-only.txt  uid=p6gvp7a4 parent=vycqm6m9 gen=- obj=- kv=- size=10 hash=theirs-new-h mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      c.jpg            uid=r2pvn1xj parent=kvexbpqb gen=- obj=- kv=1 size=1 hash=c63501248e4d mime=application/octet-stream mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   dir       Docs             uid=vycqm6m9 parent=hgx13x0w gen=- obj=- kv=- size=- hash=- mime=- mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike]   file      new.txt (ytdq5egb) uid=ytdq5egb parent=hgx13x0w gen=- obj=- kv=1 size=8 hash=68b66115b190 mime=text/plain mtime=2026-11-25T16:40:31Z target=- trashed=no versions=0
+[spike] trashed rows: 0
+/srv/vaulthalla-mirror-spike/core/tests/unit/test_mirror_spike_db.cpp:363: Failure
+Value of: db::query::fs::File::getFileByPath(id(), "/Photos/c.jpg")
+  Actual: true
+Expected: false
+their delete of c.jpg
+
+/srv/vaulthalla-mirror-spike/core/tests/unit/test_mirror_spike_db.cpp:366: Failure
+Expected equality of these values:
+  a->size_bytes
+    Which is: 1
+  11u
+    Which is: 11
+their edit of a.jpg
+
+[  FAILED  ] MirrorSpikeDb.ApplierOnALocalVault (187 ms)
+[----------] 2 tests from MirrorSpikeDb (301 ms total)
+
+[----------] Global test environment tear-down
+[==========] 2 tests from 1 test suite ran. (2021 ms total)
+[  PASSED  ] 1 test.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] MirrorSpikeDb.ApplierOnALocalVault
+
+ 1 FAILED TEST
+[unit] database dropped: vh_harness_unit_20261125t164028_771450
