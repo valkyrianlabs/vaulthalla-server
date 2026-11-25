@@ -1,7 +1,7 @@
 # Linked servers and the server mirror
 
-Design documents, never published (they live outside `docs/`). Phase 0 of the server mirror plan of 2026-11-25;
-nothing here is implemented.
+Design documents, never published (they live outside `docs/`). Phase 0 of the server mirror plan of 2026-11-25.
+Phase 1a, the link (link.md), is built, experimental and off by default (`peers.experimental`); nothing else here is.
 
 | Document | One line |
 |---|---|

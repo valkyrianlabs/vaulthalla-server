@@ -2,7 +2,9 @@
 
 #include "device/Crypto.hpp"
 
+#include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <span>
 #include <string>
@@ -70,13 +72,26 @@ struct IdentityRotation {
     unsigned int from{}, to{};
     std::string previous_spki_sha256{};
     std::size_t devices_revoked{};  // paired devices revoked in the switch transaction
+    std::size_t peers_kept{};       // linked servers that stored the announcement (design/peers/link.md)
+    std::size_t peers_revoked{};    // linked servers revoked in the switch transaction
 };
+
+struct IdentityRotationOptions {
+    // Linked servers (design/peers/link.md, "Rotation"): called once the new key is sealed and read back, before the
+    // switch, with the key in use and the new one's SPKI hash and version. Returns the `peer` rows that stored the
+    // announcement; every other live link is revoked in the switch transaction. Empty (the emergency rotation, or
+    // the feature off): every live link is revoked.
+    std::function<std::vector<uint32_t>(const ServerIdentity& current, const crypto::Hash& next, unsigned int version)>
+        announce{};
+};
+
 // Replaces the identity with a fresh key (#353, `vh secret device-identity rotate`): seals it as the next version,
-// reads it back, then in one transaction revokes every paired device and records the new version, writes the new
-// certificate and deletes the old key. Paired devices can never trust the new identity silently: their pairing was
-// bound to the old key, and their rows are revoked with the switch, so each pairs again with a fresh key.
-// Never touches the running listener (the caller swaps it: protocols::device::Service::replaceIdentity).
-[[nodiscard]] IdentityRotation rotateServerIdentity();
+// reads it back, then in one transaction revokes every paired device (and every linked server that was not told of the
+// new key) and records the new version, writes the new certificate and deletes the old key. Paired devices can never
+// trust the new identity silently: their pairing was bound to the old key, and their rows are revoked with the switch,
+// so each pairs again with a fresh key. Never touches the running listener (the caller swaps it:
+// protocols::device::Service::replaceIdentity).
+[[nodiscard]] IdentityRotation rotateServerIdentity(const IdentityRotationOptions& options = {});
 // Tests: called at "identity_sealed" and "identity_switched"; throwing from it simulates a crash there.
 void setIdentityRotationHookForTesting(void (*hook)(std::string_view point));
 

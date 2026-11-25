@@ -111,6 +111,9 @@ const std::vector<Exclusion>& exclusions() {
         // Remote connectors: which AI apps may act as the account from elsewhere, and how far, is a person's decision
         // (design/core/mcp-remote-signin.md); an agent can neither widen its own grant nor see or end anyone's.
         {{"connector"}, "which AI apps may connect to this server remotely, and with what access, is decided by a human"},
+        // Linked servers (design/peers/link.md): which servers this one trusts, and may receive vault keys from, is a
+        // person's decision; an agent can't see, make or end a link.
+        {{"peer"}, "which servers this one is linked with (and may exchange vault keys with) is decided by a human"},
     };
     return list;
 }

@@ -23,6 +23,7 @@
 #include "vault/RemoteAttachService.hpp"
 #include "vault/RetentionService.hpp"
 #include "cloud/RelayService.hpp"
+#include "peer/Links.hpp"
 #include "cloud/StorageService.hpp"
 #include "sync/events/Service.hpp"
 
@@ -58,6 +59,7 @@ constexpr std::array kBaseStartOrder{
     "ConnectionLifecycleManager",
     "ProtocolService",
     "DeviceServer",
+    "PeerLinks",
     "CloudRelayService",
     "S3GatewayService"
 };
@@ -65,6 +67,7 @@ constexpr std::array kBaseStartOrder{
 constexpr std::array kBaseStopOrder{
     "S3GatewayService",
     "CloudRelayService",
+    "PeerLinks",
     "DeviceServer",
     "ProtocolService",
     "ShellServer",
@@ -108,6 +111,7 @@ Manager::Manager()
       remoteAttachService(std::make_shared<vault::RemoteAttachService>()),
       cloudStorageService(std::make_shared<cloud::StorageService>()),
       cloudRelayService(std::make_shared<cloud::RelayService>()),
+      peerLinkService(std::make_shared<peer::LinkService>()),
       statsSnapshotService(std::make_shared<stats::SnapshotService>()),
       operatorEmailService(std::make_shared<notifications::OperatorEmailService>()),
       upstreamEventService(std::make_shared<sync::events::Service>()),
@@ -129,6 +133,7 @@ Manager::Manager()
     services_["RemoteAttachService"] = remoteAttachService;
     services_["CloudStorageService"] = cloudStorageService;
     services_["CloudRelayService"] = cloudRelayService;
+    services_["PeerLinks"] = peerLinkService;
     services_["StatsSnapshotService"] = statsSnapshotService;
     services_["OperatorEmailService"] = operatorEmailService;
     services_["UpstreamEventService"] = upstreamEventService;

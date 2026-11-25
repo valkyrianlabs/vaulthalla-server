@@ -207,6 +207,8 @@ Config& Config::operator=(Config&&) noexcept = default;
                 throw std::invalid_argument(std::string("config.yaml: ") + e.what());
             }
         }
+        // Read-only like `cloud`: config.yaml only (design/peers/link.md).
+        if (auto node = root["peers"]; node && node.IsMap()) cfg.peers.experimental = node["experimental"].as<bool>(false);
         // Read-only here like `mount`: config.yaml only, never written back or exposed through settings (#326).
         if (auto node = root["secrets"]; node && node.IsMap()) {
             cfg.secrets.require_hardware = node["require_hardware"].as<bool>(false);

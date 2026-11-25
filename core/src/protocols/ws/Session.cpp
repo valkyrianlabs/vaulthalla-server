@@ -21,6 +21,7 @@
 #include "rbac/Actor.hpp"
 #include "share/Principal.hpp"
 #include "device/Peer.hpp"
+#include "peer/Peer.hpp"
 #include "protocols/ws/TlsTransport.hpp"
 
 #include <boost/beast/http.hpp>
@@ -30,6 +31,7 @@
 #include <boost/asio.hpp>
 #include <cstddef>
 #include <string_view>
+#include <utility>
 
 #include "config/Registry.hpp"
 
@@ -291,6 +293,73 @@ void Session::acceptDevice(std::shared_ptr<TlsTransport> transport, const Reques
     });
 }
 
+void Session::setUpPeer(std::shared_ptr<TlsTransport> transport, std::shared_ptr<const ::vh::peer::Principal> principal,
+                        PeerHooks hooks, const beast::role_type role) {
+    if (!transport || !principal) throw std::invalid_argument("a peer session needs its transport and principal");
+    stream_ = std::make_shared<Stream>();
+    stream_->tls = std::move(transport);
+    strand_ = asio::make_strand(stream_->tls->ws.get_executor());
+    ipAddress = principal->address;
+    clientAddress = principal->address;
+    userAgent = "vaulthalla-peer";
+    peerPrincipal_ = std::move(principal);
+    peerResponse_ = std::move(hooks.onResponse);
+    peerOpen_ = std::move(hooks.onOpen);
+    onClose_ = std::move(hooks.onClose);
+    mode_.store(SessionMode::Peer, std::memory_order_release);
+
+    // A link stays open indefinitely; websocket pings find a dead one (peer.ping measures it on top).
+    auto timeouts = websocket::stream_base::timeout::suggested(role);
+    timeouts.idle_timeout = std::chrono::minutes(2);
+    timeouts.keep_alive_pings = true;
+    stream_->tls->ws.set_option(timeouts);
+    stream_->tls->ws.read_message_max(kWebSocketReadBufferMaxBytes);
+    if (const auto manager = runtime::Deps::get().sessionManager) manager->cache(shared_from_this());
+}
+
+void Session::acceptPeer(std::shared_ptr<TlsTransport> transport, const RequestType& req,
+                         std::shared_ptr<const ::vh::peer::Principal> principal, PeerHooks hooks) {
+    handshakeRequest_ = req;
+    setUpPeer(std::move(transport), std::move(principal), std::move(hooks), beast::role_type::server);
+    stream_->tls->ws.set_option(websocket::stream_base::decorator([](websocket::response_type& res) {
+        res.set(beast_http::field::server, "Vaulthalla");
+    }));
+    auto self = shared_from_this();
+    asio::dispatch(strand_, [self, req = std::make_shared<RequestType>(req)] {
+        if (self->closing_.load(std::memory_order_acquire)) return self->closeOnStrand();
+        self->stream_->tls->ws.async_accept(
+            *req, asio::bind_executor(self->strand_, [self, req](const beast::error_code& ec) {
+                self->onHandshakeAccepted(ec);
+            }));
+    });
+}
+
+void Session::attachPeer(std::shared_ptr<TlsTransport> transport, std::shared_ptr<const ::vh::peer::Principal> principal,
+                         PeerHooks hooks) {
+    setUpPeer(std::move(transport), std::move(principal), std::move(hooks), beast::role_type::client);
+    auto self = shared_from_this();
+    asio::dispatch(strand_, [self] {
+        self->handshakeDone_ = true;
+        self->handshakeComplete_.store(true, std::memory_order_release);
+        if (self->closing_.load(std::memory_order_acquire)) {
+            self->closeStarted_ = false;
+            if (!self->writing_) self->closeOnStrand();
+            return;
+        }
+        if (self->peerOpen_) std::exchange(self->peerOpen_, nullptr)();
+        self->maybeStartWrite();
+        self->startReadLoop();
+    });
+}
+
+std::shared_ptr<Session> Session::peerForTesting(std::shared_ptr<const ::vh::peer::Principal> principal) {
+    auto session = std::make_shared<Session>(std::make_shared<Router>());
+    session->peerPrincipal_ = std::move(principal);
+    session->mode_.store(SessionMode::Peer, std::memory_order_release);
+    session->handshakeComplete_.store(true, std::memory_order_release);
+    return session;
+}
+
 Session::ClientInfo Session::clientInfo() const {
     std::scoped_lock lock(clientInfoMutex_);
     return clientInfo_;
@@ -417,6 +486,7 @@ void Session::onHandshakeAccepted(const beast::error_code& ec) {
     }
 
     log::Registry::ws()->debug("[ws::Session] Handshake accepted from IP: {}", getIPAddress());
+    if (peerOpen_) std::exchange(peerOpen_, nullptr)();
     maybeStartWrite();  // flush anything queued while the handshake was in flight
     startReadLoop();
 }
@@ -657,7 +727,10 @@ void Session::onRead(const beast::error_code& ec, std::size_t) {
         return close();
     }
 
-    if (stream_->visit([](auto& ws) { return ws.got_binary(); })) {
+    if (isPeerSession() && stream_->visit([](auto& ws) { return ws.got_binary(); })) {
+        // The link's control socket is text only; bulk data has lanes of its own (design/peers/mirror.md).
+        log::Registry::ws()->debug("[ws::Session] Ignored a binary frame from linked server {}", ipAddress);
+    } else if (stream_->visit([](auto& ws) { return ws.got_binary(); })) {
         try {
             uploadHandler_->handleBinaryFrame(buffer_);
         } catch (const std::exception& ex) {
@@ -682,7 +755,13 @@ void Session::onRead(const beast::error_code& ec, std::size_t) {
         if (parsed) {
             if (const auto problem = envelope::problem(message)) {
                 log::Registry::ws()->debug("[ws::Session] Unroutable message: {}", *problem);
-                sendParseError(*problem, envelope::requestId(message));
+                // Never answer an answer on a link: two servers would bounce errors at each other.
+                if (!isPeerSession()) sendParseError(*problem, envelope::requestId(message));
+            } else if (isPeerSession() && message.contains("status")) {
+                // An answer to a request this end sent: the link's, never the router's (an unknown one is dropped).
+                if (!peerResponse_ || !peerResponse_(message))
+                    log::Registry::ws()->debug("[ws::Session] Dropped an unexpected answer from linked server {}",
+                                               ipAddress);
             } else {
                 try {
                     router_->routeMessage(std::move(message), shared_from_this());

@@ -22,6 +22,7 @@
 #include "crypto/util/encrypt.hpp"
 #include "db/encoding/bytea.hpp"
 #include "db/query/device/Device.hpp"
+#include "db/query/peer/Peer.hpp"
 #include "device/Pairing.hpp"
 #include "device/Peer.hpp"
 #include "device/ServerIdentity.hpp"
@@ -830,6 +831,43 @@ TEST_F(DeviceIdentityRotationTest, EveryPairedDeviceIsRevokedAndPairsAgain) {
     // A device paired after the rotation stays paired.
     (void)pairDevice();
     EXPECT_EQ(activeDevices(), 1u);
+}
+
+
+// design/peers/link.md, "Rotation": linked servers told of the new key (the announce hook says which stored it) keep
+// their link; every other one is revoked in the switch transaction, and with no hook (the emergency rotation) all are.
+TEST_F(DeviceIdentityRotationTest, LinkedServersThatHeardOfTheNewKeyKeepTheirLinkTheOthersAreRevoked) {
+    const auto before = vh::device::loadOrCreateServerIdentity();
+    vh::device::setCurrentServerIdentity(before);
+    const auto linkRow = [](const std::string& name) {
+        return db::query::peer::Peers::insert({.node_id = "node-" + name + "-" + tag(), .name = name,
+                                               .spki_sha256 = randomHex(32)})
+            .id;
+    };
+    const auto told = linkRow("told"), offline = linkRow("offline");
+    std::string announcedFrom, announcedNext;
+    unsigned int announcedVersion = 0;
+    vh::device::IdentityRotationOptions options;
+    options.announce = [&](const vh::device::ServerIdentity& current, const vh::device::crypto::Hash& next,
+                           const unsigned int version) {
+        announcedFrom = current.spkiHex();
+        announcedNext = vh::device::crypto::toHex(next);
+        announcedVersion = version;
+        return std::vector<uint32_t>{told};
+    };
+    const auto r = vh::device::rotateServerIdentity(options);
+    EXPECT_EQ(announcedFrom, before->spkiHex()) << "signed by the key in use";
+    EXPECT_EQ(announcedNext, r.identity->spkiHex()) << "announcing the key the switch makes current";
+    EXPECT_EQ(announcedVersion, r.to) << "the counter is the new version";
+    EXPECT_FALSE(db::query::peer::Peers::byId(told)->revoked());
+    EXPECT_TRUE(db::query::peer::Peers::byId(offline)->revoked()) << "an offline peer links again: failing closed";
+    EXPECT_GE(r.peers_revoked, 1u);
+    EXPECT_GE(r.peers_kept, 1u);
+    // The emergency rotation (no announcement): every link is dropped.
+    const auto again = vh::device::rotateServerIdentity();
+    EXPECT_TRUE(db::query::peer::Peers::byId(told)->revoked());
+    EXPECT_EQ(again.peers_kept, 0u);
+    EXPECT_EQ(db::query::peer::Peers::countLive(), 0u);
 }
 
 }

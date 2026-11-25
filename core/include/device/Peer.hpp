@@ -2,6 +2,7 @@
 
 #include "device/Crypto.hpp"
 #include "identities/Fwd.hpp"
+#include "peer/Fwd.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -47,13 +48,19 @@ struct Authorization {
     std::shared_ptr<Peer> peer{};
     // The device's user (the canonical object) for a Device session; null for a pairing-only connection.
     std::shared_ptr<identities::User> user{};
+    // A linked server (design/peers/link.md): the key is a live `peer` row's. Its connection is a Peer session, never
+    // a Device one (`user` stays null).
+    std::shared_ptr<const vh::peer::Principal> linked{};
 };
 
 // Authorizes a connection by its client key at handshake time: a live device (current or previous key) gives a
-// Device session as that row's user; anything else (unknown, revoked, an account that no longer exists) a
-// pairing-only one. A handshake with a rotated device's new key ends the old key's grace. Records last_seen_at/last_ip.
-// Throws only on a database failure (the listener then refuses the connection).
-// `relayed`: the key was proven inside a relayed stream (design/cloud/relay.md); the peer is marked so.
+// Device session as that row's user; then, only while peers.experimental is on and only for a key no device has ever
+// had, a live linked server (its pin, or the next key it announced, which then becomes the pin) gives a Peer
+// session; anything else (unknown, revoked, an account that no longer exists) a pairing-only one. A handshake with a
+// rotated device's new key ends the old key's grace. Records last_seen_at/last_ip. Throws only on a database failure
+// (the listener then refuses the connection).
+// `relayed`: the key was proven inside a relayed stream (design/cloud/relay.md); the peer is marked so, and is never
+// looked up as a linked server.
 [[nodiscard]] Authorization authorize(const crypto::PublicKey& key, const std::string& address, bool relayed = false);
 
 // Writes last_seen_at/last_ip for a Device session at most every 5 minutes (called per command). Never throws.

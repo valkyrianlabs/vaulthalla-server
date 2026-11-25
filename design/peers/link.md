@@ -1,6 +1,8 @@
 # Server link: pairing two Vaulthalla servers
 
-Status: design, phase 0 of the server mirror plan (2026-11-25); nothing here is implemented. It covers how two
+Status: phase 1a built (2026-11-25), experimental and off by default (`peers.experimental` in config.yaml): pairing,
+the link, unlinking and the announced identity rotation, without a console page or Desktop's brokered flow. What the
+build changed or decided is in "As built (phase 1a)" at the end; the rest of this text is the design. It covers how two
 servers pair, how they authenticate each other afterwards, what a linked server may call, and how the link is
 unlinked and rotated. It does not cover what travels over the link for a mirrored vault ([`mirror.md`](mirror.md)) or
 how accounts are shared ([`identity.md`](identity.md)). No part of it needs vaulthalla.cloud.
@@ -61,6 +63,11 @@ peer (
 )
 ```
 
+As built (`deploy/psql/157_peers.sql`): node_id and spki_sha256 are unique among live rows only (partial indexes), so
+that "linking the same server again writes a new row" holds; and four more columns: `rotate_counter` (the last
+rotation announcement accepted), `compared_by` (person | desktop), `peer_protocol` and `product_version` (the card's,
+then each peer.hello's).
+
 - **What a peer session may call:** `peer.*` wire commands, `meta.hello` and `meta.contract.get`. Nothing else: no
   filesystem, vault, key, device, settings or account command. `Router::classifyCommand` gains a `PeerSession` branch
   that fails closed, the way a scoped device's does today (`core/src/protocols/ws/Router.cpp:279-292`).
@@ -93,7 +100,8 @@ for the other.
 2. **A dials B** (`peer.link.start {endpoints, expect_spki?}`, a super admin on A). A connects with its identity
    certificate. With `expect_spki` (the brokered path) A refuses any other key at the handshake; without it A trusts
    on first use, guarded by the code in step 4.
-3. **A sends `peer.pair.request`:** its peer card and a commitment to its nonce. B answers with its own card and
+3. **A sends `peer.pair.request`:** its peer card and a commitment to its nonce,
+   `SHA-256("vh/peer/commit/v1" ‖ spki_A ‖ nonce_A)`. B answers with its own card and
    nonce; A reveals its nonce (`peer.pair.confirm`). A **peer card** is
    `{node_id, name, attest_public_keys[], wrap_public_key, peer_protocol, product_version}`. The attestation keys are
    every key the server has attested a vault key with, current and retired (`key_attestation_keys`), because an old
@@ -101,6 +109,11 @@ for the other.
 4. **Both compute the code:**
    `sas = SAS(H("vh/peer/sas/v1" ‖ spki_B ‖ spki_A ‖ nonce_A ‖ nonce_B ‖ H(card_A) ‖ H(card_B)))`.
    Binding the cards is what authenticates the attestation and wrap keys: change either and the codes differ.
+   `H(card)` is SHA-256 over `"vh/peer/card/v1" ‖ LP(node_id) ‖ LP(name) ‖ UInt32BE(n) ‖ attest_key[32] × n ‖
+   wrap_key[32] ‖ UInt32BE(peer_protocol) ‖ LP(product_version)` (LP = UInt32BE byte length ‖ UTF-8), and `SAS` is
+   device pairing's: `UInt64BE(digest[0..8]) mod 10^6`, six digits. The fixed vector Desktop implements against is
+   `core/test-assets/peer/pairing-vectors.json` (code `227515`), recomputed independently by
+   `tools/dev/peer_pairing_vectors.py`.
 5. **A shows its code** to the super admin who started the link (`peer.link.status`). **B offers three choices**
    (`peer.pairing.pending`), as device pairing does.
 6. **B's super admin picks the matching one** (`peer.pairing.approve {request_id, code, expect_spki?}`). B writes its
@@ -141,6 +154,12 @@ Nothing in this path trusts a key on first use, and no number is read by a perso
 
 Linking is not delegated below super admin in the first version. A "manage linked servers" admin permission can
 follow once the feature has been used.
+
+As built: the console's step-up (device.trust, target-bound) is asked by the two commands that make a link,
+`peer.pairing.approve` and `peer.link.start`; opening a window, listing, renaming and unlinking ask none. On a
+full-access, directly connected device the same two run on RBAC alone, but not during the account's recovery
+cooldown. The refusal for the callers in the last row is `peer_forbidden` (ops), on top of the router's and the
+MCP catalog's.
 
 ## The connection
 
@@ -185,7 +204,9 @@ Linking does not require `device_server.remote` on both servers, only that one o
 - **For peers** the server announces the new key first: `peer.identity.rotate {next_spki, proof}`, where the proof is
   a signature by the current identity key over `"vh/peer/rotate/v1" ‖ next_spki ‖ peer_spki ‖ node_id ‖ counter`. A
   connected peer stores it as `next_spki_sha256` and accepts either key until it has seen the new one in use, then
-  drops the old.
+  drops the old. As built: `node_id` is length-prefixed (UInt32BE), `counter` is UInt64BE and is the identity's new
+  version, and the announcing server revokes, in the rotation's switch transaction, every link that did not store
+  it.
 - **A peer that is offline at the rotation** never received the announcement and must be linked again. Failing
   closed is intended.
 - **An emergency rotation** (`vh secret device-identity rotate --revoke-peers`) skips the announcement and drops every
@@ -207,7 +228,8 @@ Wire, on a peer session: `peer.hello` · `peer.ping` · `peer.endpoints` · `pee
 and the `peer.mirror.*` and `peer.identity.*` families defined in the other two documents.
 
 CLI: `vh peer pair`, `vh peer link <address> [--fingerprint <hex>]`, `vh peer list`, `vh peer info <peer>`,
-`vh peer rename`, `vh peer unlink <peer>`.
+`vh peer rename`, `vh peer unlink <peer>`; as built also `vh peer pending`, `vh peer approve <request> --code <code>
+[--fingerprint <hex>]` and `vh peer deny <request>`, the non-interactive halves of `vh peer pair` (as `vh device` has).
 
 ## Audit events
 
@@ -248,3 +270,39 @@ the code was compared: person or Desktop), `peer.link.denied`, `peer.unlink`, `p
 - **More than two servers.** Nothing above limits a server to one link. `mirror.md` limits a vault to one mirror in
   the first version.
 - **A "manage linked servers" permission** below super admin: later, once there is a reason.
+
+## As built (phase 1a, 2026-11-25)
+
+Work items 1 to 7 and 9 without the console page, the operator page and Desktop (8). Decided while building (under
+the owner's instruction to build without waiting for review; compatibility policy rule 5):
+
+- **The switch.** `peers.experimental: false` (config.yaml only, like `cloud`). Off: the link service closes every link
+  and dials nothing, the listener never looks a key up in `peer`, and every `peer.*` command and `vh peer` answers
+  `peers_experimental`.
+- **Unique among live rows** (schema above), and the extra columns.
+- **The commitment** has its own domain, `vh/peer/commit/v1` (device pairing's is `vh-pair-commit-v1`); the card has an
+  exact encoding (Pairing, step 4).
+- **The pairing connection.** A's connection to B's window is a pairing-only connection on B (device pairing's rules:
+  one live request per key, 5 per window, 10 per minute per address, 5-minute requests inside a 10-minute window).
+  A writes its row only once `peer.pair.status` says approved; if A cannot write it then (a crash, a conflict), B keeps
+  a row A doesn't have, and an admin unlinks it on B. B closes the window when it approves.
+- **The brokered check on B** (`expect_spki` on `peer.pairing.approve`) is applied before the code: another key denies
+  the request whatever the code. `compared_by` is `desktop` whenever `expect_spki` was given.
+- **Who dials.** Both ends dial a live row's endpoints when it has no connection, loopback included (two servers on one
+  host); a row with no endpoints yet (the accepting side before the first peer.endpoints) waits to be dialled. Backoff
+  1 s to 2 min with full jitter. A newer connection from the same dialler replaces the older one (it reconnected); the
+  lower-node-id rule decides between the two dialling directions. Both ends ping.
+- **Wire shapes.** `peer.hello {node_id, name, peer_protocol, product_version}` both ways (the node id must be the
+  row's; the side that loses the tie-break answers `conflict` and closes); `peer.endpoints {endpoints}` answers the
+  receiver's own; `peer.ping` answers `{time}`; `peer.unlinked` makes the receiver revoke its row too (a notice that
+  is a courtesy for the key, and saves the other side from dialling a server that refuses it).
+- **Rotation.** The identity key's announced rotation is built. The attestation and wrap keys have no rotation path
+  today (the wrap key never rotates; the attestation key is replaced only when it no longer unseals), so nothing
+  announces them yet: when either gets one, the announcement gains their public keys under the same proof (a
+  `peer_protocol` bump). A new attestation key reaches a peer only by linking again until then.
+- **The websocket client** is a new reusable dialler (`protocols::ws::client::dial`: resolve, connect, the TLS client
+  handshake with a caller's certificate check, the upgrade, one deadline), used by the link for both directions'
+  dialling side. `cloud::RelayService` keeps its own (it also speaks plain ws to a loopback relay over a
+  `beast::tcp_stream`); only its reconnect backoff moved to the shared `concurrency::jitteredBackoff`.
+- **Not built here** (later phases): the principal kind in RBAC tables and vault roles for peers (identity.md, with the
+  mirror), any `peer.mirror.*` or `peer.identity.*` command, bulk lanes, the console page, Desktop's brokered flow.

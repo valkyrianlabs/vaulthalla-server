@@ -66,9 +66,16 @@ struct DeviceIdentityRotation {
     std::size_t sessions_closed{};
     std::size_t pairing_requests_dropped{};
     bool listener_updated{false};  // the running listener presents the new identity now (else: from its next start)
+    // Linked servers (design/peers/link.md, "Rotation"): told of the new key first (they keep the link), or revoked.
+    std::size_t peers_announced{};
+    std::size_t peers_kept{};
+    std::size_t peers_revoked{};
+    bool revoke_peers{false};  // the emergency rotation: no announcement, every link dropped
 };
-// No rollback: the old key is deleted, and every device paired with it is revoked.
-[[nodiscard]] DeviceIdentityRotation rotateDeviceIdentity(const Actor& actor, bool confirmed);
+// No rollback: the old key is deleted, and every device paired with it is revoked. Connected linked servers are told of
+// the new key first, signed by the old one, and keep their links; every other link is revoked. `revokePeers` (the
+// emergency rotation, for an identity key that may be compromised) skips the announcement and drops every link.
+[[nodiscard]] DeviceIdentityRotation rotateDeviceIdentity(const Actor& actor, bool confirmed, bool revokePeers = false);
 
 // ---- the sealing policy (#351) ---------------------------------------------------------------------------------
 

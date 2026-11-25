@@ -5,6 +5,7 @@
 #include "config/Registry.hpp"
 #include "device/Peer.hpp"
 #include "device/ServerIdentity.hpp"
+#include "peer/Peer.hpp"
 #include "log/Registry.hpp"
 #include "protocols/device/Listener.hpp"
 #include "protocols/http/Session.hpp"
@@ -41,12 +42,23 @@ constexpr auto kHttpDrainTimeout = std::chrono::seconds(3);
 
 using WorkGuard = asio::executor_work_guard<asio::io_context::executor_type>;
 
+// Device-listener sessions, and the linked servers' connections that came in through the listener (design/peers/
+// link.md: they end with the listener's exposure like a device's).
+bool onListener(const ws::Session& s) {
+    return s.onDeviceListener() || (s.isPeerSession() && s.peerPrincipal() && s.peerPrincipal()->inbound);
+}
+
+std::string listenerAddress(const ws::Session& s) {
+    if (s.devicePeer()) return s.devicePeer()->address;
+    return s.peerPrincipal() ? s.peerPrincipal()->address : std::string();
+}
+
 std::size_t closeIf(const std::function<bool(const ws::Session&)>& pred) {
     const auto manager = runtime::Deps::get().sessionManager;
     if (!manager) return 0;
     std::size_t closed = 0;
     for (const auto& [_, session] : manager->getActive()) {
-        if (!session || !session->onDeviceListener() || !pred(*session)) continue;
+        if (!session || !onListener(*session) || !pred(*session)) continue;
         session->close();
         ++closed;
     }
@@ -72,6 +84,7 @@ std::size_t closeDeviceSessions(const uint32_t deviceRowId, const vh::device::Pe
 
 std::size_t closeRemoteDeviceSessions() {
     return closeIf([](const ws::Session& s) {
+        if (s.isPeerSession()) return !isLoopback(listenerAddress(s));
         return !s.devicePeer() || (!s.devicePeer()->relayed && !isLoopback(s.devicePeer()->address));
     });
 }

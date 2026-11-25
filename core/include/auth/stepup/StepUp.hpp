@@ -173,6 +173,13 @@ private:
 // for target-bound families and ignored otherwise.
 void require(Family family, const std::optional<std::string>& target = std::nullopt);
 
+// design/peers/link.md (Cooper, 2026-11-25, decision 2): the step-up for making a link between two servers. A web
+// console session needs device.trust for `target` (require()); a full-access, directly connected device's own session
+// (Vaulthalla Desktop brokering the link) is trusted on RBAC alone, outside the recovery cooldown, audited
+// auth.stepup.grant method device_session; the host never asks; an agent, a scoped device and a device reached through
+// the relay are refused (require()).
+void requireForServerLink(const std::string& target);
+
 // What `user` can answer a step-up of `family` with on a web session: "webauthn" (a usable passkey and passkeys
 // configured), "password_totp" (a confirmed authenticator app), "password" (D3). Empty when nothing can (an account
 // with no factor asked for keys, device.trust or data.destroy). Factors the account's policy rule refuses

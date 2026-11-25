@@ -6,6 +6,7 @@
 #include "device/Peer.hpp"
 #include "device/ServerIdentity.hpp"
 #include "log/Registry.hpp"
+#include "peer/Links.hpp"
 #include "protocols/device/Endpoints.hpp"
 #include "protocols/device/Mcp.hpp"
 #include "protocols/http/Session.hpp"
@@ -220,6 +221,13 @@ private:
             request_ = std::make_shared<RequestType>(header.method(), header.target(), header.version());
             for (const auto& f : header) request_->insert(f.name_string(), f.value());
             if (!beast::websocket::is_upgrade(*request_)) return respond(bhttp::status::upgrade_required, "websocket only");
+            // design/peers/link.md: a linked server's key is a Peer session, run by the link service.
+            if (authorization_.linked) {
+                const auto links = peer::linkService();
+                if (!links) return respond(bhttp::status::service_unavailable, "not available");
+                links->acceptInbound(transport_, *request_, authorization_.linked, std::move(slot_));
+                return;
+            }
             const auto session = std::make_shared<ws::Session>(router_);
             session->holdConnectionSlot(std::move(slot_));
             session->acceptDevice(transport_, *request_, authorization_.peer, authorization_.user);
@@ -300,6 +308,26 @@ std::shared_ptr<ssl::context> makeServerContext(const vh::device::ServerIdentity
     if (SSL_CTX_set1_client_sigalgs_list(native, "ECDSA+SHA256") != 1)
         throw std::runtime_error("device listener: cannot set the client signature algorithms");
     SSL_CTX_set_verify(native, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, acceptAnyChain);
+    return ctx;
+}
+
+std::shared_ptr<ssl::context> makeClientContext(const vh::device::ServerIdentity& identity) {
+    auto ctx = std::make_shared<ssl::context>(ssl::context::tls_client);
+    SSL_CTX* native = ctx->native_handle();
+    if (SSL_CTX_set_min_proto_version(native, TLS1_3_VERSION) != 1 ||
+        SSL_CTX_set_max_proto_version(native, TLS1_3_VERSION) != 1)
+        throw std::runtime_error("server link: cannot restrict TLS to 1.3");
+    SSL_CTX_set_options(native, SSL_OP_NO_TICKET | SSL_OP_NO_COMPRESSION);
+    SSL_CTX_set_session_cache_mode(native, SSL_SESS_CACHE_OFF);
+    if (SSL_CTX_use_certificate(native, identity.certificate()) != 1 ||
+        SSL_CTX_use_PrivateKey(native, identity.key()) != 1 || SSL_CTX_check_private_key(native) != 1)
+        throw std::runtime_error("server link: cannot load the server identity");
+    // The other server's listener signs with its P-256 identity key, and asks for this one's.
+    if (SSL_CTX_set1_sigalgs_list(native, "ECDSA+SHA256") != 1 ||
+        SSL_CTX_set1_client_sigalgs_list(native, "ECDSA+SHA256") != 1)
+        throw std::runtime_error("server link: cannot set the signature algorithms");
+    // No trust store: each connection's verify callback compares the key with its pin.
+    SSL_CTX_set_verify(native, SSL_VERIFY_PEER, nullptr);
     return ctx;
 }
 
