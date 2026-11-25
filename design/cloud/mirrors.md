@@ -1,6 +1,16 @@
 # Mirrored vaults (wave 3): two or more servers on one bucket
 
-Status: design for review (managed storage plan of 2026-11-12, §4.7 and workstream I); nothing here is implemented.
+Status: **partly implemented, experimental.** The join, leave, replica removal, the manifest applier, `writers` in
+every root and the refusals below shipped in 1.23.0 (2026-11-22) behind `sync.replicas.experimental`, off by default,
+from the host CLI only (`vh vault join`, `vh vault leave`, `vh vault replica remove`). Not built: key rotation across
+replicas (refused while replicated), shared recovery policy, any console or Desktop surface, operator docs. The
+tables under "A second daemon on the same bucket today" describe the state before that work.
+
+**This is not the server mirror.** Syncing two servers directly over a paired link, with no bucket in the path, is
+designed in [`design/peers/`](../peers/mirror.md) (2026-11-25) and is the feature the console and Desktop will offer.
+The bucket-based replicas here stay experimental and serve writers that can only meet in a bucket. A vault is one or
+the other, never both.
+
 It covers what the server needs for one vault to be kept in sync by several of the customer's servers through its
 bucket: what works today with a second writer, what breaks, the join and leave flows, and key rotation. It does not
 cover the publish protocol itself ([spec 06](../encryption/06-publish-without-preconditions.md)), the cloud's records
