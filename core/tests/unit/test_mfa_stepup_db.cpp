@@ -170,6 +170,8 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
         {"device.backup.grant.extend", "needs a live grant: test_key_backup_grants_db.cpp"},
         {"device.backup.grant.confirm", "needs a live grant: test_key_backup_grants_db.cpp"},
         {"settings.update", "writes the daemon's config file: refusal in AStolenBrowserSessionCantApprove..."},
+        {"peer.pairing.approve", "needs a link request over the listener: PeerLinkDbTest.MakingALinkStepsUpInTheConsole..."},
+        {"peer.link.start", "dials another server: PeerLinkDbTest.MakingALinkStepsUpInTheConsole..."},
         {"email.config.update", "settings.update's email sections (ops::config::saveSettings): writes the config file"},
         {"auth.mfa.factor.remove", "covered by APasskeyStepUpIsBoundToItsSessionFamilyAndTarget"},
         {"auth.mfa.webauthn.register.options", "covered by APasskeyStepUpIsBoundToItsSessionFamilyAndTarget"},

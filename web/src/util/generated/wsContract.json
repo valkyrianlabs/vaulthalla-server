@@ -37866,6 +37866,3209 @@
       "variants": []
     },
     {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.endpoints",
+      "confirmations": [],
+      "description": "Where the sender can be reached (its device listener's advertisement); answers the receiver's. Each side stores what it is told.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "fields": [
+            {
+              "description": "Host name or IP literal (IPv6 unbracketed).",
+              "name": "host",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "maximum": 65535,
+              "minimum": 0,
+              "name": "port",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "enum": [
+                "loopback",
+                "lan",
+                "vpn",
+                "wan",
+                "passthrough",
+                "manual"
+              ],
+              "name": "kind",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "endpoints"
+            ],
+            "entity": "peer.endpoint",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "items": "object",
+          "name": "endpoints",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "description": "Host name or IP literal (IPv6 unbracketed).",
+              "name": "host",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "maximum": 65535,
+              "minimum": 0,
+              "name": "port",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "enum": [
+                "loopback",
+                "lan",
+                "vpn",
+                "wan",
+                "passthrough",
+                "manual"
+              ],
+              "name": "kind",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "endpoints",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "peer.get",
+      "confirmations": [],
+      "description": "One linked server with its link's health.",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Its row id, node id, name, key (64 hex) or 8+ hex digits of its key.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "peer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "peer",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The pin.",
+              "name": "spki_sha256",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "A key it announced and isn't using yet.",
+              "name": "next_spki_sha256",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "items": "string",
+              "name": "attest_public_keys",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "name": "wrap_public_key",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Last good first.",
+              "fields": [
+                {
+                  "description": "Host name or IP literal (IPv6 unbracketed).",
+                  "name": "host",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "name": "port",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "loopback",
+                    "lan",
+                    "vpn",
+                    "wan",
+                    "passthrough",
+                    "manual"
+                  ],
+                  "name": "kind",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "endpoints",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "enum": [
+                "identities",
+                "full"
+              ],
+              "name": "sharing",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "approved_by",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "person",
+                "desktop"
+              ],
+              "name": "compared_by",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "peer_protocol",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "product_version",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "linked_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "last_seen_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "revoked_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "revoked",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "Only after peer.hello answered, and only until the socket ends.",
+                  "name": "connected",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "name": "since",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "enum": [
+                    "this_server",
+                    "peer"
+                  ],
+                  "name": "dialed_by",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "address",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "description": "The last peer.ping's round trip.",
+                  "name": "rtt_ms",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "peer_protocol",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "peer_version",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "description": "false: another major peer protocol (upgrade one).",
+                  "name": "protocol_compatible",
+                  "required": true,
+                  "types": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "last_error",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "last_error_at",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "next_attempt_at",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "health",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "name": "peer",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.hello",
+      "confirmations": [],
+      "description": "The first request on a link: who the sender is and the peer protocol and version it speaks. The node id must be the linked one. When both servers dialled at once, the connection the lower node id dialled is kept and the other answers conflict and closes.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "node_id"
+            ],
+            "entity": "peer.hello",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "node_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "name"
+            ],
+            "entity": "peer.hello",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "peer_protocol"
+            ],
+            "entity": "peer.hello",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "maximum": 65535,
+          "minimum": 1,
+          "name": "peer_protocol",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "product_version"
+            ],
+            "entity": "peer.hello",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "product_version",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "response": [
+        {
+          "name": "node_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "maximum": 65535,
+          "minimum": 1,
+          "name": "peer_protocol",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "product_version",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.identity.rotate",
+      "confirmations": [],
+      "description": "The sender's next identity key, announced before it is used: signature is ECDSA P-256 / SHA-256 (DER, base64) by its current key over \"vh/peer/rotate/v1\" ‖ next_spki ‖ receiver_spki ‖ UInt32BE(len) ‖ node_id ‖ UInt64BE(counter). Stored as next_spki_sha256; either key is accepted until the new one is seen. counter must exceed the last one.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "64 lowercase hex digits (a SHA-256 value).",
+          "generator": {
+            "attrs": [
+              "next_spki_sha256"
+            ],
+            "entity": "peer.rotation",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "next_spki_sha256",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "counter"
+            ],
+            "entity": "peer.rotation",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 1,
+          "name": "counter",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "signature"
+            ],
+            "entity": "peer.rotation",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "signature",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "response": [
+        {
+          "name": "stored",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "peer.link.cancel",
+      "confirmations": [],
+      "description": "Stop a peer.link.start attempt that has not finished.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "link_id"
+            ],
+            "entity": "peer.link",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "link_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "description": "One peer.link.start attempt (kept 15 minutes after it ends).",
+          "fields": [
+            {
+              "name": "link_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "connecting",
+                "awaiting_approval",
+                "linked",
+                "denied",
+                "expired",
+                "failed",
+                "cancelled"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Six digits, once both nonces are known: what this side shows.",
+              "name": "code",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "node_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "product_version",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "64 lowercase hex digits (a SHA-256 value).",
+                  "name": "spki_sha256",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "peer",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "linked: the row written here.",
+              "name": "peer_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "expect_spki",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "address",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "updated_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "link",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "peer.link.start",
+      "confirmations": [],
+      "description": "Dial another server whose window is open (endpoints: what its peer.pairing.open answered, or an address) and ask to link. With expect_spki only that key completes the TLS handshake; without it the key is trusted on first use, guarded by the code. Answers at once (connecting); peer.link.status shows the code to compare, then the outcome. A device.trust step-up in the console; none on a full-access device's session or `vh`.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "1-32 of {host, port}, tried in order.",
+          "fields": [
+            {
+              "name": "host",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "maximum": 65535,
+              "minimum": 0,
+              "name": "port",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "kind",
+              "required": false,
+              "types": [
+                "string",
+                "null"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "endpoints"
+            ],
+            "entity": "peer.endpoint",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "items": "object",
+          "name": "endpoints",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits (a SHA-256 value).",
+          "name": "expect_spki",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "description": "One peer.link.start attempt (kept 15 minutes after it ends).",
+          "fields": [
+            {
+              "name": "link_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "connecting",
+                "awaiting_approval",
+                "linked",
+                "denied",
+                "expired",
+                "failed",
+                "cancelled"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Six digits, once both nonces are known: what this side shows.",
+              "name": "code",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "node_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "product_version",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "64 lowercase hex digits (a SHA-256 value).",
+                  "name": "spki_sha256",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "peer",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "linked: the row written here.",
+              "name": "peer_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "expect_spki",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "address",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "updated_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "link",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "device.trust",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "peer.link.status",
+      "confirmations": [],
+      "description": "How a peer.link.start attempt stands: connecting, awaiting_approval (with the code), linked, denied, expired, failed (with the error) or cancelled. Ask again in 1-2 s while it runs.",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "link_id"
+            ],
+            "entity": "peer.link",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "link_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "description": "One peer.link.start attempt (kept 15 minutes after it ends).",
+          "fields": [
+            {
+              "name": "link_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "connecting",
+                "awaiting_approval",
+                "linked",
+                "denied",
+                "expired",
+                "failed",
+                "cancelled"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Six digits, once both nonces are known: what this side shows.",
+              "name": "code",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "node_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "product_version",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "64 lowercase hex digits (a SHA-256 value).",
+                  "name": "spki_sha256",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "peer",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "linked: the row written here.",
+              "name": "peer_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "expect_spki",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "address",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "updated_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "link",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "peer.list",
+      "confirmations": [],
+      "description": "The linked servers with each link's health (connected, since, who dialled, round trip, the peer's version); all: unlinked ones too.",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "all",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The pin.",
+              "name": "spki_sha256",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "A key it announced and isn't using yet.",
+              "name": "next_spki_sha256",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "items": "string",
+              "name": "attest_public_keys",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "name": "wrap_public_key",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Last good first.",
+              "fields": [
+                {
+                  "description": "Host name or IP literal (IPv6 unbracketed).",
+                  "name": "host",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "name": "port",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "loopback",
+                    "lan",
+                    "vpn",
+                    "wan",
+                    "passthrough",
+                    "manual"
+                  ],
+                  "name": "kind",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "endpoints",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "enum": [
+                "identities",
+                "full"
+              ],
+              "name": "sharing",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "approved_by",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "person",
+                "desktop"
+              ],
+              "name": "compared_by",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "peer_protocol",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "product_version",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "linked_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "last_seen_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "revoked_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "revoked",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "Only after peer.hello answered, and only until the socket ends.",
+                  "name": "connected",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "name": "since",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "enum": [
+                    "this_server",
+                    "peer"
+                  ],
+                  "name": "dialed_by",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "address",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "description": "The last peer.ping's round trip.",
+                  "name": "rtt_ms",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "peer_protocol",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "peer_version",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "description": "false: another major peer protocol (upgrade one).",
+                  "name": "protocol_compatible",
+                  "required": true,
+                  "types": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "last_error",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "last_error_at",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "next_attempt_at",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "health",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "peers",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer_pairing",
+      "client_timeout_ms": 15000,
+      "command": "peer.pair.confirm",
+      "confirmations": [],
+      "description": "Reveal nonce_a; it must match the commitment (else the request is deleted: invalid). The request is then shown to the window's owner with three codes; the code is UInt64BE(digest[0..8]) mod 10^6 of SHA-256(\"vh/peer/sas/v1\" ‖ spki_B ‖ spki_A ‖ nonce_A ‖ nonce_B ‖ SHA-256(card_A) ‖ SHA-256(card_B)). The code is never sent.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "From peer.pair.request.",
+          "generator": {
+            "attrs": [
+              "request_id"
+            ],
+            "entity": "peer.pairing_request",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "request_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits (a SHA-256 value).",
+          "generator": {
+            "attrs": [
+              "nonce_a"
+            ],
+            "entity": "peer.pairing_request",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "nonce_a",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "device_unknown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "device_unknown"
+      ],
+      "response": [
+        {
+          "enum": [
+            "pending"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer_pairing",
+      "client_timeout_ms": 15000,
+      "command": "peer.pair.request",
+      "confirmations": [],
+      "description": "Ask to link while a window is open: the dialling server's card and its commitment SHA-256(\"vh/peer/commit/v1\" ‖ spki_A ‖ nonce_A). Answers this server's card and nonce_b. no_pairing_window when none is open, rate_limited past 10 per minute per address or 5 per window, conflict for a key or node already linked or a device's key.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "A peer card (design/peers/link.md): bound into the pairing code, field by field.",
+          "fields": [
+            {
+              "description": "The server's node id (1-64 printable ASCII).",
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "1-64 characters.",
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Its Ed25519 key-attestation public keys, current and retired (32 bytes each, standard base64); at most 64.",
+              "items": "string",
+              "name": "attest_public_keys",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "description": "Its X25519 peer wrap key (32 bytes, standard base64).",
+              "name": "wrap_public_key",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "maximum": 65535,
+              "minimum": 1,
+              "name": "peer_protocol",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "At most 64 printable ASCII.",
+              "name": "product_version",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "card"
+            ],
+            "entity": "peer.card",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "card",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits (a SHA-256 value).",
+          "generator": {
+            "attrs": [
+              "commitment"
+            ],
+            "entity": "peer.pairing_request",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "commitment",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "no_pairing_window",
+        "rate_limited",
+        "device_unknown",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "no_pairing_window",
+        "rate_limited",
+        "device_unknown",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "name": "request_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits (a SHA-256 value).",
+          "name": "nonce_b",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "A peer card (design/peers/link.md): bound into the pairing code, field by field.",
+          "fields": [
+            {
+              "description": "The server's node id (1-64 printable ASCII).",
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "1-64 characters.",
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Its Ed25519 key-attestation public keys, current and retired (32 bytes each, standard base64); at most 64.",
+              "items": "string",
+              "name": "attest_public_keys",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "description": "Its X25519 peer wrap key (32 bytes, standard base64).",
+              "name": "wrap_public_key",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "maximum": 65535,
+              "minimum": 1,
+              "name": "peer_protocol",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "At most 64 printable ASCII.",
+              "name": "product_version",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "card",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "expires_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer_pairing",
+      "client_timeout_ms": 15000,
+      "command": "peer.pair.status",
+      "confirmations": [],
+      "description": "How the link request stands; ask again in 2 s while pending. approved: this server wrote its peer row, and the dialling server writes its own.",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "From peer.pair.request.",
+          "generator": {
+            "attrs": [
+              "request_id"
+            ],
+            "entity": "peer.pairing_request",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "request_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "device_unknown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "device_unknown"
+      ],
+      "response": [
+        {
+          "enum": [
+            "pending",
+            "approved",
+            "denied",
+            "expired"
+          ],
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "peer.pairing.approve",
+      "confirmations": [],
+      "description": "Approve a link request with the code the dialling server shows (number matching); any other code denies it. expect_spki (the brokered path: Desktop's pin for the dialling server) also requires the requesting key to be that one, or the request is denied. Writes the peer row and closes the window. A device.trust step-up in the console; none on a full-access device's session or `vh`.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "From peer.pair.request.",
+          "generator": {
+            "attrs": [
+              "request_id"
+            ],
+            "entity": "peer.pairing_request",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "request_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Six digits.",
+          "generator": {
+            "attrs": [
+              "code"
+            ],
+            "entity": "peer.pairing_request",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "code",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits (a SHA-256 value).",
+          "name": "expect_spki",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The pin.",
+              "name": "spki_sha256",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "A key it announced and isn't using yet.",
+              "name": "next_spki_sha256",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "items": "string",
+              "name": "attest_public_keys",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "name": "wrap_public_key",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Last good first.",
+              "fields": [
+                {
+                  "description": "Host name or IP literal (IPv6 unbracketed).",
+                  "name": "host",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "name": "port",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "loopback",
+                    "lan",
+                    "vpn",
+                    "wan",
+                    "passthrough",
+                    "manual"
+                  ],
+                  "name": "kind",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "endpoints",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "enum": [
+                "identities",
+                "full"
+              ],
+              "name": "sharing",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "approved_by",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "person",
+                "desktop"
+              ],
+              "name": "compared_by",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "peer_protocol",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "product_version",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "linked_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "last_seen_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "revoked_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "revoked",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            }
+          ],
+          "name": "peer",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "device.trust",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "peer.pairing.close",
+      "confirmations": [],
+      "description": "Close the caller's window for linking a server; its requests expire.",
+      "effect": "write",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "name": "closed",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "peer.pairing.deny",
+      "confirmations": [],
+      "description": "Decline a link request.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "From peer.pair.request.",
+          "generator": {
+            "attrs": [
+              "request_id"
+            ],
+            "entity": "peer.pairing_request",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "request_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "name": "denied",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "peer.pairing.open",
+      "confirmations": [],
+      "description": "Open (or extend) a 10-minute window for linking another server; one window per node, shared with device pairing (conflict while another is open). Answers what the other side needs: this server's node id, name, key (its expect_spki on the brokered path) and endpoints. Creates the peer wrap key on first use.",
+      "effect": "write",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "description": "The window (node-wide, shared with device pairing): its owner and Unix times.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "owner_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "opened_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "window",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "server_time",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "node_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "64 lowercase hex digits (a SHA-256 value).",
+          "name": "spki_sha256",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "maximum": 65535,
+              "minimum": 0,
+              "name": "port",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "remote",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "listening",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "generated_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "Host name or IP literal (IPv6 unbracketed).",
+                  "name": "host",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "name": "port",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "loopback",
+                    "lan",
+                    "vpn",
+                    "wan",
+                    "passthrough",
+                    "manual"
+                  ],
+                  "name": "kind",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "candidates",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "name": "endpoints",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "peer.pairing.pending",
+      "confirmations": [],
+      "description": "The caller's window and its confirmed link requests, each with three code_choices (random order; one is the code the dialling server shows).",
+      "effect": "read",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "description": "The window (node-wide, shared with device pairing): its owner and Unix times.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "owner_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "opened_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "window",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "request_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "product_version",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "peer_protocol",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "64 lowercase hex digits (a SHA-256 value).",
+              "name": "spki_sha256",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "source_ip",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "items": "string",
+              "name": "code_choices",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "requests",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "server_time",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.ping",
+      "confirmations": [],
+      "description": "Liveness, every 30 s from each end; three missed answers end the connection.",
+      "effect": "read",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "response": [
+        {
+          "description": "The answering server's clock (Unix seconds).",
+          "name": "time",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "peer.rename",
+      "confirmations": [],
+      "description": "Rename a linked server here (1-64 characters).",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Its row id, node id, name, key (64 hex) or 8+ hex digits of its key.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "peer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "peer",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "pattern",
+            "pattern": "vps-{a}{a}{a}"
+          },
+          "name": "name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The pin.",
+              "name": "spki_sha256",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "A key it announced and isn't using yet.",
+              "name": "next_spki_sha256",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "items": "string",
+              "name": "attest_public_keys",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "name": "wrap_public_key",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Last good first.",
+              "fields": [
+                {
+                  "description": "Host name or IP literal (IPv6 unbracketed).",
+                  "name": "host",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "name": "port",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "loopback",
+                    "lan",
+                    "vpn",
+                    "wan",
+                    "passthrough",
+                    "manual"
+                  ],
+                  "name": "kind",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "endpoints",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "enum": [
+                "identities",
+                "full"
+              ],
+              "name": "sharing",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "approved_by",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "person",
+                "desktop"
+              ],
+              "name": "compared_by",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "peer_protocol",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "product_version",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "linked_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "last_seen_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "revoked_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "revoked",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            }
+          ],
+          "name": "peer",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "peer.unlink",
+      "confirmations": [],
+      "description": "Unlink a server: the row is revoked (kept for the audit trail), its connections close at once, and it is told (peer.unlinked) if it is connected. Linking it again needs a new pairing.",
+      "effect": "destructive",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Its row id, node id, name, key (64 hex) or 8+ hex digits of its key.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "peer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "peer",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The pin.",
+              "name": "spki_sha256",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "A key it announced and isn't using yet.",
+              "name": "next_spki_sha256",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "items": "string",
+              "name": "attest_public_keys",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "name": "wrap_public_key",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Last good first.",
+              "fields": [
+                {
+                  "description": "Host name or IP literal (IPv6 unbracketed).",
+                  "name": "host",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "name": "port",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "loopback",
+                    "lan",
+                    "vpn",
+                    "wan",
+                    "passthrough",
+                    "manual"
+                  ],
+                  "name": "kind",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "endpoints",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "enum": [
+                "identities",
+                "full"
+              ],
+              "name": "sharing",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "approved_by",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "person",
+                "desktop"
+              ],
+              "name": "compared_by",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "peer_protocol",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "product_version",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "linked_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "last_seen_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "revoked_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "revoked",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            }
+          ],
+          "name": "peer",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.unlinked",
+      "confirmations": [],
+      "description": "The sender unlinked the receiver: the receiver revokes its row too and the connection ends after the answer. A courtesy: a revoked key is refused at the handshake anyway.",
+      "effect": "destructive",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "response": [
+        {
+          "name": "revoked",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
       "auth": "human",
       "client_timeout_ms": 15000,
       "command": "permission.get",
@@ -58030,5 +61233,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "f4ac6394093213b0d9fde36ea0729572c2a274889f6563f12573da937046f423"
+  "ws_hash": "965f58905ea791d306bf6136ae93a310ad8c076b070ce871df72a47d959cc7d3"
 }

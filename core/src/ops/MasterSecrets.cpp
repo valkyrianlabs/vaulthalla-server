@@ -12,7 +12,11 @@
 #include "db/query/device/Device.hpp"
 #include "device/Pairing.hpp"
 #include "device/ServerIdentity.hpp"
+#include "config/Registry.hpp"
+#include "db/query/peer/Peer.hpp"
 #include "identities/User.hpp"
+#include "peer/Links.hpp"
+#include "peer/Pairing.hpp"
 #include "protocols/device/Service.hpp"
 #include "runtime/Deps.hpp"
 #include "runtime/Manager.hpp"
@@ -262,18 +266,25 @@ JwtRotation rotateJwtSecret(const Actor& actor, const bool confirmed) {
 
 // ---- the device listener identity -------------------------------------------------------------------------------
 
-DeviceIdentityRotation rotateDeviceIdentity(const Actor& actor, const bool confirmed) {
+DeviceIdentityRotation rotateDeviceIdentity(const Actor& actor, const bool confirmed, const bool revokePeers) {
     constexpr const char* action = "secrets.device_identity.rotate";
     requireSuperAdmin(actor, action, "device identity");
     using Devices = db::query::device::Devices;
+    const auto linked = db::query::peer::Peers::countLive();
     if (!confirmed)
         throw NeedsConfirmation(
             "device_identity_rotate",
             fmt::format("This replaces the device listener's identity: the TLS key every paired Desktop pins. Every "
                         "paired device ({} now) is revoked and disconnected and has to pair again with a new pairing "
-                        "code; pairing requests in progress are dropped. There is no rollback: the old key is "
+                        "code; pairing requests in progress are dropped.{} There is no rollback: the old key is "
                         "deleted. Continue?",
-                        Devices::countActive()));
+                        Devices::countActive(),
+                        linked == 0 ? std::string()
+                        : revokePeers
+                            ? fmt::format(" Every linked server ({}) is unlinked and has to be linked again.", linked)
+                            : fmt::format(" Linked servers ({}) that are connected are told of the new key and keep "
+                                          "their links; the others are unlinked.",
+                                          linked)));
     auditAs(actor, action, vh::audit::Outcome::Info, nlohmann::json::object(),
             "started a device identity rotation");
     auth::stepup::require(auth::stepup::Family::Secrets);  // #359
@@ -281,10 +292,24 @@ DeviceIdentityRotation rotateDeviceIdentity(const Actor& actor, const bool confi
         auto& pairing = vh::device::Pairing::instance();
         DeviceIdentityRotation out;
         // Requests in flight were bound to the old key: none of them may complete against either one.
-        out.pairing_requests_dropped = pairing.abandonAll();
+        out.pairing_requests_dropped = pairing.abandonAll() + vh::peer::Pairing::instance().abandonAll();
         // #362: every key-backup grant ends with its device (in the revocation's transaction); audited below.
         const auto liveGrants = db::query::device::BackupGrants::listLive();
-        const auto r = vh::device::rotateServerIdentity();  // revokes every paired device with the switch
+        // design/peers/link.md: connected linked servers hear of the new key first (unless this is the emergency
+        // rotation, or linked servers are off); every link that didn't store it is revoked with the switch.
+        vh::device::IdentityRotationOptions options;
+        const auto links = vh::peer::linkService();
+        out.revoke_peers = revokePeers;
+        if (!revokePeers && links && vh::config::Registry::get().peers.experimental)
+            options.announce = [&](const vh::device::ServerIdentity& current, const vh::device::crypto::Hash& next,
+                                   const unsigned int version) {
+                auto stored = links->announceRotation(current, next, version);
+                out.peers_announced = stored.size();
+                return stored;
+            };
+        const auto r = vh::device::rotateServerIdentity(options);  // revokes every paired device with the switch
+        out.peers_kept = r.peers_kept;
+        out.peers_revoked = r.peers_revoked;
         out.from = r.from;
         out.to = r.to;
         out.spki_sha256 = r.identity->spkiHex();
@@ -298,6 +323,11 @@ DeviceIdentityRotation rotateDeviceIdentity(const Actor& actor, const bool confi
         }
         out.pairing_requests_dropped += pairing.abandonAll();
         out.sessions_closed = protocols::device::closeAllDeviceListenerSessions();
+        // Every link reconnects under the new key (a kept peer accepts it as the one it was told of).
+        if (links) {
+            links->wake();  // the rows the switch revoked are dropped before anything dials again
+            out.sessions_closed += links->disconnectAll();
+        }
         // A pairing approved between the switch and the swap was still bound to the old key.
         out.devices_revoked += Devices::revokeAll();
         std::vector<db::query::device::BackupGrant> endedGrants;
@@ -310,11 +340,24 @@ DeviceIdentityRotation rotateDeviceIdentity(const Actor& actor, const bool confi
                 {{"from", out.from}, {"to", out.to}, {"spki_sha256", out.spki_sha256},
                  {"previous_spki_sha256", out.previous_spki_sha256}, {"devices_revoked", out.devices_revoked},
                  {"sessions_closed", out.sessions_closed}, {"pairing_requests_dropped", out.pairing_requests_dropped},
-                 {"listener_updated", out.listener_updated}},
+                 {"listener_updated", out.listener_updated}, {"peers_kept", out.peers_kept},
+                 {"peers_revoked", out.peers_revoked}, {"revoke_peers", out.revoke_peers}},
                 fmt::format("rotated the device identity from version {} to {} (SPKI sha256 {}): {} paired device(s) "
                             "revoked, {} connection(s) closed; every device pairs again",
                             out.from, out.to, out.spki_sha256, out.devices_revoked, out.sessions_closed),
                 spdlog::level::warn);
+        if (linked > 0 || out.peers_revoked > 0)
+            vh::audit::record({.action = "peer.identity.rotate", .actor_id = actor ? std::optional(actor->id) : std::nullopt,
+                               .actor = actor ? actor->name() : std::string(),
+                               .details = {{"side", "announced"}, {"to", out.to}, {"next_key", out.spki_sha256.substr(0, 16)},
+                                           {"peers_kept", out.peers_kept}, {"peers_revoked", out.peers_revoked},
+                                           {"emergency", out.revoke_peers}}},
+                              fmt::format("[peer] the identity rotation {}: {} linked server(s) keep their link, {} "
+                                          "unlinked",
+                                          out.revoke_peers ? "dropped every link (emergency)"
+                                                           : "was announced to the connected linked servers",
+                                          out.peers_kept, out.peers_revoked),
+                              spdlog::level::warn);
         return out;
     });
 }
@@ -549,7 +592,11 @@ nlohmann::json toJson(const DeviceIdentityRotation& r) {
             {"devices_revoked", r.devices_revoked},
             {"sessions_closed", r.sessions_closed},
             {"pairing_requests_dropped", r.pairing_requests_dropped},
-            {"listener_updated", r.listener_updated}};
+            {"listener_updated", r.listener_updated},
+            {"peers_announced", r.peers_announced},
+            {"peers_kept", r.peers_kept},
+            {"peers_revoked", r.peers_revoked},
+            {"revoke_peers", r.revoke_peers}};
 }
 
 nlohmann::json toJson(const PolicyStatus& s) {

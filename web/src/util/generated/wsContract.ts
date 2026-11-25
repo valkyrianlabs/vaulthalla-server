@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'f4ac6394093213b0d9fde36ea0729572c2a274889f6563f12573da937046f423'
+export const WS_CONTRACT_HASH = '965f58905ea791d306bf6136ae93a310ad8c076b070ce871df72a47d959cc7d3'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
@@ -5483,6 +5483,392 @@ export interface WsContract {
     }
   }
   /**
+   * Where the sender can be reached (its device listener's advertisement); answers the receiver's. Each side
+   * stores what it is told.
+   */
+  'peer.endpoints': {
+    payload: {
+      endpoints: { host: string; port: number; kind: 'loopback' | 'lan' | 'vpn' | 'wan' | 'passthrough' | 'manual' }[]
+    }
+    response: {
+      endpoints: { host: string; port: number; kind: 'loopback' | 'lan' | 'vpn' | 'wan' | 'passthrough' | 'manual' }[]
+    }
+  }
+  /**
+   * One linked server with its link's health.
+   */
+  'peer.get': {
+    payload: { peer: string }
+    response: {
+      peer: {
+        id: number
+        node_id: string
+        name: string
+        spki_sha256: string
+        next_spki_sha256: string | null
+        attest_public_keys: string[]
+        wrap_public_key: string
+        endpoints: { host: string; port: number; kind: 'loopback' | 'lan' | 'vpn' | 'wan' | 'passthrough' | 'manual' }[]
+        sharing: 'identities' | 'full'
+        approved_by: number | null
+        compared_by: 'person' | 'desktop'
+        peer_protocol: number
+        product_version: string
+        linked_at: number
+        last_seen_at: number | null
+        revoked_at: number | null
+        revoked: boolean
+        health: {
+          connected: boolean
+          since: number | null
+          dialed_by: 'this_server' | 'peer' | null
+          address: string | null
+          rtt_ms: number | null
+          peer_protocol: number | null
+          peer_version: string | null
+          protocol_compatible: boolean | null
+          last_error: string | null
+          last_error_at: number | null
+          next_attempt_at: number | null
+        }
+      }
+    }
+  }
+  /**
+   * The first request on a link: who the sender is and the peer protocol and version it speaks. The node id
+   * must be the linked one. When both servers dialled at once, the connection the lower node id dialled is
+   * kept and the other answers conflict and closes.
+   */
+  'peer.hello': {
+    payload: { node_id: string; name: string; peer_protocol: number; product_version: string }
+    response: { node_id: string; name: string; peer_protocol: number; product_version: string }
+  }
+  /**
+   * The sender's next identity key, announced before it is used: signature is ECDSA P-256 / SHA-256 (DER,
+   * base64) by its current key over "vh/peer/rotate/v1" ‖ next_spki ‖ receiver_spki ‖ UInt32BE(len) ‖ node_id
+   * ‖ UInt64BE(counter). Stored as next_spki_sha256; either key is accepted until the new one is seen.
+   * counter must exceed the last one.
+   */
+  'peer.identity.rotate': {
+    payload: { next_spki_sha256: string; counter: number; signature: string }
+    response: { stored: boolean }
+  }
+  /**
+   * Stop a peer.link.start attempt that has not finished.
+   */
+  'peer.link.cancel': {
+    payload: { link_id: string }
+    response: {
+      link: {
+        link_id: string
+        state: 'connecting' | 'awaiting_approval' | 'linked' | 'denied' | 'expired' | 'failed' | 'cancelled'
+        code: string | null
+        peer: { node_id: string; name: string; product_version: string; spki_sha256: string } | null
+        peer_id: number | null
+        expect_spki: string | null
+        address: string | null
+        error: string | null
+        created_at: number
+        updated_at: number
+      }
+    }
+  }
+  /**
+   * Dial another server whose window is open (endpoints: what its peer.pairing.open answered, or an address)
+   * and ask to link. With expect_spki only that key completes the TLS handshake; without it the key is
+   * trusted on first use, guarded by the code. Answers at once (connecting); peer.link.status shows the code
+   * to compare, then the outcome. A device.trust step-up in the console; none on a full-access device's
+   * session or `vh`.
+   */
+  'peer.link.start': {
+    payload: { endpoints: { host: string; port: number; kind?: string | null }[]; expect_spki?: string | null }
+    response: {
+      link: {
+        link_id: string
+        state: 'connecting' | 'awaiting_approval' | 'linked' | 'denied' | 'expired' | 'failed' | 'cancelled'
+        code: string | null
+        peer: { node_id: string; name: string; product_version: string; spki_sha256: string } | null
+        peer_id: number | null
+        expect_spki: string | null
+        address: string | null
+        error: string | null
+        created_at: number
+        updated_at: number
+      }
+    }
+  }
+  /**
+   * How a peer.link.start attempt stands: connecting, awaiting_approval (with the code), linked, denied,
+   * expired, failed (with the error) or cancelled. Ask again in 1-2 s while it runs.
+   */
+  'peer.link.status': {
+    payload: { link_id: string }
+    response: {
+      link: {
+        link_id: string
+        state: 'connecting' | 'awaiting_approval' | 'linked' | 'denied' | 'expired' | 'failed' | 'cancelled'
+        code: string | null
+        peer: { node_id: string; name: string; product_version: string; spki_sha256: string } | null
+        peer_id: number | null
+        expect_spki: string | null
+        address: string | null
+        error: string | null
+        created_at: number
+        updated_at: number
+      }
+    }
+  }
+  /**
+   * The linked servers with each link's health (connected, since, who dialled, round trip, the peer's
+   * version); all: unlinked ones too.
+   */
+  'peer.list': {
+    payload: { all?: boolean }
+    response: {
+      peers: {
+        id: number
+        node_id: string
+        name: string
+        spki_sha256: string
+        next_spki_sha256: string | null
+        attest_public_keys: string[]
+        wrap_public_key: string
+        endpoints: { host: string; port: number; kind: 'loopback' | 'lan' | 'vpn' | 'wan' | 'passthrough' | 'manual' }[]
+        sharing: 'identities' | 'full'
+        approved_by: number | null
+        compared_by: 'person' | 'desktop'
+        peer_protocol: number
+        product_version: string
+        linked_at: number
+        last_seen_at: number | null
+        revoked_at: number | null
+        revoked: boolean
+        health: {
+          connected: boolean
+          since: number | null
+          dialed_by: 'this_server' | 'peer' | null
+          address: string | null
+          rtt_ms: number | null
+          peer_protocol: number | null
+          peer_version: string | null
+          protocol_compatible: boolean | null
+          last_error: string | null
+          last_error_at: number | null
+          next_attempt_at: number | null
+        }
+      }[]
+    }
+  }
+  /**
+   * Reveal nonce_a; it must match the commitment (else the request is deleted: invalid). The request is then
+   * shown to the window's owner with three codes; the code is UInt64BE(digest[0..8]) mod 10^6 of
+   * SHA-256("vh/peer/sas/v1" ‖ spki_B ‖ spki_A ‖ nonce_A ‖ nonce_B ‖ SHA-256(card_A) ‖ SHA-256(card_B)). The
+   * code is never sent.
+   */
+  'peer.pair.confirm': {
+    payload: { request_id: string; nonce_a: string }
+    response: { state: 'pending'; expires_at: number }
+  }
+  /**
+   * Ask to link while a window is open: the dialling server's card and its commitment
+   * SHA-256("vh/peer/commit/v1" ‖ spki_A ‖ nonce_A). Answers this server's card and nonce_b.
+   * no_pairing_window when none is open, rate_limited past 10 per minute per address or 5 per window,
+   * conflict for a key or node already linked or a device's key.
+   */
+  'peer.pair.request': {
+    payload: {
+      card: {
+        node_id: string
+        name: string
+        attest_public_keys: string[]
+        wrap_public_key: string
+        peer_protocol: number
+        product_version: string
+      }
+      commitment: string
+    }
+    response: {
+      request_id: string
+      nonce_b: string
+      card: {
+        node_id: string
+        name: string
+        attest_public_keys: string[]
+        wrap_public_key: string
+        peer_protocol: number
+        product_version: string
+      }
+      expires_at: number
+    }
+  }
+  /**
+   * How the link request stands; ask again in 2 s while pending. approved: this server wrote its peer row,
+   * and the dialling server writes its own.
+   */
+  'peer.pair.status': {
+    payload: { request_id: string }
+    response: { state: 'pending' | 'approved' | 'denied' | 'expired' }
+  }
+  /**
+   * Approve a link request with the code the dialling server shows (number matching); any other code denies
+   * it. expect_spki (the brokered path: Desktop's pin for the dialling server) also requires the requesting
+   * key to be that one, or the request is denied. Writes the peer row and closes the window. A device.trust
+   * step-up in the console; none on a full-access device's session or `vh`.
+   */
+  'peer.pairing.approve': {
+    payload: { request_id: string; code: string; expect_spki?: string | null }
+    response: {
+      peer: {
+        id: number
+        node_id: string
+        name: string
+        spki_sha256: string
+        next_spki_sha256: string | null
+        attest_public_keys: string[]
+        wrap_public_key: string
+        endpoints: { host: string; port: number; kind: 'loopback' | 'lan' | 'vpn' | 'wan' | 'passthrough' | 'manual' }[]
+        sharing: 'identities' | 'full'
+        approved_by: number | null
+        compared_by: 'person' | 'desktop'
+        peer_protocol: number
+        product_version: string
+        linked_at: number
+        last_seen_at: number | null
+        revoked_at: number | null
+        revoked: boolean
+      }
+    }
+  }
+  /**
+   * Close the caller's window for linking a server; its requests expire.
+   */
+  'peer.pairing.close': {
+    payload: null
+    response: { closed: boolean }
+  }
+  /**
+   * Decline a link request.
+   */
+  'peer.pairing.deny': {
+    payload: { request_id: string }
+    response: { denied: boolean }
+  }
+  /**
+   * Open (or extend) a 10-minute window for linking another server; one window per node, shared with device
+   * pairing (conflict while another is open). Answers what the other side needs: this server's node id, name,
+   * key (its expect_spki on the brokered path) and endpoints. Creates the peer wrap key on first use.
+   */
+  'peer.pairing.open': {
+    payload: null
+    response: {
+      window: { owner_id: number; opened_at: number; expires_at: number }
+      server_time: number
+      node_id: string
+      name: string
+      spki_sha256: string
+      endpoints: {
+        port: number
+        remote: boolean
+        listening: boolean
+        generated_at: number
+        candidates: { host: string; port: number; kind: 'loopback' | 'lan' | 'vpn' | 'wan' | 'passthrough' | 'manual' }[]
+      }
+    }
+  }
+  /**
+   * The caller's window and its confirmed link requests, each with three code_choices (random order; one is
+   * the code the dialling server shows).
+   */
+  'peer.pairing.pending': {
+    payload: null
+    response: {
+      window: { owner_id: number; opened_at: number; expires_at: number } | null
+      requests: {
+        request_id: string
+        node_id: string
+        name: string
+        product_version: string
+        peer_protocol: number
+        spki_sha256: string
+        source_ip: string
+        code_choices: string[]
+        created_at: number
+        expires_at: number
+      }[]
+      server_time: number
+    }
+  }
+  /**
+   * Liveness, every 30 s from each end; three missed answers end the connection.
+   */
+  'peer.ping': {
+    payload: null
+    response: { time: number }
+  }
+  /**
+   * Rename a linked server here (1-64 characters).
+   */
+  'peer.rename': {
+    payload: { peer: string; name: string }
+    response: {
+      peer: {
+        id: number
+        node_id: string
+        name: string
+        spki_sha256: string
+        next_spki_sha256: string | null
+        attest_public_keys: string[]
+        wrap_public_key: string
+        endpoints: { host: string; port: number; kind: 'loopback' | 'lan' | 'vpn' | 'wan' | 'passthrough' | 'manual' }[]
+        sharing: 'identities' | 'full'
+        approved_by: number | null
+        compared_by: 'person' | 'desktop'
+        peer_protocol: number
+        product_version: string
+        linked_at: number
+        last_seen_at: number | null
+        revoked_at: number | null
+        revoked: boolean
+      }
+    }
+  }
+  /**
+   * Unlink a server: the row is revoked (kept for the audit trail), its connections close at once, and it is
+   * told (peer.unlinked) if it is connected. Linking it again needs a new pairing.
+   */
+  'peer.unlink': {
+    payload: { peer: string }
+    response: {
+      peer: {
+        id: number
+        node_id: string
+        name: string
+        spki_sha256: string
+        next_spki_sha256: string | null
+        attest_public_keys: string[]
+        wrap_public_key: string
+        endpoints: { host: string; port: number; kind: 'loopback' | 'lan' | 'vpn' | 'wan' | 'passthrough' | 'manual' }[]
+        sharing: 'identities' | 'full'
+        approved_by: number | null
+        compared_by: 'person' | 'desktop'
+        peer_protocol: number
+        product_version: string
+        linked_at: number
+        last_seen_at: number | null
+        revoked_at: number | null
+        revoked: boolean
+      }
+    }
+  }
+  /**
+   * The sender unlinked the receiver: the receiver revokes its row too and the connection ends after the
+   * answer. A courtesy: a revoked key is refused at the handshake anyway.
+   */
+  'peer.unlinked': {
+    payload: null
+    response: { revoked: boolean }
+  }
+  /**
    * One permission of the catalog by id.
    */
   'permission.get': {
@@ -8162,6 +8548,26 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'groups.list.byUser',
   'meta.contract.get',
   'meta.hello',
+  'peer.endpoints',
+  'peer.get',
+  'peer.hello',
+  'peer.identity.rotate',
+  'peer.link.cancel',
+  'peer.link.start',
+  'peer.link.status',
+  'peer.list',
+  'peer.pair.confirm',
+  'peer.pair.request',
+  'peer.pair.status',
+  'peer.pairing.approve',
+  'peer.pairing.close',
+  'peer.pairing.deny',
+  'peer.pairing.open',
+  'peer.pairing.pending',
+  'peer.ping',
+  'peer.rename',
+  'peer.unlink',
+  'peer.unlinked',
   'permission.get',
   'permission.get.byName',
   'permissions.list',
@@ -8425,6 +8831,8 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'group.member.add': 'identity.admin',
   'group.member.remove': 'identity.admin',
   'group.remove': 'identity.admin',
+  'peer.link.start': 'device.trust',
+  'peer.pairing.approve': 'device.trust',
   'recovery.point.delete': 'data.destroy',
   'role.admin.add': 'identity.admin',
   'role.admin.delete': 'identity.admin',
@@ -8600,6 +9008,26 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'groups.list.byUser': 15000,
   'meta.contract.get': 15000,
   'meta.hello': 15000,
+  'peer.endpoints': 15000,
+  'peer.get': 15000,
+  'peer.hello': 15000,
+  'peer.identity.rotate': 15000,
+  'peer.link.cancel': 15000,
+  'peer.link.start': 15000,
+  'peer.link.status': 15000,
+  'peer.list': 15000,
+  'peer.pair.confirm': 15000,
+  'peer.pair.request': 15000,
+  'peer.pair.status': 15000,
+  'peer.pairing.approve': 15000,
+  'peer.pairing.close': 15000,
+  'peer.pairing.deny': 15000,
+  'peer.pairing.open': 15000,
+  'peer.pairing.pending': 15000,
+  'peer.ping': 15000,
+  'peer.rename': 15000,
+  'peer.unlink': 15000,
+  'peer.unlinked': 15000,
   'permission.get': 15000,
   'permission.get.byName': 15000,
   'permissions.list': 15000,

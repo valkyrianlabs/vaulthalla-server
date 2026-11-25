@@ -7,6 +7,7 @@
 #include "protocols/ws/handler/StepUp.hpp"
 #include "protocols/ws/handler/Approvals.hpp"
 #include "protocols/ws/handler/Devices.hpp"
+#include "protocols/ws/handler/Peers.hpp"
 #include "protocols/ws/handler/fs/Changes.hpp"
 #include "protocols/ws/handler/fs/Storage.hpp"
 #include "protocols/ws/handler/rbac/Permissions.hpp"
@@ -62,6 +63,7 @@ void Handler::registerAllHandlers(const std::shared_ptr<Router>& r) {
     registerSharePreviewHandlers(r);
     registerShareUploadHandlers(r);
     registerDeviceHandlers(r);
+    registerPeerHandlers(r);
     registerVaultKeyHandlers(r);
 
     log::Registry::ws()->debug("[WebSocketHandler] All handlers registered successfully.");
@@ -112,6 +114,30 @@ void Handler::registerAuthHandlers(const std::shared_ptr<Router>& r) {
 }
 
 // Paired devices (ops::devices). Which sessions reach which is the router's decision (classifyCommand).
+// design/peers/link.md: linked servers (handler/Peers.hpp).
+void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
+    r->registerSessionOnlyHandler("peer.pairing.open", &handler::Peers::pairingOpen);
+    r->registerSessionOnlyHandler("peer.pairing.close", &handler::Peers::pairingClose);
+    r->registerSessionOnlyHandler("peer.pairing.pending", &handler::Peers::pairingPending);
+    r->registerPayload("peer.pairing.approve", &handler::Peers::pairingApprove);
+    r->registerPayload("peer.pairing.deny", &handler::Peers::pairingDeny);
+    r->registerPayload("peer.link.start", &handler::Peers::linkStart);
+    r->registerPayload("peer.link.status", &handler::Peers::linkStatus);
+    r->registerPayload("peer.link.cancel", &handler::Peers::linkCancel);
+    r->registerPayload("peer.list", &handler::Peers::list);
+    r->registerPayload("peer.get", &handler::Peers::get);
+    r->registerPayload("peer.rename", &handler::Peers::rename);
+    r->registerPayload("peer.unlink", &handler::Peers::unlink);
+    r->registerPayload("peer.pair.request", &handler::Peers::pairRequest);
+    r->registerPayload("peer.pair.confirm", &handler::Peers::pairConfirm);
+    r->registerPayload("peer.pair.status", &handler::Peers::pairStatus);
+    r->registerPayload("peer.hello", &handler::Peers::hello);
+    r->registerSessionOnlyHandler("peer.ping", &handler::Peers::ping);
+    r->registerPayload("peer.endpoints", &handler::Peers::endpoints);
+    r->registerPayload("peer.identity.rotate", &handler::Peers::identityRotate);
+    r->registerSessionOnlyHandler("peer.unlinked", &handler::Peers::unlinked);
+}
+
 void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("device.pair.request", &handler::Devices::pairRequest);
     r->registerPayload("device.pair.confirm", &handler::Devices::pairConfirm);

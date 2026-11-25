@@ -93,7 +93,8 @@ struct WsCommandUsage {
     // never runs), "share" (a share session), "pairing" (the device listener's pairing-only connections, and a paired
     // device's session), "device" (a paired device's own session only),
     // "pending" (a pending-MFA sign-in only, #357: auth/mfa/Pending.hpp), "enrollment" ("human", or a pending-MFA
-    // sign-in that is enrolling its first factor).
+    // sign-in that is enrolling its first factor), "peer_pairing" (design/peers/link.md: the dialling server on a
+    // pairing-only connection of the device listener) and "peer" (a linked server's own Peer session only).
     std::string auth = "human";
     // Where the handler reads its input: "payload" (the `payload` object), "none" (nothing), "token" (the envelope
     // `token`, payload ignored).

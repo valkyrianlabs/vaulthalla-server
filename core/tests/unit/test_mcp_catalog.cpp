@@ -166,7 +166,7 @@ TEST(McpCatalog, ExclusionListIsExactlyTheAgreedOne) {
                                             "cloud storage disable", "cloud storage accept", "cloud storage decline",
                                             "cloud storage confirm-ended", "cloud storage rotate", "cloud storage new-vaults",
                                             "cloud storage billing", "cloud relay enable", "cloud relay disable",
-                                            "connector"};
+                                            "connector", "peer"};
     EXPECT_EQ(paths, expected);
 }
 

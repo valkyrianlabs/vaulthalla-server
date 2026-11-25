@@ -36,6 +36,9 @@ std::vector<WsStepUp> stepUpTable() {
          "always (during a recovery cooldown: only the device's approval key, D4)"},
         {"device.backup.grant.extend", "device.trust", kTarget, ""},
         {"device.backup.grant.confirm", "device.trust", kTarget, ""},
+        // design/peers/link.md: making a link between two servers (none on a full-access device's session or `vh`)
+        {"peer.pairing.approve", "device.trust", kTarget, "in the web console (bound to the request, its key and the code)"},
+        {"peer.link.start", "device.trust", kTarget, "in the web console (bound to the key expected and the first endpoint)"},
         // connector.trust: target-bound, single use (design/core/mcp-remote-signin.md)
         {"connector.enable", "connector.trust", kTarget, "when it is off, or on at another origin"},
         {"connector.policy.update", "connector.trust", kTarget, "when the change widens anything"},

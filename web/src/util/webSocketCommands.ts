@@ -1004,6 +1004,28 @@ export interface WebSocketCommandMap {
   'device.identity.rotate': WsContract['device.identity.rotate']
   'device.server.identity': WsContract['device.server.identity']
   'device.endpoints': WsContract['device.endpoints']
+  // Linked servers (design/peers/link.md; experimental, off by default). No console page yet; typed here because every
+  // registered command is. peer.pair.* and the wire set (peer.hello ... peer.unlinked) only pass between two servers.
+  'peer.pairing.open': WsContract['peer.pairing.open']
+  'peer.pairing.close': WsContract['peer.pairing.close']
+  'peer.pairing.pending': WsContract['peer.pairing.pending']
+  'peer.pairing.approve': WsContract['peer.pairing.approve']
+  'peer.pairing.deny': WsContract['peer.pairing.deny']
+  'peer.link.start': WsContract['peer.link.start']
+  'peer.link.status': WsContract['peer.link.status']
+  'peer.link.cancel': WsContract['peer.link.cancel']
+  'peer.list': WsContract['peer.list']
+  'peer.get': WsContract['peer.get']
+  'peer.rename': WsContract['peer.rename']
+  'peer.unlink': WsContract['peer.unlink']
+  'peer.pair.request': WsContract['peer.pair.request']
+  'peer.pair.confirm': WsContract['peer.pair.confirm']
+  'peer.pair.status': WsContract['peer.pair.status']
+  'peer.hello': WsContract['peer.hello']
+  'peer.ping': WsContract['peer.ping']
+  'peer.endpoints': WsContract['peer.endpoints']
+  'peer.identity.rotate': WsContract['peer.identity.rotate']
+  'peer.unlinked': WsContract['peer.unlinked']
   // Any signed-in user pairs devices to their own account: open a 10-minute window, then approve a request by picking
   // the one of its three code_choices the device shows (a wrong pick denies the request).
   'device.pairing.open': WsContract['device.pairing.open']
