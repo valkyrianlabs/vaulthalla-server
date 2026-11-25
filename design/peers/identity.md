@@ -19,11 +19,23 @@ vault's files is in [`mirror.md`](mirror.md).
   anything the core governs.
 - **Audits must stay effective** (Cooper, 2026-11-25).
 - **The mirror's permissions are a role held by the mirror server** (Cooper, 2026-11-25, superseding parts of this
-  document). The role is a default per link, overridable per vault, and acts as a ceiling. Who may use the vault on
-  the mirror is the mirror's own local RBAC under that ceiling. Per-person access lists managed from the core, shared
-  role rows and grant forwarding are dropped from the first version. No account is matched across servers for
-  permission: an account of another server is named for attribution only (an owner, "last modified by", an audit
-  line), as a remote account. Paragraphs this replaces are marked **(superseded 2026-11-25)**.
+  document). The role is a default per link, overridable per vault, and acts as a ceiling: the core checks every
+  change that arrives from that server against it. Shared role rows and grant forwarding are dropped. The role is
+  owned by the core and read-only on the mirror, shown with the owning server as a tag. Paragraphs this replaces are
+  marked **(superseded 2026-11-25)**.
+- **Who on the mirror may use a mirrored vault** (Cooper, 2026-11-25): by default only the mirror's super admins,
+  under the server's ceiling. The core may add more of the mirror's accounts to the policy, each with a role under
+  the ceiling and optional per-vault overrides. That list is core-owned and read-only on the mirror. The mirror
+  enforces it and the core re-checks each change against the named account; the ceiling stays the security
+  boundary, because the core cannot verify who signed in on the mirror. The super-admins-only default ships with
+  vault mirroring; adding named accounts follows, since it needs the mirror to send its account list.
+- **How an added account is named** (Cooper, 2026-11-25): by its integer id on its home server, with no second id.
+  PostgreSQL never reissues a serial id in normal running, even after a delete. A restore from an older backup winds
+  the sequence back, so a rule names the account by id **and its creation time** (`users.created_at`): a reissued id
+  has a different creation time and the old rule does not match it. The link also detects a restore, because the
+  restored server reports an older position than it last acknowledged (`mirror.md`), and that server's added
+  accounts are held until an admin confirms them. An account of another server is otherwise named for attribution
+  only (an owner, "last modified by", an audit line), as a remote account.
 - **Decided in this design** (Claude, 2026-11-25, under the standing instruction of 2026-11-14 to decide, build and
   log; entries in the decisions log on Cooper's Desktop; Cooper has not reviewed them and may overturn any): the two
   sharing depths, "accounts are never matched by name", and the local effect of removals. They are marked
@@ -107,8 +119,9 @@ takes no effect.
 ## A mirrored vault's owner and access list
 
 **(Superseded 2026-11-25, except the owner.)** The mirror's permissions are now a role held by the mirror server, a
-ceiling over the mirror's own local RBAC (see "Decided and given"); the access-list, "who decides" and "changing it"
-text below is kept for the record and is not the first version's design.
+ceiling, with the mirror's super admins allowed by default and further accounts added by the core (see "Decided and
+given"); the access-list, "who decides" and "changing it" text below is kept for the record and is not the first
+version's design.
 
 - **Owner.** One owner, the vault's owner on its core, named by `(home_node, home_id)`. `vault.owner_id` on the
   mirror points at the local row for it, a remote account if the person has no account there.

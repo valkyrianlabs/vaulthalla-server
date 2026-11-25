@@ -198,7 +198,7 @@ TEST(UsageContract, WsBookCoversTheEngineAndConsoleCommands) {
         EXPECT_TRUE(cmd.input == "payload" || cmd.input == "none" || cmd.input == "token") << cmd.command;
         EXPECT_TRUE(cmd.auth == "human" || cmd.auth == "session" || cmd.auth == "share" || cmd.auth == "public" ||
                     cmd.auth == "pairing" || cmd.auth == "device" || cmd.auth == "pending" ||
-                    cmd.auth == "enrollment")
+                    cmd.auth == "enrollment" || cmd.auth == "peer" || cmd.auth == "peer_pairing")
             << cmd.command;
         if (cmd.input != "payload") {
             EXPECT_TRUE(cmd.payload.empty()) << cmd.command << " takes no payload";
@@ -427,7 +427,9 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         {"console_approval_required", {}}, {"approval_key_unavailable", {}},
         {"passkey_required", {"auth.approval.approve"}}, {"approval_failed", {"auth.approval.approve"}},
         // Scoped devices: a scoped device unpairing another, or anyone's scope changed from a device.
-        {"device_scope", {"device.revoke", "device.scope.set"}}};
+        {"device_scope", {"device.revoke", "device.scope.set"}},
+        // design/peers/link.md: linked servers (every peer.* command, below).
+        {"peers_experimental", {}}, {"peer_forbidden", {}}};
     const auto stepUp = contract::stepUpTable();
     const auto refusedCodeAllowed = [&](const std::string& code, const std::string& command) {
         if (code == "step_up_required")
@@ -444,6 +446,12 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
                                                        r.family == "identity.admin" || r.family == "secrets" ||
                                                        r.family == "settings" || r.family == "connector.trust");
                    });
+        // Linked servers: the switch and who may link (ops::peers), on every peer.* command; the window's own
+        // refusals on the dialling server's side of pairing.
+        if (code == "peers_experimental" || code == "peer_forbidden") return command.starts_with("peer.");
+        if ((code == "no_pairing_window" || code == "rate_limited" || code == "device_unknown") &&
+            command.starts_with("peer.pair."))
+            return true;
         const auto it = kRefusedCodes.find(code);
         if (it == kRefusedCodes.end()) return false;
         // rate_limited is device pairing's, auth.mfa.verify's and auth.passkey.options'.

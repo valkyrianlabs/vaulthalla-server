@@ -437,14 +437,21 @@ static CommandResult handle_secrets_device_identity(const CommandCall& call) {
         return invalid("secret device-identity rotate: the device identity is rotated by a human at the terminal, "
                        "never by an agent");
     const bool json = hasFlag(subcall, "json") || hasFlag(subcall, "j");
+    const bool revokePeers = hasFlag(subcall, "revoke-peers") || hasFlag(subcall, "revoke_peers");
     return runConfirmable(subcall, "secret device-identity rotate", [&](const bool yes) {
-        const auto r = master_ops::rotateDeviceIdentity(subcall.user, yes);
+        const auto r = master_ops::rotateDeviceIdentity(subcall.user, yes, revokePeers);
         if (json) return ok(master_ops::toJson(r).dump(4));
+        std::string peers;
+        if (r.peers_kept > 0 || r.peers_revoked > 0)
+            peers = fmt::format("\nLinked servers: {} kept their link (told of the new key first), {} unlinked{}.",
+                                r.peers_kept, r.peers_revoked,
+                                r.revoke_peers ? " (--revoke-peers)" : ": link them again");
         return ok(fmt::format("Device identity rotated (version {} to {}); the new pin is SPKI sha256 {}.\n{} paired "
                               "device(s) revoked and {} connection(s) closed: each device pairs again with a new "
-                              "pairing code.{}",
+                              "pairing code.{}{}",
                               r.from, r.to, r.spki_sha256, r.devices_revoked, r.sessions_closed,
-                              r.listener_updated ? "" : " The device listener presents the new identity when it starts."));
+                              r.listener_updated ? "" : " The device listener presents the new identity when it starts.",
+                              peers));
     });
 }
 

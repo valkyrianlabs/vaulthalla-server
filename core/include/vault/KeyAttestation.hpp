@@ -70,6 +70,11 @@ struct Attestation {
 // failed (logged).
 [[nodiscard]] std::optional<Attestation> signNodeMessage(std::span<const uint8_t> message);
 
+// This node's current attestation public key (32 bytes), creating the key and its key_attestation_keys row on first
+// need, as attest() would. What a linked server pins (design/peers/link.md, the peer card). Throws when the key can't
+// be loaded or created.
+[[nodiscard]] std::vector<uint8_t> currentPublicKey();
+
 enum class Verdict {
     Valid,
     Missing,       // no signature

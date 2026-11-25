@@ -297,7 +297,7 @@ std::shared_ptr<const ServerIdentity> loadOrCreateServerIdentity() {
     return identity;
 }
 
-IdentityRotation rotateServerIdentity() {
+IdentityRotation rotateServerIdentity(const IdentityRotationOptions& options) {
     static std::mutex rotationMutex;
     std::scoped_lock lock(rotationMutex);
 
@@ -344,6 +344,21 @@ IdentityRotation rotateServerIdentity() {
                                  "switched");
     identityCrashPoint("identity_sealed");
 
+    // Linked servers that are connected hear of the new key first, signed by the current one; the rest are revoked
+    // with the switch (an offline peer links again: failing closed is intended).
+    std::vector<uint32_t> keptPeers;
+    if (options.announce) {
+        ::vh::crypto::secrets::KeyProvider current(identitySlotName(from));
+        if (current.sealedExists()) {
+            current.init();
+            const auto inUse = ServerIdentity::fromPrivateScalar(current.getMasterKey(), {});
+            keptPeers = options.announce(*inUse, out.identity->spkiSha256(), target);
+        }
+    }
+    std::string keep = "{";
+    for (std::size_t i = 0; i < keptPeers.size(); ++i) keep += (i ? "," : "") + std::to_string(keptPeers[i]);
+    keep += "}";
+
     // Switch: every paired device is revoked in the same transaction that records the new key.
     out.devices_revoked = db::Transactions::exec("device::identity.switch", [&](pqxx::work& txn) {
         const auto state = txn.exec("SELECT version FROM master_secret_state WHERE slot = 'device_tls' FOR UPDATE")
@@ -352,6 +367,13 @@ IdentityRotation rotateServerIdentity() {
         if (state != from) throw std::runtime_error("the device identity changed during the rotation");
         const auto revoked = txn.exec("UPDATE devices SET revoked_at = CURRENT_TIMESTAMP WHERE revoked_at IS NULL")
                                  .affected_rows();
+        out.peers_revoked = static_cast<std::size_t>(
+            txn.exec("UPDATE peer SET revoked_at = CURRENT_TIMESTAMP, next_spki_sha256 = NULL "
+                     "WHERE revoked_at IS NULL AND NOT (id = ANY($1::bigint[]))",
+                     pqxx::params{keep})
+                .affected_rows());
+        out.peers_kept = static_cast<std::size_t>(
+            txn.exec("SELECT count(*) FROM peer WHERE revoked_at IS NULL").one_field_ref().as<int64_t>());
         txn.exec("UPDATE master_secret_state SET version = $1, "
                  "discard_versions = array_append(array_remove(array_remove(discard_versions, $1), $2), $2) "
                  "WHERE slot = 'device_tls'",
@@ -362,8 +384,9 @@ IdentityRotation rotateServerIdentity() {
 
     writeCertificateFile(*out.identity);
     log::Registry::runtime()->warn("[device] Rotated the device listener identity from version {} to {} (SPKI sha256 "
-                                   "{}); {} paired device(s) revoked",
-                                   from, target, out.identity->spkiHex(), out.devices_revoked);
+                                   "{}); {} paired device(s) revoked; {} linked server(s) kept, {} revoked",
+                                   from, target, out.identity->spkiHex(), out.devices_revoked, out.peers_kept,
+                                   out.peers_revoked);
     try {
         discardRetiredIdentities(target);
     } catch (const std::exception& e) {

@@ -490,6 +490,65 @@ Anything finer stays RBAC's.
   Tests: `DeviceScope.*` (DB-free), `ScopedDevicesDb.*`, `DeviceHttpTest.AScopedDeviceIsHeldToItsScopeOnEveryLane`,
   `SqlDeployerHistoryDb.DeviceScopeMigration152*`. Capability `device.scope`.
 
+### Linked servers (`peer/`, migration 157; `design/peers/link.md`)
+
+Two Vaulthalla servers paired with each other keep one mutually authenticated websocket (phase 1a of the server
+mirror: the link only; nothing travels over it yet but control). **Experimental and off:** `peers.experimental` in
+config.yaml (read-only like `cloud`, never in settings JSON); off = the link service closes every link and dials
+nothing, `device::authorize` never looks in `peer`, and every `peer.*` command and `vh peer` refuses
+`peers_experimental`.
+- **Principal:** the `peer` table (migration 157; `db::query::peer::Peers`): node_id and spki_sha256 unique among live
+  rows only (an unlinked server links again with a new row; the revoked one stays for the audit trail),
+  `next_spki_sha256` + `rotate_counter` (rotation), `attest_public_keys`, `wrap_public_key`, `endpoints` (last good
+  first), `sharing` (identities), `compared_by` (person | desktop), `peer_protocol`, `product_version`. A peer is never
+  a device and never a user: `device::authorize` looks in `devices` first and, only for a key no device ever had (and
+  never for a relayed stream), in live `peer` rows (pin or announced next key, which is then promoted). The
+  connection becomes a ws `SessionMode::Peer` session (`Session::acceptPeer`, run by `peer::LinkService`); device
+  pairing refuses a key in `peer`, `peer.pair.request` a key in `devices`. HTTP lanes answer 403 to a peer key.
+- **What a peer session runs:** `Router::isPeerWireCommand` (peer.hello, peer.ping, peer.endpoints,
+  peer.identity.rotate, peer.unlinked) plus meta.hello / meta.contract.get; anything else `Deny` (fail closed). A
+  pairing connection this server dialled (`Principal::pairing`) runs nothing. The wire set and `peer.pair.*` are
+  refused on every other session kind; `peer.pair.*` runs on pairing-only connections. Answers on a Peer session
+  (frames with `status`) go to the link's pending table (`PeerHooks::onResponse`), never to the router; an unknown one
+  is dropped. Step-up channel: Agent. The sweeper keeps Peer sessions (the link service owns liveness).
+- **Keys:** identity = device_tls both ways (`protocols::device::makeClientContext`: TLS 1.3, the identity certificate
+  as client certificate, ECDSA P-256/SHA-256, no trust store); attestation = key_attest
+  (`vault::attestation::currentPublicKey`, created for the card if none); peer wrap = X25519 in KeyProvider slot
+  `peer_wrap` (`test_peer_wrap`), created by the first `peer.pairing.open`/card, `initGuarded` (never silently replaced
+  while live rows pin it) (`peer/Keys.hpp`).
+- **Pairing** (`peer::Pairing`, in memory; the window is `device::Pairing`'s with `WindowKind::Peer`: one window at a
+  time for devices or a server): `peer/Crypto.hpp` holds the transcript (card encoding, commit "vh/peer/commit/v1",
+  SAS "vh/peer/sas/v1" over both SPKIs, both nonces and both card hashes, rotation "vh/peer/rotate/v1"); the fixed
+  vector is `core/test-assets/peer/pairing-vectors.json` (`tools/dev/peer_pairing_vectors.py --check`). The window's
+  side: `peer.pairing.open|close|pending|approve {expect_spki?}|deny`; the dialling side: `peer.link.start {endpoints,
+  expect_spki?}` (a thread per attempt in `LinkService::runAttempt`: dial, request, confirm, code, poll status, write
+  its row on approval), `peer.link.status|cancel`. `vh peer pair|pending|approve|deny|link|list|info|rename|unlink`.
+- **Who may** (`ops::peers`): super admins only; Host free; Web with device.trust on peer.pairing.approve and
+  peer.link.start (`stepup::requireForServerLink`); a full-access direct device on RBAC alone (audited
+  auth.stepup.grant method device_session, recovery cooldown still applies); Agent (MCP, `vh mcp`, scoped devices,
+  peer sessions) and relayed devices `peer_forbidden`; the router's scoped-device forbidden list has `peer.`; the MCP
+  catalog excludes `{"peer"}`.
+- **The link** (`peer::LinkService`, runtime service "PeerLinks" after DeviceServer; own io_context, 2 threads, own
+  Router): either side dials live rows' endpoints (`protocols::ws::client::dial`, pin = spki or next), with backoff
+  1 s..2 min (`concurrency::jitteredBackoff`, shared with the cloud relay); the dialler sends peer.hello (node id must
+  be the row's) then peer.endpoints; when both connect at once the one dialled by the lower node id is kept (a newer
+  one from the same dialler replaces the older); peer.ping every 30 s from both ends, three misses close it; health
+  (`peer.list` `health`: connected, since, dialed_by, address, rtt_ms, peer_version, protocol_compatible, last_error,
+  next_attempt_at). Unlink revokes the row, sends peer.unlinked and closes; the receiver revokes its row too.
+- **Rotation:** `rotateServerIdentity({announce})`: after the new key is sealed, `LinkService::announceRotation`
+  sends peer.identity.rotate (signed by the old key, counter = the new identity version) on every live link; the
+  switch transaction revokes every live row that did not store it; the links then reconnect under the new key (the
+  peer promotes its next pin). `vh secret device-identity rotate --revoke-peers` announces nothing and drops every
+  link. Attestation and wrap keys have no rotation path yet (nothing announced for them).
+- **Audit:** peer.pairing.open, peer.link.request (both sides), peer.link (both, compared_by), peer.link.denied,
+  peer.unlink (by this_server | peer), peer.identity.rotate (announced | received), peer.connection (up/down, at most
+  one a minute per peer).
+- Tests: `PeerCrypto*`, `PeerCards.*`, `PeerEndpoints.*`, `PeerPairingState.*`, `PeerRouting.*`, `PeerSwitch.*`
+  (DB-free, `test_peer_crypto.cpp`); `PeerLinkDbTest.*` (the real listener as one end, `test_peer_link_db.cpp`);
+  `DeviceIdentityRotationTest.LinkedServersThatHeardOfTheNewKey*`; Tier B `vhh drill peers`
+  (`tools/harness/vhh/drill_peers.py`: two daemons pair TOFU and pinned, reconnect after each restarts, rotate,
+  unlink).
+
 ### Super-admin initial credential
 
 No universal default password. `seed::initAdmin` (fresh DB only: `initDB` seeds when no `admin` row exists) calls
@@ -1575,7 +1634,8 @@ sharing · `stats` dashboard telemetry + snapshots · `storage` local + S3 backe
 controller, strategies `cache|sync|mirror`, cost guardrails · `vault` vault model, slugs, FUSE names ·
 `recovery` file recovery: local snapshots/versions, provider versioning, usage ledger, cost model (below) ·
 `ops` actor-authorized operations shared by the CLI and ws handlers (below) · `device` paired devices: protocol
-crypto, server identity, in-memory pairing, handshake authorization (the listener itself is `protocols/device`).
+crypto, server identity, in-memory pairing, handshake authorization (the listener itself is `protocols/device`) ·
+`peer` linked servers: card and transcript crypto, link requests, keys, the link service (see "Linked servers").
 
 **Config keys renamed or moved (#164).** `config.yaml` is never rewritten on upgrade, so `loadConfig` keeps reading
 the old spellings: `sharing.enable_public_links` → `sharing.enable_email_validated`, and
@@ -1690,7 +1750,7 @@ policies), `config` (every settings write: one validation, one apply step that r
 is deliberately ungated, see Stats below), `conflicts` (sync conflicts, #187: ws `sync.conflicts.*`, `vh sync resolve` /
 `vh resolve`, the HTTP `/download/conflict` lane's authorization), `upstream` (S3/R2 bucket administration and event
 sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`), `recovery` (file recovery: ws `recovery.*` / `vault.recovery.*`, `vh snapshot|recovery …`, `vh vault recovery …`; see `recovery.md`), `devices` (paired devices: ws `device.*`, `vh device …`; see "Device listener
-and pairing"), `vault_keys` (key backup and restoration: ws `vault.keys.status|export|export.confirm|import`, `vh vault keys
+and pairing"), `peers` (linked servers: ws `peer.*`, `vh peer …`; see "Linked servers"), `vault_keys` (key backup and restoration: ws `vault.keys.status|export|export.confirm|import`, `vh vault keys
 status|export|import`; key material only through the CLI or a paired device, D4; see `key-backup.md`), `vault_storage`
 (the bucket write-capability probe, spec 06 §7: ws `vault.storage.probe`, `vh vault storage probe`; the vault's admin
 Edit permission; audited `vault.storage.probe`; agent-available (effect write: it writes and deletes only its own

@@ -21,7 +21,10 @@
 // the code) ever touches disk.
 //
 // One window at a time, node-wide: a request names no account, so it goes to the open window's owner. A second
-// user's open() is refused (conflict) until that window closes or expires; the owner reopening extends it.
+// user's open() is refused (conflict) until that window closes or expires; the owner reopening extends it. The rule
+// covers linking another server too (design/peers/link.md): a window is for devices or for a server (WindowKind), and
+// while one kind is open the other is refused. Server link requests themselves live in peer::Pairing, which asks this
+// class for the window.
 //
 // This class keeps the protocol's state machine and its limits; ops::devices authorizes the owner side and writes
 // the devices row. Errors are ops:: refusals (ws data.code): no_pairing_window, rate_limited (Refused), not_found,
@@ -38,10 +41,13 @@ inline constexpr std::size_t kMaxRequestsPerAddressPerMinute = 10;
 enum class RequestState { AwaitingConfirm, Pending, Approving, Approved, Denied, Expired };
 [[nodiscard]] std::string to_string(RequestState state);
 
+enum class WindowKind { Device, Peer };
+
 struct PairingWindow {
     uint32_t owner_id{};
     std::time_t opened_at{};
     std::time_t expires_at{};
+    WindowKind kind{WindowKind::Device};
 };
 
 // What device.pair.request carries (validated by the caller).
@@ -113,12 +119,14 @@ public:
 
     // ---- the owner's side
 
-    // Opens (or, for its own owner, extends) the window. ops::Conflict while another user's window is open.
-    PairingWindow open(uint32_t ownerId, time_point now);
+    // Opens (or, for its own owner, extends) the window. ops::Conflict while another user's window is open, or a
+    // window of the other kind (a device window while linking a server, and the reverse).
+    PairingWindow open(uint32_t ownerId, time_point now, WindowKind kind = WindowKind::Device);
+    // The open window, whatever its kind.
     [[nodiscard]] std::optional<PairingWindow> window(time_point now);
-    // Closes the open window when `ownerId` owns it, or whoever owns it when `any`; its requests expire. False when
-    // there was nothing to close.
-    bool close(uint32_t ownerId, bool any, time_point now);
+    // Closes the open window of `kind` when `ownerId` owns it, or whoever owns it when `any`; its requests expire.
+    // False when there was nothing to close.
+    bool close(uint32_t ownerId, bool any, time_point now, WindowKind kind = WindowKind::Device);
     // The owner's confirmed requests, oldest first.
     [[nodiscard]] std::vector<PendingRequest> pending(uint32_t ownerId, time_point now);
     // Number matching: `code` must be the request's SAS (constant-time compare). Any other code denies the request

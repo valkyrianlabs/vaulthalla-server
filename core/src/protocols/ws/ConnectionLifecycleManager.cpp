@@ -58,6 +58,9 @@ ConnectionLifecycleManager::SweepVerdict ConnectionLifecycleManager::verdict(
         return session.connectionOpenedAt + kDevicePairingLifetime < now ? SweepVerdict::DeviceEnded : SweepVerdict::Keep;
     if (session.isDeviceSession())
         return session.user && session.user->authorizing() ? SweepVerdict::Keep : SweepVerdict::DeviceEnded;
+    // A link between two servers (design/peers/link.md): no token either; the link service ends it (unlink,
+    // three missed pings, peers.experimental off).
+    if (session.isPeerSession()) return SweepVerdict::Keep;
     if (!session.user && !session.isShareSession() && expired) return SweepVerdict::UnauthenticatedTimeout;
 
     const auto refreshToken = session.tokens

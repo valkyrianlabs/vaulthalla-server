@@ -197,10 +197,18 @@ static std::shared_ptr<CommandUsage> device_identity_rotate(const std::weak_ptr<
     cmd->effect = CommandEffect::Destructive;
     cmd->description = "Replace the device listener's identity (the TLS key every paired Desktop pins) with a fresh one. "
                        "Every paired device is revoked and disconnected and has to pair again with a new pairing code; "
-                       "pairing requests in progress are dropped. No rollback: the old key is deleted. Super admins "
-                       "only; asks to confirm (--yes without a terminal).";
-    cmd->optional_flags = {yesFlag, jsonFlag};
-    cmd->examples = {{"vh secret device-identity rotate", "Rotate it: every device pairs again (asks to confirm)."}};
+                       "pairing requests in progress are dropped. Linked servers (experimental) that are connected are "
+                       "told of the new key first, signed by the old one, and keep their links; the others are "
+                       "unlinked. No rollback: the old key is deleted. Super admins only; asks to confirm (--yes "
+                       "without a terminal).";
+    cmd->optional_flags = {yesFlag, jsonFlag,
+                           Flag::WithAliases("revoke_peers",
+                                             "Emergency: tell no linked server and unlink every one (the identity key "
+                                             "may be compromised)",
+                                             {"revoke-peers"})};
+    cmd->examples = {{"vh secret device-identity rotate", "Rotate it: every device pairs again (asks to confirm)."},
+                     {"vh secret device-identity rotate --revoke-peers",
+                      "Rotate it and drop every server link too (a key that may be compromised)."}};
     return cmd;
 }
 

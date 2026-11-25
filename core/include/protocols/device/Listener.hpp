@@ -30,6 +30,12 @@ using tcp = asio::ip::tcp;
 // what is checked, after the handshake), client signatures limited to ECDSA P-256 / SHA-256.
 [[nodiscard]] std::shared_ptr<asio::ssl::context> makeServerContext(const vh::device::ServerIdentity& identity);
 
+// The dialling end of a link between two servers (design/peers/link.md): TLS 1.3 only, no session tickets or cache,
+// presenting this server's identity certificate as the client certificate, and signatures limited to ECDSA P-256 /
+// SHA-256 both ways. The trust store is never consulted: a connection sets its own verify callback that compares the
+// server key's SPKI hash with the pin (protocols::ws::client::dial).
+[[nodiscard]] std::shared_ptr<asio::ssl::context> makeClientContext(const vh::device::ServerIdentity& identity);
+
 // ---- relayed streams (design/cloud/relay.md: the Vaulthalla Cloud relay, option (c)) --------------------------------
 //
 // The second way to authenticate a peer, used only for a stream the relay service (cloud/RelayService) accepted after

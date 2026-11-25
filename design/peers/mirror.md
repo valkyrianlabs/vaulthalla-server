@@ -102,7 +102,8 @@ vault_replication_log (
   state         jsonb   not null,       -- the entry as this transaction left it (below)
   entry_hash    bytea,                  -- of the new state; NULL for a removal
   prev_hash     bytea,                  -- of the state it replaced; NULL for a creation
-  actor_uid     uuid,
+  actor_node    text,                   -- the acting account's home server (NULL: this one) and its id there
+  actor_id      integer,
   origin        text,                   -- a mirror's request id when the change was submitted by it
   primary key (vault_id, term, seq)
 )
@@ -238,7 +239,8 @@ each file into memory. A mirror that is unreachable blocks step 2; the core's ad
 
 ## A change made on the mirror
 
-1. **Local.** The mirror checks the person's permission against the shared access list, applies the change locally,
+1. **Local.** The mirror checks that the person is allowed by the link's policy (a super admin of the mirror by
+   default, or an account the core added; `identity.md`) and within the server's role, applies the change locally,
    and records it in `mirror_pending` (vault, entry uid, operation, the generation it was based on, the new
    generation, the actor's uid, the origin). People on the mirror see it at once.
 2. **Contents first.** For a new or changed file the mirror sends the sealed bytes to the core's lane. The core
@@ -247,7 +249,7 @@ each file into memory. A mirror that is unreachable blocks step 2; the core's ad
    had applied, and the operations by uid with the generation each was based on.
 4. **The core executes it** through the operation layer as that person:
    - the peer's vault role is checked first, as a ceiling;
-   - then the person's own permission, from the access list;
+   - then, when the acting account is one the core added to the policy, that account's role;
    - then quota, a name clash (`RenameMode::NoReplace`) and the base generation (`expected_source_id`);
    - a file is committed from the staged bytes (`NewFileContext::sealed`), so the core never has a row for a
      mirror's file without its contents;
