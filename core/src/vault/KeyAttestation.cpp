@@ -149,6 +149,15 @@ std::optional<Attestation> signNodeMessage(const std::span<const uint8_t> msg) {
     }
 }
 
+std::vector<uint8_t> currentPublicKey() {
+    auto& s = signingSeed();
+    std::scoped_lock lock(s.mutex);
+    const auto seed = loadSeedLocked(s);
+    auto pk = publicKeyFromSeed(seed->bytes());
+    (void)db::query::vault::Key::attestationKeyId(pk);  // recorded, like a first attestation would
+    return pk;
+}
+
 Verdict checkNodeMessage(const Attestation& attestation, const std::span<const uint8_t> msg) {
     if (attestation.signature.empty()) return Verdict::Missing;
     if (hasAttestationDomain(msg)) return Verdict::BadSignature;

@@ -8,6 +8,7 @@
 
 #include "config/Registry.hpp"
 #include "db/query/device/Device.hpp"
+#include "db/query/peer/Peer.hpp"
 #include "device/Crypto.hpp"
 #include "device/Peer.hpp"
 #include "device/ServerIdentity.hpp"
@@ -167,7 +168,9 @@ PendingList pending(const Actor& actor) {
     requireUser(actor);
     const auto now = PairingClock::now();
     PendingList out;
-    if (const auto window = pairing().window(now); window && window->owner_id == actor->id) out.window = window;
+    if (const auto window = pairing().window(now);
+        window && window->owner_id == actor->id && window->kind == vh::device::WindowKind::Device)
+        out.window = window;
     out.requests = pairing().pending(actor->id, now);
     return out;
 }
@@ -249,8 +252,9 @@ vh::device::PairRequestReceipt pairRequest(const vh::device::Peer& peer, const P
         input.approval_key = validApprovalKey(*der, peer);
     }
     if (req.scope) input.requested_scope = validDeviceScope(*req.scope);
-    // A key that is (or was) a device here never pairs again: pairing always uses a fresh key (spec §6).
-    if (Devices::spkiKnown(peer.spkiHex))
+    // A key that is (or was) a device here never pairs again: pairing always uses a fresh key (spec §6). A linked
+    // server's key (design/peers/link.md) is never a device either.
+    if (Devices::spkiKnown(peer.spkiHex) || db::query::peer::Peers::spkiKnown(peer.spkiHex))
         throw Conflict("this device key is already known to this node; pair with a new key");
     return pairing().request(peer, input, PairingClock::now());
 }

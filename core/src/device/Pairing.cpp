@@ -66,7 +66,8 @@ void Pairing::expireLocked(const time_point now) {
     for (auto it = requests_.begin(); it != requests_.end();) {
         const auto next = std::next(it);
         // An approval in progress finishes on its own (the devices row is being written).
-        const bool windowGone = !window_ || window_->owner_id != it->second.owner_id;
+        const bool windowGone = !window_ || window_->kind != WindowKind::Device ||
+                                window_->owner_id != it->second.owner_id;
         if (it->second.state != RequestState::Approving && (windowGone || it->second.expires_at <= now))
             finishLocked(it, RequestState::Expired, std::nullopt, now);
         it = next;
@@ -79,14 +80,21 @@ void Pairing::expireLocked(const time_point now) {
     }
 }
 
-PairingWindow Pairing::open(const uint32_t ownerId, const time_point now) {
+PairingWindow Pairing::open(const uint32_t ownerId, const time_point now, const WindowKind kind) {
     std::scoped_lock lock(mutex_);
     expireLocked(now);
+    const auto until = window_ ? clockText(PairingClock::from_time_t(window_->expires_at)) : std::string();
     if (window_ && window_->owner_id != ownerId)
-        throw ops::Conflict("another user is pairing a device on this node until " +
-                            clockText(PairingClock::from_time_t(window_->expires_at)) + "; try again then");
+        throw ops::Conflict(std::string(window_->kind == WindowKind::Peer ? "another user is linking a server to"
+                                                                          : "another user is pairing a device on") +
+                            " this node until " + until + "; try again then");
+    if (window_ && window_->kind != kind)
+        throw ops::Conflict(std::string("your ") +
+                            (window_->kind == WindowKind::Peer ? "window for linking a server" : "device pairing window") +
+                            " is open until " + until + ": close it first (one pairing window at a time)");
     const auto opened = window_ ? window_->opened_at : toTime(now);
-    window_ = PairingWindow{.owner_id = ownerId, .opened_at = opened, .expires_at = toTime(now + kPairingWindowLifetime)};
+    window_ = PairingWindow{.owner_id = ownerId, .opened_at = opened, .expires_at = toTime(now + kPairingWindowLifetime),
+                            .kind = kind};
     return *window_;
 }
 
@@ -96,10 +104,10 @@ std::optional<PairingWindow> Pairing::window(const time_point now) {
     return window_;
 }
 
-bool Pairing::close(const uint32_t ownerId, const bool any, const time_point now) {
+bool Pairing::close(const uint32_t ownerId, const bool any, const time_point now, const WindowKind kind) {
     std::scoped_lock lock(mutex_);
     expireLocked(now);
-    if (!window_ || (!any && window_->owner_id != ownerId)) return false;
+    if (!window_ || window_->kind != kind || (!any && window_->owner_id != ownerId)) return false;
     window_.reset();
     expireLocked(now);  // every request of the window expires with it
     return true;
@@ -187,7 +195,7 @@ void Pairing::deny(const uint32_t ownerId, const std::string& requestId, const t
 PairRequestReceipt Pairing::request(const Peer& peer, const PairRequestInput& input, const time_point now) {
     std::scoped_lock lock(mutex_);
     expireLocked(now);
-    if (!window_)
+    if (!window_ || window_->kind != WindowKind::Device)
         throw ops::Refused("no_pairing_window", "no pairing window is open on this node: open one (`vh device pair` on "
                                                 "the node), then try again");
 

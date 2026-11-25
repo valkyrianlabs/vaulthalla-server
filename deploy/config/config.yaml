@@ -301,6 +301,13 @@ cloud:
     ended_grace_hours: 24                  # an ended plan converts managed vaults to local after this long, or when an admin confirms
 
 
+# === 🔗 Linked servers ===
+# Pair this server with another Vaulthalla server (`vh peer pair`, `vh peer link`): experimental and off. While it is
+# off nothing dials another server and no peer key is accepted. Read at startup.
+peers:
+  experimental: false
+
+
 # === 🔐 Sealed Secrets ===
 # Master secrets are sealed to this machine: a TPM on Linux, the Secure Enclave on macOS (docs: vaults/secrets-and-key-export).
 secrets:
