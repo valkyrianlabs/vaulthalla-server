@@ -1524,11 +1524,12 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
   rule of mkdir/create/upload and of `fs.entry.copy`'s per-entry authorizer (`rbac::fs::placement::createAction`), and a
   folder's contents are each checked at their new path (`firstRefusedDescendant`). FUSE answers a refusal like a create
   in that folder (`resolver::deniedErrno`: ENOENT when the caller can't see it, EACCES when it can; EACCES for a
-  refused descendant); ws answers `denied`, checked before the endpoint lookups, so a refused caller gets no
-  not_found/conflict about the destination. A rename within its own folder is unchanged (source check only), and
-  across vaults FUSE still answers EXDEV with nothing authorized. `storage::Engine::move/rename` and
-  `Filesystem::rename` stay non-authorizing primitives; their callers are the two surfaces above and the ws upload
-  finish (a same-folder rename of the staged part after Write on the target). `FsMoveAuthzDbTest`, Tier A "Move Into
+  refused descendant); ws answers `denied` (the check is `ops::fs::move/rename`'s), checked before the endpoint
+  lookups, so a refused caller gets no not_found/conflict about the destination. A rename within its own folder is
+  unchanged (source check only), and across vaults FUSE still answers EXDEV with nothing authorized.
+  `storage::Engine::move/rename` and `Filesystem::rename` stay non-authorizing primitives; their callers are FUSE,
+  `ops::fs` and the ws upload commit (`ops::fs::commitStaged`: a same-folder rename of the staged part after Write on
+  the target). `FsMoveAuthzDbTest`, Tier A "Move Into
   Unwritable Folder". `Filesystem::repairAtRest` (first sync pass per vault per start) seals plaintext left by older
   builds and corrects ciphertext-length sizes.
 - **No key is minted over sealed data (`EncryptionManager::load_key`, `key-backup.md`).** A vault without a
@@ -1768,6 +1769,23 @@ View; audited `vault.remote.attach|detach|abort`; `vault remote attach|detach` a
 `AgentCallScope`). Still per-surface: the ws-only
 pricing preflight/override/notification endpoints, email test-send/history, `vh vault keys inspect|rotate`, sync
 diagnostics, and lifecycle commands (`setup`, `teardown`, `secrets`).
+
+**`ops::fs` (file operations, `ops/Fs.hpp`; mirror phase 2, `design/peers/mirror.md`).** mkdir, move, rename, copy,
+remove (files to the trash, folders and symlinks deleted: `Filesystem::remove`), the ws upload's `authorizeUpload` /
+`commitStaged`, and `commitSealed` (a file from bytes a `SealedWriter` already sealed: new, or a replacement of a named
+base generation through `expected_source_id`). Each op takes the `Actor`, the vault id and vault-relative paths, and
+does inside it the filesystem permission check, the name-clash handling, the mutation through `Filesystem`/`Engine`,
+the `operations` row (move, rename, copy only, as before), the audit event (`fs.mkdir|move|rename|copy|delete`, by entry
+id; `fs.commit` for `commitSealed`) and the early sync pass. Refusals: `Denied`, `NotFound`, `Conflict` (a taken
+name), `Invalid` (into itself), and `ops::fs::ContentConflict` (a `Conflict`: the base generation is gone). The vault's RBAC
+refuses an action on a missing entry, so a missing source (or a replacement whose file is gone) is `Denied` for any
+account the check applies to, and NotFound/ContentConflict only for one it passes (the super admin). Only the ws
+`fs.*` handlers (`handler/fs/Storage.cpp`, `Upload.cpp`) call it; they keep parsing, envelopes and upload-session
+bookkeeping. The HTTP lanes, text save, `vh fs put`, shares, the S3 gateway and FUSE keep their own paths to
+`Filesystem` until each is lifted. The only space check on these ops is the one `Filesystem::copy` makes (-ENOSPC);
+`commitSealed` checks none (the HTTP lanes check when an upload begins). Inside `vh::ops`, `fs::` now names this
+namespace: write `vh::fs::` for the filesystem layer (and `vh::audit::`, `vh::config::`, `vh::recovery::`, which
+`vh::ops` also has). `OpsFsDbTest` (`test_ops_fs.cpp`) runs every op for a constructed `Actor` with no session.
 
 Rules the families hold (keep them in ops, never re-add them in a handler):
 - **Users:** an account is an *admin identity* when its admin role grants anything outside the self scopes
