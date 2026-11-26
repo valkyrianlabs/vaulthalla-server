@@ -15,6 +15,11 @@
 
 #include "../helpers/db_suite.hpp"
 #include "audit/Trail.hpp"
+#include "protocols/ws/Session.hpp"
+#include "protocols/ws/Router.hpp"
+#include "auth/stepup/StepUp.hpp"
+#include "auth/model/RefreshToken.hpp"
+#include "auth/model/TokenPair.hpp"
 #include "config/Registry.hpp"
 #include "crypto/SecretKey.hpp"
 #include "db/Transactions.hpp"
@@ -1168,6 +1173,107 @@ TEST_F(MirrorStartDbTest, DeletingAMirroredVaultIsRefusedUntilItsMirrorEnded) {
         EXPECT_EQ(scalar("SELECT count(*) FROM audit_event WHERE action = 'mirror.remove' AND vault_id = " +
                          std::to_string(vaultId)),
                   "1");
+    }
+}
+
+// ============================================================================ step-up in the console
+
+namespace {
+std::shared_ptr<protocols::ws::Session> mirrorConsole(const std::shared_ptr<identities::User>& user) {
+    auto web = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
+    web->user = user;
+    web->tokens->refreshToken = std::make_shared<auth::model::RefreshToken>();
+    web->tokens->refreshToken->jti = "mirror-stepup-jti-" + tag();
+    web->tokens->refreshToken->aal = 1;
+    web->tokens->refreshToken->amr = {"pwd"};
+    web->tokens->refreshToken->authTime = std::chrono::system_clock::now() - std::chrono::hours(1);
+    return web;
+}
+
+void grantStepUp(const std::shared_ptr<protocols::ws::Session>& web, const auth::stepup::Family family,
+                 const std::string& target) {
+    web->stepUp().addGrant({.user_id = web->user->id, .refresh_jti = web->tokens->refreshToken->jti, .family = family,
+                            .target = target, .method = "test",
+                            .expires_at = std::chrono::system_clock::now() + std::chrono::minutes(5)});
+}
+
+// The step-up a call asks for in the console, or nullopt when it asks none (and ran).
+template <class F>
+std::optional<std::pair<std::string, std::string>> stepUpAsked(F&& f) {
+    try {
+        f();
+    } catch (const ops::StepUpRequired& e) {
+        return std::make_pair(e.family, e.target.value_or(""));
+    }
+    return std::nullopt;
+}
+}
+
+TEST_F(MirrorStartDbTest, TheConsoleStepsUpToSendAVaultsKeysToRemoveACopyOrAnOrphanedCopyAndForNothingElse) {
+    namespace stepup = auth::stepup;
+    const auto peer = newPeer(false);
+    const auto web = mirrorConsole(superUser);
+
+    // mirror.add: the keys family, bound to the vault; refused without the grant, runs with it.
+    const auto v = coreVault();
+    {
+        const stepup::Scope scope(web);
+        const auto asked = stepUpAsked([&] { (void)ops::mirrors::add(superUser, {.vault_id = v, .peer = std::to_string(peer.id)}); });
+        ASSERT_TRUE(asked);
+        EXPECT_EQ(asked->first, "keys");
+        EXPECT_EQ(asked->second, "mirror.add:" + std::to_string(v));
+        EXPECT_FALSE(MirrorStart::facts(v) && MirrorStart::activeOffer(MirrorStart::facts(v)->vault_uid, "core"))
+            << "nothing offered without the step-up";
+        grantStepUp(web, stepup::Family::Keys, "mirror.add:" + std::to_string(v));
+        EXPECT_FALSE(stepUpAsked([&] {
+            EXPECT_EQ(ops::mirrors::add(superUser, {.vault_id = v, .peer = std::to_string(peer.id)}).state, "offered");
+        }));
+    }
+
+    // mirror.cancel on the core of a mirror that has begun: data.destroy only when it asks to remove the copy.
+    const auto begun = coreVault();
+    {
+        const auto offer = start::offerVault(begun, peer, superUser->id, superUser->name());
+        (void)MirrorStart::transition(offer.id, {"offered"}, {.to = "keys_acked", .notify = false});
+        (void)MirrorVaults::startCore(begun, peer.id);
+        const stepup::Scope scope(web);
+        const auto asked = stepUpAsked([&] { (void)ops::mirrors::cancel(superUser, {.vault_id = begun, .remove_copy = true}); });
+        ASSERT_TRUE(asked);
+        EXPECT_EQ(asked->first, "data.destroy");
+        EXPECT_EQ(asked->second, "mirror.cancel:" + std::to_string(begun));
+        EXPECT_TRUE(MirrorVaults::get(begun)) << "nothing ended without the step-up";
+        grantStepUp(web, stepup::Family::DataDestroy, "mirror.cancel:" + std::to_string(begun));
+        EXPECT_FALSE(stepUpAsked([&] { (void)ops::mirrors::cancel(superUser, {.vault_id = begun, .remove_copy = true}); }));
+        EXPECT_FALSE(MirrorVaults::get(begun));
+        EXPECT_TRUE(MirrorStart::latestOffer(*db::query::vault::Vault::getVault(begun)->uid, "core")->remove_copy);
+    }
+    const auto kept = coreVault();
+    {
+        const auto offer = start::offerVault(kept, peer, superUser->id, superUser->name());
+        (void)MirrorStart::transition(offer.id, {"offered"}, {.to = "keys_acked", .notify = false});
+        (void)MirrorVaults::startCore(kept, peer.id);
+        const auto plain = mirrorConsole(superUser);
+        const stepup::Scope scope(plain);
+        EXPECT_FALSE(stepUpAsked([&] { (void)ops::mirrors::cancel(superUser, {.vault_id = kept}); }))
+            << "ending a mirror and leaving the copy where it is asks for nothing";
+        EXPECT_FALSE(MirrorVaults::get(kept));
+    }
+
+    // Removing an orphaned copy on the mirror: data.destroy, bound to the vault.
+    auto [o, copyId] = startedCopy();
+    (void)coreEnds(o, std::nullopt);
+    ASSERT_EQ(MirrorVaults::get(copyId)->role, "orphaned");
+    {
+        const auto mirrorWeb = mirrorConsole(superUser);
+        const stepup::Scope scope(mirrorWeb);
+        const auto asked = stepUpAsked([&] { (void)ops::mirrors::cancel(superUser, {.vault_id = copyId}); });
+        ASSERT_TRUE(asked);
+        EXPECT_EQ(asked->first, "data.destroy");
+        EXPECT_EQ(asked->second, "mirror.cancel:" + std::to_string(copyId));
+        EXPECT_TRUE(MirrorStart::vaultWithUid(o.vaultUid)) << "the copy stays without the step-up";
+        grantStepUp(mirrorWeb, stepup::Family::DataDestroy, "mirror.cancel:" + std::to_string(copyId));
+        EXPECT_FALSE(stepUpAsked([&] { (void)ops::mirrors::cancel(superUser, {.vault_id = copyId}); }));
+        EXPECT_FALSE(MirrorStart::vaultWithUid(o.vaultUid));
     }
 }
 
