@@ -139,6 +139,44 @@ std::shared_ptr<CommandUsage> unlink(const std::weak_ptr<CommandUsage>& parent) 
     return cmd;
 }
 
+std::shared_ptr<CommandUsage> policyShow(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Read;
+    cmd->aliases = {"show", "get", "info"};
+    cmd->description = "Show a linked server's default vault role here: the role it holds on every vault mirrored with "
+                       "it, unless the vault assigns it another (`vh vault role assign <vault> <role> --peer <server>`). "
+                       "Needs vault.roles.view on every vault (super admins hold it).";
+    cmd->positionals = {peerPos};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh peer policy show 1", "Linked server 1's default vault role."}};
+    return cmd;
+}
+
+std::shared_ptr<CommandUsage> policySet(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
+    cmd->aliases = {"set"};
+    cmd->description = "Set a linked server's default vault role here (a vault role's name or id), or `none`. It is the "
+                       "ceiling on what that server may submit for every vault mirrored with it (nothing sends or "
+                       "enforces it yet). Needs vault.roles.assign on every vault (super admins hold it); audited.";
+    cmd->positionals = {peerPos, Positional::Alias("role", "A vault role's name or id, or none", "role",
+                                                   contract::gen::constant("reader"))};
+    cmd->examples = {{"vh peer policy set 1 contributor", "Linked server 1 holds 'contributor' on vaults it mirrors."},
+                     {"vh peer policy set vps none", "No default: only vaults that assign it a role grant it one."}};
+    return cmd;
+}
+
+std::shared_ptr<CommandUsage> policy(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->aliases = {"policy"};
+    cmd->description = "A linked server's default vault role on this server (design/peers/identity.md): the role it "
+                       "holds on every vault mirrored with it; a vault's own assignment for it overrides it, "
+                       "implicit_deny meaning no access.";
+    cmd->subcommands = {policyShow(cmd->weak_from_this()), policySet(cmd->weak_from_this())};
+    cmd->examples = {{"vh peer policy show 1", "Show it."}, {"vh peer policy set 1 reader", "Set it."}};
+    return cmd;
+}
+
 }
 
 std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
@@ -151,7 +189,8 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
                         "config.yaml). A linked server is its own kind of principal: it never acts as a user.";
     root->subcommands = {pair(root->weak_from_this()),   pending(root->weak_from_this()), approve(root->weak_from_this()),
                          deny(root->weak_from_this()),   link(root->weak_from_this()),    list(root->weak_from_this()),
-                         info(root->weak_from_this()),   rename(root->weak_from_this()),  unlink(root->weak_from_this())};
+                         info(root->weak_from_this()),   rename(root->weak_from_this()),  unlink(root->weak_from_this()),
+                         policy(root->weak_from_this())};
     root->examples = {
         {"vh peer pair", "On one server: open a window for the other."},
         {"vh peer link <address>", "On the other: link with it, then compare the codes."},

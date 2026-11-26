@@ -505,7 +505,8 @@ the console reads to leave the Linked servers page out (`web-client.md`, "Linked
   a device and never a user: `device::authorize` looks in `devices` first and, only for a key no device ever had (and
   never for a relayed stream), in live `peer` rows (pin or announced next key, which is then promoted). The
   connection becomes a ws `SessionMode::Peer` session (`Session::acceptPeer`, run by `peer::LinkService`); device
-  pairing refuses a key in `peer`, `peer.pair.request` a key in `devices`. HTTP lanes answer 403 to a peer key.
+  pairing refuses a key in `peer`, `peer.pair.request` a key in `devices`. HTTP lanes answer 403 to a peer key; the
+  sealed lane (`/peer/object/…`, below) is the one HTTP route it gets, and nobody else does (404).
 - **What a peer session runs:** `Router::isPeerWireCommand` (peer.hello, peer.ping, peer.endpoints,
   peer.identity.rotate, peer.unlinked) plus meta.hello / meta.contract.get; anything else `Deny` (fail closed). A
   pairing connection this server dialled (`Principal::pairing`) runs nothing. The wire set and `peer.pair.*` are
@@ -576,6 +577,88 @@ it differs from the journal.
   (`test_replication_log.cpp`: every op on a local and an S3 vault, groups, commit order, pages, the apply switch,
   concurrent writers, random ops with digest and replay, retention); `SqlDeployerHistoryDb.ReplicationLogMigration160*`;
   contract `tools/contracts/test_replication_log_contract.py`; cost `tools/dev/bench/replication_log_cost.sh`.
+
+### Sealed contents between linked servers (`peer/ObjectClient`, `protocols/device/PeerObject`, `mirror/Contents`, migration 161)
+
+Phase 2 wave 2 of the server mirror (`design/peers/mirror.md` "As built: sealed contents"): a file generation's sealed
+bytes travel between two linked servers exactly as they sit on disk, never re-encrypted. The mirror protocol (what to
+fetch when, keys, the tree) is the next wave: nothing marks a file as expected in production yet; tests and the
+internal API do.
+- **The lane:** `GET|HEAD /peer/object/<vault uid>/<object uid>/<generation>` on the device listener (uids base32,
+  generation unpadded base64url; `peer::object::target`/`parseTarget`/`etagOf`). The listener hands it only to a
+  linked key (`Authorization::linked`; anyone else 404) as an HTTP session with no user (`DeviceConnection::linked`),
+  which serves that lane and nothing else. `peer_object::serve` decides per request: switch off 404; row revoked or
+  its key replaced 403 `peer_revoked`; no such mirrored vault, another linked server, an orphaned role or no such file
+  404 `not_found`; another current generation 410 `generation_not_current`; gcm0 or plain with bytes 422
+  `format_not_portable`; bytes not on disk or not that generation's length 404 `not_held`. Then the bytes from the
+  descriptor it opened (the row read again after the open), via `handler::serve` (Content-Length, ETag, one range,
+  If-Range, no-store). `peer_object::track` registers each lane connection; `LinkService::disconnect`/`disconnectAll`
+  close them.
+- **The client:** `peer::object::fetch(Record, Address, FetchOptions, Sink)`: endpoints in order, TLS 1.3 with
+  `LinkService::clientTls()` and `peer::pinnedKeyOf` (the same pin check the link's dial now uses; an announced key in
+  use is promoted), `Range: bytes=<offset>-` + If-Range, a private io_context run in `kCancelSlice` (200 ms) slices
+  (cancellation, an overall deadline, per-step inactivity), body streamed into the sink at its pace. Status
+  Complete | Interrupted (resume) | Refused (code) | Unreachable | Cancelled.
+- **Slots:** `peer::Transfers` (owned by `LinkService`, `transfers()`): 4 per peer both directions, 1 reserved for
+  interactive; interactive waiters go before background ones; `spawn` runs a transfer on a thread joined when the
+  service stops (`shutdown` first in `LinkService::shutdown`, `resume` at `runLoop` start).
+- **Pending contents:** `mirror_content_pending` (161; `db::query::mirror::PendingContents`): per file of a vault whose
+  `mirror_vault.role` is `mirror`: generation, key version, size, content hash, mtime (us), priority, state waiting |
+  failed, attempts, last error. `expect`, `get`, `outstanding` (priority order), `recordFailure` (3 →
+  failed), `retry`, `dropSuperseded`, `lockForLink` + `clear` (the compare-and-set), `mayHavePending` (per-vault cache:
+  one query per vault per process). No foreign key to files (none of its triggers change). `MirrorVaults::startMirror`
+  (tests) writes a mirror row.
+- **Receive** (`mirror::contents::receive(Expected, Source&)`): O_TMPFILE in the backing directory (named O_EXCL sibling
+  on macOS), resumes on Interrupted (≤ 5), then size, `crypto::hash::blake2bFd`, `vault::content::verifyFd` (binding:
+  vault uid, generation, key version; not the object: a local copy shares its source's header), then under
+  `Filesystem::contentWriteMutex` and in one transaction `lockForLink` (pending row FOR UPDATE, files row FOR SHARE)
+  → futimens + durable sync → link at the content sidecar → rename over the backing path → `clear`. Bytes already in
+  place that pass the same checks settle the row (a crash between link and commit). Failures counted: refusals and
+  verification; not link down, cancellation or a superseded row.
+- **Open-time fetch:** `mirror::contents::awaitIfPending(file, kOpenWait = 15 s)` from `Engine::openPlaintextReader`
+  (downloads, previews, the ws/share download, CLI, S3 gateway: `ContentUnavailable` with `mirror_link_down|
+  mirror_fetch_timeout|mirror_fetch_failed: …`, which `handler::errorFor` answers as 503 with that code) and from the
+  working copies' materialize hook (FUSE open: `NotReceived`, a `std::system_error` with ENOLINK | ETIMEDOUT | ENODATA,
+  which `fuse::errnoFrom` returns; only `mountWaitCap()` mount opens wait at once, a quarter of the FUSE pool within
+  1..4, the rest get ETIMEDOUT at once with their fetch started). Link down is said at once (no transfer); one transfer per file however many wait,
+  on an interactive slot, continuing after a waiter gives up. `fetchOutstanding(vault, max)` drains background slots.
+- **Test hook:** in test instances only, `LinkService::pollTestFetch` runs `VH_TEST_FAULT_DIR/peer-object-fetch.json`
+  (the Tier B drill's request) with the real client.
+- Tests: `PeerObjectLaneDbTest.*` (`test_peer_object_lane_db.cpp`: every refusal, the bytes, ranges, the real client
+  resuming against the listener); `MirrorContentsDbTest.*`, `PeerTransfersTest.*` (`test_mirror_contents_db.cpp`);
+  Tier B `vhh drill peers` step 6 (two daemons, the real link, a resumed transfer, byte for byte).
+
+### A linked server's vault role and mirrored vaults (migration 162; `design/peers/identity.md`)
+
+The mirror server's permissions as a role it holds, a ceiling (phase 2 wave 2). Storage, resolver and management
+only: nothing transmits the role or enforces it on submitted changes yet. Full text: identity.md "As built: the mirror
+server's vault role".
+- **Core:** `vault_role_assignments.subject_type = 'peer'` (a `peer` row, trigger-checked; no path overrides) and
+  `peer_vault_policy` (a link's default, NULL = none; `db::query::peer::VaultPolicy`). `rbac::resolver::PeerVault`:
+  `role(peer, vault)` = per-vault assignment (`implicit_deny`, by name: no access) else the link's default else none,
+  nothing for a revoked peer or a deleted vault, never anything from an account's rows; `may(peer, vault, action, path,
+  exists, isDirectory)` only on a vault this server is core of, mirrored with that peer. Nothing calls `may` yet.
+- **Who may** (`ops::peer_policy`, `ops::roles` for subject peer): `peers.experimental`; a person (Host, Web,
+  full-access direct device; Agent, scoped and relayed devices `peer_forbidden`); per vault `vault.roles.assign|revoke`
+  as for users and groups; the link's default needs it in every scope of the actor's global vault policy (view to
+  read). identity.admin step-up. Audited `peer.policy.set`, `rbac.vault_role.assign|unassign` with `node_id`.
+  `vh peer policy show|set`, ws `peer.policy.get|set`, `vh vault role assign|remove --peer`, `role.vault.assign|unassign`
+  `subject_type: peer`; listings annotate a peer subject (`subject_name`, `subject_node_id`, `subject_revoked`).
+- **Mirror:** `mirror_vault.granted_*` (role name, four permission columns, granting node, time; all or none, never on
+  a core row; written only by `db::query::mirror::MirrorVaults::recordGrant|clearGrant`, rows by `startMirror`).
+  `rbac::mirrored` (`rbac/Mirrored.hpp`): a vault whose role here is mirror or orphaned resolves from its grant alone,
+  for this server's super admins; nobody else, no local source, no grant = nobody. Applied in `resolver::Vault::has`
+  (before the super-admin short-circuit), `fs::policy::Evaluator` (stage 0), `resolver::Admin` (`admin.vaults.*`: super
+  admins View/ViewStats only), `fs::visibility::seesWholeSubtree`, the S3 policy evaluator and
+  `ObjectStore::requireRbacPermission`, `ops::s3_gateway` principal checks, `ops::vaults::listAccessible`; the access
+  listing shows the grant (`subject_type: server`, `owned_by`, `editable: false`) and local rows `in_effect: false`;
+  assignment and override writes refuse (`conflict`). Not FUSE's own root shortcuts (`fuse/Resolver.cpp`).
+- **Hot path and invalidation:** `rbac::mirrored::find` = one atomic load while nothing is held, else an immutable
+  snapshot lookup. Loaded in `wireStorage()` before engines serve (failure stops startup); republished by every
+  `MirrorVaults` write that changes a held row or grant before it returns; runtime service "MirrorAccessWatcher"
+  (after IdentityWatcher, 1 s) reconciles out-of-band changes; each change bumps `rbac::policyEpoch()`. Test schema
+  resets call `resetForTesting()` (`db_suite.hpp`).
+- Tests: `PeerVaultRoleDb.*` (`test_peer_vault_role_db.cpp`), `SqlDeployerHistoryDb.PeerVaultRoleMigration162*`.
 
 ### Super-admin initial credential
 

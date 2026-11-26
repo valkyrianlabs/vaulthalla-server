@@ -15,8 +15,25 @@
 namespace vh::rbac::role {
     struct Vault final : Meta, vault::Base, std::enable_shared_from_this<Vault> {
         struct AssignmentInfo {
+            // The server whose vault this is, for the role its core granted this server (rbac/Mirrored.hpp).
+            struct Owner {
+                uint32_t peer_id{};
+                std::string node_id{};
+                std::string name{};
+            };
+
             uint32_t subject_id{}, vault_id{};
-            std::string subject_type{}; // 'user', 'group', 'public', or 'actor'
+            // 'user', 'group', 'peer' (a linked server), 'public', 'actor'; 'server' (this server) in a mirrored
+            // vault's listing, for what its core granted this server.
+            std::string subject_type{};
+
+            // Listing annotations (ops::roles::listVaultRoleAssignments), absent from JSON when unset.
+            std::optional<std::string> subject_name{};     // peer: the linked server's name
+            std::optional<std::string> subject_node_id{};  // peer: its node id
+            std::optional<bool> subject_revoked{};         // peer: unlinked (the row grants nothing)
+            std::optional<bool> in_effect{};               // false: a local row on a vault held as another's copy
+            std::optional<bool> editable{};                // false: owned by another server, read-only here
+            std::optional<Owner> owned_by{};               // the server that owns this entry
 
             [[nodiscard]] std::string toString(uint8_t indent) const;
         };
@@ -32,7 +49,7 @@ namespace vh::rbac::role {
         explicit Vault(const nlohmann::json &j);
 
         void assign(const uint32_t subject_id, const std::string &subject_type, const uint32_t vault_id) {
-            assignment = AssignmentInfo{subject_id, vault_id, subject_type};
+            assignment = AssignmentInfo{.subject_id = subject_id, .vault_id = vault_id, .subject_type = subject_type};
         }
 
         void updateFromJson(const nlohmann::json &j);

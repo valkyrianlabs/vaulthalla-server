@@ -9,6 +9,7 @@
 #include "log/Registry.hpp"
 #include "log/Redact.hpp"
 #include "rbac/fs/policy/Evaluator.hpp"
+#include "rbac/Mirrored.hpp"
 #include "rbac/permission/admin/VaultGlobals.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
 #include "rbac/resolver/VaultScope.hpp"
@@ -112,6 +113,10 @@ bool canLookup(const std::shared_ptr<identities::User>& user, const EntryPtr& en
 
 bool seesWholeSubtree(const std::shared_ptr<identities::User>& user, const EntryPtr& directory) {
     if (!user || !directory || !directory->vault_id) return false;
+    // A vault held here as another server's copy: neither being a super admin nor owning it shows anything by itself
+    // (rbac/Mirrored.hpp). Its grant has no path overrides, so one probe per kind answers for the whole subtree.
+    if (vh::rbac::mirrored::find(static_cast<std::uint32_t>(*directory->vault_id)))
+        return canLookup(user, probeIn(directory, true)) && canLookup(user, probeIn(directory, false));
     if (user->isSuperAdmin()) return true;
     if (isVaultOwner(user, directory)) return true;
     if (overridesMayReach(user, directory)) return false;

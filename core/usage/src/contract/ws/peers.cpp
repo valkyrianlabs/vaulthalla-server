@@ -264,6 +264,48 @@ std::vector<WsCommandUsage> peerCommands() {
         .client_timeout = kDefaultTimeout,
     });
 
+    // ---- a linked server's vault role on this server (migration 162; ops/PeerPolicy.hpp)
+
+    const auto policyObject = [] {
+        return object("policy", "",
+                      {object("peer", "", {uinteger("id"), str("node_id"), str("name"), boolean("revoked")}),
+                       object("role", "VaultRole").nullable().desc(
+                           "The default vault role, with its permissions; null: none (the link grants nothing on a "
+                           "vault without its own assignment)."),
+                       integer("set_by").nullable(), str("set_by_name").nullable(),
+                       integer("set_at").nullable().desc("Unix seconds; null: never set.")})
+            .desc("A linked server's default vault role here: it holds it on every vault mirrored over the link, "
+                  "unless the vault assigns it another (role.vault.assign, subject_type peer; implicit_deny is no "
+                  "access). The ceiling on what that server may submit; nothing transmits or enforces it yet.");
+    };
+
+    out.push_back({
+        .command = "peer.policy.get",
+        .description = "A linked server's default vault role on this server. Needs vault.roles.view on every vault "
+                       "(super admins hold it).",
+        .payload = {pcPeerRef()},
+        .response = {policyObject()},
+        .refusal_codes = pcPeerRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "peer.policy.set",
+        .description = "Set (role: a vault role's id or name) or clear (role: null) a linked server's default vault "
+                       "role here. It reaches every vault mirrored over the link, whoever owns it: needs "
+                       "vault.roles.assign on every vault (super admins hold it). implicit_deny is refused (no "
+                       "access is a per-vault override). Audited peer.policy.set with the server's node id.",
+        .payload = {pcPeerRef(),
+                    anyOf("role", {"integer", "string", "null"})
+                        .alternatives({alt({"integer"}).desc("A vault role's id."),
+                                       alt({"string"}).desc("A vault role's name.")})
+                        .gen(gen::ref("role.vault", {"id"}))
+                        .desc("A vault role's id or name; null: no default.")},
+        .response = {policyObject()},
+        .refusal_codes = pcPeerRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
     // ---- the dialling server, on a pairing-only connection of this server's listener
 
     out.push_back({

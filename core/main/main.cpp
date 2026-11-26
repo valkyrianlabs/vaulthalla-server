@@ -29,6 +29,7 @@
 #include "ops/BackupGrants.hpp"
 #include "connector/Grants.hpp"
 #include "storage/upstream/Guard.hpp"
+#include "rbac/Mirrored.hpp"
 #include "seed/include/init_db_tables.hpp"
 
 // Misc
@@ -205,6 +206,10 @@ void wireStorage() {
     // Upstream bucket protection locks (#237) are loaded before any engine can make a request; a failure here stops
     // startup rather than running with an empty (unprotected) set.
     vh::storage::upstream::guard::reload();
+    // The vaults held here as another server's copy (migration 162) resolve from what their core granted this server
+    // alone, from the first request on: loaded before any engine serves one, and a failure stops startup rather than
+    // resolving them from local roles.
+    vh::rbac::mirrored::reload();
     Filesystem::init(vh::runtime::Deps::get().storageManager);
     vh::runtime::Deps::get().storageManager->initStorageEngines();
 

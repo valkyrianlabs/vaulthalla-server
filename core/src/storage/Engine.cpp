@@ -29,6 +29,7 @@
 #include "recovery/Store.hpp"
 #include "recovery/local/Versions.hpp"
 #include "db/Transactions.hpp"
+#include "mirror/Contents.hpp"
 
 #include <cerrno>
 #include <cstring>
@@ -110,6 +111,15 @@ namespace vh::storage {
         auto generation = generationOf(*f);
         if (vault) generation.vault_id = vault->id;
         if (f->size_bytes == 0) return std::make_unique<EngineEmptyReader>(std::move(generation));
+
+        // design/peers/mirror.md "Contents": a mirror's file whose contents have not arrived is fetched from the vault's
+        // core first, within a bounded wait; otherwise the open fails with the reason (ContentUnavailable: 503 with
+        // the mirror_* code on the HTTP lanes).
+        try {
+            (void)::vh::mirror::contents::awaitIfPending(*f);
+        } catch (const ::vh::mirror::contents::NotReceived& e) {
+            throw ContentUnavailable(e.what());
+        }
 
         std::error_code ec;
         if (!fs::exists(f->backing_path, ec)) return openMissingReader(f, options);

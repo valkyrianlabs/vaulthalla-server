@@ -5,6 +5,8 @@
 
 #include "db/query/identities/Group.hpp"
 #include "db/query/identities/User.hpp"
+#include "db/query/peer/Peer.hpp"
+#include "db/query/peer/VaultPolicy.hpp"
 #include "db/query/rbac/Permission.hpp"
 #include "db/query/rbac/permission/Override.hpp"
 #include "db/query/rbac/role/Admin.hpp"
@@ -16,16 +18,20 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "notifications/SecurityAlertProducer.hpp"
+#include "ops/PeerPolicy.hpp"
+#include "rbac/Mirrored.hpp"
 #include "rbac/fs/glob/Tokenizer.hpp"
 #include "rbac/fs/glob/model/Pattern.hpp"
 #include "rbac/permission/Override.hpp"
 #include "rbac/permission/vault/Roles.hpp"
+#include "rbac/resolver/PeerVault.hpp"
 #include "rbac/resolver/permission/EnumPack.hpp"
 #include "rbac/resolver/vault/all.hpp"
 #include "rbac/role/Admin.hpp"
 #include "rbac/role/Vault.hpp"
 #include "vault/model/Vault.hpp"
 
+#include <fmt/format.h>
 #include <pqxx/pqxx>
 
 #include <algorithm>
@@ -47,6 +53,19 @@ void auditRbac(const Actor& actor, const std::string& action, const std::string&
 }
 
 nlohmann::json subjectJson(const Subject& s) { return {{"type", s.type}, {"id", s.id}}; }
+
+// A linked server is named by its node id as well as its row (design/peers/identity.md: audits name the server).
+void addPeerDetails(nlohmann::json& details, const Subject& s) {
+    if (s.type != "peer") return;
+    if (const auto row = db::query::peer::Peers::byId(s.id)) details["node_id"] = row->node_id;
+}
+
+std::string describeSubject(const Subject& s) {
+    if (s.type == "peer")
+        if (const auto row = db::query::peer::Peers::byId(s.id))
+            return fmt::format("linked server {} ('{}', peer {})", row->node_id, row->name, s.id);
+    return s.type + " " + std::to_string(s.id);
+}
 // Authorization caches key on rbac::policyEpoch(); any vault role mutation (successful or not) invalidates them.
 struct PolicyEpochBump {
     ~PolicyEpochBump() { rbac::bumpPolicyEpoch(); }
@@ -69,11 +88,23 @@ std::shared_ptr<rbac::role::Admin> actorAdminRole(const Actor& actor) {
     return std::make_shared<rbac::role::Admin>(*state->roles.admin);
 }
 
-// Which identity an assignment or override write republishes.
+// Which identity an assignment or override write republishes (a linked server is no identity: nothing).
 identities::Touched touchedBy(const Subject& subject) {
     if (subject.type == "user") return {.users = {subject.id}};
     if (subject.type == "group") return {.groups = {subject.id}};
     return {};
+}
+
+bool isPeerSubject(const Subject& subject) { return subject.type == "peer"; }
+
+// A vault held here as another server's copy: its access list is that server's, and nothing written here would
+// apply to it (rbac/Mirrored.hpp).
+void refuseOnMirror(const unsigned int vaultId) {
+    if (const auto held = vh::rbac::mirrored::find(vaultId)) {
+        const auto owner = db::query::peer::Peers::byId(held->peer_id);
+        throw Conflict("this vault is a mirror of " + (owner ? "'" + owner->name + "'" : std::string("a linked server")) +
+                       "'s: who may use it is decided there");
+    }
 }
 
 std::string describeRef(const Ref& ref) {
@@ -149,8 +180,12 @@ void requireSubjectExists(const Subject& subject) {
     } else if (subject.type == "group") {
         if (!vh::identities::manager().group(subject.id))
             throw NotFound("group not found: " + std::to_string(subject.id));
+    } else if (subject.type == "peer") {
+        const auto row = db::query::peer::Peers::byId(subject.id);
+        if (!row) throw NotFound("linked server not found: " + std::to_string(subject.id));
+        if (row->revoked()) throw Conflict("that server is unlinked: link it again first");
     } else {
-        throw Invalid("subject type must be 'user' or 'group', got '" + subject.type + "'");
+        throw Invalid("subject type must be 'user', 'group' or 'peer', got '" + subject.type + "'");
     }
 }
 
@@ -175,6 +210,48 @@ VaultRolePtr requireAssignment(const VaultSubject& target) {
         throw NotFound("no vault role is assigned to " + target.subject.type + " " + std::to_string(target.subject.id) +
                        " on vault " + std::to_string(target.vault_id));
     return assignment;
+}
+
+// Path overrides are for people; a linked server's role is whole (migration 162 refuses them too).
+void refusePeerOverrides(const VaultSubject& target) {
+    if (isPeerSubject(target.subject)) throw Invalid("a linked server's vault role takes no path override");
+}
+
+// Annotations on a listed assignment: a linked server by name and node id; on a vault held here as another server's
+// copy, local rows are listed as not in effect and the core's grant as the one that is.
+void annotatePeerSubject(rbac::role::Vault& role) {
+    if (!role.assignment || role.assignment->subject_type != "peer") return;
+    if (const auto row = db::query::peer::Peers::byId(role.assignment->subject_id)) {
+        role.assignment->subject_name = row->name;
+        role.assignment->subject_node_id = row->node_id;
+        role.assignment->subject_revoked = row->revoked();
+    }
+}
+
+VaultRolePtr grantEntry(const vh::rbac::mirrored::Held& held) {
+    auto entry = std::make_shared<rbac::role::Vault>(*held.grant->role);
+    entry->id = 0;
+    entry->assignment_id = 0;
+    entry->assigned_at = held.grant->granted_at;
+    entry->assign(0, "server", held.vault_id);
+    entry->assignment->in_effect = true;
+    entry->assignment->editable = false;
+    rbac::role::Vault::AssignmentInfo::Owner owner{.peer_id = held.peer_id, .node_id = held.grant->granted_by_node};
+    if (const auto row = db::query::peer::Peers::byId(held.peer_id)) owner.name = row->name;
+    entry->assignment->owned_by = std::move(owner);
+    return entry;
+}
+
+std::vector<VaultRolePtr> listed(std::vector<VaultRolePtr> rows) {
+    std::vector<VaultRolePtr> out;
+    out.reserve(rows.size());
+    for (auto& row : rows) {
+        if (!row) continue;
+        annotatePeerSubject(*row);
+        if (row->assignment && vh::rbac::mirrored::find(row->assignment->vault_id)) row->assignment->in_effect = false;
+        out.push_back(std::move(row));
+    }
+    return out;
 }
 
 }
@@ -355,6 +432,9 @@ VaultRolePtr removeVaultRole(const Actor& actor, const Ref& ref) {
     if (VaultAssignments::countAssignmentsForRole(existing->id) > 0)
         throw Conflict("cannot delete vault role '" + existing->name +
                        "' because it has active assignments; remove those assignments first");
+    if (db::query::peer::VaultPolicy::countForRole(existing->id) > 0)
+        throw Conflict("cannot delete vault role '" + existing->name +
+                       "' because it is a linked server's default role; change that first (vh peer policy set)");
     auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     VaultRoleQuery::remove(existing->id);
 auditRbac(actor, "rbac.vault_role.delete", "deleted vault role " + existing->name, {{"role_id", existing->id}, {"role", existing->name}});
@@ -378,9 +458,13 @@ std::vector<VaultRolePtr> listVaultRoles(const Actor& actor, db::model::ListQuer
 VaultRolePtr assignVaultRole(const Actor& actor, const AssignVaultRole& req) {
     const PolicyEpochBump bumpOnExit;
     requireActor(actor);
+    // A linked server (design/peers/identity.md): the switch and a person first (ops/PeerPolicy.hpp), then the same
+    // right to assign vault roles on this vault as for a user or a group.
+    if (isPeerSubject(req.target.subject)) peer_policy::requirePerson(actor, "decide what a linked server may do");
     requireVaultRolePermission(actor, req.target, RolePerm::Assign,
                                "you do not have permission to assign vault roles to this subject on this vault");
     requireVaultExists(req.target.vault_id);
+    refuseOnMirror(req.target.vault_id);
     requireSubjectExists(req.target.subject);
     const auto role = requireVaultRole(req.role);
 
@@ -390,36 +474,64 @@ VaultRolePtr assignVaultRole(const Actor& actor, const AssignVaultRole& req) {
     });
     auto assignment = VaultAssignments::get(req.target.vault_id, req.target.subject.type, req.target.subject.id);
     if (!assignment) throw std::runtime_error("vault role assignment could not be read back");
-auditRbac(actor, "rbac.vault_role.assign", "assigned vault role " + role->name + " to " + req.target.subject.type + " " + std::to_string(req.target.subject.id) + " on vault " + std::to_string(req.target.vault_id), {{"role_id", role->id}, {"subject", subjectJson(req.target.subject)}}, req.target.vault_id);
+    annotatePeerSubject(*assignment);
+    nlohmann::json details{{"role_id", role->id}, {"subject", subjectJson(req.target.subject)}};
+    addPeerDetails(details, req.target.subject);
+    auditRbac(actor, "rbac.vault_role.assign",
+              "assigned vault role " + role->name + " to " + describeSubject(req.target.subject) + " on vault " +
+                  std::to_string(req.target.vault_id),
+              std::move(details), req.target.vault_id);
     return assignment;
 }
 
 VaultRolePtr unassignVaultRole(const Actor& actor, const VaultSubject& target) {
     const PolicyEpochBump bumpOnExit;
     requireActor(actor);
+    if (isPeerSubject(target.subject)) peer_policy::requirePerson(actor, "decide what a linked server may do");
     requireVaultRolePermission(actor, target, RolePerm::Revoke,
                                "you do not have permission to remove vault roles from this subject on this vault");
+    refuseOnMirror(target.vault_id);
     auto assignment = requireAssignment(target);
     auth::stepup::require(auth::stepup::Family::IdentityAdmin);
     identities::manager().mutate(touchedBy(target.subject), [&] {
         VaultAssignments::unassign(target.vault_id, target.subject.type, target.subject.id);
     });
-auditRbac(actor, "rbac.vault_role.unassign", "removed the vault role of " + target.subject.type + " " + std::to_string(target.subject.id) + " on vault " + std::to_string(target.vault_id), {{"subject", subjectJson(target.subject)}}, target.vault_id);
+    annotatePeerSubject(*assignment);
+    nlohmann::json details{{"subject", subjectJson(target.subject)}};
+    addPeerDetails(details, target.subject);
+    auditRbac(actor, "rbac.vault_role.unassign",
+              "removed the vault role of " + describeSubject(target.subject) + " on vault " +
+                  std::to_string(target.vault_id),
+              std::move(details), target.vault_id);
     return assignment;
 }
 
 std::vector<VaultRolePtr> listVaultRoleAssignments(const Actor& actor, const std::optional<unsigned int> vaultId) {
     requireActor(actor);
+    // On a vault held here as another server's copy, this server's super admins see what its core granted this server
+    // (the role that applies to them) and the local rows, listed as not in effect; nobody else sees anything there.
     const auto canView = [&](const unsigned int id) {
+        if (vh::rbac::mirrored::find(id)) return actor->isSuperAdmin();
         return rbac::resolver::Vault::has<RolePerm>({.user = actor, .permission = RolePerm::View, .vault_id = id});
+    };
+    const auto withGrant = [](std::vector<VaultRolePtr> rows, const unsigned int id) {
+        if (const auto held = vh::rbac::mirrored::find(id); held && held->grant && held->grant->role)
+            rows.insert(rows.begin(), grantEntry(*held));
+        return rows;
     };
     if (vaultId) {
         if (!canView(*vaultId)) throw Denied("you do not have permission to view role assignments for this vault");
-        return VaultAssignments::listForVault(*vaultId);
+        return withGrant(listed(VaultAssignments::listForVault(*vaultId)), *vaultId);
     }
     auto all = VaultAssignments::listAll();
     std::erase_if(all, [&](const VaultRolePtr& r) { return !r || !r->assignment || !canView(r->assignment->vault_id); });
-    return all;
+    auto out = listed(std::move(all));
+    if (vh::rbac::mirrored::any() && actor->isSuperAdmin())
+        for (const auto& vault : db::query::vault::Vault::listLiveVaults())
+            if (vault)
+                if (const auto held = vh::rbac::mirrored::find(vault->id); held && held->grant && held->grant->role)
+                    out.push_back(grantEntry(*held));
+    return out;
 }
 
 // ---------------------------------------------------------------------------------------------- overrides
@@ -427,8 +539,10 @@ std::vector<VaultRolePtr> listVaultRoleAssignments(const Actor& actor, const std
 std::vector<rbac::permission::Override> addVaultRoleOverrides(const Actor& actor, const AddOverrides& req) {
     const PolicyEpochBump bumpOnExit;
     requireActor(actor);
+    refusePeerOverrides(req.target);
     requireVaultRolePermission(actor, req.target, RolePerm::AssignOverride,
                                "you do not have permission to add overrides for this subject on this vault");
+    refuseOnMirror(req.target.vault_id);
     if (req.permissions.changes.empty()) throw Invalid("at least one permission is required");
     if (!rbac::fs::glob::Tokenizer::isValid(req.pattern)) throw Invalid("invalid override pattern '" + req.pattern + "'");
     const auto assignment = requireAssignment(req.target);
@@ -474,8 +588,10 @@ auditRbac(actor, "rbac.override.add", "added " + std::to_string(created.size()) 
 rbac::permission::Override updateVaultRoleOverride(const Actor& actor, const UpdateOverride& req) {
     const PolicyEpochBump bumpOnExit;
     requireActor(actor);
+    refusePeerOverrides(req.target);
     requireVaultRolePermission(actor, req.target, RolePerm::AssignOverride,
                                "you do not have permission to change overrides for this subject on this vault");
+    refuseOnMirror(req.target.vault_id);
     const auto assignment = requireAssignment(req.target);
     auto ov = db::query::rbac::permission::Override::get(req.override_id);
     if (!ov || ov->assignment_id != assignment->assignment_id)
@@ -497,8 +613,10 @@ auditRbac(actor, "rbac.override.update", "updated permission override " + std::t
 void removeVaultRoleOverride(const Actor& actor, const VaultSubject& target, const unsigned int overrideId) {
     const PolicyEpochBump bumpOnExit;
     requireActor(actor);
+    refusePeerOverrides(target);
     requireVaultRolePermission(actor, target, RolePerm::RevokeOverride,
                                "you do not have permission to remove overrides for this subject on this vault");
+    refuseOnMirror(target.vault_id);
     const auto assignment = requireAssignment(target);
     const auto ov = db::query::rbac::permission::Override::get(overrideId);
     if (!ov || ov->assignment_id != assignment->assignment_id)

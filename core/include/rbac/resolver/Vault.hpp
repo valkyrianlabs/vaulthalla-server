@@ -22,6 +22,7 @@
 #include "fs/model/Entry.hpp"
 #include "fs/model/Path.hpp"
 #include "rbac/fs/policy/Evaluator.hpp"
+#include "rbac/Mirrored.hpp"
 
 #include <filesystem>
 #include <memory>
@@ -198,9 +199,38 @@ namespace vh::rbac::resolver {
                     resolved.targetUser = vh::identities::manager().user(*targetSubjectId);
                 else if (*targetSubjectType == "group")
                     resolved.targetGroup = vh::identities::manager().group(*targetSubjectId);
+                else if (*targetSubjectType == "peer")
+                    resolved.targetPeer = *targetSubjectId;
             }
 
             return resolved;
+        }
+
+        // A vault this server holds as another server's copy (rbac/Mirrored.hpp): exactly what its core granted this
+        // server, for this server's super admins, and nothing for anyone else. No local source applies (vault roles,
+        // groups', the admin role's globals, ownership); no grant recorded, nobody. Filesystem actions go to the
+        // evaluator, which applies the same rule (and needs no owner: a mirrored vault's may be a remote account).
+        template<typename EnumT>
+        static bool hasOnMirror(const vault::Context<EnumT> &ctx, const vault::ResolvedContext &resolved,
+                                const vh::rbac::mirrored::Held &held) {
+            if (!ctx.user->isSuperAdmin() || !held.grant || !held.grant->role) return false;
+            for (const auto permission : collectPermissions(ctx)) {
+                if constexpr (VaultResolverMode<EnumT>::policy_only) {
+                    const fs::policy::Request req{.user = ctx.user, .action = permission, .vaultId = resolved.vault->id,
+                                                  .path = ctx.path, .entry = ctx.entry};
+                    const auto decision = fs::policy::Evaluator::evaluate(req);
+                    if (!decision.allowed) {
+                        if (!vault::QuietFilesystemDenials::engaged())
+                            log::Registry::auth()->warn("Filesystem permission denied on a mirrored vault. Context:\n{}",
+                                                        decision.toString());
+                        return false;
+                    }
+                } else {
+                    if (!VaultResolverTraits<EnumT>::direct(*held.grant->role).has(permission)) return false;
+                    if (!vault::ContextPolicy<EnumT>::validate(ctx.user, resolved, permission, ctx)) return false;
+                }
+            }
+            return true;
         }
 
     public:
@@ -209,6 +239,25 @@ namespace vh::rbac::resolver {
             if (!ctx.isValid()) return false;
             // A deactivated or deleted account (a tombstone still held somewhere) authorizes nothing.
             if (!ctx.user->authorizing()) return false;
+
+            // While no vault is held as another server's copy (every server that mirrors nothing) this costs one
+            // atomic load and everything below is as it always was. Otherwise the vault is resolved first, super
+            // admins included, so that a mirrored one answers from its grant alone.
+            if (vh::rbac::mirrored::any()) {
+                const auto resolved = resolveVaultContext(ctx.vault_id, ctx.path, ctx.entry, ctx.target_subject_type,
+                                                          ctx.target_subject_id, ctx.user);
+                if (resolved.vault)
+                    if (const auto held = vh::rbac::mirrored::find(resolved.vault->id))
+                        return hasOnMirror(ctx, resolved, *held);
+                if (ctx.user->isSuperAdmin()) return true;
+                if (!resolved.isValid()) {
+                    log::Registry::auth()->warn(
+                        "vh::rbac::resolver::Vault::resolveVaultContext(): Failed to resolve:\n{}", ctx.dump());
+                    return false;
+                }
+                return checkPermissions(ctx.user, resolved, ctx);
+            }
+
             if (ctx.user->isSuperAdmin()) return true;
 
             const auto resolved = resolveVaultContext(
