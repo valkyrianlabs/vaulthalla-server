@@ -5,10 +5,15 @@
 #include "log/Registry.hpp"
 #include "mirror/Contents.hpp"
 #include "mirror/follow/Protocol.hpp"
+#include "mirror/start/Start.hpp"
 #include "peer/Links.hpp"
 
+#include <paths.h>
+
 #include <algorithm>
+#include <cstdlib>
 #include <exception>
+#include <filesystem>
 #include <vector>
 
 namespace vh::mirror::follow {
@@ -175,6 +180,18 @@ StepResult Follower::step(const uint32_t vaultId, Transport& transport, const ap
     }
     if (mv->state != "live") return {.step = Step::Stopped, .detail = mv->state};
     if (!transport.connected(mv->peer_id)) return {.step = Step::Waiting, .detail = "link_down"};
+    // Piece A's start not complete yet (the core's begin has not arrived, so its core row may not exist): ask nothing,
+    // or the core's not_found would read as "the core is gone" and stop the vault for good.
+    if (!mv->copy_finished && vh::mirror::start::awaitingBegin(vaultId))
+        return {.step = Step::Waiting, .detail = "awaiting_begin"};
+    // Test instances only: VH_TEST_FAULT_DIR/mirror-copy-hold holds every first copy back (the Tier B drill's
+    // unfinished copy); never in a packaged daemon.
+    if (!mv->copy_finished && vh::paths::testMode)
+        if (const char* dir = std::getenv("VH_TEST_FAULT_DIR")) {
+            std::error_code ec;
+            if (std::filesystem::exists(std::filesystem::path(dir) / "mirror-copy-hold", ec))
+                return {.step = Step::Waiting, .detail = "copy_held_for_testing"};
+        }
     const auto uid = mq::MirrorVaults::vaultUidOf(vaultId);
     if (!uid) return {.step = Step::Gone};
     const auto deadline = SteadyClock::now() + kStepBudget;

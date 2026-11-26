@@ -1,4 +1,5 @@
 #include "sync/Local.hpp"
+#include "rbac/Mirrored.hpp"
 #include "concurrency/ThreadPoolManager.hpp"
 #include "concurrency/ThreadPool.hpp"
 #include "sync/Controller.hpp"
@@ -138,6 +139,12 @@ void Local::startTask() {
 
 void Local::processSharedOps() {
     struct NamedOp { const char* name; std::function<void()> fn; };
+
+    // A vault held here as another server's copy (a mirror, or an orphaned copy; rbac::mirrored) changes only by what
+    // its core's log says (design/peers/mirror.md "Background work on the mirror"): no trash purge, no at-rest repair,
+    // no key rotation here. A purge on the mirror would drop trashed files the core still holds, and the next group
+    // naming one of them would stop the vault as diverged.
+    if (engine && engine->vault && vh::rbac::mirrored::find(engine->vault->id)) return;
 
     const std::vector<NamedOp> ops = {
         {"repairAtRest", [this]{ repairAtRestOnce(); }},

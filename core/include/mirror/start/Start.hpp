@@ -133,6 +133,10 @@ void removeCopy(uint32_t vaultId);
 // answers from the start: true once its offer here is `started`, or when no offer of it is left (erring towards
 // "finished" errs towards keeping the copy). The lead rewires it to piece B's first-copy column at the merge.
 [[nodiscard]] bool firstCopyFinished(uint32_t vaultId);
+// The mirror holds the vault's keys and its row, and the core's begin has not arrived yet: the core may not have its
+// `core` row (startCore runs after the keys are answered, and takes as long as its baseline), so it answers a tree
+// request with not_found. The follower asks nothing until the begin (piece B treats not_found as "the core is gone").
+[[nodiscard]] bool awaitingBegin(uint32_t vaultId);
 // A super admin here removes an orphaned copy (ops::mirrors authorizes, with the data-destroy step-up). Audited
 // mirror.remove.
 void removeOrphaned(uint32_t vaultId, std::optional<uint32_t> actorId, const std::string& actorName);

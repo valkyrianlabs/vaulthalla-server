@@ -30,6 +30,7 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "mirror/Contents.hpp"
+#include "mirror/follow/Follower.hpp"
 #include "mirror/start/BackgroundContents.hpp"
 #include "mirror/start/Start.hpp"
 #include "ops/Error.hpp"
@@ -46,6 +47,7 @@
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
+#include "sync/Local.hpp"
 #include "vault/EncryptionManager.hpp"
 #include "vault/KeyAttestation.hpp"
 #include "vault/KeyCheck.hpp"
@@ -1167,6 +1169,66 @@ TEST_F(MirrorStartDbTest, DeletingAMirroredVaultIsRefusedUntilItsMirrorEnded) {
                          std::to_string(vaultId)),
                   "1");
     }
+}
+
+// ================================================================================== the join with piece B
+
+namespace {
+// The core as the follower reaches it: counts what it is asked, answers nothing.
+class CountingCore final : public vh::mirror::follow::Transport {
+public:
+    std::vector<std::string> asked;
+    bool connected(uint32_t) override { return true; }
+    std::optional<Answer> request(uint32_t, const std::string& command, const json&) override {
+        asked.push_back(command);
+        return std::nullopt;
+    }
+    bool notify(uint32_t, const std::string&, const json&) override { return true; }
+};
+}
+
+TEST_F(MirrorStartDbTest, TheFollowerAsksForTheTreeOnlyOnceTheCoresBeginArrived) {
+    // Found while building the wave 3 drill (by reading the join): the mirror's row exists from the keys on, the core's row only after the keys
+    // are answered and its baseline taken; a tree request in between got not_found, which the follower read as "the
+    // core is gone" and stopped the vault for good (expired, mirror_core_gone).
+    auto o = offeredAndAccepted();
+    (void)start::keysReceived(o.core, keysJson(o.offerUid, o.core, o.vaultUid, twoVersions()));
+    const auto vaultId = *MirrorStart::vaultWithUid(o.vaultUid);
+    EXPECT_TRUE(start::awaitingBegin(vaultId));
+    CountingCore core;
+    const auto before = vh::mirror::follow::Follower::instance()->step(vaultId, core);
+    EXPECT_EQ(before.step, vh::mirror::follow::Step::Waiting) << before.detail;
+    EXPECT_TRUE(core.asked.empty()) << "nothing asked before the begin";
+    EXPECT_EQ(MirrorVaults::get(vaultId)->state, "live");
+    (void)start::beginReceived(o.core, {{"offer_uid", o.offerUid}, {"vault_uid", vl::keykit::toBase32(o.vaultUid)},
+                                        {"term", 1}, {"grant", nullptr}});
+    EXPECT_FALSE(start::awaitingBegin(vaultId));
+    (void)vh::mirror::follow::Follower::instance()->step(vaultId, core);
+    ASSERT_FALSE(core.asked.empty());
+    EXPECT_EQ(core.asked.front(), "peer.mirror.tree") << "the first copy starts once the core has its row";
+}
+
+// ============================================================================ background work on the mirror
+
+TEST_F(MirrorStartDbTest, TheLocalSyncPassLeavesTheTrashOfAMirrorAndOfAnOrphanedCopyAlone) {
+    // Found while building the wave 3 drill (by reading the join): the mirror's local sync task purged its trash, so the next group naming a
+    // trashed file found nothing to compare and stopped the vault as diverged.
+    const auto core = newPeer(true);
+    const auto v = coreVault("trash");
+    const auto engine = runtime::Deps::get().storageManager->getEngine(v);
+    engine->remove("/doc.txt", superUser->id);
+    const auto trashed = [&] {
+        return scalar("SELECT count(*) FROM files_trashed WHERE deleted_at IS NULL AND vault_id = " + std::to_string(v));
+    };
+    ASSERT_EQ(trashed(), "1");
+    (void)MirrorVaults::startMirror(v, core.id);
+    (*std::make_shared<sync::Local>(engine))();
+    EXPECT_EQ(trashed(), "1") << "a mirror's trash changes only by its core's log";
+    (void)MirrorVaults::orphan(v);
+    (*std::make_shared<sync::Local>(engine))();
+    EXPECT_EQ(trashed(), "1") << "an orphaned copy is still another server's vault";
+    // (An ordinary vault's pass purges it: SyncPassSchedulingDb runs those, on the sync pools this suite doesn't start.)
+    (void)MirrorVaults::remove(v);
 }
 
 // ====================================================================================== background contents

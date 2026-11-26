@@ -9,6 +9,7 @@
 #include "db/query/vault/Key.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "log/Registry.hpp"
+#include "mirror/follow/Follower.hpp"
 #include "ops/Error.hpp"
 #include "peer/Keys.hpp"
 #include "runtime/Deps.hpp"
@@ -483,6 +484,8 @@ json beginReceived(const vh::peer::Record& from, const json& payload) {
     applyGrant(*vaultId, roleOf(payload.contains("grant") ? payload.at("grant") : json(nullptr)), from);
     if (offer.state == "installed") {
         (void)Q::transition(offer.id, {"installed"}, {.to = "started", .notify = false});
+        // The core has its row now: the follower may ask for the tree (it waited for this, awaitingBegin).
+        vh::mirror::follow::Follower::instance()->wake(*vaultId);
         audit::record({.action = "mirror.start", .vault_id = *vaultId,
                        .details = {{"peer", from.id}, {"node_id", from.node_id}, {"side", "mirror"},
                                    {"term", offer.term}}},
@@ -566,6 +569,13 @@ json cancelReceived(const vh::peer::Record& from, const json& payload) {
                   spdlog::level::warn);
     Service::instance()->wake();
     return {{"cancelled", true}, {"copy", copy}};
+}
+
+bool awaitingBegin(const uint32_t vaultId) {
+    const auto vault = vh::db::query::vault::Vault::getVault(vaultId);
+    if (!vault || !vault->uid) return false;
+    const auto offer = start_mirror_detail::Q::latestOffer(*vault->uid, "mirror");
+    return offer && offer->state == "installed" && offer->vault_id == vaultId;
 }
 
 bool firstCopyFinished(const uint32_t vaultId) {
