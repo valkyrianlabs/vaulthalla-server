@@ -40,6 +40,7 @@ UsageManager::UsageManager() {
     registerBook(connector_book::get(root_->weak_from_this()));
     registerBook(peer_book::get(root_->weak_from_this()));
     registerBook(audit_book::get(root_->weak_from_this()));
+    registerBook(health_book::get(root_->weak_from_this()));
     registerBook(recovery_book::get(root_->weak_from_this()));
     registerBook(recovery_book::getSnapshot(root_->weak_from_this()));
     registerBook(role::get(root_->weak_from_this()));

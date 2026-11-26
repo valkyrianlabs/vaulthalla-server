@@ -37,6 +37,7 @@ namespace cloud_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<Comm
 namespace connector_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 namespace peer_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 namespace audit_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
+namespace health_book { std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent); }
 // File recovery: `vh recovery …` (get), `vh snapshot …` (getSnapshot) and the `vh vault recovery …` subtree.
 namespace recovery_book {
 std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent);

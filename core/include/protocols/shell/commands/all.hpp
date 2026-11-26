@@ -24,6 +24,7 @@ void registerUpstreamCommands(const std::shared_ptr<Router>& r);
 void registerRecoveryCommands(const std::shared_ptr<Router>& r);
 void registerSnapshotCommands(const std::shared_ptr<Router>& r);
 void registerAuditCommands(const std::shared_ptr<Router>& r);
+void registerHealthCommands(const std::shared_ptr<Router>& r);
 void registerDeviceCommands(const std::shared_ptr<Router>& r);
 void registerPeerCommands(const std::shared_ptr<Router>& r);
 void registerCloudCommands(const std::shared_ptr<Router>& r);

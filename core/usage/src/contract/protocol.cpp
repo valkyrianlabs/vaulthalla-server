@@ -84,6 +84,12 @@ std::vector<Capability> capabilities() {
          .since = "1.17.0",
          .description = "An entry keeps its id across rename and move (ws, FUSE), children of a moved folder "
                         "included."},
+        {.name = "health.findings",
+         .since = "1.27.0",
+         .description = "Health findings carry a state operators set (health.findings.list; health.finding."
+                        "acknowledge, .silence and .unsilence with admin.stats.manage), and stats.dashboard.overview "
+                        "and .severity answer unattended_error_count and unattended_warning_count: the counts "
+                        "without acknowledged and silenced findings (design/health/findings.md)."},
         {.name = "http.upload.content",
          .since = "1.17.0",
          .description = "PUT /upload/content: a streaming conditional create (If-None-Match) or replace (If-Match) "

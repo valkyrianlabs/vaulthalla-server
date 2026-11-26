@@ -91,8 +91,8 @@ Expired rows and acknowledgements of cleared findings are removed by the same pa
 - **Reading** state and the catalog: `admin.stats.view`, as for the dashboard.
 - **Acknowledging, silencing and turning back on:** a new permission bit, `admin.stats.manage`
   (`StatsPermissions::Manage = 1 << 1`, appended; "Allows acknowledging and silencing health findings."). It
-  changes what every operator is told, so seeing the dashboard is not enough. Super admins always pass. Existing
-  roles keep what they have; the migration grants the bit to no role.
+  changes what every operator is told, so seeing the dashboard is not enough. The built-in `super_admin` role holds
+  it (the migration adds it there on upgraded installs); no other role gains it.
 - **A paired Desktop** acts as its approving user, by RBAC alone, as everywhere else.
 - **Remedies** need whatever the underlying command needs. Listing a remedy grants nothing.
 
@@ -175,7 +175,8 @@ add one through the side door.
 ## 9. Audit
 
 `health.finding.acknowledge`, `health.finding.silence`, `health.finding.unsilence` go to the audit trail through
-`vh::audit::record`, with the class, subject, the severity at the time, the expiry and the note. Expiry by time
+`vh::audit::record`, with the class, subject, the severity at the time, the expiry and whether a note was given. The
+note itself is free text and stays out of the trail, which never carries names. Expiry by time
 is not an event (nobody did it); the silence's own record carries when it ends.
 
 ## 10. Operator email

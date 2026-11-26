@@ -510,15 +510,22 @@ std::vector<WsModel> statsDashboardModels() {
 
     out.push_back(model("DashboardOverview",
         "The health dashboard (core/src/stats/model/DashboardOverview.cpp to_json).",
-        {str("overall_status"), statsUint("warning_count"), statsUint("error_count"), statsCheckedAt(),
+        {str("overall_status"), statsUint("warning_count"), statsUint("error_count"),
+         statsUint("unattended_warning_count",
+                   "Warnings no operator acknowledged or silenced (health.findings.list): what still asks for a person."),
+         statsUint("unattended_error_count"), statsCheckedAt(),
          objectArray("attention", "",
                      {str("code"), str("severity"), str("card_id"), str("title"), str("message"),
-                      statsNullable(str("href")), statsNullable(str("metric_key"))}),
+                      statsNullable(str("href")), statsNullable(str("metric_key")),
+                      str("state").oneOf({"active", "acknowledged", "silenced"}).desc(
+                          "What an operator said about the finding; the severity is never changed by it.")}),
          objectArray("sections", "DashboardSectionSummary"), objectArray("cards", "DashboardCardSummary")}));
 
     out.push_back(model("DashboardSeverity",
         "The overview's overall severity only (core/src/stats/model/DashboardOverview.cpp dashboardSeverityJson).",
-        {str("overall_status"), statsUint("error_count"), statsUint("warning_count"), statsCheckedAt()}));
+        {str("overall_status"), statsUint("error_count"), statsUint("warning_count"),
+         statsUint("unattended_error_count", "Errors no operator acknowledged or silenced."),
+         statsUint("unattended_warning_count"), statsCheckedAt()}));
 
     out.push_back(model("DashboardPreference",
         "A user's saved dashboard layout (core/src/stats/model/DashboardPreferences.cpp to_json).",

@@ -19,5 +19,6 @@ void checkRecoveryModels(Checker& c);
 void checkUpstreamModels(Checker& c);
 void checkDeviceModels(Checker& c);
 void checkVaultKeyModels(Checker& c);
+void checkHealthModels(Checker& c);
 
 }

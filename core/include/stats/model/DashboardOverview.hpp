@@ -54,6 +54,9 @@ struct DashboardAttentionItem {
     std::string message;
     std::optional<std::string> href;
     std::optional<std::string> metricKey;
+    // What an operator said about the finding (health::annotate): "active", "acknowledged" or "silenced". The
+    // severity above is never changed by it.
+    std::string state = "active";
 };
 
 struct DashboardCardRequest {
@@ -106,6 +109,10 @@ struct DashboardOverview {
     std::string overallStatus = "unknown";
     std::uint32_t warningCount = 0;
     std::uint32_t errorCount = 0;
+    // The counts without acknowledged and silenced findings: what still asks for a person (health::annotate). Until
+    // annotated they equal the counts above, so nothing reads as dealt with by default.
+    std::uint32_t unattendedWarningCount = 0;
+    std::uint32_t unattendedErrorCount = 0;
     std::uint64_t checkedAt = 0;
     std::vector<DashboardSectionSummary> sections;
     std::vector<DashboardCardSummary> cards;

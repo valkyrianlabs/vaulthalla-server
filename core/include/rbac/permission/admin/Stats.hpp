@@ -14,7 +14,10 @@ namespace vh::rbac::permission {
         enum class StatsPermissions : uint8_t {
             None = 0,
             View = 1 << 0,
-            All = View
+            // Acknowledging and silencing health findings (design/health/findings.md §4): it changes what every
+            // operator is told, so seeing the dashboard is not enough.
+            Manage = 1 << 1,
+            All = View | Manage
         };
     }
 
@@ -24,6 +27,7 @@ namespace vh::rbac::permission {
 
         static constexpr std::array entries{
             Entry{admin::StatsPermissions::View, "view", "Allows viewing server, daemon and system stats and the health dashboard."},
+            Entry{admin::StatsPermissions::Manage, "manage", "Allows acknowledging and silencing health findings."},
         };
     };
 
@@ -52,6 +56,7 @@ namespace vh::rbac::permission {
             [[nodiscard]] std::string toString(uint8_t indent) const override;
 
             [[nodiscard]] bool canView() const noexcept { return has(StatsPermissions::View); }
+            [[nodiscard]] bool canManage() const noexcept { return has(StatsPermissions::Manage); }
 
             static Stats None() {
                 Stats s;

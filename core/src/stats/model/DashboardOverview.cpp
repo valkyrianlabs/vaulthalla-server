@@ -1150,6 +1150,9 @@ DashboardOverview DashboardOverview::build(const DashboardOverviewRequest& reque
         for (const auto& warning : card.warnings) dashboardOverviewAddAttention(overview, card, warning);
     }
 
+    overview.unattendedErrorCount = overview.errorCount;
+    overview.unattendedWarningCount = overview.warningCount;
+
     if (overview.errorCount > 0) overview.overallStatus = "error";
     else if (overview.warningCount > 0) overview.overallStatus = "warning";
     else if (!sawVisibleStatus) overview.overallStatus = "unavailable";
@@ -1236,6 +1239,7 @@ void to_json(nlohmann::json& j, const DashboardAttentionItem& item) {
         {"message", item.message},
         {"href", dashboardOverviewNullable(item.href)},
         {"metric_key", dashboardOverviewNullable(item.metricKey)},
+        {"state", item.state},
     };
 }
 
@@ -1282,6 +1286,8 @@ nlohmann::json dashboardSeverityJson(const DashboardOverview& overview) {
         {"overall_status", overview.overallStatus},
         {"error_count", overview.errorCount},
         {"warning_count", overview.warningCount},
+        {"unattended_error_count", overview.unattendedErrorCount},
+        {"unattended_warning_count", overview.unattendedWarningCount},
         {"checked_at", overview.checkedAt},
     };
 }
@@ -1291,6 +1297,8 @@ void to_json(nlohmann::json& j, const DashboardOverview& overview) {
         {"overall_status", overview.overallStatus},
         {"warning_count", overview.warningCount},
         {"error_count", overview.errorCount},
+        {"unattended_warning_count", overview.unattendedWarningCount},
+        {"unattended_error_count", overview.unattendedErrorCount},
         {"checked_at", overview.checkedAt},
         {"attention", overview.attention},
         {"sections", overview.sections},

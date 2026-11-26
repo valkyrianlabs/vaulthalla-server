@@ -50,6 +50,9 @@ constexpr std::string_view kKeysReason =
 
 }
 
+// design/health/findings.md §7: an agent may read findings and may not change what operators are told.
+constexpr std::string_view kHealthReason = "whether a warning has been dealt with is decided by a human";
+
 const std::vector<Exclusion>& exclusions() {
     static const std::vector<Exclusion> list{
         {{"vault", "key", "export"}, kKeysReason},
@@ -67,6 +70,9 @@ const std::vector<Exclusion>& exclusions() {
         {{"vault", "remote", "attach"}, "where a vault's data is stored is decided by a human"},
         {{"vault", "remote", "detach"}, "where a vault's data is stored is decided by a human"},
         {{"vault", "remote", "access"}, "whether a vault may use its bucket is decided by a human"},
+        {{"health", "ack"}, kHealthReason},
+        {{"health", "silence"}, kHealthReason},
+        {{"health", "unsilence"}, kHealthReason},
         {{"secrets", "export"}, kKeysReason},
         {{"secrets", "update"}, "internal secrets are changed by the operator, never by an agent"},
         {{"secrets", "master", "rotate"}, kMasterReason},

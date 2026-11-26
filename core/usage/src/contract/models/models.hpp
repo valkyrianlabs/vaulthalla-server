@@ -28,5 +28,6 @@ std::vector<WsModel> recoveryModels();
 std::vector<WsModel> upstreamModels();
 std::vector<WsModel> deviceModels();
 std::vector<WsModel> vaultKeyModels();
+std::vector<WsModel> healthModels();
 
 }
