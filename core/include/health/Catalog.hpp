@@ -20,10 +20,10 @@ struct Remedy {
     std::string id;                      // stable within its class
     std::string label;
     std::string kind;                    // "open" | "command"
-    std::optional<std::string> href;     // open: the console's route ("/cost#budget-alerts")
-    std::optional<std::string> command;  // command: an existing ws command
+    std::optional<std::string> href{};     // open: the console's route ("/cost#budget-alerts")
+    std::optional<std::string> command{};  // command: an existing ws command
     nlohmann::json payload = nullptr;    // command: its payload
-    std::optional<std::string> effect;   // command: read | write | destructive (the ws book's)
+    std::optional<std::string> effect{};   // command: read | write | destructive (the ws book's)
 };
 
 struct FindingClass {
@@ -32,7 +32,7 @@ struct FindingClass {
     std::string title;
     std::string maxSeverity;  // the worst severity the class is raised with: "warning" | "error"
     bool notifies = true;
-    std::vector<Remedy> remedies;
+    std::vector<Remedy> remedies{};
 };
 
 [[nodiscard]] const std::vector<FindingClass>& catalog();

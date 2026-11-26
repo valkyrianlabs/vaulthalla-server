@@ -25,11 +25,11 @@ struct Mark {
     std::string subject;   // "" for the whole server
     std::string state;     // "acknowledged" | "silenced"
     std::string severity;  // the class's severity when the mark was set: "warning" | "error"
-    std::optional<std::uint32_t> setBy;
+    std::optional<std::uint32_t> setBy{};
     std::string setByName;
     std::uint64_t setAt = 0;                 // epoch seconds
-    std::optional<std::uint64_t> expiresAt;  // epoch seconds; never for an acknowledgement
-    std::optional<std::string> note;
+    std::optional<std::uint64_t> expiresAt{};  // epoch seconds; never for an acknowledgement
+    std::optional<std::string> note{};
 };
 
 // A finding as a card raised it.
@@ -40,14 +40,14 @@ struct Active {
     std::string severity;  // "warning" | "error"
     std::string title;     // the card's
     std::string message;
-    std::optional<std::string> href;
-    std::optional<std::string> metricKey;
+    std::optional<std::string> href{};
+    std::optional<std::string> metricKey{};
 };
 
 struct Finding {
     Active raised;
     std::string state = "active";  // "active" | "acknowledged" | "silenced"
-    std::optional<Mark> mark;      // the mark behind `state`, when it isn't "active"
+    std::optional<Mark> mark{};      // the mark behind `state`, when it isn't "active"
 };
 
 using Key = std::pair<std::string, std::string>;  // class, subject
@@ -79,8 +79,8 @@ struct Snapshot {
     std::uint32_t unattendedErrorCount = 0;
     std::uint32_t unattendedWarningCount = 0;
     std::uint64_t checkedAt = 0;
-    std::vector<Finding> findings;
-    std::vector<Mark> silences;
+    std::vector<Finding> findings{};
+    std::vector<Mark> silences{};
 };
 
 // The findings of an overview as `resolve` takes them.
