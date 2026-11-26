@@ -141,9 +141,9 @@ void Local::processSharedOps() {
     struct NamedOp { const char* name; std::function<void()> fn; };
 
     // A vault held here as another server's copy (a mirror, or an orphaned copy; rbac::mirrored) changes only by what
-    // its core's log says (design/peers/mirror.md "Background work on the mirror"): no trash purge, no at-rest repair,
-    // no key rotation here. A purge on the mirror would drop trashed files the core still holds, and the next group
-    // naming one of them would stop the vault as diverged.
+    // its core's log says (design/peers/mirror.md "Background work on the mirror"): none of this pass's jobs that
+    // change content run here (the at-rest repair re-seals files, the trash purge, key rotation). A file re-sealed here
+    // would carry a generation the core never wrote, and the next group naming it would stop the vault as diverged.
     if (engine && engine->vault && vh::rbac::mirrored::find(engine->vault->id)) return;
 
     const std::vector<NamedOp> ops = {

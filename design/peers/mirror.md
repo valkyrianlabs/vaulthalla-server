@@ -526,10 +526,12 @@ building (owner's instruction to build without waiting for review):
   busy. It runs nothing with the link down or the switch off.
 
 **What still treats the mirror's vault as an ordinary local vault** (found while building; the write gate and the
-background-job skips are wave 4): a super admin with a granted role that writes can write through every surface (no
-gate yet); the sync controller runs the local task (FSTask) for it on its interval; local versioning and its retention
-(`recovery/local/Versions.cpp`) run on its writes; the format conversion service would visit it (a mirror holds only
-VHF1, so it finds nothing). `storage::Manager::removeVault` itself (the trusted primitive behind rollbacks and the
+remaining background-job skips are wave 4): a super admin with a granted role that writes can write through every
+surface (no gate yet; a reader grant is refused writes by RBAC, `vhh drill peers` 7f); local versioning and its
+retention (`recovery/local/Versions.cpp`) run on its writes; the format conversion service would visit it (a mirror
+holds only VHF1, so it finds nothing). The local sync task (FSTask) now runs none of its content-changing jobs (the
+at-rest repair, the trash purge, rotation) on a vault held as another server's copy, mirror or orphaned (wave 3 join,
+`MirrorStartDbTest.TheLocalSyncPassLeavesTheTrashOfAMirrorAndOfAnOrphanedCopyAlone`). `storage::Manager::removeVault` itself (the trusted primitive behind rollbacks and the
 removals above) has no mirror check.
 
 ### As built: following the core (phase 2 wave 3 piece B, migration 164)
@@ -657,7 +659,24 @@ without waiting for review); each is listed for confirmation in the hand-off:
   (known limit, as before) (`AcknowledgementsCompareDigestsAndRetentionFollowsThem`).
 
 Not built here: resynchronising a diverged or expired vault, the strict-mode gate (a local write on the mirror is not
-refused yet), submitting the mirror's changes, history. The two-daemon proof needs piece A and is the lead's.
+refused yet), submitting the mirror's changes, history.
+
+**At the join with piece A** (wave 3 merge, 2026-11-26):
+
+- **The follower waits for the core's begin.** The mirror's row exists from the keys step on; the core's `core` row
+  only after the keys are answered and `startCore` took its baseline (seconds for a large vault). A tree request in
+  between got `not_found`, which the follower reads as "the core is gone" and stops the vault for good
+  (`mirror_core_gone`). It now asks nothing while piece A's offer for the vault is still `installed`
+  (`mirror::start::awaitingBegin`), and the begin wakes it (`MirrorStartDbTest.TheFollowerAsksForTheTreeOnlyOnceTheCoresBeginArrived`).
+- **`firstCopyFinished`** (piece A's ending rule) answers from `copy_finished`: no row or `orphaned`, true.
+- **Test instances only** (`paths::testMode`, `VH_TEST_FAULT_DIR`): `mirror-copy-hold` holds every first copy back
+  (`Follower::step` answers Waiting) and `mirror-contents-hold` holds background fetching (`contents::fetchOutstanding`
+  fetches nothing; a person's open is not held), so `vhh drill peers` can see an empty vault after the begin, an open
+  fetched ahead of the queue, and an unfinished copy ended. Never in a packaged daemon.
+- **The two-daemon proof** is `vhh drill peers` steps 7 and 8 (above): a whole mirror and its ending, nothing written
+  by hand. Restore and purge have no person's command on a local vault (the purge is a bucket vault's pass, a restore
+  the manifest applier's), so the drill does not do them; `MirrorFollowDbTest` applies both from a real core's log.
+  A single-group swap needs a rename exchange, which the mount does not offer: the drill swaps with three renames.
 
 ### Key rotation
 

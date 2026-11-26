@@ -1188,7 +1188,8 @@ public:
 }
 
 TEST_F(MirrorStartDbTest, TheFollowerAsksForTheTreeOnlyOnceTheCoresBeginArrived) {
-    // Found while building the wave 3 drill (by reading the join): the mirror's row exists from the keys on, the core's row only after the keys
+    // Found while building the wave 3 drill (by reading the join): the mirror's row exists from the keys on, the core's
+    // row only after the keys
     // are answered and its baseline taken; a tree request in between got not_found, which the follower read as "the
     // core is gone" and stopped the vault for good (expired, mirror_core_gone).
     auto o = offeredAndAccepted();
@@ -1211,8 +1212,9 @@ TEST_F(MirrorStartDbTest, TheFollowerAsksForTheTreeOnlyOnceTheCoresBeginArrived)
 // ============================================================================ background work on the mirror
 
 TEST_F(MirrorStartDbTest, TheLocalSyncPassLeavesTheTrashOfAMirrorAndOfAnOrphanedCopyAlone) {
-    // Found while building the wave 3 drill (by reading the join): the mirror's local sync task purged its trash, so the next group naming a
-    // trashed file found nothing to compare and stopped the vault as diverged.
+    // The design's rule ("Background work on the mirror"), enforced while building the wave 3 drill: the local sync
+    // pass runs none of its content-changing jobs (the at-rest repair, the trash purge, rotation) on a vault held here
+    // as another server's copy. Shown with the trash (rows the pass would end on a vault whose engine purges).
     const auto core = newPeer(true);
     const auto v = coreVault("trash");
     const auto engine = runtime::Deps::get().storageManager->getEngine(v);
@@ -1227,7 +1229,8 @@ TEST_F(MirrorStartDbTest, TheLocalSyncPassLeavesTheTrashOfAMirrorAndOfAnOrphaned
     (void)MirrorVaults::orphan(v);
     (*std::make_shared<sync::Local>(engine))();
     EXPECT_EQ(trashed(), "1") << "an orphaned copy is still another server's vault";
-    // (An ordinary vault's pass purges it: SyncPassSchedulingDb runs those, on the sync pools this suite doesn't start.)
+    // (An ordinary vault's pass purges it: SyncPassSchedulingDb runs those, on the sync pools this suite doesn't
+    // start.)
     (void)MirrorVaults::remove(v);
 }
 

@@ -741,7 +741,12 @@ the log are piece B. Full text: mirror.md "As built: starting a mirror". Experim
   `ObjectStore::deleteBucket`: `vault_mirrored`, `vault_orphaned_copy`).
 - **Rotation guard** (`mirror/start/Guard.hpp`): `refuseIfMirrored` in `prepare_key_rotation` and `mintSalvageKey`
   (`vault_mirrored`), `vh vault keys rotate` reports it per vault.
-- Tests: `MirrorStartDbTest.*` (`test_mirror_start_db.cpp`); Tier B `vhh drill peers` step 7.
+- **At the join with piece B:** the follower asks nothing while the mirror's offer is `installed`
+  (`mirror::start::awaitingBegin`; the begin wakes it), since the core's row comes after the keys; `firstCopyFinished`
+  reads `copy_finished`; the local sync task (FSTask) skips its content-changing jobs on a vault `rbac::mirrored` holds.
+  Test instances only: `VH_TEST_FAULT_DIR/mirror-copy-hold` and `mirror-contents-hold` (the drill's holds).
+- Tests: `MirrorStartDbTest.*` (`test_mirror_start_db.cpp`); Tier B `vhh drill peers` steps 7 (a whole mirror) and 8
+  (ending it).
 
 ### Super-admin initial credential
 
