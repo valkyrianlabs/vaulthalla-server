@@ -457,6 +457,14 @@ bool MirrorVaults::recordAcknowledged(const uint32_t vaultId, const Position at)
                         pqxx::params{vaultId, static_cast<int64_t>(at.term), static_cast<int64_t>(at.seq)})
                    .affected_rows() > 0;
     });
+
+bool MirrorVaults::orphan(const uint32_t vaultId) {
+    return mirrorAccessRepublished(Transactions::exec("mirror::MirrorVaults::orphan", [&](pqxx::work& txn) {
+        return txn.exec("UPDATE mirror_vault SET role = 'orphaned', updated_at = CURRENT_TIMESTAMP "
+                        "WHERE vault_id = $1 AND role = 'mirror'",
+                        pqxx::params{vaultId})
+                   .affected_rows() > 0;
+    }));
 }
 
 }

@@ -272,6 +272,13 @@ bool Router::isPeerWireCommand(const std::string_view command) {
         std::string_view{"peer.endpoints"},
         std::string_view{"peer.identity.rotate"},
         std::string_view{"peer.unlinked"},
+        // Mirror phase 2 wave 3, piece A: starting a mirror (handler/Mirrors.hpp).
+        std::string_view{"peer.mirror.offer"},
+        std::string_view{"peer.mirror.answer"},
+        std::string_view{"peer.mirror.keys"},
+        std::string_view{"peer.mirror.begin"},
+        std::string_view{"peer.mirror.grant"},
+        std::string_view{"peer.mirror.cancel"},
         // The server mirror's data plane (wave 3 piece B; handler/MirrorFollow.hpp).
         std::string_view{"peer.mirror.tree"},
         std::string_view{"peer.mirror.log"},
@@ -303,7 +310,7 @@ bool Router::isRelayedReadCommand(const std::string_view command) {
 }
 
 bool Router::isScopedDeviceForbidden(const std::string_view command) {
-    for (const std::string_view prefix : {"device.pair", "device.approval.", "device.backup.grant.", "connector.", "peer."})
+    for (const std::string_view prefix : {"device.pair", "device.approval.", "device.backup.grant.", "connector.", "peer.", "mirror."})
         if (command.starts_with(prefix)) return true;
     constexpr std::array exact{std::string_view{"vault.keys.export"}, std::string_view{"vault.keys.export.confirm"},
                                std::string_view{"vault.keys.import"}, std::string_view{"device.scope.set"}};

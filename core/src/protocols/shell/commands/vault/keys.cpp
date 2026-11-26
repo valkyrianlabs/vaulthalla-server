@@ -1,3 +1,4 @@
+#include "mirror/start/Guard.hpp"
 #include "protocols/shell/commands/vault.hpp"
 #include "protocols/shell/util/argsHelpers.hpp"
 #include "protocols/shell/commands/helpers.hpp"
@@ -361,6 +362,11 @@ static CommandResult handle_rotate_vault_keys(const CommandCall& call) {
         if (!alreadyPending && ::vh::sync::replicas::replicated(engine->vault->id))
             return "Key rotation for " + label + " is refused: the vault is replicated; " +
                    std::string(::vh::sync::replicas::kRotateHow) + ".\n";
+        // A mirrored vault (either server) until rotation over the link is built (design/peers/mirror.md).
+        if (!alreadyPending && ::vh::mirror::start::mirroredOrStarting(engine->vault->id))
+            return "Key rotation for " + label + " is refused (vault_mirrored): the vault is mirrored with a linked "
+                   "server, and rotation over the link is not built yet; cancel the mirror first (vh mirror cancel " +
+                   std::to_string(engine->vault->id) + ").\n";
         // A new key version must not seal content before its recovery envelopes reach the bucket a remote attach is
         // filling: the rotation waits for the attach (vault/RemoteAttach.hpp) and starts when it ends.
         // A vault whose remote is read-only or unavailable can't put the new version's envelopes or re-sealed objects

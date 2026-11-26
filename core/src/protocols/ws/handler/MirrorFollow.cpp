@@ -1,5 +1,6 @@
 #include "protocols/ws/handler/MirrorFollow.hpp"
 
+#include "db/query/peer/Peer.hpp"
 #include "mirror/follow/Protocol.hpp"
 #include "ops/Error.hpp"
 #include "ops/Peers.hpp"
@@ -19,6 +20,9 @@ uint32_t mirrorFollowCaller(const std::shared_ptr<Session>& session) {
     if (!session || !session->isPeerSession() || !session->peerPrincipal() || session->peerPrincipal()->pairing ||
         session->peerPrincipal()->peer_id == 0)
         throw ops::Denied("only a linked server may ask this");
+    // The link still live (the starting half's wire handlers check the same): an unlinked server asks nothing more.
+    const auto row = vh::db::query::peer::Peers::byId(session->peerPrincipal()->peer_id);
+    if (!row || row->revoked()) throw ops::Refused("peer_revoked", "this link is unlinked");
     return session->peerPrincipal()->peer_id;
 }
 

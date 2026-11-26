@@ -94,4 +94,18 @@ Card localCard() {
     return card;
 }
 
+vl::keykit::kev1::Unwrapped unwrapVaultKey(const std::span<const uint8_t> envelope, const vl::keykit::Uid& vaultUid) {
+    if (sodium_init() < 0) throw std::runtime_error("libsodium cannot initialize");
+    // The key the card carried and the other server wrapped to: only an existing one (never created here: a missing
+    // key is MasterSecretLost).
+    vh::crypto::secrets::KeyProvider provider(wrapSlotName());
+    provider.initGuarded([]() -> std::optional<std::string> {
+        return std::string("a vault key arrived for this server's peer wrap key");
+    });
+    const auto secret = provider.getMasterKey();
+    if (secret.size() != crypto_scalarmult_SCALARBYTES)
+        throw std::runtime_error("the sealed peer wrap key is not a 32-byte X25519 key");
+    return vl::keykit::kev1::unwrap(envelope, secret, vl::keykit::kev1::Suite::X25519, vaultUid);
+}
+
 }

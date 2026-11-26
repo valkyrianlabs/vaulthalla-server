@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'aada0d38af88443b4b1643e68e3a34f5704454e231595697a37870ceb35ab1ce'
+export const WS_CONTRACT_HASH = '7519dab3e9e9ec1728391313e2b75f7f58a27855188b698d0613055a41617d97'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
@@ -5483,6 +5483,363 @@ export interface WsContract {
     }
   }
   /**
+   * Accept an offer (super admins): checked again (mirror_vault_exists, mirror_name_taken, mirror_no_space,
+   * history_not_supported), then the core is told and sends the keys.
+   */
+  'mirror.accept': {
+    payload: { offer: number | string }
+    response: {
+      offer: {
+        id: number
+        offer_uid: string
+        side: 'core' | 'mirror'
+        peer_id: number
+        vault_uid: string
+        vault_id: number | null
+        core_vault_id: number
+        term: number
+        name: string
+        description: string
+        quota: number
+        size_bytes: number
+        file_count: number
+        history: boolean
+        owner: { node: string; id: number; name: string }
+        role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned'
+        step: string
+        told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | null
+        reason: string | null
+        detail: string | null
+        attempts: number
+        last_error: string | null
+        created_at: number
+        updated_at: number
+        expires_at: number
+        finished_at: number | null
+      }
+    }
+  }
+  /**
+   * Whether this server accepts every vault a linked server offers without asking (default off). Super
+   * admins; audited mirror.accept_all.set.
+   */
+  'mirror.accept_all.set': {
+    payload: { peer: string; enabled: boolean }
+    response: {
+      peer: { id: number; node_id: string; name: string }
+      enabled: boolean
+      set_by: number | null
+      set_at: number | null
+    }
+  }
+  /**
+   * Start mirroring one of this server's vaults to a linked server (this server stays its core). Every
+   * precondition refuses with its own code: mirror_already, mirror_start_running, vault_replicated,
+   * vault_attach_running, vault_detach_running, layout_migration_running, key_rotation_running,
+   * key_salvage_running, vault_pending_deletion, vault_unavailable, legacy_content, key_version_missing,
+   * key_version_unattested, trashed_without_uid, contents_not_held, peer_not_linked, peer_link_down. Then the
+   * offer goes to the linked server. A super admin, or someone with the vault's admin Edit and
+   * vault.roles.assign on it.
+   */
+  'mirror.add': {
+    payload: { vault_id: number; peer: string }
+    response: {
+      offer: {
+        id: number
+        offer_uid: string
+        side: 'core' | 'mirror'
+        peer_id: number
+        vault_uid: string
+        vault_id: number | null
+        core_vault_id: number
+        term: number
+        name: string
+        description: string
+        quota: number
+        size_bytes: number
+        file_count: number
+        history: boolean
+        owner: { node: string; id: number; name: string }
+        role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned'
+        step: string
+        told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | null
+        reason: string | null
+        detail: string | null
+        attempts: number
+        last_error: string | null
+        created_at: number
+        updated_at: number
+        expires_at: number
+        finished_at: number | null
+      }
+    }
+  }
+  /**
+   * End a vault's mirror at any step. On the core: the core row and the log go at once and the mirror is told
+   * (queued while the link is down; dropped if the servers are unlinked first), with remove_copy. On the
+   * mirror (super admins): a start that has not completed is removed here and the core is told; a completed
+   * one is refused (mirror_detach_required); an orphaned copy is removed. Name the vault, or the offer when
+   * its vault doesn't exist here yet.
+   */
+  'mirror.cancel': {
+    payload: { vault_id?: number; offer?: number | string; remove_copy?: boolean }
+    response: {
+      side: 'core' | 'mirror'
+      vault_id: number | null
+      removed: boolean
+      remove_copy: boolean
+      offer: {
+        id: number
+        offer_uid: string
+        side: 'core' | 'mirror'
+        peer_id: number
+        vault_uid: string
+        vault_id: number | null
+        core_vault_id: number
+        term: number
+        name: string
+        description: string
+        quota: number
+        size_bytes: number
+        file_count: number
+        history: boolean
+        owner: { node: string; id: number; name: string }
+        role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned'
+        step: string
+        told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | null
+        reason: string | null
+        detail: string | null
+        attempts: number
+        last_error: string | null
+        created_at: number
+        updated_at: number
+        expires_at: number
+        finished_at: number | null
+      } | null
+    }
+  }
+  /**
+   * Decline an offer (super admins); the core is told.
+   */
+  'mirror.decline': {
+    payload: { offer: number | string }
+    response: {
+      offer: {
+        id: number
+        offer_uid: string
+        side: 'core' | 'mirror'
+        peer_id: number
+        vault_uid: string
+        vault_id: number | null
+        core_vault_id: number
+        term: number
+        name: string
+        description: string
+        quota: number
+        size_bytes: number
+        file_count: number
+        history: boolean
+        owner: { node: string; id: number; name: string }
+        role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned'
+        step: string
+        told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | null
+        reason: string | null
+        detail: string | null
+        attempts: number
+        last_error: string | null
+        created_at: number
+        updated_at: number
+        expires_at: number
+        finished_at: number | null
+      }
+    }
+  }
+  /**
+   * One vault's mirror: role, linked server, state, grant, and what step a start is at. Super admins; on the
+   * core also the vault's admin View.
+   */
+  'mirror.get': {
+    payload: { vault_id: number }
+    response: {
+      vault: {
+        vault_id: number
+        vault_name: string
+        role: 'core' | 'mirror' | 'orphaned' | 'starting' | 'none'
+        peer: { id: number; node_id: string; name: string; revoked: boolean } | null
+        term: number | null
+        last_seq: number | null
+        state: 'live' | 'paused' | 'diverged' | null
+        grant: {
+          role_name: string
+          files: number
+          directories: number
+          sync: number
+          roles: number
+          granted_by_node: string
+          granted_at: number
+        } | null
+        acked: { term: number; seq: number } | null
+        created_at: number | null
+        start: {
+          id: number
+          offer_uid: string
+          side: 'core' | 'mirror'
+          peer_id: number
+          vault_uid: string
+          vault_id: number | null
+          core_vault_id: number
+          term: number
+          name: string
+          description: string
+          quota: number
+          size_bytes: number
+          file_count: number
+          history: boolean
+          owner: { node: string; id: number; name: string }
+          role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+          state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned'
+          step: string
+          told: boolean
+          remove_copy: boolean
+          copy: 'removed' | 'kept' | 'none' | null
+          reason: string | null
+          detail: string | null
+          attempts: number
+          last_error: string | null
+          created_at: number
+          updated_at: number
+          expires_at: number
+          finished_at: number | null
+        } | null
+      }
+    }
+  }
+  /**
+   * Whether this server keeps the vaults a linked server (their core) removes: a cancel that asks to remove a
+   * finished copy leaves it here as an orphaned copy instead (default off). Super admins; audited
+   * mirror.keep_removed.set.
+   */
+  'mirror.keep_removed.set': {
+    payload: { peer: string; enabled: boolean }
+    response: {
+      peer: { id: number; node_id: string; name: string }
+      enabled: boolean
+      set_by: number | null
+      set_at: number | null
+    }
+  }
+  /**
+   * Every mirrored vault here (this server's role, the linked server, the grant) and every start in progress
+   * (role starting). Super admins.
+   */
+  'mirror.list': {
+    payload: null
+    response: {
+      vaults: {
+        vault_id: number
+        vault_name: string
+        role: 'core' | 'mirror' | 'orphaned' | 'starting' | 'none'
+        peer: { id: number; node_id: string; name: string; revoked: boolean } | null
+        term: number | null
+        last_seq: number | null
+        state: 'live' | 'paused' | 'diverged' | null
+        grant: {
+          role_name: string
+          files: number
+          directories: number
+          sync: number
+          roles: number
+          granted_by_node: string
+          granted_at: number
+        } | null
+        acked: { term: number; seq: number } | null
+        created_at: number | null
+        start: {
+          id: number
+          offer_uid: string
+          side: 'core' | 'mirror'
+          peer_id: number
+          vault_uid: string
+          vault_id: number | null
+          core_vault_id: number
+          term: number
+          name: string
+          description: string
+          quota: number
+          size_bytes: number
+          file_count: number
+          history: boolean
+          owner: { node: string; id: number; name: string }
+          role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+          state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned'
+          step: string
+          told: boolean
+          remove_copy: boolean
+          copy: 'removed' | 'kept' | 'none' | null
+          reason: string | null
+          detail: string | null
+          attempts: number
+          last_error: string | null
+          created_at: number
+          updated_at: number
+          expires_at: number
+          finished_at: number | null
+        } | null
+      }[]
+    }
+  }
+  /**
+   * Offers linked servers made this server that wait for a super admin's answer.
+   */
+  'mirror.pending': {
+    payload: null
+    response: {
+      offers: {
+        id: number
+        offer_uid: string
+        side: 'core' | 'mirror'
+        peer_id: number
+        vault_uid: string
+        vault_id: number | null
+        core_vault_id: number
+        term: number
+        name: string
+        description: string
+        quota: number
+        size_bytes: number
+        file_count: number
+        history: boolean
+        owner: { node: string; id: number; name: string }
+        role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned'
+        step: string
+        told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | null
+        reason: string | null
+        detail: string | null
+        attempts: number
+        last_error: string | null
+        created_at: number
+        updated_at: number
+        expires_at: number
+        finished_at: number | null
+      }[]
+    }
+  }
+  /**
    * Where the sender can be reached (its device listener's advertisement); answers the receiver's. Each side
    * stores what it is told.
    */
@@ -5660,92 +6017,98 @@ export interface WsContract {
     }
   }
   /**
-   * The mirror applied everything through (term, seq) and its digest there is `digest`. The core compares it
-   * with its own: equal, the acknowledgement is recorded (retention may pass it, the baseline is dropped);
-   * different, the vault stops as diverged on both servers.
+   * The mirror's decision on an offer: accepted (the core then sends the keys) or declined with a reason.
+   * Answers the core's state of the offer.
    */
-  'peer.mirror.ack': {
-    payload: { vault_uid: string; term: number; seq: number; digest: string; entries: number }
-    response: {
-      known: boolean
-      match: boolean
-      recorded: boolean
-      core_digest: string | null
-      core_entries: number | null
+  'peer.mirror.answer': {
+    payload: { offer_uid: string; decision: 'accepted' | 'declined'; reason?: string; detail?: string }
+    response: { state: string }
+  }
+  /**
+   * The core started following the vault (its core row exists): the mirror's start is complete, and the grant
+   * comes with it (null: nothing granted).
+   */
+  'peer.mirror.begin': {
+    payload: {
+      offer_uid: string
+      vault_uid: string
+      term: number
+      grant: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
     }
+    response: { started: boolean }
   }
   /**
-   * Whole groups of the core's log after (term, seq), at most 2,000 rows and 768 KiB; a single group larger
-   * than that comes in parts (part, asked again with the group's txid and the last seq held) and is applied
-   * whole. expired below retention or when the vault is no longer the core's.
+   * Either side cancels a start, or the core ends a mirror (remove_copy: it asks the mirror to remove its
+   * copy). The core drops its core row and log. The mirror removes a copy whose first copy isn't finished; a
+   * finished one it removes when asked and its keep setting is off, and otherwise keeps orphaned (read-only,
+   * the last grant kept). Answers what it did.
    */
-  'peer.mirror.log': {
-    payload: { vault_uid: string; term: number; seq: number; part?: { txid: number; after_seq: number } }
-    response: {
-      expired?: boolean
-      groups?: ({
-        term: number
-        txid: number
-        first_seq: number
-        last_seq: number
-        rows: ({
-          seq: number
-          op: 'upsert' | 'move' | 'trash' | 'restore' | 'purge' | 'delete' | 'vault' | 'key' | 'history'
-          uid: string | null
-          type: string | null
-          state: object
-          entry_hash: string | null
-          prev_hash: string | null
-          actor: { node: string; id: number } | null
-        })[]
-      })[]
-      last?: { term: number; seq: number }
-      more?: boolean
-      part?: {
-        term: number
-        txid: number
-        first_seq: number
-        last_seq: number
-        rows: ({
-          seq: number
-          op: 'upsert' | 'move' | 'trash' | 'restore' | 'purge' | 'delete' | 'vault' | 'key' | 'history'
-          uid: string | null
-          type: string | null
-          state: object
-          entry_hash: string | null
-          prev_hash: string | null
-          actor: { node: string; id: number } | null
-        })[]
-        complete: boolean
-      }
-      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped'
+  'peer.mirror.cancel': {
+    payload: { offer_uid?: string | null; vault_uid: string; reason?: string; remove_copy?: boolean }
+    response: { cancelled: boolean; copy: 'removed' | 'kept' | 'none' }
+  }
+  /**
+   * What the core grants the mirror server for a vault now (its role's name and actual permissions; null:
+   * nothing). Sent at begin, on every link-up and whenever it changes. Kept only for a vault the sender is
+   * the core of (else not_found).
+   */
+  'peer.mirror.grant': {
+    payload: {
+      vault_uid: string
+      grant: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
     }
+    response: { recorded: boolean }
   }
   /**
-   * The core numbered groups of the vault through (term, seq): the mirror's follower looks now. Coalesced,
-   * never waited for; a lost one is harmless (the follower also polls).
+   * Every key version the vault needs: each a KEV1 envelope (suite X25519) to the receiver's peer wrap key,
+   * the core's key check over its vault id, and the core's attestation. The receiver proves every version
+   * against the attestation keys it pinned at pairing (vault::recover::prove); one unprovable version refuses
+   * the start (mirror_keys_refused) and nothing is written. Else it creates the vault (the core's uid and
+   * root uid), seals the keys under its own vault master with their origin, writes its mirror row, and
+   * answers (the acknowledgement). Again after that: the same answer.
    */
-  'peer.mirror.notify': {
-    payload: { vault_uid: string; term: number; seq: number }
-    response: Record<string, never>
+  'peer.mirror.keys': {
+    payload: {
+      offer_uid: string
+      vault_uid: string
+      core_vault_id: number
+      versions: {
+        version: number
+        current: boolean
+        envelope: string
+        key_check: string
+        attestation: { key_id: number; signature: string; public_key?: string }
+      }[]
+    }
+    response: { vault_uid: string; installed: boolean }
   }
   /**
-   * The mirror's first copy: a page of the core's tree as of its baseline (the state documents of the
-   * replication log, a folder before what is under it, trashed files last), after `after`. expired once the
-   * baseline is gone (the mirror acknowledged it).
+   * The core offers a vault: its uid (base32), its id on the core, its root folder's uid, the term, name,
+   * description, quota, size, file count, history (false), its owner (home node, id there, name) and the role
+   * it proposes. The receiver stores it (pending, or accepted when its link accepts every vault from the
+   * sender, or declined at once with a reason) and answers its state; the decision follows as
+   * peer.mirror.answer.
    */
-  'peer.mirror.tree': {
-    payload: { vault_uid: string; after?: number }
+  'peer.mirror.offer': {
+    payload: {
+      offer_uid: string
+      vault_uid: string
+      core_vault_id: number
+      root_uid: string
+      term: number
+      name: string
+      description?: string
+      quota: number
+      size_bytes: number
+      file_count: number
+      history: boolean
+      owner: { node: string; id: number; name?: string }
+      role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+      expires_at?: number
+    }
     response: {
-      expired?: boolean
-      baseline?: { term: number; seq: number }
-      digest?: string
-      entries?: number
-      rows?: number
-      vault?: object
-      items?: ({ ord: number; state: object })[]
-      more?: boolean
-      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped'
+      offer_uid: string
+      state: 'pending' | 'accepted' | 'declined' | 'installed' | 'started' | 'cancelled' | 'expired' | 'failed'
     }
   }
   /**
@@ -7765,7 +8128,8 @@ export interface WsContract {
   /**
    * Delete a vault: restorable until the retention window ends, or purged on the next pass with `now`.
    * Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or 'vault_delete_now'
-   * (resend with confirm_now).
+   * (resend with confirm_now). A mirrored vault is refused (vault_mirrored: end the mirror first;
+   * vault_orphaned_copy: remove it with mirror.cancel).
    */
   'storage.vault.remove': {
     payload: {
@@ -8686,6 +9050,15 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'groups.list.byUser',
   'meta.contract.get',
   'meta.hello',
+  'mirror.accept',
+  'mirror.accept_all.set',
+  'mirror.add',
+  'mirror.cancel',
+  'mirror.decline',
+  'mirror.get',
+  'mirror.keep_removed.set',
+  'mirror.list',
+  'mirror.pending',
   'peer.endpoints',
   'peer.get',
   'peer.hello',
@@ -8694,10 +9067,12 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.link.start',
   'peer.link.status',
   'peer.list',
-  'peer.mirror.ack',
-  'peer.mirror.log',
-  'peer.mirror.notify',
-  'peer.mirror.tree',
+  'peer.mirror.answer',
+  'peer.mirror.begin',
+  'peer.mirror.cancel',
+  'peer.mirror.grant',
+  'peer.mirror.keys',
+  'peer.mirror.offer',
   'peer.pair.confirm',
   'peer.pair.request',
   'peer.pair.status',
@@ -8976,6 +9351,8 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'group.member.add': 'identity.admin',
   'group.member.remove': 'identity.admin',
   'group.remove': 'identity.admin',
+  'mirror.add': 'keys',
+  'mirror.cancel': 'data.destroy',
   'peer.link.start': 'device.trust',
   'peer.pairing.approve': 'device.trust',
   'peer.policy.set': 'identity.admin',
@@ -9154,6 +9531,15 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'groups.list.byUser': 15000,
   'meta.contract.get': 15000,
   'meta.hello': 15000,
+  'mirror.accept': 15000,
+  'mirror.accept_all.set': 15000,
+  'mirror.add': 15000,
+  'mirror.cancel': 15000,
+  'mirror.decline': 15000,
+  'mirror.get': 15000,
+  'mirror.keep_removed.set': 15000,
+  'mirror.list': 15000,
+  'mirror.pending': 15000,
   'peer.endpoints': 15000,
   'peer.get': 15000,
   'peer.hello': 15000,
@@ -9162,10 +9548,12 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.link.start': 15000,
   'peer.link.status': 15000,
   'peer.list': 15000,
-  'peer.mirror.ack': 15000,
-  'peer.mirror.log': 15000,
-  'peer.mirror.notify': 15000,
-  'peer.mirror.tree': 15000,
+  'peer.mirror.answer': 15000,
+  'peer.mirror.begin': 15000,
+  'peer.mirror.cancel': 15000,
+  'peer.mirror.grant': 15000,
+  'peer.mirror.keys': 60000,
+  'peer.mirror.offer': 15000,
   'peer.pair.confirm': 15000,
   'peer.pair.request': 15000,
   'peer.pair.status': 15000,

@@ -11,6 +11,7 @@
 // tables after random operations; replaying the log's states alone reproduces the tree.
 // tools/contracts/test_replication_log_contract.py keeps every SQL writer of these tables classified.
 
+#include "mirror/start/Guard.hpp"
 #include "../helpers/db_suite.hpp"
 
 #include "db/Transactions.hpp"
@@ -395,8 +396,12 @@ protected:
         // The vault's settings and a key record.
         sql("UPDATE vault SET description = 'mirrored " + rlTag() + "', quota = 123456789 WHERE id = " +
             std::to_string(vid(engine)));
+        // Rotation is refused on a mirrored vault until it goes over the link (mirror/start/Guard.hpp); the log's key
+        // rows are what that rotation will write, so this test lets one through.
+        vh::mirror::start::allowRotationOnMirroredForTesting(true);
         engine->encryptionManager->prepare_key_rotation();
         engine->encryptionManager->finish_key_rotation();
+        vh::mirror::start::allowRotationOnMirroredForTesting(false);
         groups = drain(engine, cursor);
         const auto all = lines(groups);
         ASSERT_FALSE(all.empty());

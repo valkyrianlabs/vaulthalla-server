@@ -76,6 +76,11 @@ WRITERS: dict[str, dict[tuple[str, str], int]] = {
         ("INSERT INTO", "symlinks"): 1, ("UPDATE", "fs_entry"): 3, ("UPDATE", "files"): 1, ("UPDATE", "symlinks"): 1,
         ("DELETE FROM", "fs_entry"): 1,
     },
+    # Starting a mirror (migration 163): the mirror's new vault and its root folder, in one transaction; the root is
+    # never journaled (no entries below it yet).
+    "core/src/db/query/mirror/Start.cpp": {
+        ("INSERT INTO", "fs_entry"): 1, ("INSERT INTO", "directories"): 1,
+    },
     # Vault deletion/revival re-parents the vault root and clears inodes: the root is never journaled, inodes aren't
     # changes, and a purge's cascade skips a deleted vault.
     "core/src/db/query/vault/Deletion.cpp": {("UPDATE", "fs_entry"): 3},

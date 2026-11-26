@@ -406,8 +406,12 @@ std::shared_ptr<protocols::ws::Session> peerSession(const bool pairing) {
 }
 
 std::vector<std::string> peerWireSet() {
-    return {"peer.hello",       "peer.ping",       "peer.endpoints",  "peer.identity.rotate", "peer.unlinked",
-            "peer.mirror.tree", "peer.mirror.log", "peer.mirror.ack", "peer.mirror.notify"};
+    return {"peer.hello",        "peer.ping",          "peer.endpoints",   "peer.identity.rotate", "peer.unlinked",
+            // starting a mirror (mirror phase 2 wave 3, piece A)
+            "peer.mirror.offer", "peer.mirror.answer", "peer.mirror.keys", "peer.mirror.begin",    "peer.mirror.grant",
+            "peer.mirror.cancel",
+            // following the core (piece B)
+            "peer.mirror.tree",  "peer.mirror.log",    "peer.mirror.ack",  "peer.mirror.notify"};
 }
 
 // Invariant 1: a peer session can call no command outside the peer set, whatever its vault roles are.
@@ -424,7 +428,7 @@ TEST(PeerRouting, ALinkedServerRunsThePeerWireSetAndNothingElse) {
     std::vector<std::string> names;
     for (const auto& c : everything) names.push_back(c.command);
     // Commands no book names (a later one, a typo, the pairing commands' look-alikes) are refused too: fail closed.
-    for (const auto* invented : {"peer.mirror.offer", "peer.identity.list", "peer.pings", "fs.dir.list.all", "x"})
+    for (const auto* invented : {"peer.mirror.submit", "peer.identity.list", "peer.pings", "fs.dir.list.all", "x"})
         names.emplace_back(invented);
     for (const auto& c : names)
         EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *session),

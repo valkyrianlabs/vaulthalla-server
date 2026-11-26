@@ -23,6 +23,13 @@ A's disk holds them; a generation that is not current and a vault B is not the l
 hold the vault itself yet (key delivery and vault creation are the next piece): receiving into a vault is proven in
 process (MirrorContentsDbTest).
 
+Then 7, starting a mirror: A offers a vault (`vh mirror add`), B accepts (`vh mirror accept`), the keys go over the link
+and are proven on B against A's attestation key pinned at pairing, B creates the vault with A's vault uid and root uid
+(empty: the tree is piece B's) owned by A's account as a remote account, A's grant follows a `vh peer policy set`, key
+rotation is refused on A, B's own cancel of a completed mirror is refused; A's cancel without --remove-copy leaves B an
+orphaned copy that B's super admin removes, --remove-copy with B's keep setting on leaves it, and with it off removes
+it; an offer B declines is reported declined on A.
+
 Nothing secret is printed or kept: the drill's directory holds only its report.
 """
 from __future__ import annotations
@@ -190,6 +197,135 @@ def _sealed_lane(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, rep
     _sql(a, f"DELETE FROM mirror_vault WHERE vault_id = {vid}")
 
 
+def _mirror_info(node: Node, vault_id: int) -> dict:
+    code, j, text = _json(node, "mirror", "info", str(vault_id))
+    return j.get("vault", {}) if code == 0 else {}
+
+
+def _start_mirror(a: Node, b: Node, node_a: str, node_b: str, report: Report) -> None:
+    """7: starting a mirror (design/peers/mirror.md "Starting a mirror"): A offers a vault, B accepts, the keys go over
+    the link and are proven against A's attestation key B pinned at pairing, B creates the vault (same uid, empty)
+    with A's grant; rotation and B's own cancel are refused; A's cancel removes B's copy. A declined offer too."""
+    a.vh("vault", "create", "mirrored", "--local")
+    vid = int(_sql(a, "SELECT id FROM vault WHERE name = 'mirrored' AND deleted_at IS NULL"))
+    _wait("A's mount showing the vault", lambda: (a.inst.mount / "mirrored").is_dir(), timeout=60)
+    a.sh("head -c 4096 /dev/urandom > MNT/mirrored/one.bin")
+    _wait("the file's row", lambda: _sql(a, (
+        "SELECT 1 FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id "
+        f"WHERE e.vault_id = {vid} AND e.name = 'one.bin' AND length(f.encryption_iv) = 44")), timeout=60)
+    vault_uid = _sql(a, f"SELECT uid FROM vault WHERE id = {vid}")
+    root_uid = _sql(a, "SELECT d.uid FROM fs_entry e JOIN directories d ON d.fs_entry_id = e.id "
+                       f"WHERE e.vault_id = {vid} AND e.path = '/'")
+
+    code, offer, text = _json(a, "mirror", "add", str(vid), "--to", node_b)
+    report.check("7: A offers the vault to B (mirror.add)", code == 0 and offer.get("state") == "offered", text[-400:])
+    pending = _wait("B's pending offer", lambda: [o for o in (_json(b, "mirror", "pending")[1].get("offers") or [])
+                                                  if o.get("name") == "mirrored"], timeout=60)
+    first = pending[0]
+    report.check("7: B holds the offer, waiting for a super admin (uid, size, owner, no history)",
+                 first.get("state") == "pending" and first.get("vault_uid") == _b32(vault_uid)
+                 and first.get("history") is False and first.get("owner", {}).get("node") == node_a,
+                 json.dumps(first)[:500])
+    cp = b.vh("mirror", "accept", str(first["id"]), check=False)
+    report.check("7: B accepts", cp.returncode == 0, (cp.stdout + cp.stderr)[-300:])
+    started = _wait("the start to complete on A", lambda: (lambda m: m if m.get("role") == "core"
+                                                           and (m.get("start") or {}).get("state") == "started"
+                                                           else None)(_mirror_info(a, vid)), timeout=90)
+    report.check("7: A is the vault's core, the start complete", bool(started), json.dumps(started)[:400])
+    bvid = int(_wait("B's vault with A's vault uid", lambda: _sql(b, f"SELECT id FROM vault WHERE uid = '{vault_uid}'"),
+                     timeout=30))
+    mb = _mirror_info(b, bvid)
+    report.check("7: B holds the vault as A's mirror: the same uid and root uid, no entries yet",
+                 mb.get("role") == "mirror" and (mb.get("peer") or {}).get("node_id") == node_a
+                 and _sql(b, "SELECT d.uid FROM fs_entry e JOIN directories d ON d.fs_entry_id = e.id "
+                             f"WHERE e.vault_id = {bvid} AND e.path = '/'") == root_uid
+                 and _sql(b, f"SELECT count(*) FROM fs_entry WHERE vault_id = {bvid}") == "1",
+                 json.dumps(mb)[:500])
+    keys_a = _sql(a, f"SELECT version FROM vault_keys WHERE vault_id = {vid}")
+    report.check("7: B's keys are A's versions, each proven against A's pinned attestation key (origin: peer)",
+                 _sql(b, f"SELECT version FROM vault_keys WHERE vault_id = {bvid}") == keys_a
+                 and _sql(b, f"SELECT count(*) FROM vault_key_origin WHERE vault_id = {bvid} AND anchor = 'peer' "
+                             f"AND origin_node_id = '{node_a}' AND origin_vault_id = {vid}") != "0",
+                 f"A {keys_a}")
+    report.check("7: the owner is A's account, a remote account on B",
+                 _sql(b, f"SELECT u.remote::text || ':' || u.home_node FROM vault v JOIN users u ON u.id = v.owner_id "
+                         f"WHERE v.id = {bvid}") == f"true:{node_a}")
+    report.check("7: no grant yet (A's link grants nothing): nobody on B has access", mb.get("grant") is None,
+                 json.dumps(mb.get("grant")))
+    a.vh("peer", "policy", "set", node_b, "reader")
+    g = _wait("A's grant on B", lambda: (_mirror_info(b, bvid).get("grant") or {}).get("role_name") == "reader"
+              or None, timeout=30)
+    report.check("7: A's grant follows the change (peer policy set reader)", bool(g))
+
+    cp = a.vh("vault", "keys", "rotate", str(vid), check=False)
+    report.check("7: key rotation on the mirrored vault is refused on A", "vault_mirrored" in (cp.stdout + cp.stderr),
+                 (cp.stdout + cp.stderr)[-300:])
+    cp = b.vh("mirror", "cancel", str(bvid), check=False)
+    report.check("7: B can't remove a completed mirror (mirror_detach_required)",
+                 cp.returncode != 0 and "mirror_detach_required" in (cp.stdout + cp.stderr),
+                 (cp.stdout + cp.stderr)[-300:])
+    a.vh("peer", "policy", "set", node_b, "none")
+
+    # The ending rule (owner, 2026-11-26): the core chooses, the mirror keeps or removes.
+    cp = a.vh("mirror", "cancel", str(vid), check=False)
+    report.check("7: A ends the mirror without --remove-copy", cp.returncode == 0, (cp.stdout + cp.stderr)[-300:])
+    _wait("B's copy orphaned", lambda: _mirror_info(b, bvid).get("role") == "orphaned" or None, timeout=60)
+    told = _wait("A told B kept its copy", lambda: (lambda m: m if (m.get("start") or {}).get("copy") == "kept" else None)(
+        _mirror_info(a, vid)), timeout=60)
+    report.check("7: B keeps an orphaned copy (its keys, the last grant) and A records it kept; A has no core row",
+                 bool(told) and _sql(b, f"SELECT count(*) FROM vault_keys WHERE vault_id = {bvid}") == "1"
+                 and _sql(a, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {vid}") == "0",
+                 json.dumps(told)[:300])
+    cp = b.vh("mirror", "cancel", str(bvid), check=False)
+    report.check("7: B's super admin removes the orphaned copy",
+                 cp.returncode == 0 and _sql(b, f"SELECT count(*) FROM vault WHERE uid = '{vault_uid}'") == "0"
+                 and _sql(b, f"SELECT count(*) FROM vault_keys WHERE vault_id = {bvid}") == "0",
+                 (cp.stdout + cp.stderr)[-300:])
+
+    def mirrored_pair(name: str) -> tuple[int, int, str]:
+        a.vh("vault", "create", name, "--local")
+        v = int(_sql(a, f"SELECT id FROM vault WHERE name = '{name}' AND deleted_at IS NULL"))
+        uid = _sql(a, f"SELECT uid FROM vault WHERE id = {v}")
+        _json(a, "mirror", "add", str(v), "--to", node_b)
+        offer = _wait(f"B's offer of {name}", lambda: [o for o in (_json(b, "mirror", "pending")[1].get("offers") or [])
+                                                      if o.get("name") == name], timeout=60)[0]
+        b.vh("mirror", "accept", str(offer["id"]))
+        _wait(f"{name} started", lambda: (_mirror_info(a, v).get("start") or {}).get("state") == "started" or None,
+              timeout=90)
+        bv = int(_wait(f"B's {name}", lambda: _sql(b, f"SELECT id FROM vault WHERE uid = '{uid}'"), timeout=30))
+        return v, bv, uid
+
+    v2, bv2, uid2 = mirrored_pair("kept")
+    b.vh("mirror", "keep-removed", node_a, "on")
+    a.vh("mirror", "cancel", str(v2), "--remove-copy")
+    _wait("B's kept copy orphaned", lambda: _mirror_info(b, bv2).get("role") == "orphaned" or None, timeout=60)
+    told = _wait("A told", lambda: (_mirror_info(a, v2).get("start") or {}).get("copy") or None, timeout=60)
+    report.check("7: with B's keep setting on, A's --remove-copy leaves B's copy (orphaned, kept)",
+                 told == "kept" and _sql(b, f"SELECT count(*) FROM vault WHERE uid = '{uid2}'") == "1", str(told))
+    b.vh("mirror", "cancel", str(bv2))
+    b.vh("mirror", "keep-removed", node_a, "off")
+
+    v3, bv3, uid3 = mirrored_pair("removed")
+    a.vh("mirror", "cancel", str(v3), "--remove-copy")
+    _wait("B's copy removed", lambda: _sql(b, f"SELECT count(*) FROM vault WHERE uid = '{uid3}'") == "0" or None,
+          timeout=60)
+    told = _wait("A told", lambda: (_mirror_info(a, v3).get("start") or {}).get("copy") or None, timeout=60)
+    report.check("7: with the setting off, A's --remove-copy removes B's copy, its keys and its row",
+                 told == "removed" and _sql(b, f"SELECT count(*) FROM vault_keys WHERE vault_id = {bv3}") == "0"
+                 and _sql(b, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {bv3}") == "0", str(told))
+
+    # A declined offer: A learns it.
+    a.vh("vault", "create", "declined", "--local")
+    did = int(_sql(a, "SELECT id FROM vault WHERE name = 'declined' AND deleted_at IS NULL"))
+    code, offer, text = _json(a, "mirror", "add", str(did), "--to", node_b)
+    pending = _wait("B's second offer", lambda: [o for o in (_json(b, "mirror", "pending")[1].get("offers") or [])
+                                                 if o.get("name") == "declined"], timeout=60)
+    b.vh("mirror", "decline", str(pending[0]["id"]))
+    dec = _wait("A told of the decline", lambda: (lambda m: m if (m.get("start") or {}).get("state") == "declined"
+                                                  else None)(_mirror_info(a, did)), timeout=60)
+    report.check("7: B declines an offer and A is told", bool(dec), json.dumps(dec)[:300])
+
+
 def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bool, dict]:
     report = Report()
     run_id = time.strftime("%Y%m%dT%H%M%S") + "_" + secrets.token_hex(3)
@@ -285,6 +421,10 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
         # ------------------------------------------------------------------ 6. the sealed lane
         print("vhh drill peers: 6. the sealed lane: B fetches a file's sealed bytes from A, resumed", flush=True)
         _sealed_lane(a, b, faults["b"], node_a, node_b, report)
+
+        # ------------------------------------------------------------------ 7. starting a mirror
+        print("vhh drill peers: 7. starting a mirror: offer, accept, keys proven, the vault on B, grant, cancel", flush=True)
+        _start_mirror(a, b, node_a, node_b, report)
 
         # ------------------------------------------------------------------ 2. restarts
         print("vhh drill peers: 2. B restarts, then A restarts: the link comes back", flush=True)

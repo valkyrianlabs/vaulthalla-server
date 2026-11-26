@@ -36,7 +36,31 @@ class InstanceError(RuntimeError):
     pass
 
 
+def _ephemeral_range() -> tuple[int, int]:
+    try:
+        low, high = (int(x) for x in Path("/proc/sys/net/ipv4/ip_local_port_range").read_text().split())
+        return low, high
+    except (OSError, ValueError):
+        return 32768, 60999
+
+
 def _free_port() -> int:
+    """A free TCP port below the kernel's ephemeral range. A port from that range (bind to 0) goes back to the pool when
+    its daemon is stopped or killed, and an outgoing connection of any process on the host (database pools, swtpm, the
+    other drills running beside this one) can take it before the restart binds it again: the restart then fails with
+    EADDRINUSE until that connection ends (seen as "daemon not ready within 90s" in vhh drill peers). Ports below the
+    range are never handed to outgoing connections."""
+    low, _ = _ephemeral_range()
+    floor = max(10000, low - 12000)
+    rng = secrets.SystemRandom()
+    for _ in range(200):
+        port = rng.randrange(floor, low)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]

@@ -37866,6 +37866,3500 @@
       "variants": []
     },
     {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.accept",
+      "confirmations": [],
+      "description": "Accept an offer (super admins): checked again (mirror_vault_exists, mirror_name_taken, mirror_no_space, history_not_supported), then the core is told and sends the keys.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "An offer (vh mirror pending).",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "mirror.offer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "offer",
+          "one_of": [
+            {
+              "description": "The offer's number here.",
+              "name": "",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Its offer uid.",
+              "name": "",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "required": true,
+          "types": [
+            "integer",
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_offer_not_pending",
+        "mirror_vault_exists",
+        "mirror_name_taken",
+        "mirror_no_space",
+        "history_not_supported"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_offer_not_pending",
+        "mirror_vault_exists",
+        "mirror_name_taken",
+        "mirror_no_space",
+        "history_not_supported"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "description": "The offer's number on this server.",
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The start's id, the same on both servers (UUID).",
+              "name": "offer_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "This server's part in it.",
+              "enum": [
+                "core",
+                "mirror"
+              ],
+              "name": "side",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "peer_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "26 base32 symbols.",
+              "name": "vault_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "core: the vault; mirror: the vault created for it, once installed.",
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "The vault's id on the core (its key attestations bind it).",
+              "minimum": 0,
+              "name": "core_vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "description",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "quota",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "size_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "file_count",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Always false in this version.",
+              "name": "history",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "The vault's owner on the core: its home server's node id and its id there.",
+              "fields": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "owner",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "The role the core proposes for the mirror server; null: none.",
+              "fields": [
+                {
+                  "description": "1-50 characters: the role's name on the core, never matched to a role here.",
+                  "name": "role_name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "files",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "directories",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "sync",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "roles",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "role",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "offered",
+                "pending",
+                "accepted",
+                "keys_acked",
+                "installed",
+                "started",
+                "declined",
+                "cancelled",
+                "expired",
+                "failed",
+                "orphaned"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What the start is doing, in words: offering, waiting_for_answer, delivering_keys, beginning, waiting_for_a_super_admin, answering, waiting_for_keys, waiting_for_begin, or the state once it finished.",
+              "name": "step",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The other server was told this state.",
+              "name": "told",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: its cancel asked the mirror to remove its copy.",
+              "name": "remove_copy",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: what the mirror said it did with its copy when it was told of the cancel.",
+              "enum": [
+                "removed",
+                "kept",
+                "none"
+              ],
+              "name": "copy",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "A decline's, cancel's or failure's code.",
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "detail",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "attempts",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "last_error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "updated_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "An offer nobody answered expires (7 days).",
+              "minimum": 0,
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "finished_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "offer",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.accept_all.set",
+      "confirmations": [],
+      "description": "Whether this server accepts every vault a linked server offers without asking (default off). Super admins; audited mirror.accept_all.set.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "peer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "peer",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "peer",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "set_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "set_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.add",
+      "confirmations": [],
+      "description": "Start mirroring one of this server's vaults to a linked server (this server stays its core). Every precondition refuses with its own code: mirror_already, mirror_start_running, vault_replicated, vault_attach_running, vault_detach_running, layout_migration_running, key_rotation_running, key_salvage_running, vault_pending_deletion, vault_unavailable, legacy_content, key_version_missing, key_version_unattested, trashed_without_uid, contents_not_held, peer_not_linked, peer_link_down. Then the offer goes to the linked server. A super admin, or someone with the vault's admin Edit and vault.roles.assign on it.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The linked server.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "peer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "peer",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_already",
+        "mirror_start_running",
+        "vault_replicated",
+        "vault_attach_running",
+        "vault_detach_running",
+        "layout_migration_running",
+        "key_rotation_running",
+        "key_salvage_running",
+        "vault_pending_deletion",
+        "vault_unavailable",
+        "legacy_content",
+        "key_version_missing",
+        "key_version_unattested",
+        "trashed_without_uid",
+        "contents_not_held",
+        "peer_not_linked",
+        "peer_link_down",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_already",
+        "mirror_start_running",
+        "vault_replicated",
+        "vault_attach_running",
+        "vault_detach_running",
+        "layout_migration_running",
+        "key_rotation_running",
+        "key_salvage_running",
+        "vault_pending_deletion",
+        "vault_unavailable",
+        "legacy_content",
+        "key_version_missing",
+        "key_version_unattested",
+        "trashed_without_uid",
+        "contents_not_held",
+        "peer_not_linked",
+        "peer_link_down",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "description": "The offer's number on this server.",
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The start's id, the same on both servers (UUID).",
+              "name": "offer_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "This server's part in it.",
+              "enum": [
+                "core",
+                "mirror"
+              ],
+              "name": "side",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "peer_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "26 base32 symbols.",
+              "name": "vault_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "core: the vault; mirror: the vault created for it, once installed.",
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "The vault's id on the core (its key attestations bind it).",
+              "minimum": 0,
+              "name": "core_vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "description",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "quota",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "size_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "file_count",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Always false in this version.",
+              "name": "history",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "The vault's owner on the core: its home server's node id and its id there.",
+              "fields": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "owner",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "The role the core proposes for the mirror server; null: none.",
+              "fields": [
+                {
+                  "description": "1-50 characters: the role's name on the core, never matched to a role here.",
+                  "name": "role_name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "files",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "directories",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "sync",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "roles",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "role",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "offered",
+                "pending",
+                "accepted",
+                "keys_acked",
+                "installed",
+                "started",
+                "declined",
+                "cancelled",
+                "expired",
+                "failed",
+                "orphaned"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What the start is doing, in words: offering, waiting_for_answer, delivering_keys, beginning, waiting_for_a_super_admin, answering, waiting_for_keys, waiting_for_begin, or the state once it finished.",
+              "name": "step",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The other server was told this state.",
+              "name": "told",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: its cancel asked the mirror to remove its copy.",
+              "name": "remove_copy",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: what the mirror said it did with its copy when it was told of the cancel.",
+              "enum": [
+                "removed",
+                "kept",
+                "none"
+              ],
+              "name": "copy",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "A decline's, cancel's or failure's code.",
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "detail",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "attempts",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "last_error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "updated_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "An offer nobody answered expires (7 days).",
+              "minimum": 0,
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "finished_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "offer",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "keys",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.cancel",
+      "confirmations": [],
+      "description": "End a vault's mirror at any step. On the core: the core row and the log go at once and the mirror is told (queued while the link is down; dropped if the servers are unlinked first), with remove_copy. On the mirror (super admins): a start that has not completed is removed here and the core is told; a completed one is refused (mirror_detach_required); an orphaned copy is removed. Name the vault, or the offer when its vault doesn't exist here yet.",
+      "effect": "destructive",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "An offer (vh mirror pending).",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "mirror.offer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "offer",
+          "one_of": [
+            {
+              "description": "The offer's number here.",
+              "name": "",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Its offer uid.",
+              "name": "",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "required": false,
+          "types": [
+            "integer",
+            "string"
+          ]
+        },
+        {
+          "description": "On the core: ask the mirror to remove its copy (default false: it keeps it, orphaned). The mirror removes it unless its link keeps the vaults this server removes; a copy whose first copy isn't finished is removed anyway. The data-destroy step-up for a mirror that has begun.",
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "remove_copy",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_detach_required",
+        "mirror_offer_finished",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_detach_required",
+        "mirror_offer_finished",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "enum": [
+            "core",
+            "mirror"
+          ],
+          "name": "side",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "mirror: the vault this server was given, or an orphaned copy, went.",
+          "name": "removed",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "core: what was asked; what the mirror did comes later (mirror.get: start.copy).",
+          "name": "remove_copy",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "description": "The offer's number on this server.",
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The start's id, the same on both servers (UUID).",
+              "name": "offer_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "This server's part in it.",
+              "enum": [
+                "core",
+                "mirror"
+              ],
+              "name": "side",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "peer_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "26 base32 symbols.",
+              "name": "vault_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "core: the vault; mirror: the vault created for it, once installed.",
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "The vault's id on the core (its key attestations bind it).",
+              "minimum": 0,
+              "name": "core_vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "description",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "quota",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "size_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "file_count",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Always false in this version.",
+              "name": "history",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "The vault's owner on the core: its home server's node id and its id there.",
+              "fields": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "owner",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "The role the core proposes for the mirror server; null: none.",
+              "fields": [
+                {
+                  "description": "1-50 characters: the role's name on the core, never matched to a role here.",
+                  "name": "role_name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "files",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "directories",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "sync",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "roles",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "role",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "offered",
+                "pending",
+                "accepted",
+                "keys_acked",
+                "installed",
+                "started",
+                "declined",
+                "cancelled",
+                "expired",
+                "failed",
+                "orphaned"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What the start is doing, in words: offering, waiting_for_answer, delivering_keys, beginning, waiting_for_a_super_admin, answering, waiting_for_keys, waiting_for_begin, or the state once it finished.",
+              "name": "step",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The other server was told this state.",
+              "name": "told",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: its cancel asked the mirror to remove its copy.",
+              "name": "remove_copy",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: what the mirror said it did with its copy when it was told of the cancel.",
+              "enum": [
+                "removed",
+                "kept",
+                "none"
+              ],
+              "name": "copy",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "A decline's, cancel's or failure's code.",
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "detail",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "attempts",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "last_error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "updated_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "An offer nobody answered expires (7 days).",
+              "minimum": 0,
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "finished_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "offer",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "data.destroy",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.decline",
+      "confirmations": [],
+      "description": "Decline an offer (super admins); the core is told.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "An offer (vh mirror pending).",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "mirror.offer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "offer",
+          "one_of": [
+            {
+              "description": "The offer's number here.",
+              "name": "",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Its offer uid.",
+              "name": "",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "required": true,
+          "types": [
+            "integer",
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_offer_not_pending"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_offer_not_pending"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "description": "The offer's number on this server.",
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The start's id, the same on both servers (UUID).",
+              "name": "offer_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "This server's part in it.",
+              "enum": [
+                "core",
+                "mirror"
+              ],
+              "name": "side",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "peer_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "26 base32 symbols.",
+              "name": "vault_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "core: the vault; mirror: the vault created for it, once installed.",
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "The vault's id on the core (its key attestations bind it).",
+              "minimum": 0,
+              "name": "core_vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "description",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "quota",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "size_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "file_count",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Always false in this version.",
+              "name": "history",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "The vault's owner on the core: its home server's node id and its id there.",
+              "fields": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "owner",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "The role the core proposes for the mirror server; null: none.",
+              "fields": [
+                {
+                  "description": "1-50 characters: the role's name on the core, never matched to a role here.",
+                  "name": "role_name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "files",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "directories",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "sync",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "roles",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "role",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "offered",
+                "pending",
+                "accepted",
+                "keys_acked",
+                "installed",
+                "started",
+                "declined",
+                "cancelled",
+                "expired",
+                "failed",
+                "orphaned"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What the start is doing, in words: offering, waiting_for_answer, delivering_keys, beginning, waiting_for_a_super_admin, answering, waiting_for_keys, waiting_for_begin, or the state once it finished.",
+              "name": "step",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The other server was told this state.",
+              "name": "told",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: its cancel asked the mirror to remove its copy.",
+              "name": "remove_copy",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: what the mirror said it did with its copy when it was told of the cancel.",
+              "enum": [
+                "removed",
+                "kept",
+                "none"
+              ],
+              "name": "copy",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "A decline's, cancel's or failure's code.",
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "detail",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "attempts",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "last_error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "updated_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "An offer nobody answered expires (7 days).",
+              "minimum": 0,
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "finished_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "offer",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.get",
+      "confirmations": [],
+      "description": "One vault's mirror: role, linked server, state, grant, and what step a start is at. Super admins; on the core also the vault's admin View.",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "core",
+                "mirror",
+                "orphaned",
+                "starting",
+                "none"
+              ],
+              "name": "role",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "node_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "revoked",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                }
+              ],
+              "name": "peer",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "last_seq",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "live",
+                "paused",
+                "diverged"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "mirror: what the core granted this server (its super admins get exactly that); null: nothing.",
+              "fields": [
+                {
+                  "name": "role_name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "files",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "directories",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "sync",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "roles",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "granted_by_node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "granted_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "grant",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "seq",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "acked",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "The latest start of the vault on this side.",
+              "fields": [
+                {
+                  "description": "The offer's number on this server.",
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "The start's id, the same on both servers (UUID).",
+                  "name": "offer_uid",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "This server's part in it.",
+                  "enum": [
+                    "core",
+                    "mirror"
+                  ],
+                  "name": "side",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "peer_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "26 base32 symbols.",
+                  "name": "vault_uid",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "core: the vault; mirror: the vault created for it, once installed.",
+                  "name": "vault_id",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "description": "The vault's id on the core (its key attestations bind it).",
+                  "minimum": 0,
+                  "name": "core_vault_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "description",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "quota",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "size_bytes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "file_count",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Always false in this version.",
+                  "name": "history",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "The vault's owner on the core: its home server's node id and its id there.",
+                  "fields": [
+                    {
+                      "name": "node",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "id",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "name": "name",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    }
+                  ],
+                  "name": "owner",
+                  "required": true,
+                  "types": [
+                    "object"
+                  ]
+                },
+                {
+                  "description": "The role the core proposes for the mirror server; null: none.",
+                  "fields": [
+                    {
+                      "description": "1-50 characters: the role's name on the core, never matched to a role here.",
+                      "name": "role_name",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "files",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "directories",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "sync",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "roles",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "role",
+                  "required": true,
+                  "types": [
+                    "object",
+                    "null"
+                  ]
+                },
+                {
+                  "enum": [
+                    "offered",
+                    "pending",
+                    "accepted",
+                    "keys_acked",
+                    "installed",
+                    "started",
+                    "declined",
+                    "cancelled",
+                    "expired",
+                    "failed",
+                    "orphaned"
+                  ],
+                  "name": "state",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "What the start is doing, in words: offering, waiting_for_answer, delivering_keys, beginning, waiting_for_a_super_admin, answering, waiting_for_keys, waiting_for_begin, or the state once it finished.",
+                  "name": "step",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "The other server was told this state.",
+                  "name": "told",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "core: its cancel asked the mirror to remove its copy.",
+                  "name": "remove_copy",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "core: what the mirror said it did with its copy when it was told of the cancel.",
+                  "enum": [
+                    "removed",
+                    "kept",
+                    "none"
+                  ],
+                  "name": "copy",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "description": "A decline's, cancel's or failure's code.",
+                  "name": "reason",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "detail",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "attempts",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "last_error",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "created_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "updated_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "An offer nobody answered expires (7 days).",
+                  "minimum": 0,
+                  "name": "expires_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "finished_at",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "start",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            }
+          ],
+          "name": "vault",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.keep_removed.set",
+      "confirmations": [],
+      "description": "Whether this server keeps the vaults a linked server (their core) removes: a cancel that asks to remove a finished copy leaves it here as an orphaned copy instead (default off). Super admins; audited mirror.keep_removed.set.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "peer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "peer",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "peer",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "set_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "set_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.list",
+      "confirmations": [],
+      "description": "Every mirrored vault here (this server's role, the linked server, the grant) and every start in progress (role starting). Super admins.",
+      "effect": "read",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "core",
+                "mirror",
+                "orphaned",
+                "starting",
+                "none"
+              ],
+              "name": "role",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "node_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "revoked",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                }
+              ],
+              "name": "peer",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "last_seq",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "live",
+                "paused",
+                "diverged"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "mirror: what the core granted this server (its super admins get exactly that); null: nothing.",
+              "fields": [
+                {
+                  "name": "role_name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "files",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "directories",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "sync",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "roles",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "granted_by_node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "granted_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "grant",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "seq",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "acked",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "The latest start of the vault on this side.",
+              "fields": [
+                {
+                  "description": "The offer's number on this server.",
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "The start's id, the same on both servers (UUID).",
+                  "name": "offer_uid",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "This server's part in it.",
+                  "enum": [
+                    "core",
+                    "mirror"
+                  ],
+                  "name": "side",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "peer_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "26 base32 symbols.",
+                  "name": "vault_uid",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "core: the vault; mirror: the vault created for it, once installed.",
+                  "name": "vault_id",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "description": "The vault's id on the core (its key attestations bind it).",
+                  "minimum": 0,
+                  "name": "core_vault_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "description",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "quota",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "size_bytes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "file_count",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Always false in this version.",
+                  "name": "history",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "The vault's owner on the core: its home server's node id and its id there.",
+                  "fields": [
+                    {
+                      "name": "node",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "id",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "name": "name",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    }
+                  ],
+                  "name": "owner",
+                  "required": true,
+                  "types": [
+                    "object"
+                  ]
+                },
+                {
+                  "description": "The role the core proposes for the mirror server; null: none.",
+                  "fields": [
+                    {
+                      "description": "1-50 characters: the role's name on the core, never matched to a role here.",
+                      "name": "role_name",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "files",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "directories",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "sync",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "roles",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "role",
+                  "required": true,
+                  "types": [
+                    "object",
+                    "null"
+                  ]
+                },
+                {
+                  "enum": [
+                    "offered",
+                    "pending",
+                    "accepted",
+                    "keys_acked",
+                    "installed",
+                    "started",
+                    "declined",
+                    "cancelled",
+                    "expired",
+                    "failed",
+                    "orphaned"
+                  ],
+                  "name": "state",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "What the start is doing, in words: offering, waiting_for_answer, delivering_keys, beginning, waiting_for_a_super_admin, answering, waiting_for_keys, waiting_for_begin, or the state once it finished.",
+                  "name": "step",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "The other server was told this state.",
+                  "name": "told",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "core: its cancel asked the mirror to remove its copy.",
+                  "name": "remove_copy",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "core: what the mirror said it did with its copy when it was told of the cancel.",
+                  "enum": [
+                    "removed",
+                    "kept",
+                    "none"
+                  ],
+                  "name": "copy",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "description": "A decline's, cancel's or failure's code.",
+                  "name": "reason",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "detail",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "attempts",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "last_error",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "created_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "updated_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "An offer nobody answered expires (7 days).",
+                  "minimum": 0,
+                  "name": "expires_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "finished_at",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "start",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "vaults",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.pending",
+      "confirmations": [],
+      "description": "Offers linked servers made this server that wait for a super admin's answer.",
+      "effect": "read",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "description": "The offer's number on this server.",
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The start's id, the same on both servers (UUID).",
+              "name": "offer_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "This server's part in it.",
+              "enum": [
+                "core",
+                "mirror"
+              ],
+              "name": "side",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "peer_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "26 base32 symbols.",
+              "name": "vault_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "core: the vault; mirror: the vault created for it, once installed.",
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "The vault's id on the core (its key attestations bind it).",
+              "minimum": 0,
+              "name": "core_vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "description",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "quota",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "size_bytes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "file_count",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Always false in this version.",
+              "name": "history",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "The vault's owner on the core: its home server's node id and its id there.",
+              "fields": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "owner",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "The role the core proposes for the mirror server; null: none.",
+              "fields": [
+                {
+                  "description": "1-50 characters: the role's name on the core, never matched to a role here.",
+                  "name": "role_name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "files",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "directories",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "sync",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "roles",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "role",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "offered",
+                "pending",
+                "accepted",
+                "keys_acked",
+                "installed",
+                "started",
+                "declined",
+                "cancelled",
+                "expired",
+                "failed",
+                "orphaned"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What the start is doing, in words: offering, waiting_for_answer, delivering_keys, beginning, waiting_for_a_super_admin, answering, waiting_for_keys, waiting_for_begin, or the state once it finished.",
+              "name": "step",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The other server was told this state.",
+              "name": "told",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: its cancel asked the mirror to remove its copy.",
+              "name": "remove_copy",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: what the mirror said it did with its copy when it was told of the cancel.",
+              "enum": [
+                "removed",
+                "kept",
+                "none"
+              ],
+              "name": "copy",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "A decline's, cancel's or failure's code.",
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "detail",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "attempts",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "last_error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "updated_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "An offer nobody answered expires (7 days).",
+              "minimum": 0,
+              "name": "expires_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "finished_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "offers",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
       "auth": "peer",
       "client_timeout_ms": 15000,
       "command": "peer.endpoints",
@@ -39454,20 +42948,132 @@
     {
       "auth": "peer",
       "client_timeout_ms": 15000,
-      "command": "peer.mirror.ack",
+      "command": "peer.mirror.answer",
       "confirmations": [],
-      "description": "The mirror applied everything through (term, seq) and its digest there is `digest`. The core compares it with its own: equal, the acknowledgement is recorded (retention may pass it, the baseline is dropped); different, the vault stops as diverged on both servers.",
+      "description": "The mirror's decision on an offer: accepted (the core then sends the keys) or declined with a reason. Answers the core's state of the offer.",
       "effect": "write",
       "input": "payload",
       "operation": null,
       "payload": [
         {
-          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
           "generator": {
             "attrs": [
-              "uid"
+              "offer_uid"
             ],
-            "entity": "mirror.vault",
+            "entity": "peer.mirror.answer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "offer_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "accepted",
+            "declined"
+          ],
+          "name": "decision",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "reason"
+            ],
+            "entity": "peer.mirror.answer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "reason",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "detail"
+            ],
+            "entity": "peer.mirror.answer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "detail",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked"
+      ],
+      "response": [
+        {
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.begin",
+      "confirmations": [],
+      "description": "The core started following the vault (its core row exists): the mirror's start is complete, and the grant comes with it (null: nothing granted).",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "offer_uid"
+            ],
+            "entity": "peer.mirror.begin",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "offer_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "peer.mirror.begin",
             "kind": "ref",
             "scope": "any"
           },
@@ -39482,7 +43088,7 @@
             "attrs": [
               "term"
             ],
-            "entity": "mirror.position",
+            "entity": "peer.mirror.begin",
             "kind": "ref",
             "scope": "any"
           },
@@ -39494,50 +43100,62 @@
           ]
         },
         {
+          "description": "The core's grant.",
+          "fields": [
+            {
+              "description": "1-50 characters: the role's name on the core, never matched to a role here.",
+              "name": "role_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "directories",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "sync",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "roles",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
           "generator": {
             "attrs": [
-              "seq"
+              "grant"
             ],
-            "entity": "mirror.position",
+            "entity": "peer.mirror.begin",
             "kind": "ref",
             "scope": "any"
           },
-          "minimum": 0,
-          "name": "seq",
+          "name": "grant",
           "required": true,
           "types": [
-            "integer"
-          ]
-        },
-        {
-          "description": "64 hex digits.",
-          "generator": {
-            "attrs": [
-              "digest"
-            ],
-            "entity": "mirror.digest",
-            "kind": "ref",
-            "scope": "any"
-          },
-          "name": "digest",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "generator": {
-            "attrs": [
-              "entries"
-            ],
-            "entity": "mirror.digest",
-            "kind": "ref",
-            "scope": "any"
-          },
-          "name": "entries",
-          "required": true,
-          "types": [
-            "integer"
+            "object",
+            "null"
           ]
         }
       ],
@@ -39545,77 +43163,298 @@
         "denied",
         "invalid",
         "not_found",
+        "conflict",
         "unauthorized",
-        "peers_experimental"
+        "peers_experimental",
+        "peer_revoked",
+        "mirror_offer_not_installed"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
+        "conflict",
         "unauthorized",
-        "peers_experimental"
+        "peers_experimental",
+        "peer_revoked",
+        "mirror_offer_not_installed"
       ],
       "response": [
         {
-          "description": "The core can say its digest at that position.",
-          "name": "known",
+          "name": "started",
           "required": true,
           "types": [
             "boolean"
           ]
-        },
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.cancel",
+      "confirmations": [],
+      "description": "Either side cancels a start, or the core ends a mirror (remove_copy: it asks the mirror to remove its copy). The core drops its core row and log. The mirror removes a copy whose first copy isn't finished; a finished one it removes when asked and its keep setting is off, and otherwise keeps orphaned (read-only, the last grant kept). Answers what it did.",
+      "effect": "destructive",
+      "input": "payload",
+      "operation": null,
+      "payload": [
         {
-          "name": "match",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "name": "recorded",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "name": "core_digest",
-          "required": true,
+          "generator": {
+            "attrs": [
+              "offer_uid"
+            ],
+            "entity": "peer.mirror.cancel",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "offer_uid",
+          "required": false,
           "types": [
             "string",
             "null"
           ]
         },
         {
-          "name": "core_entries",
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "peer.mirror.cancel",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
           "required": true,
           "types": [
-            "integer",
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "reason"
+            ],
+            "entity": "peer.mirror.cancel",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "reason",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "remove_copy"
+            ],
+            "entity": "peer.mirror.cancel",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "remove_copy",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked"
+      ],
+      "response": [
+        {
+          "name": "cancelled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "What the mirror did with its copy: removed (the first copy wasn't finished, or removal was asked and its link keeps nothing), kept (orphaned), or none (it held none).",
+          "enum": [
+            "removed",
+            "kept",
+            "none"
+          ],
+          "name": "copy",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.grant",
+      "confirmations": [],
+      "description": "What the core grants the mirror server for a vault now (its role's name and actual permissions; null: nothing). Sent at begin, on every link-up and whenever it changes. Kept only for a vault the sender is the core of (else not_found).",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "peer.mirror.grant",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "null: the core grants nothing now.",
+          "fields": [
+            {
+              "description": "1-50 characters: the role's name on the core, never matched to a role here.",
+              "name": "role_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "directories",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "sync",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "roles",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "grant"
+            ],
+            "entity": "peer.mirror.grant",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "grant",
+          "required": true,
+          "types": [
+            "object",
             "null"
           ]
         }
       ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked"
+      ],
+      "response": [
+        {
+          "name": "recorded",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
       "response_model": null,
       "untyped_refusals": [],
       "variants": []
     },
     {
       "auth": "peer",
-      "client_timeout_ms": 15000,
-      "command": "peer.mirror.log",
+      "client_timeout_ms": 60000,
+      "command": "peer.mirror.keys",
       "confirmations": [],
-      "description": "Whole groups of the core's log after (term, seq), at most 2,000 rows and 768 KiB; a single group larger than that comes in parts (part, asked again with the group's txid and the last seq held) and is applied whole. expired below retention or when the vault is no longer the core's.",
-      "effect": "read",
+      "description": "Every key version the vault needs: each a KEV1 envelope (suite X25519) to the receiver's peer wrap key, the core's key check over its vault id, and the core's attestation. The receiver proves every version against the attestation keys it pinned at pairing (vault::recover::prove); one unprovable version refuses the start (mirror_keys_refused) and nothing is written. Else it creates the vault (the core's uid and root uid), seals the keys under its own vault master with their origin, writes its mirror row, and answers (the acknowledgement). Again after that: the same answer.",
+      "effect": "write",
       "input": "payload",
       "operation": null,
       "payload": [
         {
-          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
           "generator": {
             "attrs": [
-              "uid"
+              "offer_uid"
             ],
-            "entity": "mirror.vault",
+            "entity": "peer.mirror.keys",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "offer_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "peer.mirror.keys",
             "kind": "ref",
             "scope": "any"
           },
@@ -39628,30 +43467,14 @@
         {
           "generator": {
             "attrs": [
-              "term"
+              "core_vault_id"
             ],
-            "entity": "mirror.position",
+            "entity": "peer.mirror.keys",
             "kind": "ref",
             "scope": "any"
           },
           "minimum": 0,
-          "name": "term",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "generator": {
-            "attrs": [
-              "seq"
-            ],
-            "entity": "mirror.position",
-            "kind": "ref",
-            "scope": "any"
-          },
-          "minimum": 0,
-          "name": "seq",
+          "name": "core_vault_id",
           "required": true,
           "types": [
             "integer"
@@ -39660,423 +43483,127 @@
         {
           "fields": [
             {
-              "generator": {
-                "attrs": [
-                  "txid"
-                ],
-                "entity": "mirror.group",
-                "kind": "ref",
-                "scope": "any"
-              },
-              "minimum": 0,
-              "name": "txid",
+              "minimum": 1,
+              "name": "version",
               "required": true,
               "types": [
                 "integer"
               ]
             },
             {
-              "generator": {
-                "attrs": [
-                  "after_seq"
-                ],
-                "entity": "mirror.group",
-                "kind": "ref",
-                "scope": "any"
-              },
-              "minimum": 0,
-              "name": "after_seq",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "part",
-          "required": false,
-          "types": [
-            "object"
-          ]
-        }
-      ],
-      "refusal_codes": [
-        "denied",
-        "invalid",
-        "not_found",
-        "unauthorized",
-        "peers_experimental"
-      ],
-      "refusal_kinds": [
-        "denied",
-        "invalid",
-        "not_found",
-        "unauthorized",
-        "peers_experimental"
-      ],
-      "response": [
-        {
-          "name": "expired",
-          "required": false,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "element": {
-            "fields": [
-              {
-                "minimum": 0,
-                "name": "term",
-                "required": true,
-                "types": [
-                  "integer"
-                ]
-              },
-              {
-                "minimum": 0,
-                "name": "txid",
-                "required": true,
-                "types": [
-                  "integer"
-                ]
-              },
-              {
-                "minimum": 0,
-                "name": "first_seq",
-                "required": true,
-                "types": [
-                  "integer"
-                ]
-              },
-              {
-                "minimum": 0,
-                "name": "last_seq",
-                "required": true,
-                "types": [
-                  "integer"
-                ]
-              },
-              {
-                "description": "The group's log rows in order (vault_replication_log: state documents, 64-hex hashes).",
-                "element": {
-                  "fields": [
-                    {
-                      "minimum": 0,
-                      "name": "seq",
-                      "required": true,
-                      "types": [
-                        "integer"
-                      ]
-                    },
-                    {
-                      "enum": [
-                        "upsert",
-                        "move",
-                        "trash",
-                        "restore",
-                        "purge",
-                        "delete",
-                        "vault",
-                        "key",
-                        "history"
-                      ],
-                      "name": "op",
-                      "required": true,
-                      "types": [
-                        "string"
-                      ]
-                    },
-                    {
-                      "name": "uid",
-                      "required": true,
-                      "types": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    {
-                      "name": "type",
-                      "required": true,
-                      "types": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    {
-                      "name": "state",
-                      "required": true,
-                      "types": [
-                        "object"
-                      ]
-                    },
-                    {
-                      "name": "entry_hash",
-                      "required": true,
-                      "types": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    {
-                      "name": "prev_hash",
-                      "required": true,
-                      "types": [
-                        "string",
-                        "null"
-                      ]
-                    },
-                    {
-                      "fields": [
-                        {
-                          "name": "node",
-                          "required": true,
-                          "types": [
-                            "string"
-                          ]
-                        },
-                        {
-                          "minimum": 0,
-                          "name": "id",
-                          "required": true,
-                          "types": [
-                            "integer"
-                          ]
-                        }
-                      ],
-                      "name": "actor",
-                      "required": true,
-                      "types": [
-                        "object",
-                        "null"
-                      ]
-                    }
-                  ],
-                  "name": "",
-                  "required": true,
-                  "types": [
-                    "object"
-                  ]
-                },
-                "name": "rows",
-                "required": true,
-                "types": [
-                  "array"
-                ]
-              }
-            ],
-            "name": "",
-            "required": true,
-            "types": [
-              "object"
-            ]
-          },
-          "name": "groups",
-          "required": false,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "description": "A place in the vault's log.",
-          "fields": [
-            {
-              "minimum": 0,
-              "name": "term",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "seq",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "last",
-          "required": false,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "name": "more",
-          "required": false,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "fields": [
-            {
-              "minimum": 0,
-              "name": "term",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "txid",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "first_seq",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "last_seq",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "description": "The group's log rows in order (vault_replication_log: state documents, 64-hex hashes).",
-              "element": {
-                "fields": [
-                  {
-                    "minimum": 0,
-                    "name": "seq",
-                    "required": true,
-                    "types": [
-                      "integer"
-                    ]
-                  },
-                  {
-                    "enum": [
-                      "upsert",
-                      "move",
-                      "trash",
-                      "restore",
-                      "purge",
-                      "delete",
-                      "vault",
-                      "key",
-                      "history"
-                    ],
-                    "name": "op",
-                    "required": true,
-                    "types": [
-                      "string"
-                    ]
-                  },
-                  {
-                    "name": "uid",
-                    "required": true,
-                    "types": [
-                      "string",
-                      "null"
-                    ]
-                  },
-                  {
-                    "name": "type",
-                    "required": true,
-                    "types": [
-                      "string",
-                      "null"
-                    ]
-                  },
-                  {
-                    "name": "state",
-                    "required": true,
-                    "types": [
-                      "object"
-                    ]
-                  },
-                  {
-                    "name": "entry_hash",
-                    "required": true,
-                    "types": [
-                      "string",
-                      "null"
-                    ]
-                  },
-                  {
-                    "name": "prev_hash",
-                    "required": true,
-                    "types": [
-                      "string",
-                      "null"
-                    ]
-                  },
-                  {
-                    "fields": [
-                      {
-                        "name": "node",
-                        "required": true,
-                        "types": [
-                          "string"
-                        ]
-                      },
-                      {
-                        "minimum": 0,
-                        "name": "id",
-                        "required": true,
-                        "types": [
-                          "integer"
-                        ]
-                      }
-                    ],
-                    "name": "actor",
-                    "required": true,
-                    "types": [
-                      "object",
-                      "null"
-                    ]
-                  }
-                ],
-                "name": "",
-                "required": true,
-                "types": [
-                  "object"
-                ]
-              },
-              "name": "rows",
-              "required": true,
-              "types": [
-                "array"
-              ]
-            },
-            {
-              "name": "complete",
+              "name": "current",
               "required": true,
               "types": [
                 "boolean"
               ]
+            },
+            {
+              "description": "KEV1, standard base64.",
+              "name": "envelope",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "32 hex digits, over the core's vault id.",
+              "name": "key_check",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "key_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "signature",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "public_key",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "attestation",
+              "required": true,
+              "types": [
+                "object"
+              ]
             }
           ],
-          "name": "part",
-          "required": false,
+          "generator": {
+            "attrs": [
+              "versions"
+            ],
+            "entity": "peer.mirror.keys",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "items": "object",
+          "name": "versions",
+          "required": true,
           "types": [
-            "object"
+            "array"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked",
+        "mirror_keys_refused",
+        "mirror_offer_not_accepted",
+        "mirror_vault_exists",
+        "mirror_name_taken",
+        "mirror_no_space",
+        "history_not_supported"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked",
+        "mirror_keys_refused",
+        "mirror_offer_not_accepted",
+        "mirror_vault_exists",
+        "mirror_name_taken",
+        "mirror_no_space",
+        "history_not_supported"
+      ],
+      "response": [
+        {
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
           ]
         },
         {
-          "description": "The vault's state on the core: diverged stops the mirror too.",
-          "enum": [
-            "live",
-            "paused",
-            "diverged",
-            "expired",
-            "stopped"
-          ],
-          "name": "core_state",
-          "required": false,
+          "name": "installed",
+          "required": true,
           "types": [
-            "string"
+            "boolean"
           ]
         }
       ],
@@ -40087,20 +43614,34 @@
     {
       "auth": "peer",
       "client_timeout_ms": 15000,
-      "command": "peer.mirror.notify",
+      "command": "peer.mirror.offer",
       "confirmations": [],
-      "description": "The core numbered groups of the vault through (term, seq): the mirror's follower looks now. Coalesced, never waited for; a lost one is harmless (the follower also polls).",
-      "effect": "read",
+      "description": "The core offers a vault: its uid (base32), its id on the core, its root folder's uid, the term, name, description, quota, size, file count, history (false), its owner (home node, id there, name) and the role it proposes. The receiver stores it (pending, or accepted when its link accepts every vault from the sender, or declined at once with a reason) and answers its state; the decision follows as peer.mirror.answer.",
+      "effect": "write",
       "input": "payload",
       "operation": null,
       "payload": [
         {
-          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
           "generator": {
             "attrs": [
-              "uid"
+              "offer_uid"
             ],
-            "entity": "mirror.vault",
+            "entity": "peer.mirror.offer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "offer_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "peer.mirror.offer",
             "kind": "ref",
             "scope": "any"
           },
@@ -40113,9 +43654,40 @@
         {
           "generator": {
             "attrs": [
+              "core_vault_id"
+            ],
+            "entity": "peer.mirror.offer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "core_vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "root_uid"
+            ],
+            "entity": "peer.mirror.offer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "root_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
               "term"
             ],
-            "entity": "mirror.position",
+            "entity": "peer.mirror.offer",
             "kind": "ref",
             "scope": "any"
           },
@@ -40129,108 +43701,149 @@
         {
           "generator": {
             "attrs": [
-              "seq"
+              "name"
             ],
-            "entity": "mirror.position",
+            "entity": "peer.mirror.offer",
             "kind": "ref",
             "scope": "any"
           },
-          "minimum": 0,
-          "name": "seq",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        }
-      ],
-      "refusal_codes": [
-        "denied",
-        "invalid",
-        "not_found",
-        "unauthorized",
-        "peers_experimental"
-      ],
-      "refusal_kinds": [
-        "denied",
-        "invalid",
-        "not_found",
-        "unauthorized",
-        "peers_experimental"
-      ],
-      "response": [],
-      "response_model": null,
-      "untyped_refusals": [],
-      "variants": []
-    },
-    {
-      "auth": "peer",
-      "client_timeout_ms": 15000,
-      "command": "peer.mirror.tree",
-      "confirmations": [],
-      "description": "The mirror's first copy: a page of the core's tree as of its baseline (the state documents of the replication log, a folder before what is under it, trashed files last), after `after`. expired once the baseline is gone (the mirror acknowledged it).",
-      "effect": "read",
-      "input": "payload",
-      "operation": null,
-      "payload": [
-        {
-          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
-          "generator": {
-            "attrs": [
-              "uid"
-            ],
-            "entity": "mirror.vault",
-            "kind": "ref",
-            "scope": "any"
-          },
-          "name": "vault_uid",
+          "name": "name",
           "required": true,
           "types": [
             "string"
           ]
         },
         {
-          "description": "The last baseline entry the mirror holds (0 first).",
           "generator": {
-            "kind": "int_range",
-            "max": 1000,
-            "min": 0
+            "attrs": [
+              "description"
+            ],
+            "entity": "peer.mirror.offer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "description",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "quota"
+            ],
+            "entity": "peer.mirror.offer",
+            "kind": "ref",
+            "scope": "any"
           },
           "minimum": 0,
-          "name": "after",
-          "required": false,
+          "name": "quota",
+          "required": true,
           "types": [
             "integer"
           ]
-        }
-      ],
-      "refusal_codes": [
-        "denied",
-        "invalid",
-        "not_found",
-        "unauthorized",
-        "peers_experimental"
-      ],
-      "refusal_kinds": [
-        "denied",
-        "invalid",
-        "not_found",
-        "unauthorized",
-        "peers_experimental"
-      ],
-      "response": [
+        },
         {
-          "name": "expired",
-          "required": false,
+          "generator": {
+            "attrs": [
+              "size_bytes"
+            ],
+            "entity": "peer.mirror.offer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "size_bytes",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "file_count"
+            ],
+            "entity": "peer.mirror.offer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "file_count",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "history"
+            ],
+            "entity": "peer.mirror.offer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "history",
+          "required": true,
           "types": [
             "boolean"
           ]
         },
         {
-          "description": "A place in the vault's log.",
           "fields": [
             {
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
               "minimum": 0,
-              "name": "term",
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "name",
+              "required": false,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "owner"
+            ],
+            "entity": "peer.mirror.offer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "owner",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "The proposed role; null: none.",
+          "fields": [
+            {
+              "description": "1-50 characters: the role's name on the core, never matched to a role here.",
+              "name": "role_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files",
               "required": true,
               "types": [
                 "integer"
@@ -40238,100 +43851,99 @@
             },
             {
               "minimum": 0,
-              "name": "seq",
+              "name": "directories",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "sync",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "roles",
               "required": true,
               "types": [
                 "integer"
               ]
             }
           ],
-          "name": "baseline",
-          "required": false,
+          "generator": {
+            "attrs": [
+              "role"
+            ],
+            "entity": "peer.mirror.offer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "role",
+          "required": true,
           "types": [
-            "object"
+            "object",
+            "null"
           ]
         },
         {
-          "description": "The baseline's digest (64 hex).",
-          "name": "digest",
+          "generator": {
+            "attrs": [
+              "expires_at"
+            ],
+            "entity": "peer.mirror.offer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "expires_at",
           "required": false,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked"
+      ],
+      "response": [
+        {
+          "name": "offer_uid",
+          "required": true,
           "types": [
             "string"
           ]
         },
         {
-          "name": "entries",
-          "required": false,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "description": "Entries the baseline serves.",
-          "minimum": 0,
-          "name": "rows",
-          "required": false,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "description": "The vault's document then (the first page only).",
-          "name": "vault",
-          "required": false,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "element": {
-            "fields": [
-              {
-                "minimum": 0,
-                "name": "ord",
-                "required": true,
-                "types": [
-                  "integer"
-                ]
-              },
-              {
-                "name": "state",
-                "required": true,
-                "types": [
-                  "object"
-                ]
-              }
-            ],
-            "name": "",
-            "required": true,
-            "types": [
-              "object"
-            ]
-          },
-          "name": "items",
-          "required": false,
-          "types": [
-            "array"
-          ]
-        },
-        {
-          "name": "more",
-          "required": false,
-          "types": [
-            "boolean"
-          ]
-        },
-        {
-          "description": "The vault's state on the core: diverged stops the mirror too.",
           "enum": [
-            "live",
-            "paused",
-            "diverged",
+            "pending",
+            "accepted",
+            "declined",
+            "installed",
+            "started",
+            "cancelled",
             "expired",
-            "stopped"
+            "failed"
           ],
-          "name": "core_state",
-          "required": false,
+          "name": "state",
+          "required": true,
           "types": [
             "string"
           ]
@@ -56241,7 +59853,7 @@
           "description": "Deleting now skips the restore window: resend with confirm_now."
         }
       ],
-      "description": "Delete a vault: restorable until the retention window ends, or purged on the next pass with `now`. Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or 'vault_delete_now' (resend with confirm_now).",
+      "description": "Delete a vault: restorable until the retention window ends, or purged on the next pass with `now`. Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or 'vault_delete_now' (resend with confirm_now). A mirrored vault is refused (vault_mirrored: end the mirror first; vault_orphaned_copy: remove it with mirror.cancel).",
       "effect": "destructive",
       "input": "payload",
       "operation": "vaults.delete",
@@ -56299,6 +59911,8 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "vault_mirrored",
+        "vault_orphaned_copy",
         "step_up_required",
         "vault_upstream_key_loss",
         "vault_delete_now"
@@ -56309,6 +59923,8 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "vault_mirrored",
+        "vault_orphaned_copy",
         "step_up_required"
       ],
       "response": [
@@ -62484,5 +66100,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "aada0d38af88443b4b1643e68e3a34f5704454e231595697a37870ceb35ab1ce"
+  "ws_hash": "7519dab3e9e9ec1728391313e2b75f7f58a27855188b698d0613055a41617d97"
 }

@@ -8,6 +8,8 @@
 #include "log/RotationService.hpp"
 #include "mirror/Sequencer.hpp"
 #include "mirror/follow/Follower.hpp"
+#include "mirror/start/BackgroundContents.hpp"
+#include "mirror/start/Start.hpp"
 #include "rbac/Mirrored.hpp"
 #include "audit/Trail.hpp"
 #include "notifications/OperatorEmailService.hpp"
@@ -65,6 +67,8 @@ constexpr std::array kBaseStartOrder{
     "ProtocolService",
     "DeviceServer",
     "PeerLinks",
+    "MirrorStarter",
+    "MirrorContents",
     "MirrorFollower",
     "CloudRelayService",
     "S3GatewayService"
@@ -74,6 +78,8 @@ constexpr std::array kBaseStopOrder{
     "S3GatewayService",
     "CloudRelayService",
     "MirrorFollower",
+    "MirrorContents",
+    "MirrorStarter",
     "PeerLinks",
     "DeviceServer",
     "ProtocolService",
@@ -150,6 +156,8 @@ Manager::Manager()
     services_["MirrorSequencer"] = vh::mirror::Sequencer::instance();
     services_["MirrorFollower"] = vh::mirror::follow::Follower::instance();
     services_["MirrorAccessWatcher"] = vh::rbac::mirrored::Watcher::instance();
+    services_["MirrorStarter"] = vh::mirror::start::Service::instance();
+    services_["MirrorContents"] = vh::mirror::start::BackgroundContents::instance();
 
     // A test instance serves `vh` only on a private socket (VH_TEST_CLI_SOCKET), never the system one.
     if (!paths::testMode || paths::testCliSocket) {

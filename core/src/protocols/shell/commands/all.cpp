@@ -26,6 +26,7 @@ void vh::protocols::shell::commands::registerAllCommands(const std::shared_ptr<R
     registerAuditCommands(r);
     registerDeviceCommands(r);
     registerPeerCommands(r);
+    registerMirrorCommands(r);
     registerCloudCommands(r);
     registerConnectorCommands(r);
     registerClientCommands(r);
