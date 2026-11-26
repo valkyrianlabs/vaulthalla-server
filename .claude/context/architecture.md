@@ -555,6 +555,28 @@ the console reads to leave the Linked servers page out (`web-client.md`, "Linked
   (`tools/harness/vhh/drill_peers.py`: two daemons pair TOFU and pinned, reconnect after each restarts, rotate,
   unlink).
 
+### Replication log of a mirrored vault (`mirror/`, `db::query::mirror`, migration 160; `design/peers/mirror.md`)
+
+Core side only (phase 2 piece 1): no wire protocol, applier or command; nothing creates a `mirror_vault` row but tests
+and `MirrorVaults::startCore`. Full description: mirror.md "As built: the replication log"; `change-journal.md` for how
+it differs from the journal.
+- **Tables:** `mirror_vault` (per mirrored vault: peer, role core | mirror | orphaned, term, last_seq, acknowledged and
+  pruned positions, running digest, state), `mirror_entry_hash` (each entry's hash as the log last recorded it: the next
+  `prev_hash`), `vault_replication_log` (`seq` NULL until numbered, `txid` = the transaction, state JSON, hashes,
+  actor as home node + id, origin). Triggers on fs_entry, files, directories, symlinks, files_trashed, vault, sync,
+  fsync, rsync, vault_recovery_policy, vault_keys return at once unless the vault's role is core; `vh.mirror_apply`
+  (SET LOCAL, `Log::markMirrorApply`) silences them. Type-row triggers take the entry's fs_entry row lock first.
+- **Hash and digest:** `core/include/mirror/Hash.hpp` (canonical encoding, test vector; SQL twin
+  `vh_mirror_state_hash`); digest = per-word sum mod 2^64, `vh_mirror_digest` aggregate, `vh_mirror_tree` (scrub).
+- **Sequencer:** `mirror::Sequencer` ("MirrorSequencer", after DBJanitor, 250 ms; `Log::pending()` on the empty pending
+  index otherwise) → `Log::sequence()`: whole groups per vault under the mirror_vault row lock, ordered by each group's
+  last row, digest moved with them. Reader `Log::groupsAfter`. Retention in `db::Janitor` (`pruneReplicationLog`: 30
+  days / 5,000,000 rows, never past the acknowledged position, orphans of unmirrored vaults).
+- Tests: `MirrorEntryHash.*`, `MirrorDigest.*` (DB-free, `test_mirror_hash.cpp`); `MirrorReplicationLogDbTest.*`
+  (`test_replication_log.cpp`: every op on a local and an S3 vault, groups, commit order, pages, the apply switch,
+  concurrent writers, random ops with digest and replay, retention); `SqlDeployerHistoryDb.ReplicationLogMigration160*`;
+  contract `tools/contracts/test_replication_log_contract.py`; cost `tools/dev/bench/replication_log_cost.sh`.
+
 ### Super-admin initial credential
 
 No universal default password. `seed::initAdmin` (fresh DB only: `initDB` seeds when no `admin` row exists) calls

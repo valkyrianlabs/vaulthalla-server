@@ -42,6 +42,19 @@ was an agent's, not Cooper's; this records the reviewed scope).
   behind are deleted and `pruned_through` raised; pending rows are never pruned. No foreign keys: rows outlive their
   entry and vault until then.
 
+## Not the replication stream (migration 160)
+
+A mirrored vault's core has a second, separate log, `vault_replication_log` (`.claude/context/architecture.md`,
+"Replication log of a mirrored vault"; `design/peers/mirror.md`). The journal is unchanged by it and stays each
+server's feed for its own clients: per-server revisions, local ids and paths, no grouping, and the omissions above.
+The replication log has what the journal leaves out (permanent ids, whole transactions in commit order per vault,
+complete self-contained states, mtime, attribution, owner, key-version changes, trash vs purge vs restore, vault
+settings, key records) and is written only for a vault whose `mirror_vault` role is core; its triggers sit beside the
+journal's on the same tables (`vh_mirror_track*`, after `vh_fs_change_track*` by name) and share its "triggers, not
+call sites" rule, enforced by `tools/contracts/test_replication_log_contract.py`, which reuses this journal contract's
+classification of the entry-table writers. A mirror applying a core's group (later) sets `vh.mirror_apply`: the
+replication log ignores it, the journal still records it for the mirror's own clients.
+
 ## `fs.changes.list {vault_id, since?, limit?}` (`ops::fs_changes`)
 
 - Needs filesystem List on the vault root (`canFollow`, the browse rule of `storage.vault.accessible.list`); Denied
