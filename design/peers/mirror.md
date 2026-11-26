@@ -3,7 +3,8 @@
 Status: design, phase 0 of the server mirror plan (2026-11-25). Built so far: permanent ids for every entry (phase 1b,
 migrations 158/159), the core side of the replication log (phase 2 piece 1, migration 160; "As built: the
 replication log" below) and the sealed contents lane with the mirror's receive path (phase 2 wave 2, migration 161;
-"As built: sealed contents" below). The rest is not implemented. It covers how a vault
+"As built: sealed contents" below) and following the core (phase 2 wave 3 piece B, migration 164; "As built: following
+the core" below). The rest is not implemented. It covers how a vault
 is kept identical on two linked servers: the core role, the replication log, applying it, changes made on the
 mirror, behaviour while the link is down, moving the core, leaving a mirror, and vaults that also have a remote. The
 link is in [`link.md`](link.md); accounts, ownership and audits are in [`identity.md`](identity.md). Section "What
@@ -160,7 +161,7 @@ no applier, no command: nothing makes a vault mirrored yet but tests and the int
   term, `last_seq` (core: the last row numbered; mirror: the last applied), the position the mirror acknowledged
   (`acked_term`, `acked_seq`), how far retention pruned, the running digest and its entry count, the state (`live`,
   `paused`, `diverged`) and timestamps. A `core` row is what switches the log on. `MirrorVaults::startCore` takes the
-  baseline: under a SHARE lock on the entry tables (writers wait for the time it takes to hash the vault; each wait
+  baseline (per vault since 164: "As built: following the core"; as first built:) under a SHARE lock on the entry tables (writers wait for the time it takes to hash the vault; each wait
   for a writer already running is capped at 200 ms and retried, so it never sits in a deadlock with one) it records
   every entry's hash and the tree's digest, so no change is half in the baseline and half missing from the log.
 - **Triggers** on `fs_entry` (update, delete), `files`, `directories`, `symlinks` (insert, delete; files and
@@ -411,6 +412,273 @@ command. Decided while building (owner's instruction to build without waiting fo
   creation are the next piece), so receiving into a vault is proven in process with a test source of bytes
   (`MirrorContentsDbTest`).
 
+### As built: starting a mirror (phase 2 wave 3, piece A, migration 163)
+
+Steps 1 to 4 of "Starting a mirror", the vault-creation half of step 5, the grant, cancelling, the rotation refusal and
+the background contents worker. The tree, its first copy and following the log are piece B (same wave). Decided while
+building (owner's instruction to build without waiting for review):
+
+- **The protocol** (`mirror/start/Start.hpp`). Each side keeps one `mirror_offer` row per start (migration 163; the two
+  rows share `offer_uid`). Core: `offered` → `accepted` → `keys_acked` → `started`; mirror: `pending` → `accepted` →
+  `installed` → `started`; either: `declined`, `cancelled`, `expired`, `failed`. A `notify` flag marks a state the
+  other server has not been told; the `MirrorStarter` service (1 s, woken by every operation) tells it while the link
+  is up and again after a restart, waits 5 s after a request that got no answer, and never holds a lock while it waits
+  (the wire handlers run on the link's two io threads and only change rows). Messages: `peer.mirror.offer` (vault uid,
+  its numeric id on the core, its root folder's uid, term, name, description, quota, size, file count, `history`
+  false, owner as home node and id with a display name, the proposed role), `peer.mirror.answer`, `peer.mirror.keys`,
+  `peer.mirror.begin` (term, grant), `peer.mirror.grant`, `peer.mirror.cancel`. `LinkService::request` (new) sends a
+  request over the kept connection and waits.
+- **Where the core row comes from.** The mirror writes its vault and its `mirror` row in the transaction that installs
+  the keys; its answer to `peer.mirror.keys` is the acknowledgement. Only then does the core call
+  `MirrorVaults::startCore`, and it sends `peer.mirror.begin` until it is answered. So the core never has a `core`
+  row whose mirror does not already hold the vault, its keys and its own row; a crash after `startCore` resends the
+  begin (startCore is not repeated), a crash before it repeats it. A crash on the mirror after the commit and before the
+  answer: the core sends the keys again and gets the same answer.
+- **Preconditions**, each an `ops::Refused` code: `mirror_already` (mirrored, or held here as another's copy),
+  `mirror_start_running`, `vault_replicated`, `vault_attach_running`, `vault_detach_running`,
+  `layout_migration_running`, `key_rotation_running`, `key_salvage_running`, `vault_pending_deletion`,
+  `vault_unavailable`, `legacy_content` (gcm0, or plain with bytes), `key_version_missing`, `key_version_unattested`,
+  `trashed_without_uid` (as-built note 6 for migration 160: refused, not converted), `contents_not_held` (a file whose
+  bytes are not on this disk at its generation's sealed length: "download them first"; the "complete copy or what the
+  core holds" choice is not built), and on the link `peer_not_linked`, `peer_link_down`. An S3 vault is accepted when
+  every file is on disk (remote sync stays on the core).
+- **Which key versions go:** every version live files are sealed under, the current one, and every retired version this
+  server still holds (trashed files record no key version, so all retained ones go). History is not mirrored, but a
+  retained version a snapshot needs goes with the rest. Each is wrapped in a KEV1 envelope (suite X25519) to the
+  peer row's `wrap_public_key`, with this node's key check over its own vault id and a fresh attestation by this node
+  (`attestation::provenanceOf`), and the attestation key's public half.
+- **The proof** on the mirror: `vault::recover::prove` with the evidence's node id taken from the peer row (never from
+  the payload), the core's vault id from the offer, and the pins = the peer row's `attest_public_keys` (what pairing
+  bound into the code); this server's own attestation keys are passed as self keys, so a self-attested version is
+  refused. An envelope for another recipient or vault, a version mismatch, a wrong key check, an attestation by
+  another key, or no (or more than one) current version refuses the **whole** start: the mirror's offer becomes
+  `failed` (`mirror_keys_unproven`, the reason kept), the core's too (`mirror_keys_refused`), nothing of the vault is
+  written. Pairing pins what this needs: no weakening.
+- **The mirror's vault**, one transaction (`MirrorStart::createMirrorVault`): a local vault with the core's uid, name,
+  description and quota; its root folder carries **the core's root uid** (so piece B's tree starts from the same root);
+  no other entries; the owner is the remote account for (home node, id) (`users.remote`, created when missing), or the
+  local account itself when the owner's home is this server; each key version sealed under this host's vault master,
+  with this node's provenance over the new vault id (`vault_keys`, retired ones in `vault_keys_trashed`) and its origin
+  (`vault_key_origin`, anchor `peer`: migration 163 widens the CHECK); the `mirror` row with no grant (rbac::mirrored:
+  nobody has access); the offer `installed`. Then the engine starts (`reinstateVault`).
+- **A name clash is refused, not renamed** (`mirror_name_taken`: any live vault here with that name, case and spaces
+  aside), so nobody can mistake one for the other in the mount or a list; rename this server's vault and accept again.
+  Also refused: a uid this server holds (`mirror_vault_exists`), `history: true` (`history_not_supported`), and a
+  volume (the backing path) with less free than the vault's size plus max(256 MiB, a tenth of it) (`mirror_no_space`).
+  Checked at the offer (declined at once, the core told), again at accept (the offer stays pending) and again at the
+  keys.
+- **Accept every vault** from a linked server: `peer.accept_vaults` (163, default off, who and when), set by a super
+  admin here (`vh mirror accept-all <server> on|off`, ws `mirror.accept_all.set`), audited `mirror.accept_all.set`.
+- **Lifetime.** An offer nobody answered (core `offered` or `accepted`, mirror `pending` or `accepted`) expires 7 days
+  after it was made, on each server by its own clock (`offer_expired`; the other server is told). Once the keys are
+  installed nothing expires: cancel ends it. Finished rows are swept 30 days after they ended, except a `started` row
+  whose vault is still mirrored (a later cancel tells the other server through it).
+- **The grant.** The core sends `PeerVault::role(peer, vault)` (role name and its four permission masks, or null for
+  nothing or `implicit_deny`) at begin, then whenever it differs from what it last sent over the current connection:
+  the service compares on every pass, so every source of change is covered without a hook in each (the link's default,
+  a per-vault assignment or its removal, the role's permissions edited, the role deleted), and a link-up resends it.
+  The mirror records it with `granted_by_node` = the sending server's node id from its session, never a field, and
+  only for a vault whose `mirror` row names that server (`not_found` otherwise).
+- **Cancel** (`mirror.cancel`, `peer.mirror.cancel`; the ending rule, owner's decision of 2026-11-26, "Ending a mirror
+  from the core, and deleting" above). On the core, at any step: the `core` row and the log go at once
+  (`MirrorVaults::remove`), the offer becomes `cancelled` with `remove_copy` recorded, and `peer.mirror.cancel` carries
+  it to the mirror, queued while the link is down. The mirror's answer carries `copy` (removed | kept | none), which the
+  core stores on its offer (`copy_outcome`, shown by `vh mirror info`) and audits (`mirror.cancel.copy`). On the
+  mirror: unfinished (`firstCopyFinished` false) is removed (`storage::Manager::removeVault`: rows, keys, origins,
+  pending contents and the mirror row cascade, the backing directory goes, then the remote owner account when nothing
+  else names it); finished with `remove_copy` and `peer.keep_vaults` off is removed; otherwise `MirrorVaults::orphan`
+  and the offer ends `orphaned`. A cancel told again after that answers `kept` and changes nothing. On the mirror's
+  own side, a start that has not completed (`pending`, `accepted`, `installed`) is removed and the core told; a
+  completed one is refused (`mirror_detach_required`); an orphaned copy is removed (`removeOrphaned`, data-destroy
+  step-up, audited `mirror.remove`). `firstCopyFinished(vault)` is the one place "finished" is decided: on this branch,
+  true once the mirror's offer is `started` (or orphaned, or gone); **the lead rewires it to piece B's first-copy
+  column at the merge** (erring towards "finished" errs towards keeping).
+- **Keep setting:** `peer.keep_vaults` (163, who and when), `vh mirror keep-removed <server> on|off`, ws
+  `mirror.keep_removed.set`; super admins; audited `mirror.keep_removed.set`.
+- **Deletion refused** (`mirror/start/Guard.hpp` `refuseDeletionIfMirrored`): `ops::vaults::remove` (a live vault and
+  an already deleted one; a super admin is told why even where the mirror's rule leaves no Remove permission) and the S3
+  gateway's DeleteBucket (both overloads; 409 `InvalidBucketState`). Codes `vault_mirrored` (core, a start running, or
+  a mirror) and `vault_orphaned_copy` (removed through `vh mirror cancel` only: one way, one step-up, one audit line).
+  The retention pass only purges what `ops::vaults::remove` scheduled, and a vault pending deletion can't be mirrored.
+- **Unlinked meanwhile** (`reconcileUnlinked`, every MirrorStarter pass, so every revocation path counts: `vh peer
+  unlink`, `peer.unlinked`, a rotation that dropped the link): the queued notices for that server are dropped (a
+  removal never delivered), its copies here become orphaned (`mirror.orphan` audited), and the mirrors this server is
+  the core of with it end here (core row and log dropped, so the log is not held for a server that can't acknowledge).
+  A mirror that never learns of the unlink (it was down and the notice was lost) keeps its `mirror` row until it is
+  unlinked there too, then orphans it.
+- **Rotation refused** (`vault_mirrored`) on both servers while the vault has any `mirror_vault` row or a core-side
+  start runs: `EncryptionManager::prepare_key_rotation` (so `vh vault keys rotate`, an attach's rotation and an
+  import's salvage) and `EncryptionManager::mintSalvageKey`; `vh vault keys rotate` reports it per vault. No scheduled
+  rotation exists. (`mirror/start/Guard.hpp`; a test-only switch lets the replication log's own test rotate.)
+- **Who may** (`ops::mirrors`): the switch, then a person (`ops::peer_policy::requirePerson`: never an agent, a scoped
+  or relayed device, a linked server; `peer_forbidden`). `mirror.add` and the core's cancel: a super admin, or a person
+  with the vault's admin Edit and `vault.roles.assign` on it (design decision for "a person the access list lets
+  manage the vault": the rights that already decide who may hold a vault), plus the keys step-up in the console
+  (target `mirror.add:<vault>`). Everything on the mirror's side and `mirror.list`: super admins. `mirror.get`: super
+  admins, or on the core the vault's admin View. The MCP catalog leaves `mirror` out; the router refuses `mirror.` to
+  scoped devices. Audited: `mirror.offer` (both sides), `mirror.accept`, `mirror.decline`, `mirror.keys` (versions,
+  never material), `mirror.start`, `mirror.cancel`, `mirror.accept_all.set`.
+- **Background contents** (`MirrorContents` service, `mirror/start/BackgroundContents.hpp`): wave 2 left no worker,
+  only `fetchOutstanding`. Every 2 s, for each `mirror` vault whose link is up and that has outstanding rows, one batch
+  of up to 16 files on a transfer thread (`Transfers::spawn`, joined when the link service stops) through
+  `fetchOutstanding` (background slots; a person's open always goes first). A batch that received nothing backs that
+  vault off with jitter from 5 s to 10 min; a file fails for good after three attempts, so failed rows never keep it
+  busy. It runs nothing with the link down or the switch off.
+
+**What still treats the mirror's vault as an ordinary local vault** (found while building; the write gate and the
+remaining background-job skips are wave 4): a super admin with a granted role that writes can write through every
+surface (no gate yet; a reader grant is refused writes by RBAC, `vhh drill peers` 7f); local versioning and its
+retention (`recovery/local/Versions.cpp`) run on its writes; the format conversion service would visit it (a mirror
+holds only VHF1, so it finds nothing). The local sync task (FSTask) now runs none of its content-changing jobs (the
+at-rest repair, the trash purge, rotation) on a vault held as another server's copy, mirror or orphaned (wave 3 join,
+`MirrorStartDbTest.TheLocalSyncPassLeavesTheTrashOfAMirrorAndOfAnOrphanedCopyAlone`). `storage::Manager::removeVault` itself (the trusted primitive behind rollbacks and the
+removals above) has no mirror check.
+
+### As built: following the core (phase 2 wave 3 piece B, migration 164)
+
+The data plane: the baseline, the first copy, serving and following the log, applying it, acknowledging with the
+digest. The control plane (the offer, keys, creating the mirror's vault, the grant, cancelling) is piece A; the two meet
+only at `MirrorVaults::startCore` (A calls it once the mirror has the keys) and at the `mirror` row A writes with
+`startMirror` (the follower finds every such row by itself). Decided while building (owner's instruction to build
+without waiting for review); each is listed for confirmation in the hand-off:
+
+- **The baseline is per vault.** `startCore` no longer locks the entry tables server-wide. It commits the vault's
+  `mirror_vault` row in a new state `starting` first; from then on a writer of that vault takes a share of the row's
+  lock in its trigger (`vh_mirror_core_term`) and so waits while the baseline runs, and is logged once it has committed.
+  The writers of the entry tables already running when the row committed (every holder of a RowExclusiveLock on
+  fs_entry, files, directories, symlinks or files_trashed, read from pg_locks) may have changed the vault without
+  seeing the row: the start waits for each to end (bounded: 200 ms x 50, then ops::Conflict "try again"). Then, under
+  the row's exclusive lock, it reads the tree. A writer of another vault never waits; a writer of this one waits as long
+  as the baseline takes; no change is half in the baseline and half missing from the log
+  (`MirrorFollowDbTest.AWriterOfTheVaultDuringTheBaselineIsInItOrLoggedNeverBoth`). A start that crashed leaves a
+  `starting` row that costs the vault's writers a share lock and is replaced by the next start. The start waits for a
+  long-running writer of any vault (it cannot tell which vault an open transaction changed); it never blocks one.
+- **A readable baseline: the states are kept** (`mirror_baseline`), recommended by the brief and taken as it is: in
+  the same transaction that records the entry hashes, every entry's state document and hash, numbered so that a folder
+  comes before everything under it (by depth) and trashed files after every live entry. The first copy pages through
+  it however long it takes while the core keeps writing; the log from the baseline's position (`(term, 0)`) is held by
+  retention (nothing is acknowledged yet). Dropped by the first matching acknowledgement (`baseline_rows` NULL; its
+  position and digest stay for a repeated acknowledgement there) and by `MirrorVaults::remove`. A fuzzy copy plus replay
+  was not taken: the log's rows chain `prev_hash` from the baseline's hashes, so a copy read at another moment would need
+  a second compare-and-set rule. Cost, measured (`MirrorFollowDbTest.DISABLED_BaselineOfAHundredThousandEntries`, dev VM, PostgreSQL 16, 2026-11-26:
+  100,000 entries, 100 folders of 999 files): the state documents 2.1 s, the scrub (hashing them) 11.5 s, `startCore`
+  with its baseline 11.5 s. Keeping the states adds next to nothing; hashing is the whole cost (about 93 us an entry in
+  SQL). As first built (a function call per entry, under the server-wide lock) the same vault took 22.7 s to hash:
+  164 builds the tree's documents in one join (`vh_mirror_tree_states`), which halved it. The vault's writers wait
+  those 11.5 s; no other writer waits. Recommended next (not done): hash in C++ (`mirror::entryHash`, a few us) in the
+  same transaction.
+- **The root folder is named by the vault's uid.** Each server gives its own vault root a uid of its own, so an entry
+  directly under the root names the vault's uid (the one both servers share) as its parent in its state (164 replaces
+  `vh_mirror_entry_state`). Without this no top-level entry's hash could ever agree.
+- **The digest at every group's end** is written by the sequencer on the group's last log row (`digest_after`,
+  `entries_after`); `MirrorVaults::digestAt` answers it, or the baseline's for its position. An acknowledgement
+  (`peer.mirror.ack`) is compared there: equal, it is recorded (retention may pass it) and the baseline goes; different,
+  the core stops the vault as `diverged` (`mirror_digest_mismatch`, both digests in `stop_detail`), records nothing, and
+  answers `match: false`, and the mirror stops too. A position pruned since it was acknowledged answers as matching
+  without comparing (a repeat).
+- **The wire.** `peer.mirror.tree {vault_uid, after}`, `peer.mirror.log {vault_uid, term, seq, part?}`,
+  `peer.mirror.ack {vault_uid, term, seq, digest, entries}` (the core answers) and `peer.mirror.notify {vault_uid, term,
+  seq}` (the mirror wakes), on the link's websocket (`peer::LinkService::request|notify`), peer sessions only (the peer
+  wire set), `peers_experimental` while the switch is off. A caller that is not the vault's linked server with the other
+  role, a vault not mirrored here or no such vault: `not_found` "Not found", the sealed lane's answer. Every answer
+  carries the core's state; `diverged` there stops the mirror. **Bounds:** the link takes messages of at most 1 MiB
+  (`protocols::ws::Session`, `kWebSocketReadBufferMaxBytes`), so an answer stays under 768 KiB and 1,000 tree entries
+  or 2,000 log rows. A log page holds whole groups only. **Deviation:** one group larger than an answer (a folder move
+  re-stamps every entry under it, as-built deviation 8 of the log) comes in parts (`part {term, txid, first_seq,
+  last_seq, rows, complete}`, asked again with `{txid, after_seq}`); the mirror collects them in memory and applies the
+  group whole. A group of 100,000 rows holds about 60 MB in the follower while it arrives (known limit).
+- **The notice** is coalesced per vault in the follower and sent from its thread (`Follower::numbered`, called by the
+  sequencer after each pass), never blocking the sequencer. A lost notice costs at most the slow poll.
+- **The follower** ("MirrorFollower", started after PeerLinks) visits every `mirror` row (never an `orphaned` one: while
+  a vault is mirrored the mirror applies everything the core's log says, deletions included, with no safety copies;
+  only an explicit act, the row ending or becoming orphaned, or an unlink, stops it matching): every second while the first
+  copy is unfinished, at once on a notice or when its link comes up, every 30 s otherwise; an error backs off from 1 s
+  to 60 s; a visit applies for at most 3 s; a vault that is not `live` or whose row is gone is not asked anything.
+  Requests are bounded by the link's request timeout (15 s). It runs on its own thread, never on a FUSE worker or the
+  link's read thread; contents are not fetched here: the MirrorContents service is the one drainer of the pending queue (the follower's own
+  fetch thread was removed at the merge, so no file is fetched twice). For a drill:
+  the mirror's `mirror_vault` row (`last_seq`, `copy_finished`, `copy_cursor`, `digest`, `state`, `stop_reason`) and the
+  log lines "first copy finished at (t, s), digest D, N entries" and "applied through (t, s), digest D".
+- **The applier** (`mirror::apply`): one transaction per page or group, under the apply switch and `vh.keep_mtime`
+  (`ApplyRows::begin`). The mirror's entry hashes are kept in `mirror_entry_hash` on the mirror too (the Janitor's sweep
+  of vaults that are not a core now spares `mirror` and `orphaned` rows): per uid the group's first `prev_hash` must be
+  the hash recorded here, the last row's state is the result. Work: removals (a folder once it is empty), then
+  placements (a creation or a move whose parent exists here and whose name is free), repeated until done; when nothing
+  can proceed, an entry in the way that itself moves or goes in the group steps aside to `.vh-mirror-<uid>` (a swap or
+  a cycle); anything else that cannot be placed is a divergence. Then every replicated field, the paths of what moved
+  (folders first), the contents expected, and each entry's hash computed from this server's own tables
+  (`vh_mirror_entry_state`): it must equal the core's, else `diverged` (`mirror_apply_mismatch` with both hashes and both
+  states). A first copy whose digest at its last page is not the baseline's is `mirror_copy_mismatch`. Exactly once: a
+  page or group at or below the vault's position is `AlreadyApplied`, one that does not start right after it is
+  `NotNext`; both apply nothing.
+- **Accounts** arrive as `{node, id}`: this server's own node id names a local account (none: the field is empty and the
+  hash will not agree, a divergence); any other node a remote account (migration 158: `remote`, `home_node`, `home_id`,
+  no password, named `#<id>@<node>`), created in the group's transaction the first time it is named. Never matched by
+  name, never a local account for another server's. Written as SQL in the applier's transaction, not through
+  identities::Manager (remote accounts never authorize, so no canonical object goes stale that matters; the watcher
+  catches up).
+- **Contents:** every live file whose generation is new here gets its `mirror_content_pending` row in the group's
+  transaction (wave 2's rules: a new generation replaces an older row); a file trashed, deleted or purged drops it. The
+  applier locks the group's pending rows before any entry row, the receive path's order (pending row, then the file's).
+  Bytes of the old generation stay on disk until the new ones are linked over them (every open waits for a pending file;
+  the lane refuses bytes that are not the asked generation). Nothing is fetched by the applier.
+- **A file open on the mirror's mount: the whole group waits** (deviation from "deferred the way the manifest applier
+  defers"): a group that replaces, trashes or removes a file with an open working copy applies nothing and is tried
+  again on the next visit until the file is closed. The group stays atomic for the digest and for the files on disk, and
+  no deferral table is needed. Known limit: a file held open for hours holds that vault's log behind it (reads go on).
+- **Keys:** a `key` row, or a file sealed under a key version this server does not hold, stops the vault as `stopped`
+  (`mirror_key_missing`, the version). Only presence is checked (a key check is over each server's own vault id;
+  piece A proves delivered keys). Unknown ops (`history`) stop it as `mirror_unknown_op`.
+- **Vault settings** (`op = vault`, and the baseline's vault document on the first page): name (unless another vault
+  here holds it), description, quota and owner (mapped) applied, the whole document recorded in
+  `mirror_vault.vault_state`; its sync and recovery policies are never acted on (remote sync runs on the core only).
+  After the commit the engine is rebuilt (`storage::Manager::updateVault`).
+- **Expired:** `{expired: true}` (below retention, the baseline gone before the copy finished) or `not_found` (the core
+  no longer mirrors the vault with this server) stops the vault as `expired` (`mirror_log_expired`,
+  `mirror_baseline_gone`, `mirror_core_gone`); it is not asked again. Resynchronising is a later piece.
+- **After the commit**, through the calls a local write uses: the bytes of a removed file (under its content lock), its
+  derived artifacts, a removed folder's backing directory, a moved entry's backing path (through a staging directory, so
+  a folder and an entry that left it can both move), a new folder's backing directory, the FUSE cache
+  (`fs::tree_apply::cacheFresh`, evictions, totals). `fs_change_log` fires from the table writes.
+- **The shared tree-apply module** (`fs/tree_apply`): the uid lookup for local vaults (no `remote_object_index`) and the
+  after-commit cache and folder effects, which the manifest applier's executors now call. Deviation: its row writers
+  stay with each applier (`db::query::sync::ManifestApply` and `db::query::mirror::ApplyRows`): the compare-and-sets
+  differ (the bucket index's generation; the log's entry hashes) and so do the transactions (one per operation; one per
+  group). The manifest applier's behaviour and suites are unchanged.
+- **The trigger deadlock (wave 1's risk), fixed with one lock order:** a writer of a type row locks the entry's fs_entry
+  row first. Every writer already did (it updates fs_entry first in the same statement) except key rotation's
+  `set_file_encryption_iv_and_version` and its compare-and-set and `ManifestApply::replaceContent`, which now lock the
+  entry first; the type trigger's own lock then never waits while holding the files row. Reproduced with the old
+  statement shape and shown gone with the product's (`TypeRowWritersLockTheEntryFirstSoNoDeadlock`). Cost re-measured
+  (`tools/dev/bench/replication_log_cost.sh`, the base e0b1201a and this change back to back, twice, 2026-11-26, on a
+  dev VM busy with another build): the mirrored seal 1.30 and 1.15 ms on the base, 1.31 and 2.10 ms with 164 (the
+  second run disturbed: its unmirrored seal doubled too); the other cases within the same noise. Nothing measurable on a
+  loaded VM. 164 adds one read of the vault's state in `vh_mirror_core_term` on a core vault's writes and nothing on
+  any other vault's; the seal path's statements do not change (the lock order touched rotation and the manifest
+  applier only). The cost table above (160) stands as measured then.
+- **Retention** moves once the mirror acknowledges and never past it; a mirror that stops acknowledging holds the log
+  (known limit, as before) (`AcknowledgementsCompareDigestsAndRetentionFollowsThem`).
+
+Not built here: resynchronising a diverged or expired vault, the strict-mode gate (a local write on the mirror is not
+refused yet), submitting the mirror's changes, history.
+
+**At the join with piece A** (wave 3 merge, 2026-11-26):
+
+- **The follower waits for the core's begin.** The mirror's row exists from the keys step on; the core's `core` row
+  only after the keys are answered and `startCore` took its baseline (seconds for a large vault). A tree request in
+  between got `not_found`, which the follower reads as "the core is gone" and stops the vault for good
+  (`mirror_core_gone`). It now asks nothing while piece A's offer for the vault is still `installed`
+  (`mirror::start::awaitingBegin`), and the begin wakes it (`MirrorStartDbTest.TheFollowerAsksForTheTreeOnlyOnceTheCoresBeginArrived`).
+- **`firstCopyFinished`** (piece A's ending rule) answers from `copy_finished`: no row or `orphaned`, true.
+- **Test instances only** (`paths::testMode`, `VH_TEST_FAULT_DIR`): `mirror-copy-hold` holds every first copy back
+  (`Follower::step` answers Waiting) and `mirror-contents-hold` holds background fetching (`contents::fetchOutstanding`
+  fetches nothing; a person's open is not held), so `vhh drill peers` can see an empty vault after the begin, an open
+  fetched ahead of the queue, and an unfinished copy ended. Never in a packaged daemon.
+- **The two-daemon proof** is `vhh drill peers` steps 7 and 8 (above): a whole mirror and its ending, nothing written
+  by hand. Restore and purge have no person's command on a local vault (the purge is a bucket vault's pass, a restore
+  the manifest applier's), so the drill does not do them; `MirrorFollowDbTest` applies both from a real core's log.
+  A single-group swap needs a rename exchange, which the mount does not offer: the drill swaps with three renames.
+
 ### Key rotation
 
 Run by the core.
@@ -642,11 +910,35 @@ alone. Never an agent, a scoped device or a relayed browser.
 
 ### Ending a mirror from the core, and deleting
 
-- **The core ends the mirror** (`mirror.remove`): the mirror is told and its copy becomes **orphaned**: read-only,
-  kept, waiting for an admin there to delete it or detach it. The core never deletes another server's copy.
-- **The core's vault is deleted:** the same. The mirror's copy is orphaned, not deleted.
-- **Unlinking the servers** is refused on a mirror while it holds mirrored vaults, until each is detached or
-  deleted there. On the core it orphans the mirrors.
+> "Assume the trust boundary is valid until either party acts to make it invalidated." (Cooper, 2026-11-26)
+
+While two servers are linked and a vault is mirrored, each side does what the other asks, without second-guessing or
+defensive extra steps. What invalidates the trust is an explicit act: the core ending the mirror, the mirror turning on
+its keep setting or detaching (wave 5), either side unlinking. The rule (Cooper, 2026-11-26: the core may choose to
+try to remove the mirror's copy, the mirror may keep what its core removes, and mirrors should not accumulate junk):
+
+- **The core chooses.** `mirror.cancel` on the core (`vh mirror cancel <vault> [--remove-copy]`) ends the mirror on
+  the core at once (its `core` row and log go) and tells the mirror, with `remove_copy` (default false). Asking for
+  removal of a mirror that has begun needs the data-destroy step-up. The audit says which was asked.
+- **The mirror applies the rule, with no confirmation of its own:**
+  - a copy whose first copy is not finished is removed, whatever was asked or set: the mirror holds nothing complete;
+  - a finished copy is removed when the core asked for it and the mirror's keep setting for that link is off;
+  - otherwise it is kept as an **orphaned** copy: `mirror_vault.role = 'orphaned'`, read-only, its last grant and its
+    pending-contents rows kept (rbac::mirrored resolves it as it did).
+  It answers what it did (removed or kept), and the core records and shows it (audit `mirror.cancel.copy`,
+  `vh mirror info`).
+- **The keep setting** ("keep the vaults this server's core removes", per link, on the mirror, default off; a super
+  admin there): turning it on is the mirror's act that limits what the core may remove.
+- **Orphaned copies do not pile up:** a super admin on the server holding one removes it (`vh mirror cancel <vault>`,
+  with the data-destroy step-up; audited `mirror.remove`). A live mirror is not removed from the mirror's side (detach,
+  wave 5).
+- **Deleting a mirrored vault is refused until its mirror is ended,** on both servers and at every entry point that
+  deletes a vault: on the core "end the mirror first: vh mirror cancel <id> [--remove-copy]", on the mirror "this is
+  another server's vault"; an orphaned copy is removed only through `vh mirror cancel`. Deleting and choosing what
+  happens to the mirror's copy in one step is wave 5.
+- **The mirror unreachable:** the core ends its side at once and the request waits (`notify`) until the link is back.
+- **Unlinking the servers** invalidates the trust: a request still queued is dropped, never delivered; the mirror's
+  copies of that core become orphaned (kept), and the core's mirrors with that server end on the core.
 - **After any of these** the server that left still holds the keys. The core is offered a key rotation.
 
 ## A mirrored vault with a remote
@@ -700,7 +992,8 @@ CLI: `vh mirror add <vault> --to <peer>`, `vh mirror status [<vault>]`, `vh mirr
 8. No file is linked into place before its size, hash and authentication checks pass.
 9. A key version is installed on the mirror only after `prove` accepts it against a pinned attestation key.
 10. Detach completes with the peer unreachable, deletes nothing, and touches no bucket.
-11. The core never deletes or alters the mirror's copy when a mirror ends.
+11. When a mirror ends, the mirror's copy is removed only by the rule above: unfinished, or removal asked by the core
+    with the mirror's keep setting off; otherwise it is kept, orphaned. Nothing else on either side removes it.
 12. Two servers never both accept changes as core of one vault in the same term.
 
 **The drill** (exit criterion for phase 2): two private daemons; mirror a vault; write on both sides; kill the core

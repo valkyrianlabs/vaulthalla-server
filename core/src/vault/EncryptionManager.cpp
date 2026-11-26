@@ -1,4 +1,6 @@
 #include "vault/EncryptionManager.hpp"
+
+#include "mirror/start/Guard.hpp"
 #include "vault/Content.hpp"
 #include "crypto/SecretBytes.hpp"
 #include "db/query/vault/Vault.hpp"
@@ -250,6 +252,8 @@ void EncryptionManager::prepare_key_rotation() {
     if (!sealed_) throw std::logic_error("prepare_key_rotation requires a TPM-backed EncryptionManager");
     // Only a solo vault mints key versions (design/cloud/mirrors.md, as amended: no replica keys yet).
     sync::replicas::refuseIfReplicated(vault_id_, "a key rotation", sync::replicas::kRotateHow);
+    // Nor a mirrored one, on either server, until rotation over the link is built (design/peers/mirror.md).
+    vh::mirror::start::refuseIfMirrored(vault_id_, "a key rotation");
     if (db::query::vault::Key::keyRotationInProgress(vault_id_)) {
         log::Registry::crypto()->warn("[VaultEncryptionManager] Key rotation already in progress for vault {}", vault_id_);
         return;
@@ -298,6 +302,7 @@ void EncryptionManager::prepare_key_rotation() {
 unsigned int EncryptionManager::mintSalvageKey(const unsigned int vaultId, const unsigned int expectedVersion,
                                                const bool outgoingHeld) {
     sync::replicas::refuseIfReplicated(vaultId, "a key salvage (it mints a key version)", sync::replicas::kRotateHow);
+    vh::mirror::start::refuseIfMirrored(vaultId, "a key salvage (it mints a key version)");
     const auto next = SecretKey::random();
     const auto key = std::make_shared<vault::model::Key>();
     key->vaultId = vaultId;

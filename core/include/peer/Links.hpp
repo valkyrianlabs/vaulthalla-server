@@ -130,6 +130,14 @@ public:
     // A row changed (linked, endpoints): look again now instead of at the next tick.
     void wake();
 
+    // A request to a linked server over its kept connection (after peer.hello), waiting at most `timeout` for the
+    // answer frame ({status, data, error}). For threads that may block: never this service's io threads, which deliver
+    // the answer. nullopt when not connected, when the connection ended, or when no answer came in time.
+    // (`request` below is the same with the frame taken apart; this one hands back the frame itself.)
+    [[nodiscard]] std::optional<nlohmann::json> requestFrame(uint32_t peerId, const std::string& command,
+                                                             nlohmann::json payload,
+                                                             std::chrono::milliseconds timeout = kRequestTimeout);
+
     // peer.link.start: returns the attempt's id at once; the attempt runs on a thread of its own. `comparedBy`
     // (person | desktop) is who compares the code, from the starting call's channel; the row written here gets it.
     [[nodiscard]] std::string startLink(uint32_t ownerId, std::vector<Endpoint> endpoints,
@@ -152,6 +160,23 @@ public:
     // Bulk transfers to linked servers (the sealed lane's fetches): slots per peer, and the threads they run on,
     // stopped and joined when this service stops.
     [[nodiscard]] Transfers& transfers() noexcept { return transfers_; }
+
+    // ---- requests on a link (the server mirror's data plane: mirror::follow)
+
+    struct Answer {
+        bool ok{false};
+        nlohmann::json data{};   // the answer's data (an object)
+        std::string code{};      // a refusal's data.code
+        std::string error{};     // a refusal's text
+    };
+    // Whether the peer's link is up (peer.hello answered).
+    [[nodiscard]] bool connected(uint32_t peerId) const;
+    // Sends `command` on the peer's link and waits at most `timeout` for its answer: nullopt when there is no link (or
+    // it ended, or nothing came in time). Blocks the caller: never call it on an io thread or a request handler.
+    [[nodiscard]] std::optional<Answer> request(uint32_t peerId, const std::string& command, nlohmann::json payload,
+                                                std::chrono::milliseconds timeout = kRequestTimeout);
+    // Sends a notice on the peer's link and does not wait for (or read) its answer. False without a link.
+    bool notify(uint32_t peerId, const std::string& command, nlohmann::json payload);
 
     // Tests: dials started since construction (invariant 6: none without peer rows).
     [[nodiscard]] std::size_t dialsStarted() const noexcept { return dials_.load(std::memory_order_relaxed); }

@@ -13,6 +13,7 @@
 #include "fs/model/File.hpp"
 #include "fs/model/Symlink.hpp"
 #include "fs/model/file/Trashed.hpp"
+#include "fs/tree_apply/TreeApply.hpp"
 #include "fuse/WorkingCopies.hpp"
 #include "log/Registry.hpp"
 #include "notifications/OperatorNotificationBus.hpp"
@@ -55,11 +56,13 @@ bool open(const ApplyOptions& options, const std::optional<uint64_t>& inode) {
     return fuse::WorkingCopies::instance().isOpen(*inode);
 }
 
-// Everything one apply needs from the server.
+// Everything one apply needs from the server: where it applies (the shared tree-apply module's Target: the engine and
+// the FUSE cache) and what this apply is.
 struct Ctx {
     uint32_t vaultId{};
     std::shared_ptr<storage::Engine> engine;
     std::shared_ptr<fs::cache::Registry> cache;
+    fs::tree_apply::Target target;
     unsigned int owner{};
     uint64_t epoch{};
     std::string rootSha;
@@ -71,15 +74,9 @@ struct Ctx {
         return engine->vaultPathToFusePath(vaultPath);
     }
     void note(std::string text) const { report->notes.push_back(std::move(text)); }
-    void cacheFresh(const unsigned int id) const {
-        if (!cache) return;
-        // The cache takes the row as the apply wrote it; never Registry::updateEntry, which writes the entry back
-        // and stamps it with the current time (the drill: another writer's mtime was lost that way).
-        if (const auto entry = db::query::fs::Entry::getFSEntryById(id)) {
-            cache->cacheEntry(entry);
-            if (entry->parent_id) (void)cache->refreshDirStats(*entry->parent_id);
-        }
-    }
+    // The cache takes the row as the apply wrote it; never Registry::updateEntry, which writes the entry back and
+    // stamps it with the current time (the drill: another writer's mtime was lost that way): tree_apply::cacheFresh.
+    void cacheFresh(const unsigned int id) const { fs::tree_apply::cacheFresh(target, id); }
 };
 
 std::optional<std::pair<unsigned int, std::string>> liveDir(const Ctx& c, const std::optional<std::string>& uid) {
@@ -171,10 +168,8 @@ Outcome create(const Ctx& c, const mf::Op& op) {
     if (!id) return Outcome::Skipped;
     if (trashedFile) c.engine->removeLocally(trashedFile);   // the trashed generation's local bytes, as a purge would
     if (t.kind == mf::EntryKind::Dir)
-        if (const auto entry = db::query::fs::Entry::getFSEntryById(*id)) {
-            std::error_code ec;   // its backing directory, as a local mkdir makes it (files under it are hydrated there)
-            std::filesystem::create_directories(entry->backing_path, ec);
-        }
+        if (const auto entry = db::query::fs::Entry::getFSEntryById(*id))
+            fs::tree_apply::ensureBackingDirectory(entry->backing_path);
     c.cacheFresh(*id);
     return Outcome::Applied;
 }
@@ -197,15 +192,12 @@ Outcome move(const Ctx& c, const mf::Op& op) {
                               op.target->mtime);
         });
         if (!moved) return Outcome::Skipped;
-        if (c.cache) {
-            c.cache->evictPath(c.fuse(cur->path));
-            if (cur->parent_id) (void)c.cache->refreshDirStats(*cur->parent_id);
-        }
+        fs::tree_apply::evicted(c.target, cur->path, cur->parent_id);
         c.cacheFresh(cur->id);
         return Outcome::Applied;
     }
     // A folder another writer created here (or a restore did) may have no backing directory yet.
-    if (cur->kind == ApplyRow::Kind::Dir) std::filesystem::create_directories(entry->backing_path, ec);
+    if (cur->kind == ApplyRow::Kind::Dir) fs::tree_apply::ensureBackingDirectory(entry->backing_path);
     const int rc = fs::Filesystem::rename(c.fuse(cur->path), c.fuse(to), nullptr, c.engine, fs::RenameMode::NoReplace);
     if (rc != 0) return Outcome::Skipped;
     if (op.target->mtime)   // the mover's date, as the moved-rows path above
@@ -247,15 +239,12 @@ Outcome remove(const Ctx& c, const mf::Op& op) {
     if (cur->kind == ApplyRow::Kind::Dir) {
         if (op.kind != mf::OpKind::Delete || !db::query::fs::Directory::isDirectoryEmpty(cur->id)) return Outcome::Skipped;
         if (!db::query::fs::Directory::deleteEmptyDirectory(cur->id)) return Outcome::Skipped;
-        if (c.cache) {
-            c.cache->evictPath(c.fuse(cur->path));
-            if (cur->parent_id) (void)c.cache->refreshDirStats(*cur->parent_id);
-        }
+        fs::tree_apply::evicted(c.target, cur->path, cur->parent_id);
         return Outcome::Applied;
     }
     if (cur->kind == ApplyRow::Kind::Symlink) {
         if (const auto link = db::query::fs::Symlink::getSymlinkById(cur->id)) db::query::fs::Symlink::deleteSymlink(link);
-        if (c.cache) c.cache->evictPath(c.fuse(cur->path));
+        fs::tree_apply::evicted(c.target, cur->path, std::nullopt);
         return Outcome::Applied;
     }
     if (cur->index_generation != op.ours->generation) return Outcome::Skipped;
@@ -385,6 +374,7 @@ Ctx contextFor(const uint32_t vaultId, const ApplyOptions& options, ApplyReport&
     if (deps.storageManager) c.engine = deps.storageManager->getEngine(vaultId);
     if (!c.engine) throw std::runtime_error(fmt::format("vault {} has no storage engine to apply a manifest to", vaultId));
     c.cache = deps.fsCache;
+    c.target = {.vaultId = vaultId, .engine = c.engine, .cache = c.cache};
     c.owner = c.engine->vault->owner_id;
     c.options = &options;
     c.report = &report;

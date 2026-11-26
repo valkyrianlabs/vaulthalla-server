@@ -21,7 +21,11 @@
 
 #include <fmt/format.h>
 
+#include <paths.h>
+
 #include <cerrno>
+#include <cstdlib>
+#include <filesystem>
 #include <fcntl.h>
 #include <future>
 #include <algorithm>
@@ -526,7 +530,18 @@ bool awaitIfPending(const vh::fs::model::File& file, const std::chrono::millisec
     return true;
 }
 
+// Test instances only (paths::testMode): while VH_TEST_FAULT_DIR/mirror-contents-hold exists, background fetching
+// fetches nothing, so the Tier B drill can show a file opened on the mirror arriving ahead of the queue. Never in a
+// packaged daemon. A person's open (awaitIfPending) is not held.
+static bool contentsHeldForTesting() {
+    if (!vh::paths::testMode) return false;
+    const char* dir = std::getenv("VH_TEST_FAULT_DIR");
+    std::error_code ec;
+    return dir && std::filesystem::exists(std::filesystem::path(dir) / "mirror-contents-hold", ec);
+}
+
 std::size_t fetchOutstanding(const uint32_t vaultId, const std::size_t max) {
+    if (contentsHeldForTesting()) return 0;
     const auto mirror = MirrorVaults::get(vaultId);
     if (!mirror || mirror->role != "mirror") return 0;
     const auto links = peer::linkService();

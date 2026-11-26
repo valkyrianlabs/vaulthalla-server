@@ -508,7 +508,7 @@ the console reads to leave the Linked servers page out (`web-client.md`, "Linked
   pairing refuses a key in `peer`, `peer.pair.request` a key in `devices`. HTTP lanes answer 403 to a peer key; the
   sealed lane (`/peer/object/…`, below) is the one HTTP route it gets, and nobody else does (404).
 - **What a peer session runs:** `Router::isPeerWireCommand` (peer.hello, peer.ping, peer.endpoints,
-  peer.identity.rotate, peer.unlinked) plus meta.hello / meta.contract.get; anything else `Deny` (fail closed). A
+  peer.identity.rotate, peer.unlinked, and piece A's peer.mirror.offer|answer|keys|begin|grant|cancel) plus meta.hello / meta.contract.get; anything else `Deny` (fail closed). A
   pairing connection this server dialled (`Principal::pairing`) runs nothing. The wire set and `peer.pair.*` are
   refused on every other session kind; `peer.pair.*` runs on pairing-only connections. Answers on a Peer session
   (frames with `status`) go to the link's pending table (`PeerHooks::onResponse`), never to the router; an unknown one
@@ -558,15 +558,15 @@ the console reads to leave the Linked servers page out (`web-client.md`, "Linked
 
 ### Replication log of a mirrored vault (`mirror/`, `db::query::mirror`, migration 160; `design/peers/mirror.md`)
 
-Core side only (phase 2 piece 1): no wire protocol, applier or command; nothing creates a `mirror_vault` row but tests
-and `MirrorVaults::startCore`. Full description: mirror.md "As built: the replication log"; `change-journal.md` for how
+Core side (phase 2 piece 1; the wire protocol and applier are wave 3, below). Full description: mirror.md "As built: the replication log"; `change-journal.md` for how
 it differs from the journal.
 - **Tables:** `mirror_vault` (per mirrored vault: peer, role core | mirror | orphaned, term, last_seq, acknowledged and
   pruned positions, running digest, state), `mirror_entry_hash` (each entry's hash as the log last recorded it: the next
   `prev_hash`), `vault_replication_log` (`seq` NULL until numbered, `txid` = the transaction, state JSON, hashes,
   actor as home node + id, origin). Triggers on fs_entry, files, directories, symlinks, files_trashed, vault, sync,
   fsync, rsync, vault_recovery_policy, vault_keys return at once unless the vault's role is core; `vh.mirror_apply`
-  (SET LOCAL, `Log::markMirrorApply`) silences them. Type-row triggers take the entry's fs_entry row lock first.
+  (SET LOCAL, `Log::markMirrorApply`) silences them. Type-row triggers take the entry's fs_entry row lock (its writers
+  take it first too, migration 164's lock order).
 - **Hash and digest:** `core/include/mirror/Hash.hpp` (canonical encoding, test vector; SQL twin
   `vh_mirror_state_hash`); digest = per-word sum mod 2^64, `vh_mirror_digest` aggregate, `vh_mirror_tree` (scrub).
 - **Sequencer:** `mirror::Sequencer` ("MirrorSequencer", after DBJanitor, 250 ms; `Log::pending()` on the empty pending
@@ -628,6 +628,47 @@ internal API do.
   resuming against the listener); `MirrorContentsDbTest.*`, `PeerTransfersTest.*` (`test_mirror_contents_db.cpp`);
   Tier B `vhh drill peers` step 6 (two daemons, the real link, a resumed transfer, byte for byte).
 
+### Following the core: the first copy and the log applier (`mirror/apply`, `mirror/follow`, `fs/tree_apply`, migration 164)
+
+Phase 2 wave 3 piece B of the server mirror (`design/peers/mirror.md` "As built: following the core"): the data plane.
+The control plane (offer, keys, creating the mirror's vault, the grant) is piece A; the only contract between them is
+that a `mirror` row exists (`MirrorVaults::startMirror`) and that `MirrorVaults::startCore` takes the baseline.
+- **Baseline (core):** `startCore` is per vault: a committed `mirror_vault` row with state `starting` makes the vault's
+  writers wait in `vh_mirror_core_term` (FOR SHARE on that row; VOLATILE since 164); writers of the entry tables
+  already running are waited for (pg_locks RowExclusive holders, bounded); then under the row's lock the tree's state
+  documents go to `mirror_baseline` (ord: a folder before what is under it, trashed files last) with their hashes,
+  `mirror_entry_hash` and the digest; state `live`, `baseline_*` columns set. Writers of other vaults never wait.
+  Dropped by the first matching acknowledgement and by `remove`. An entry directly under the root names the vault's
+  uid as its parent in its state (164's `vh_mirror_entry_state`): each server's root folder has its own uid.
+- **Per-group digest:** the sequencer writes `digest_after`/`entries_after` on each group's last log row;
+  `MirrorVaults::digestAt` answers the baseline's position or a group's end; `acknowledgeChecked` compares, records or
+  stops the vault as `diverged` (`mirror_digest_mismatch`). New states `expired`, `stopped`; `stop_reason`,
+  `stop_detail`, `stopped_at`.
+- **Wire (`mirror::follow::Protocol`, ws `handler/MirrorFollow`):** `peer.mirror.tree|log|ack` (core answers),
+  `peer.mirror.notify` (mirror wakes); peer wire set only (`Router::isPeerWireCommand`), `peers_experimental` when off,
+  a vault the caller is not the linked server of answers `not_found` ("Not found"), as the sealed lane. Answers under
+  768 KiB (the link's ws frame limit is 1 MiB, `kWebSocketReadBufferMaxBytes`); a group larger than that comes in
+  `part`s. `peer::LinkService::request|notify|connected` carry them.
+- **Applier (`mirror::apply`):** one transaction per tree page or log group (`ApplyRows::begin`: the apply switch and
+  `vh.keep_mtime`); per uid the compare-and-set on `mirror_entry_hash` (kept on the mirror: the Janitor's orphan sweep
+  spares mirror rows), entries by uid (`fs::tree_apply::locate`), removals and placements in a work loop with
+  `.vh-mirror-<uid>` temporary names for swaps and cycles, every field the core's (accounts {node, id} mapped by
+  `ApplyRows::account`: this server's own node id is a local account, any other a remote account created on first use),
+  `mirror_content_pending` rows in the same transaction (pending rows locked first: the receive path's order), then each
+  entry's hash from this server's tables must equal the core's (else `diverged`, `mirror_apply_mismatch`). A file open
+  on the mount defers the whole group. After the commit: backing files and folders moved (via a staging directory),
+  removed or made, derived artifacts dropped, `tree_apply::cacheFresh`.
+- **Follower (`mirror::follow::Follower`, service "MirrorFollower" after PeerLinks):** visits each `mirror` row (1 s
+  while the first copy runs, at once on a notice or link-up, 30 s otherwise; errors back off to 60 s), 3 s per visit,
+  acknowledges after it applied; contents are fetched by MirrorContents alone (one drainer of the pending queue). The sequencer's numbered vaults
+  become notices (`Follower::numbered`), sent from the follower's thread.
+- **Shared tree-apply module (`fs/tree_apply`):** the uid lookup for local vaults and the after-commit cache and folder
+  effects; the manifest applier's executors call its effects (its own lookup keeps reading the bucket index).
+- **Lock order:** a type row's writer locks the entry's fs_entry row first (`set_file_encryption_iv_and_version`, its
+  compare-and-set, `ManifestApply::replaceContent`), as the type trigger does: no crossing with fs_entry-then-files.
+- Tests: `MirrorFollowDbTest.*` (`test_mirror_follow_db.cpp`: capture and replay, serving, retention, the per-vault
+  baseline, the deadlock); contracts as for 160; `SqlDeployerHistoryDb.*` for 164.
+
 ### A linked server's vault role and mirrored vaults (migration 162; `design/peers/identity.md`)
 
 The mirror server's permissions as a role it holds, a ceiling (phase 2 wave 2). Storage, resolver and management
@@ -659,6 +700,53 @@ server's vault role".
   (after IdentityWatcher, 1 s) reconciles out-of-band changes; each change bumps `rbac::policyEpoch()`. Test schema
   resets call `resetForTesting()` (`db_suite.hpp`).
 - Tests: `PeerVaultRoleDb.*` (`test_peer_vault_role_db.cpp`), `SqlDeployerHistoryDb.PeerVaultRoleMigration162*`.
+
+### Starting a mirror (`mirror/start/`, `ops::mirrors`, migration 163; `design/peers/mirror.md`)
+
+Phase 2 wave 3, piece A: the control plane (offer, answer, keys, the mirror's vault, begin, grant, cancel). The tree and
+the log are piece B. Full text: mirror.md "As built: starting a mirror". Experimental (peers.experimental).
+- **Tables:** `mirror_offer` (163; one row per start per side, shared `offer_uid`; core offered → accepted → keys_acked →
+  started, mirror pending → accepted → installed → started; declined | cancelled | expired | failed; `notify` = the
+  other server not told yet; 7-day expiry of unanswered offers, 30-day sweep, a started row whose vault is mirrored
+  kept), `peer.accept_vaults` (+ set_by/at), `vault_key_origin.anchor` 'peer'. `db::query::mirror::MirrorStart`
+  (offers, CAS `transition`, `told`, facts of a core vault, `createMirrorVault`: vault with the core's uid + root uid,
+  remote owner, keys sealed here with provenance and origin, `mirror` row, offer installed, one transaction).
+- **Protocol** (`mirror::start`): `checkVault` (every precondition its own `Refused` code), `offerVault`; wire
+  handlers (`handler/Mirrors.cpp`, Peer sessions only, `Router::isPeerWireCommand`): `peer.mirror.offer|answer|keys|
+  begin|grant|cancel`. Keys: KEV1 X25519 to the peer row's wrap key (`peer::keys::unwrapVaultKey` opens them), proven
+  with `vault::recover::prove` against the peer row's pinned `attest_public_keys` (node id from the row, the core's
+  vault id from the offer, own keys as self keys); one unprovable version fails the start, nothing written. The
+  core's `startCore` only after the keys answer; begin resent until answered. `stepMutex()` serializes startCore vs
+  cancel and vault creation vs removal; nothing waits on the peer under it.
+- **Services:** "MirrorStarter" (`mirror::start::Service`, after PeerLinks; 1 s, woken by operations): tells/asks per
+  `notify`, retries after 5 s, expires, sweeps, and keeps each core row's grant current (`PeerVault::role` compared
+  every pass, resent on link-up). "MirrorContents" (`BackgroundContents`, after MirrorStarter): per mirror vault with
+  the link up, a batch of 16 through `contents::fetchOutstanding` on a `Transfers::spawn` thread; jittered backoff
+  5 s..10 min after a batch that received nothing. `LinkService::request(peer, command, payload, timeout)` sends over
+  the kept connection and waits (not on the link's io threads). Transport seam: `setTransportForTesting`.
+- **Ops / commands:** `ops::mirrors` (add, pending, accept, decline, cancel, list, get, offers, acceptAll/setAcceptAll,
+  keepRemoved/setKeepRemoved); ws `mirror.add|pending|accept|decline|cancel|list|get|accept_all.set|keep_removed.set`
+  (keys step-up on mirror.add, data.destroy on a removing cancel), `vh mirror
+  add|pending|accept|decline|cancel [--remove-copy]|list|info|accept-all|keep-removed`. Who: the switch, a person (`peer_forbidden` otherwise); add
+  and the core's cancel: super admin or the vault's admin Edit + vault.roles.assign; the mirror's side and list: super
+  admins. Router: `mirror.` forbidden to scoped devices; MCP catalog excludes `mirror`.
+- **Ending** (owner's rule, 2026-11-26; mirror.md "Ending a mirror from the core, and deleting"): the core's cancel
+  drops its core row and log at once and sends `peer.mirror.cancel {remove_copy}` (queued while the link is down);
+  the mirror removes an unfinished copy (`firstCopyFinished`, rewired to piece B's flag at the merge), removes a
+  finished one when asked and `peer.keep_vaults` is off, else `MirrorVaults::orphan` (offer state orphaned); its
+  answer's `copy` is stored as the core offer's `copy_outcome`. The mirror's own cancel removes an uncompleted start,
+  refuses a live one (`mirror_detach_required`), removes an orphaned copy (data.destroy, audited mirror.remove).
+  `reconcileUnlinked` (every pass): an unlinked server's queued notices dropped, its copies orphaned, its core rows
+  ended. Deletion refused while mirrored (`refuseDeletionIfMirrored` in `ops::vaults::remove` and
+  `ObjectStore::deleteBucket`: `vault_mirrored`, `vault_orphaned_copy`).
+- **Rotation guard** (`mirror/start/Guard.hpp`): `refuseIfMirrored` in `prepare_key_rotation` and `mintSalvageKey`
+  (`vault_mirrored`), `vh vault keys rotate` reports it per vault.
+- **At the join with piece B:** the follower asks nothing while the mirror's offer is `installed`
+  (`mirror::start::awaitingBegin`; the begin wakes it), since the core's row comes after the keys; `firstCopyFinished`
+  reads `copy_finished`; the local sync task (FSTask) skips its content-changing jobs on a vault `rbac::mirrored` holds.
+  Test instances only: `VH_TEST_FAULT_DIR/mirror-copy-hold` and `mirror-contents-hold` (the drill's holds).
+- Tests: `MirrorStartDbTest.*` (`test_mirror_start_db.cpp`); Tier B `vhh drill peers` steps 7 (a whole mirror) and 8
+  (ending it).
 
 ### Super-admin initial credential
 
@@ -1551,6 +1639,18 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 `core/src/fuse/Service.cpp` validates the mountpoint, mounts a low-level session with `allow_other,auto_unmount`
 (subtype `vaulthalla-fuse`), and dispatches to a thread pool. Mount path: `/mnt/vaulthalla` (prod/dev),
 `/tmp/vh_mount` (integration harness).
+- **The mount never forks.** `platform::mount::mountWithHelper` starts `fusermount3 -o rw,nosuid,nodev,allow_other,
+  auto_unmount,subtype=vaulthalla-fuse -- <mount>` (the command libfuse runs) with `posix_spawn`, its socket as fd 3
+  (`_FUSE_COMMFD`) and every other descriptor closed, receives `/dev/fuse` over it and hands libfuse `/dev/fd/<n>`.
+  The helper stays (auto_unmount) until its socket closes (`releaseHelper` at the loop's end, or the daemon dying),
+  then unmounts. Why: libfuse forks and calls `setenv` in the child, which allocates; in this multithreaded process a
+  sanitizer build's allocator (GCC 14's libasan has no fork handling) could be locked by another thread at the fork,
+  so the child hung before exec, the mount never came, and the child kept the daemon's listening sockets (the wave 3
+  drill's "daemon not ready within 90s" and EADDRINUSE on restart). glibc's malloc is fork-safe, so packaged builds
+  never hung, but the child was outside POSIX's async-signal-safe rule there too. libfuse's own unmount fork is gone
+  with it (a `/dev/fd` session has no mountpoint; `platform::mount::detach` and the helper unmount). Other children:
+  the preview runner uses `_Fork` with everything prepared before it; `gpg` (key export) builds its argv before
+  fork; `std::system` and `posix_spawn` users allocate nothing in a child (glibc's `system` is posix_spawn).
 - **FUSE ops still hit the DB for content and metadata writes**, but no longer for identity: the caller (by uid), its
   groups and the vault owner come from `identities::Manager` in memory (see Identities below). If the DB pool wedges,
   writes, opens of uncached entries and anything else that queries still hang. See P0 in `production-hardening.md`.
@@ -1862,7 +1962,7 @@ policies), `config` (every settings write: one validation, one apply step that r
 is deliberately ungated, see Stats below), `conflicts` (sync conflicts, #187: ws `sync.conflicts.*`, `vh sync resolve` /
 `vh resolve`, the HTTP `/download/conflict` lane's authorization), `upstream` (S3/R2 bucket administration and event
 sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`), `recovery` (file recovery: ws `recovery.*` / `vault.recovery.*`, `vh snapshot|recovery …`, `vh vault recovery …`; see `recovery.md`), `devices` (paired devices: ws `device.*`, `vh device …`; see "Device listener
-and pairing"), `peers` (linked servers: ws `peer.*`, `vh peer …`; see "Linked servers"), `vault_keys` (key backup and restoration: ws `vault.keys.status|export|export.confirm|import`, `vh vault keys
+and pairing"), `peers` (linked servers: ws `peer.*`, `vh peer …`; see "Linked servers"), `mirrors` (starting a mirror: ws `mirror.*`, `vh mirror …`; see "Starting a mirror"), `vault_keys` (key backup and restoration: ws `vault.keys.status|export|export.confirm|import`, `vh vault keys
 status|export|import`; key material only through the CLI or a paired device, D4; see `key-backup.md`), `vault_storage`
 (the bucket write-capability probe, spec 06 §7: ws `vault.storage.probe`, `vh vault storage probe`; the vault's admin
 Edit permission; audited `vault.storage.probe`; agent-available (effect write: it writes and deletes only its own

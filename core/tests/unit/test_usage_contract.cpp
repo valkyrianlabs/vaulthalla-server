@@ -252,6 +252,10 @@ void walkContract(const FieldVisitor& visit) {
 const std::map<std::string, std::string>& opaqueObjects() {
     static const std::map<std::string, std::string> kOpaque{
         {"PriceBudgetNotification.metadata", "operator notification details stored as JSONB; each producer (budget preflight, gateway budgets, recovery cost alerts) records its own keys"},
+        {"peer.mirror.log response.groups[].rows[].state", "a replication log row's state document (design/peers/mirror.md \"State documents\"), carried verbatim and hashed by its canonical encoding (mirror/Hash.hpp), never read by the contract"},
+        {"peer.mirror.log response.part.rows[].state", "a replication log row's state document, as in groups[].rows[].state"},
+        {"peer.mirror.tree response.items[].state", "a baseline entry's state document, the same documents the replication log carries"},
+        {"peer.mirror.tree response.vault", "the vault's document (vh_mirror_vault_state) as of the baseline, recorded by the mirror verbatim"},
         {"cloud.storage.status response.billing", "the account's billing summary as the service last answered GET /v1/billing, passed through for display"},
         {"cloud.storage.status response.ejection", "the account's ejection progress as the service reports it in GET /v1/storage, passed through for display"},
         {"CloudStorageStatus.billing", "the account's billing summary as the service last answered GET /v1/billing, passed through for display"},
@@ -450,7 +454,32 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         // refusals on the dialling server's side of pairing.
         // Assigning a vault role names a linked server too (migration 162): the same two refusals there.
         if (code == "peers_experimental" || code == "peer_forbidden")
-            return command.starts_with("peer.") || command == "role.vault.assign" || command == "role.vault.unassign";
+            return command.starts_with("peer.") || command.starts_with("mirror.") || command == "role.vault.assign" ||
+                   command == "role.vault.unassign";
+        // Starting a mirror (ops::mirrors, mirror::start): each refusal on the commands that send it.
+        static const std::map<std::string, std::set<std::string>> kMirrorCodes{
+            {"peer_revoked", {"peer.mirror.offer", "peer.mirror.answer", "peer.mirror.keys", "peer.mirror.begin",
+                              "peer.mirror.grant", "peer.mirror.cancel"}},
+            {"mirror_already", {"mirror.add"}}, {"mirror_start_running", {"mirror.add"}},
+            {"vault_replicated", {"mirror.add"}}, {"vault_attach_running", {"mirror.add"}},
+            {"vault_detach_running", {"mirror.add"}}, {"layout_migration_running", {"mirror.add"}},
+            {"key_rotation_running", {"mirror.add"}}, {"key_salvage_running", {"mirror.add"}},
+            {"vault_pending_deletion", {"mirror.add"}}, {"vault_unavailable", {"mirror.add"}},
+            {"legacy_content", {"mirror.add"}}, {"key_version_missing", {"mirror.add"}},
+            {"key_version_unattested", {"mirror.add"}}, {"trashed_without_uid", {"mirror.add"}},
+            {"contents_not_held", {"mirror.add"}}, {"peer_not_linked", {"mirror.add"}},
+            {"peer_link_down", {"mirror.add"}},
+            {"mirror_offer_not_pending", {"mirror.accept", "mirror.decline"}},
+            {"mirror_vault_exists", {"mirror.accept", "peer.mirror.keys"}},
+            {"mirror_name_taken", {"mirror.accept", "peer.mirror.keys"}},
+            {"mirror_no_space", {"mirror.accept", "peer.mirror.keys"}},
+            {"history_not_supported", {"mirror.accept", "peer.mirror.keys"}},
+            {"mirror_detach_required", {"mirror.cancel"}}, {"mirror_offer_finished", {"mirror.cancel"}},
+            {"mirror_keys_refused", {"peer.mirror.keys"}}, {"mirror_offer_not_accepted", {"peer.mirror.keys"}},
+            {"mirror_offer_not_installed", {"peer.mirror.begin"}},
+            {"vault_mirrored", {"storage.vault.remove"}}, {"vault_orphaned_copy", {"storage.vault.remove"}},
+        };
+        if (const auto m = kMirrorCodes.find(code); m != kMirrorCodes.end() && m->second.contains(command)) return true;
         if ((code == "no_pairing_window" || code == "rate_limited" || code == "device_unknown") &&
             command.starts_with("peer.pair."))
             return true;

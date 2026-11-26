@@ -1,4 +1,5 @@
 #include "sync/Local.hpp"
+#include "rbac/Mirrored.hpp"
 #include "concurrency/ThreadPoolManager.hpp"
 #include "concurrency/ThreadPool.hpp"
 #include "sync/Controller.hpp"
@@ -138,6 +139,12 @@ void Local::startTask() {
 
 void Local::processSharedOps() {
     struct NamedOp { const char* name; std::function<void()> fn; };
+
+    // A vault held here as another server's copy (a mirror, or an orphaned copy; rbac::mirrored) changes only by what
+    // its core's log says (design/peers/mirror.md "Background work on the mirror"): none of this pass's jobs that
+    // change content run here (the at-rest repair re-seals files, the trash purge, key rotation). A file re-sealed here
+    // would carry a generation the core never wrote, and the next group naming it would stop the vault as diverged.
+    if (engine && engine->vault && vh::rbac::mirrored::find(engine->vault->id)) return;
 
     const std::vector<NamedOp> ops = {
         {"repairAtRest", [this]{ repairAtRestOnce(); }},

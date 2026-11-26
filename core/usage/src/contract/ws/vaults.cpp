@@ -120,14 +120,22 @@ std::vector<WsCommandUsage> vaultCommands() {
         .command = "storage.vault.remove",
         .description = "Delete a vault: restorable until the retention window ends, or purged on the next pass with "
                        "`now`. Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or "
-                       "'vault_delete_now' (resend with confirm_now).",
+                       "'vault_delete_now' (resend with confirm_now). A mirrored vault is refused (vault_mirrored: end the "
+                       "mirror first; vault_orphaned_copy: remove it with mirror.cancel).",
         .payload = {vaultIdPayload(),
                     boolean("now").opt(),
                     boolean("delete_upstream").opt().nullable(),
                     boolean("confirm_now").opt(),
                     boolean("accept_key_loss").opt()},
         .response = {object("deletion", "VaultDeletion").nullable()},
-        .refusal_codes = opsRefusals(),
+        // A mirrored vault is deleted only once its mirror ended (vault_mirrored); an orphaned copy through
+        // mirror.cancel (vault_orphaned_copy).
+        .refusal_codes = [] {
+            auto r = opsRefusals();
+            r.emplace_back("vault_mirrored");
+            r.emplace_back("vault_orphaned_copy");
+            return r;
+        }(),
         .confirmations = {{.code = "vault_upstream_key_loss",
                            .accept_field = "accept_key_loss",
                            .description = "The vault key was never exported and its S3 data would become "

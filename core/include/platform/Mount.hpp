@@ -37,6 +37,25 @@ namespace vh::platform::mount {
 // Linux: allow_other + auto_unmount (per-uid RBAC; the kernel unmounts if the daemon dies).
 [[nodiscard]] std::vector<std::string> fuseOptions(std::string_view mode);
 
+// The mount made through the platform's mount helper, without forking (Linux: fusermount3, the setuid helper libfuse
+// itself runs for an auto_unmount mount, started with posix_spawn). libfuse forks to run it and calls setenv in the
+// child; in a multithreaded process only async-signal-safe calls are allowed there, and setenv allocates: under a
+// sanitizer's allocator (no fork handling) the child deadlocks on a lock another thread held at the fork, never runs
+// the helper, and keeps the daemon's listening sockets open. posix_spawn runs nothing of this process in the child.
+// The helper hands over the /dev/fuse descriptor (fuse_session_mount takes it as "/dev/fd/<fuse_fd>") on the socket it
+// was given (_FUSE_COMMFD) and, with auto_unmount, stays until that socket closes (releaseHelper, or this process
+// ending), then unmounts. `options` is the helper's -o list as libfuse would pass it. fuse_fd < 0 with `error` on
+// failure (nothing mounted, nothing left running).
+struct HelperMount {
+    int fuse_fd{-1};
+    int comm_fd{-1};
+    int pid{-1};
+    std::string error{};
+};
+[[nodiscard]] HelperMount mountWithHelper(const std::filesystem::path& mountpoint, const std::string& options);
+// Closes the helper's socket (with auto_unmount it unmounts and exits) and reaps it, waiting at most `waitMs`.
+void releaseHelper(HelperMount& helper, int waitMs = 2000) noexcept;
+
 // Whether something is mounted at `path`, or a dead FUSE endpoint is left there.
 // Linux: lstat (ENOTCONN, or a st_dev boundary with the parent) — the proven check.
 [[nodiscard]] bool isMountedOrStale(const std::filesystem::path& path);

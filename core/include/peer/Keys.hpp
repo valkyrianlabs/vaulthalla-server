@@ -2,6 +2,10 @@
 
 #include "peer/Peer.hpp"
 
+#include <vl/keykit/kev1.hpp>
+
+#include <cstdint>
+#include <span>
 #include <string>
 
 // This server's keys as a linked server sees them (design/peers/link.md, "Keys"): the identity (device_tls, the
@@ -23,5 +27,12 @@ namespace vh::peer::keys {
 
 // The name this server goes by on a card (the host name; "vaulthalla" when it has none).
 [[nodiscard]] std::string serverName();
+
+// A vault key version a linked server wrapped to this server's wrap key (design/peers/mirror.md "Starting a mirror"
+// step 4): the KEV1 envelope (suite X25519) for `vaultUid`, opened with the sealed wrap key. Throws
+// vl::keykit::kev1::Error with the first check that fails (another vault, another recipient, a damaged envelope). The
+// key is held only in the returned locked buffer; the wrap key never leaves this function.
+[[nodiscard]] vl::keykit::kev1::Unwrapped unwrapVaultKey(std::span<const uint8_t> envelope,
+                                                         const vl::keykit::Uid& vaultUid);
 
 }

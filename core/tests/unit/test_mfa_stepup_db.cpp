@@ -152,6 +152,9 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
     // a vault engine, a factor); each says where and why, so a new annotation can't go unexamined.
     const std::map<std::string, std::string> elsewhere{
         {"vault.keys.export", "console: export_requires_device first; device: test_key_backup_grants_db.cpp"},
+        {"mirror.add", "needs a linked server and its link up: MirrorStartDbTest.TheConsoleStepsUpToSendAVaultsKeys..."},
+        {"mirror.cancel", "with remove_copy on a mirror that has begun, or an orphaned copy: MirrorStartDbTest."
+                          "TheConsoleStepsUpToSendAVaultsKeysToRemoveACopyOrAnOrphanedCopyAndForNothingElse"},
         {"vault.keys.import", "console: import_requires_device first; needs a sealed vault key (test_vault_keys)"},
         {"vault.keys.recipients.add", "console: recipient_requires_device first; device refusal and host exemption in "
                                       "RecoveryRecipient.EnrollmentIsForTheCliAndPairedDevicesWithTheExportPermission"},
