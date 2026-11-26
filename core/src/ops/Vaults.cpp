@@ -609,8 +609,12 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
         return db::query::vault::Deletion::get(req.id);
     }
 
-    if (!canOnVault(actor, VaultPerm::Remove, req.id)) throw Denied("you do not have permission to remove this vault");
-    // A mirrored vault (either role) is deleted only once its mirror ended (mirror/start/Guard.hpp).
+    // A mirrored vault (either role) is deleted only once its mirror ended (mirror/start/Guard.hpp). A super admin is
+    // told why even where the mirror's rule leaves no Remove permission (another server's vault, an orphaned copy).
+    if (!canOnVault(actor, VaultPerm::Remove, req.id)) {
+        if (actor->isSuperAdmin()) vh::mirror::start::refuseDeletionIfMirrored(req.id);
+        throw Denied("you do not have permission to remove this vault");
+    }
     vh::mirror::start::refuseDeletionIfMirrored(req.id);
     const bool isS3 = live->type == VaultType::S3;
     if (req.delete_upstream && *req.delete_upstream && !isS3) throw Invalid("only S3 vaults have upstream data to delete");

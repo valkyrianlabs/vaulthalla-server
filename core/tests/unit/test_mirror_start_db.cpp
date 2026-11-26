@@ -361,6 +361,23 @@ protected:
         return o;
     }
 
+    // A copy this server holds, its start complete (keys installed, the begin with a reader grant).
+    static std::pair<Offered, uint32_t> startedCopy() {
+        auto o = offeredAndAccepted();
+        (void)start::keysReceived(o.core, keysJson(o.offerUid, o.core, o.vaultUid, twoVersions()));
+        (void)start::beginReceived(o.core, {{"offer_uid", o.offerUid}, {"vault_uid", vl::keykit::toBase32(o.vaultUid)},
+                                            {"term", 1},
+                                            {"grant", {{"role_name", "reader"}, {"files", 0xffffffffu},
+                                                       {"directories", 0xffffffffu}, {"sync", 0}, {"roles", 0}}}});
+        return {o, *MirrorStart::vaultWithUid(o.vaultUid)};
+    }
+
+    static json coreEnds(const Offered& o, const std::optional<bool> removeCopy) {
+        json p{{"offer_uid", o.offerUid}, {"vault_uid", vl::keykit::toBase32(o.vaultUid)}, {"reason", "cancelled_by_core"}};
+        if (removeCopy) p["remove_copy"] = *removeCopy;
+        return start::cancelReceived(o.core, p);
+    }
+
     static bool superAdminMay(const uint32_t vaultId, const Action action, const std::string& path = "/") {
         const rbac::resolver::vault::QuietFilesystemDenials quiet;
         const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
@@ -899,7 +916,7 @@ TEST_F(MirrorStartDbTest, TheMirrorCancelsAStartThatHasNotCompletedAndRefusesACo
         EXPECT_EQ(scalar("SELECT count(*) FROM users WHERE id = " + std::to_string(owner)), "0");
         EXPECT_FALSE(runtime::Deps::get().storageManager->getEngine(vaultId));
     }
-    {   // started: refused here; the core's cancel removes it
+    {   // started: refused here; the core's cancel with remove_copy removes it
         auto o = offeredAndAccepted();
         (void)start::keysReceived(o.core, keysJson(o.offerUid, o.core, o.vaultUid, twoVersions()));
         (void)start::beginReceived(o.core, {{"offer_uid", o.offerUid}, {"vault_uid", vl::keykit::toBase32(o.vaultUid)},
@@ -914,7 +931,7 @@ TEST_F(MirrorStartDbTest, TheMirrorCancelsAStartThatHasNotCompletedAndRefusesACo
                          .value("cancelled", true));
         EXPECT_TRUE(MirrorVaults::get(vaultId));
         EXPECT_TRUE(start::cancelReceived(o.core, {{"offer_uid", o.offerUid}, {"vault_uid", vl::keykit::toBase32(o.vaultUid)},
-                                                   {"reason", "cancelled_by_core"}})
+                                                   {"reason", "cancelled_by_core"}, {"remove_copy", true}})
                         .value("cancelled", false));
         EXPECT_FALSE(MirrorStart::vaultWithUid(o.vaultUid));
         EXPECT_EQ(MirrorStart::offerByUid(o.offerUid, "mirror")->state, "cancelled");
@@ -978,6 +995,162 @@ TEST_F(MirrorStartDbTest, KeyRotationIsRefusedOnAMirroredVaultAndWhileAStartRuns
     EXPECT_EQ(refusalCode([&] { (void)vh::vault::EncryptionManager::mintSalvageKey(v, 99, true); }), "vault_mirrored");
     (void)ops::mirrors::cancel(superUser, {.vault_id = v});
     EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "") << "free again once the mirror ended";
+}
+
+// =============================================================================== ending a mirror (owner, 2026-11-26)
+
+TEST_F(MirrorStartDbTest, TheMirrorRemovesAnUnfinishedCopyWhateverTheFlagOrTheSetting) {
+    auto o = offeredAndAccepted();
+    (void)start::keysReceived(o.core, keysJson(o.offerUid, o.core, o.vaultUid, twoVersions()));
+    const auto vaultId = *MirrorStart::vaultWithUid(o.vaultUid);
+    EXPECT_FALSE(start::firstCopyFinished(vaultId)) << "installed: the first copy has not begun";
+    (void)ops::mirrors::setKeepRemoved(superUser, std::to_string(o.core.id), true);
+    const auto answer = coreEnds(o, false);
+    EXPECT_EQ(answer.value("copy", ""), "removed");
+    EXPECT_FALSE(MirrorStart::vaultWithUid(o.vaultUid)) << "nothing complete was held: removed";
+    EXPECT_EQ(MirrorStart::offerByUid(o.offerUid, "mirror")->state, "cancelled");
+}
+
+TEST_F(MirrorStartDbTest, AFinishedCopyIsRemovedOnlyWhenAskedAndTheLinkKeepsNothingAndOtherwiseOrphaned) {
+    {   // remove_copy, keep off: removed
+        auto [o, vaultId] = startedCopy();
+        EXPECT_TRUE(start::firstCopyFinished(vaultId));
+        const auto answer = coreEnds(o, true);
+        EXPECT_EQ(answer.value("copy", ""), "removed");
+        EXPECT_FALSE(MirrorStart::vaultWithUid(o.vaultUid));
+        EXPECT_FALSE(MirrorVaults::get(vaultId));
+    }
+    {   // no remove_copy: kept, orphaned, the last grant and the offer's own ending
+        auto [o, vaultId] = startedCopy();
+        const auto answer = coreEnds(o, std::nullopt);
+        EXPECT_EQ(answer.value("copy", ""), "kept");
+        const auto row = MirrorVaults::get(vaultId);
+        ASSERT_TRUE(row);
+        EXPECT_EQ(row->role, "orphaned");
+        ASSERT_TRUE(row->grant);
+        EXPECT_EQ(row->grant->role_name, "reader") << "the last recorded grant stays";
+        EXPECT_TRUE(superAdminMay(vaultId, Action::List)) << "rbac::mirrored treats it like a mirror";
+        EXPECT_EQ(MirrorStart::offerByUid(o.offerUid, "mirror")->state, "orphaned");
+        // Told again (the core's retry): it stays as it was left.
+        EXPECT_EQ(coreEnds(o, true).value("copy", ""), "kept");
+        EXPECT_TRUE(MirrorVaults::get(vaultId));
+        EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::cancel(superUser, {.vault_id = vaultId}); }), "");
+        EXPECT_FALSE(MirrorStart::vaultWithUid(o.vaultUid)) << "a super admin here removes an orphaned copy";
+    }
+    {   // remove_copy, keep on: kept
+        auto [o, vaultId] = startedCopy();
+        (void)ops::mirrors::setKeepRemoved(superUser, std::to_string(o.core.id), true);
+        const auto answer = coreEnds(o, true);
+        EXPECT_EQ(answer.value("copy", ""), "kept");
+        EXPECT_EQ(MirrorVaults::get(vaultId)->role, "orphaned");
+        EXPECT_EQ(MirrorStart::keepVaults(o.core.id).set_by, superUser->id);
+    }
+}
+
+TEST_F(MirrorStartDbTest, TheKeepSettingIsASuperAdminsAndAudited) {
+    const auto core = newPeer(true);
+    const auto plain = identities::manager().user(
+        ops::users::create(superUser, {.name = "ms_keep_" + tag(), .role = "unprivileged",
+                                       .password = std::string("Mirror-Start-Pass-123")})
+            .user->id);
+    EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::setKeepRemoved(plain, std::to_string(core.id), true); }), "denied");
+    setExperimental(false);
+    EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::setKeepRemoved(superUser, std::to_string(core.id), true); }),
+              "peers_experimental");
+    setExperimental(true);
+    EXPECT_FALSE(MirrorStart::keepVaults(core.id).enabled) << "off by default";
+    EXPECT_TRUE(ops::mirrors::setKeepRemoved(superUser, std::to_string(core.id), true).enabled);
+    EXPECT_TRUE(audit::Trail::instance()->flushNow());
+    EXPECT_EQ(scalar("SELECT details::jsonb->>'enabled' FROM audit_event WHERE action = 'mirror.keep_removed.set' "
+                     "ORDER BY seq DESC LIMIT 1"),
+              "true");
+    EXPECT_FALSE(ops::mirrors::setKeepRemoved(superUser, std::to_string(core.id), false).enabled);
+}
+
+TEST_F(MirrorStartDbTest, TheCoreAsksForRemovalOrNotAndRecordsWhatTheMirrorDid) {
+    const auto peer = newPeer(false);
+    for (const bool remove : {false, true}) {
+        const auto v = coreVault();
+        const auto offer = ops::mirrors::add(superUser, {.vault_id = v, .peer = std::to_string(peer.id)});
+        (void)start::answerReceived(peer, {{"offer_uid", offer.offer_uid}, {"decision", "accepted"}});
+        tickUntilQuiet();
+        ASSERT_EQ(MirrorStart::offer(offer.id)->state, "started");
+        // The mirror unreachable: the core ends its own side at once and the request waits.
+        wire->up.reset();
+        const auto c = ops::mirrors::cancel(superUser, {.vault_id = v, .remove_copy = remove});
+        EXPECT_EQ(c.remove_copy, remove);
+        EXPECT_FALSE(MirrorVaults::get(v)) << "the core's side ended at once";
+        start::Service::instance()->tick();
+        EXPECT_TRUE(MirrorStart::offer(offer.id)->notify) << "queued";
+        wire->up = 3000;
+        wire->answer = [remove](const std::string& command, const json&) -> std::optional<json> {
+            if (command == "peer.mirror.cancel") return okAnswer({{"cancelled", true}, {"copy", remove ? "removed" : "kept"}});
+            return okAnswer();
+        };
+        start::Service::instance()->tick();
+        const auto sent = wire->of("peer.mirror.cancel", offer.offer_uid);
+        ASSERT_EQ(sent.size(), 1u);
+        EXPECT_EQ(sent[0].value("remove_copy", !remove), remove);
+        const auto after = *MirrorStart::offer(offer.id);
+        EXPECT_FALSE(after.notify);
+        EXPECT_EQ(after.remove_copy, remove);
+        EXPECT_EQ(after.copy_outcome.value_or(""), remove ? "removed" : "kept");
+        EXPECT_EQ(ops::mirrors::toJson(ops::mirrors::get(superUser, v))["start"].value("copy", ""),
+                  remove ? "removed" : "kept")
+            << "mirror info shows it";
+        wire->answer = {};
+    }
+}
+
+TEST_F(MirrorStartDbTest, UnlinkingBeforeAQueuedRemovalIsDeliveredDropsItAndKeepsTheCopiesOrphaned) {
+    {   // The core's side: a queued cancel for a server unlinked meanwhile is dropped.
+        const auto peer = newPeer(false);
+        const auto v = coreVault();
+        const auto offer = ops::mirrors::add(superUser, {.vault_id = v, .peer = std::to_string(peer.id)});
+        wire->up.reset();
+        (void)ops::mirrors::cancel(superUser, {.vault_id = v, .remove_copy = true});
+        (void)db::query::peer::Peers::revoke(peer.id);
+        wire->up = 4000;
+        start::Service::instance()->tick();
+        EXPECT_FALSE(MirrorStart::offer(offer.id)->notify) << "dropped";
+        EXPECT_TRUE(wire->of("peer.mirror.cancel", offer.offer_uid).empty()) << "never delivered";
+    }
+    {   // The mirror's side: an unlinked core's copies are kept, orphaned.
+        auto [o, vaultId] = startedCopy();
+        (void)db::query::peer::Peers::revoke(o.core.id);
+        EXPECT_GE(start::reconcileUnlinked(), 1u);
+        EXPECT_EQ(MirrorVaults::get(vaultId)->role, "orphaned");
+        EXPECT_TRUE(MirrorStart::vaultWithUid(o.vaultUid));
+    }
+}
+
+TEST_F(MirrorStartDbTest, DeletingAMirroredVaultIsRefusedUntilItsMirrorEnded) {
+    const auto peer = newPeer(false);
+    const auto remove = [](const uint32_t v) {
+        return refusalCode([&] { (void)ops::vaults::remove(superUser, {.id = v, .accept_key_loss = true}); });
+    };
+    {   // The core: while a start runs, while mirrored; free once ended.
+        const auto v = coreVault();
+        (void)ops::mirrors::add(superUser, {.vault_id = v, .peer = std::to_string(peer.id)});
+        EXPECT_EQ(remove(v), "vault_mirrored");
+        (void)MirrorVaults::startCore(v, peer.id);
+        EXPECT_EQ(remove(v), "vault_mirrored");
+        (void)ops::mirrors::cancel(superUser, {.vault_id = v});
+        EXPECT_EQ(remove(v), "") << "the mirror ended: an ordinary vault again";
+    }
+    {   // The mirror: another server's vault; an orphaned copy goes through mirror.cancel.
+        auto [o, vaultId] = startedCopy();
+        EXPECT_EQ(remove(vaultId), "vault_mirrored");
+        (void)coreEnds(o, false);
+        EXPECT_EQ(remove(vaultId), "vault_orphaned_copy");
+        EXPECT_TRUE(MirrorStart::vaultWithUid(o.vaultUid));
+        (void)ops::mirrors::cancel(superUser, {.vault_id = vaultId});
+        EXPECT_FALSE(MirrorStart::vaultWithUid(o.vaultUid));
+        EXPECT_TRUE(audit::Trail::instance()->flushNow());
+        EXPECT_EQ(scalar("SELECT count(*) FROM audit_event WHERE action = 'mirror.remove' AND vault_id = " +
+                         std::to_string(vaultId)),
+                  "1");
+    }
 }
 
 // ====================================================================================== background contents
