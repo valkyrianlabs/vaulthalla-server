@@ -252,6 +252,10 @@ void walkContract(const FieldVisitor& visit) {
 const std::map<std::string, std::string>& opaqueObjects() {
     static const std::map<std::string, std::string> kOpaque{
         {"PriceBudgetNotification.metadata", "operator notification details stored as JSONB; each producer (budget preflight, gateway budgets, recovery cost alerts) records its own keys"},
+        {"peer.mirror.log response.groups[].rows[].state", "a replication log row's state document (design/peers/mirror.md \"State documents\"), carried verbatim and hashed by its canonical encoding (mirror/Hash.hpp), never read by the contract"},
+        {"peer.mirror.log response.part.rows[].state", "a replication log row's state document, as in groups[].rows[].state"},
+        {"peer.mirror.tree response.items[].state", "a baseline entry's state document, the same documents the replication log carries"},
+        {"peer.mirror.tree response.vault", "the vault's document (vh_mirror_vault_state) as of the baseline, recorded by the mirror verbatim"},
         {"cloud.storage.status response.billing", "the account's billing summary as the service last answered GET /v1/billing, passed through for display"},
         {"cloud.storage.status response.ejection", "the account's ejection progress as the service reports it in GET /v1/storage, passed through for display"},
         {"CloudStorageStatus.billing", "the account's billing summary as the service last answered GET /v1/billing, passed through for display"},

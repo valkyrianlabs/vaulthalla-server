@@ -7,6 +7,7 @@
 #include "protocols/ws/handler/StepUp.hpp"
 #include "protocols/ws/handler/Approvals.hpp"
 #include "protocols/ws/handler/Devices.hpp"
+#include "protocols/ws/handler/MirrorFollow.hpp"
 #include "protocols/ws/handler/PeerPolicy.hpp"
 #include "protocols/ws/handler/Peers.hpp"
 #include "protocols/ws/handler/fs/Changes.hpp"
@@ -140,6 +141,11 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("peer.endpoints", &handler::Peers::endpoints);
     r->registerPayload("peer.identity.rotate", &handler::Peers::identityRotate);
     r->registerSessionOnlyHandler("peer.unlinked", &handler::Peers::unlinked);
+    // The server mirror's data plane (wave 3 piece B; design/peers/mirror.md "As built: following the core").
+    r->registerPayload("peer.mirror.tree", &handler::MirrorFollow::tree);
+    r->registerPayload("peer.mirror.log", &handler::MirrorFollow::log);
+    r->registerPayload("peer.mirror.ack", &handler::MirrorFollow::ack);
+    r->registerPayload("peer.mirror.notify", &handler::MirrorFollow::notify);
 }
 
 void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {

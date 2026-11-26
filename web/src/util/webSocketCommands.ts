@@ -1031,6 +1031,11 @@ export interface WebSocketCommandMap {
   'peer.endpoints': WsContract['peer.endpoints']
   'peer.identity.rotate': WsContract['peer.identity.rotate']
   'peer.unlinked': WsContract['peer.unlinked']
+  // The server mirror's data plane (design/peers/mirror.md "As built: following the core"): between two servers only.
+  'peer.mirror.tree': WsContract['peer.mirror.tree']
+  'peer.mirror.log': WsContract['peer.mirror.log']
+  'peer.mirror.ack': WsContract['peer.mirror.ack']
+  'peer.mirror.notify': WsContract['peer.mirror.notify']
   // Any signed-in user pairs devices to their own account: open a 10-minute window, then approve a request by picking
   // the one of its three code_choices the device shows (a wrong pick denies the request).
   'device.pairing.open': WsContract['device.pairing.open']

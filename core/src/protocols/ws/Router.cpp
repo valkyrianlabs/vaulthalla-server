@@ -271,7 +271,12 @@ bool Router::isPeerWireCommand(const std::string_view command) {
         std::string_view{"peer.ping"},
         std::string_view{"peer.endpoints"},
         std::string_view{"peer.identity.rotate"},
-        std::string_view{"peer.unlinked"}
+        std::string_view{"peer.unlinked"},
+        // The server mirror's data plane (wave 3 piece B; handler/MirrorFollow.hpp).
+        std::string_view{"peer.mirror.tree"},
+        std::string_view{"peer.mirror.log"},
+        std::string_view{"peer.mirror.ack"},
+        std::string_view{"peer.mirror.notify"}
     };
     return containsCommand(commands, command);
 }

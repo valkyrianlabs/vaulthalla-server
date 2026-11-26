@@ -406,7 +406,8 @@ std::shared_ptr<protocols::ws::Session> peerSession(const bool pairing) {
 }
 
 std::vector<std::string> peerWireSet() {
-    return {"peer.hello", "peer.ping", "peer.endpoints", "peer.identity.rotate", "peer.unlinked"};
+    return {"peer.hello",       "peer.ping",       "peer.endpoints",  "peer.identity.rotate", "peer.unlinked",
+            "peer.mirror.tree", "peer.mirror.log", "peer.mirror.ack", "peer.mirror.notify"};
 }
 
 // Invariant 1: a peer session can call no command outside the peer set, whatever its vault roles are.

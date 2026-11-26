@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '68d6605bf13e6fd51fb17ec4c64acb79c37d4176bd5a002cacb12f806ba82b17'
+export const WS_CONTRACT_HASH = 'aada0d38af88443b4b1643e68e3a34f5704454e231595697a37870ceb35ab1ce'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
@@ -5660,6 +5660,95 @@ export interface WsContract {
     }
   }
   /**
+   * The mirror applied everything through (term, seq) and its digest there is `digest`. The core compares it
+   * with its own: equal, the acknowledgement is recorded (retention may pass it, the baseline is dropped);
+   * different, the vault stops as diverged on both servers.
+   */
+  'peer.mirror.ack': {
+    payload: { vault_uid: string; term: number; seq: number; digest: string; entries: number }
+    response: {
+      known: boolean
+      match: boolean
+      recorded: boolean
+      core_digest: string | null
+      core_entries: number | null
+    }
+  }
+  /**
+   * Whole groups of the core's log after (term, seq), at most 2,000 rows and 768 KiB; a single group larger
+   * than that comes in parts (part, asked again with the group's txid and the last seq held) and is applied
+   * whole. expired below retention or when the vault is no longer the core's.
+   */
+  'peer.mirror.log': {
+    payload: { vault_uid: string; term: number; seq: number; part?: { txid: number; after_seq: number } }
+    response: {
+      expired?: boolean
+      groups?: ({
+        term: number
+        txid: number
+        first_seq: number
+        last_seq: number
+        rows: ({
+          seq: number
+          op: 'upsert' | 'move' | 'trash' | 'restore' | 'purge' | 'delete' | 'vault' | 'key' | 'history'
+          uid: string | null
+          type: string | null
+          state: object
+          entry_hash: string | null
+          prev_hash: string | null
+          actor: { node: string; id: number } | null
+        })[]
+      })[]
+      last?: { term: number; seq: number }
+      more?: boolean
+      part?: {
+        term: number
+        txid: number
+        first_seq: number
+        last_seq: number
+        rows: ({
+          seq: number
+          op: 'upsert' | 'move' | 'trash' | 'restore' | 'purge' | 'delete' | 'vault' | 'key' | 'history'
+          uid: string | null
+          type: string | null
+          state: object
+          entry_hash: string | null
+          prev_hash: string | null
+          actor: { node: string; id: number } | null
+        })[]
+        complete: boolean
+      }
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped'
+    }
+  }
+  /**
+   * The core numbered groups of the vault through (term, seq): the mirror's follower looks now. Coalesced,
+   * never waited for; a lost one is harmless (the follower also polls).
+   */
+  'peer.mirror.notify': {
+    payload: { vault_uid: string; term: number; seq: number }
+    response: Record<string, never>
+  }
+  /**
+   * The mirror's first copy: a page of the core's tree as of its baseline (the state documents of the
+   * replication log, a folder before what is under it, trashed files last), after `after`. expired once the
+   * baseline is gone (the mirror acknowledged it).
+   */
+  'peer.mirror.tree': {
+    payload: { vault_uid: string; after?: number }
+    response: {
+      expired?: boolean
+      baseline?: { term: number; seq: number }
+      digest?: string
+      entries?: number
+      rows?: number
+      vault?: object
+      items?: ({ ord: number; state: object })[]
+      more?: boolean
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped'
+    }
+  }
+  /**
    * Reveal nonce_a; it must match the commitment (else the request is deleted: invalid). The request is then
    * shown to the window's owner with three codes; the code is UInt64BE(digest[0..8]) mod 10^6 of
    * SHA-256("vh/peer/sas/v1" ‖ spki_B ‖ spki_A ‖ nonce_A ‖ nonce_B ‖ SHA-256(card_A) ‖ SHA-256(card_B)). The
@@ -8605,6 +8694,10 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.link.start',
   'peer.link.status',
   'peer.list',
+  'peer.mirror.ack',
+  'peer.mirror.log',
+  'peer.mirror.notify',
+  'peer.mirror.tree',
   'peer.pair.confirm',
   'peer.pair.request',
   'peer.pair.status',
@@ -9069,6 +9162,10 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.link.start': 15000,
   'peer.link.status': 15000,
   'peer.list': 15000,
+  'peer.mirror.ack': 15000,
+  'peer.mirror.log': 15000,
+  'peer.mirror.notify': 15000,
+  'peer.mirror.tree': 15000,
   'peer.pair.confirm': 15000,
   'peer.pair.request': 15000,
   'peer.pair.status': 15000,

@@ -876,6 +876,47 @@ Health LinkService::health(const uint32_t peerId) const {
     return h;
 }
 
+bool LinkService::connected(const uint32_t peerId) const {
+    std::scoped_lock lock(mutex_);
+    const auto it = peers_.find(peerId);
+    return it != peers_.end() && it->second.active && !it->second.active->closed && it->second.active->hello;
+}
+
+std::optional<LinkService::Answer> LinkService::request(const uint32_t peerId, const std::string& command,
+                                                        json payload, const std::chrono::milliseconds timeout) {
+    std::shared_ptr<Connection> conn;
+    {
+        std::scoped_lock lock(mutex_);
+        const auto it = peers_.find(peerId);
+        if (it == peers_.end() || !it->second.active || it->second.active->closed || !it->second.active->hello)
+            return std::nullopt;
+        conn = it->second.active;
+    }
+    const auto answer = callAndWait(*conn->rpc, *conn->session, command, std::move(payload), timeout);
+    if (!answer) return std::nullopt;
+    Answer out;
+    out.ok = answeredOk(answer);
+    out.data = dataOf(*answer);
+    if (!out.ok) {
+        out.code = errorCode(*answer);
+        out.error = errorText(*answer);
+    }
+    return out;
+}
+
+bool LinkService::notify(const uint32_t peerId, const std::string& command, json payload) {
+    std::shared_ptr<Connection> conn;
+    {
+        std::scoped_lock lock(mutex_);
+        const auto it = peers_.find(peerId);
+        if (it == peers_.end() || !it->second.active || it->second.active->closed || !it->second.active->hello)
+            return false;
+        conn = it->second.active;
+    }
+    (void)conn->rpc->call(*conn->session, command, std::move(payload), kRequestTimeout, [](std::optional<json>) {});
+    return true;
+}
+
 std::size_t LinkService::disconnect(const uint32_t peerId, const bool notifyUnlinked,
                                     const protocols::ws::Session* spare) {
     std::vector<std::shared_ptr<Connection>> mine;
