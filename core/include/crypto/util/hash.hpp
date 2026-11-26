@@ -7,6 +7,9 @@
 namespace vh::crypto::hash {
 
 std::string blake2b(const std::filesystem::path& filepath);
+// The same digest (lower-case hex, crypto_generichash_BYTES) of everything an open descriptor holds, read from offset 0
+// with pread (the descriptor's position is untouched). std::system_error on a read failure.
+std::string blake2bFd(int fd);
 
 // Hashes a password with Argon2id using libsodium
 std::string password(const std::string& password);

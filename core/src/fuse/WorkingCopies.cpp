@@ -13,6 +13,7 @@
 #include "rbac/resolver/vault/all.hpp"
 #include "fs/ops/file.hpp"
 #include "log/Registry.hpp"
+#include "mirror/Contents.hpp"
 #include "platform/Durable.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
@@ -111,6 +112,10 @@ WorkingCopyHooks runtimeHooks() {
         .materialize = [](const fs::model::File& file, crypto::ScratchFile& to) {
             const fs::model::File* source = &file;
             std::shared_ptr<fs::model::File> hydrated;
+            // A mirror's file whose contents have not arrived (design/peers/mirror.md "Contents"): fetched from the
+            // vault's core first, waiting at most mirror::contents::kOpenWait. Otherwise NotReceived, a system_error
+            // whose errno is the open's: ENOLINK (the link is down), ETIMEDOUT (still coming), ENODATA (failed).
+            if (file.size_bytes > 0) (void)vh::mirror::contents::awaitIfPending(file);
             if (!std::filesystem::exists(file.backing_path)) {
                 if (file.size_bytes == 0) return;
                 // An index-only cloud file (Cache strategy): its bytes live in the bucket. Fetch them (price-gated,
