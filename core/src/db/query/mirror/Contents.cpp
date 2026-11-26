@@ -132,13 +132,42 @@ std::optional<uint32_t> SealedObjects::fileIdOf(const uint32_t vaultId, const vh
 
 // ---- what a mirror is waiting for -------------------------------------------------------------------------------------
 
-void PendingContents::expect(const Expected& e) {
+namespace {
+
+void mirrorValidateExpected(const Expected& e) {
     try {
         (void)vh::vault::content::formatOf(e.generation);
     } catch (const std::invalid_argument&) {
         throw ops::Invalid("not a generation id");
     }
     if (!isHexDigest(e.content_hash)) throw ops::Invalid("the content hash must be 64 lower-case hex digits");
+}
+
+void mirrorUpsertExpected(pqxx::work& txn, const Expected& e) {
+    txn.exec("INSERT INTO mirror_content_pending (vault_id, object_uid, generation, key_version, size_bytes, "
+             "  content_hash, mtime_us, priority) "
+             "VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8) "
+             "ON CONFLICT (vault_id, object_uid) DO UPDATE SET "
+             "  key_version = EXCLUDED.key_version, size_bytes = EXCLUDED.size_bytes, "
+             "  content_hash = EXCLUDED.content_hash, mtime_us = EXCLUDED.mtime_us, priority = EXCLUDED.priority, "
+             "  state = CASE WHEN mirror_content_pending.generation = EXCLUDED.generation "
+             "               THEN mirror_content_pending.state ELSE 'waiting' END, "
+             "  attempts = CASE WHEN mirror_content_pending.generation = EXCLUDED.generation "
+             "                  THEN mirror_content_pending.attempts ELSE 0 END, "
+             "  last_error = CASE WHEN mirror_content_pending.generation = EXCLUDED.generation "
+             "                    THEN mirror_content_pending.last_error END, "
+             "  expected_at = CASE WHEN mirror_content_pending.generation = EXCLUDED.generation "
+             "                     THEN mirror_content_pending.expected_at ELSE CURRENT_TIMESTAMP END, "
+             "  generation = EXCLUDED.generation",
+             pqxx::params{e.vault_id, vh::crypto::id::toUuid(e.object_uid), e.generation,
+                          static_cast<int64_t>(e.key_version), static_cast<int64_t>(e.size_bytes), e.content_hash,
+                          e.mtime_us, e.priority});
+}
+
+}
+
+void PendingContents::expect(const Expected& e) {
+    mirrorValidateExpected(e);
     Transactions::exec("mirror::PendingContents::expect", [&](pqxx::work& txn) {
         const auto role = txn.exec("SELECT m.role FROM vault v JOIN mirror_vault m ON m.vault_id = v.id "
                                    "WHERE v.id = $1 AND v.deleted_at IS NULL",
@@ -146,26 +175,20 @@ void PendingContents::expect(const Expected& e) {
         if (role.empty()) throw ops::NotFound("no such mirrored vault");
         if (role[0][0].as<std::string>() != "mirror")
             throw ops::Invalid("this server is not the mirror of the vault: only a mirror waits for contents");
-        txn.exec("INSERT INTO mirror_content_pending (vault_id, object_uid, generation, key_version, size_bytes, "
-                 "  content_hash, mtime_us, priority) "
-                 "VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8) "
-                 "ON CONFLICT (vault_id, object_uid) DO UPDATE SET "
-                 "  key_version = EXCLUDED.key_version, size_bytes = EXCLUDED.size_bytes, "
-                 "  content_hash = EXCLUDED.content_hash, mtime_us = EXCLUDED.mtime_us, priority = EXCLUDED.priority, "
-                 "  state = CASE WHEN mirror_content_pending.generation = EXCLUDED.generation "
-                 "               THEN mirror_content_pending.state ELSE 'waiting' END, "
-                 "  attempts = CASE WHEN mirror_content_pending.generation = EXCLUDED.generation "
-                 "                  THEN mirror_content_pending.attempts ELSE 0 END, "
-                 "  last_error = CASE WHEN mirror_content_pending.generation = EXCLUDED.generation "
-                 "                    THEN mirror_content_pending.last_error END, "
-                 "  expected_at = CASE WHEN mirror_content_pending.generation = EXCLUDED.generation "
-                 "                     THEN mirror_content_pending.expected_at ELSE CURRENT_TIMESTAMP END, "
-                 "  generation = EXCLUDED.generation",
-                 pqxx::params{e.vault_id, vh::crypto::id::toUuid(e.object_uid), e.generation,
-                              static_cast<int64_t>(e.key_version), static_cast<int64_t>(e.size_bytes), e.content_hash,
-                              e.mtime_us, e.priority});
+        mirrorUpsertExpected(txn, e);
     });
     markMayHavePending(e.vault_id);
+}
+
+void PendingContents::expect(pqxx::work& txn, const Expected& e) {
+    mirrorValidateExpected(e);
+    mirrorUpsertExpected(txn, e);
+    markMayHavePending(e.vault_id);
+}
+
+void PendingContents::forget(pqxx::work& txn, const uint32_t vaultId, const vh::crypto::id::ObjectUid& objectUid) {
+    txn.exec("DELETE FROM mirror_content_pending WHERE vault_id = $1 AND object_uid = $2::uuid",
+             pqxx::params{vaultId, vh::crypto::id::toUuid(objectUid)});
 }
 
 std::optional<Expected> PendingContents::get(const uint32_t vaultId, const vh::crypto::id::ObjectUid& objectUid) {

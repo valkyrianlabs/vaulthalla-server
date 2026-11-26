@@ -153,6 +153,23 @@ public:
     // stopped and joined when this service stops.
     [[nodiscard]] Transfers& transfers() noexcept { return transfers_; }
 
+    // ---- requests on a link (the server mirror's data plane: mirror::follow)
+
+    struct Answer {
+        bool ok{false};
+        nlohmann::json data{};   // the answer's data (an object)
+        std::string code{};      // a refusal's data.code
+        std::string error{};     // a refusal's text
+    };
+    // Whether the peer's link is up (peer.hello answered).
+    [[nodiscard]] bool connected(uint32_t peerId) const;
+    // Sends `command` on the peer's link and waits at most `timeout` for its answer: nullopt when there is no link (or
+    // it ended, or nothing came in time). Blocks the caller: never call it on an io thread or a request handler.
+    [[nodiscard]] std::optional<Answer> request(uint32_t peerId, const std::string& command, nlohmann::json payload,
+                                                std::chrono::milliseconds timeout = kRequestTimeout);
+    // Sends a notice on the peer's link and does not wait for (or read) its answer. False without a link.
+    bool notify(uint32_t peerId, const std::string& command, nlohmann::json payload);
+
     // Tests: dials started since construction (invariant 6: none without peer rows).
     [[nodiscard]] std::size_t dialsStarted() const noexcept { return dials_.load(std::memory_order_relaxed); }
     // Tests: one pass of the run loop (dial what needs dialling, ping, time out), without the thread.

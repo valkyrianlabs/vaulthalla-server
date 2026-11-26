@@ -11,7 +11,7 @@
 // Numbers the replication log of every vault this server is the core of (design/peers/mirror.md "The replication
 // log"; db::query::mirror::Log::sequence), so that each change is readable soon after it commits. Registered with
 // runtime::Manager as "MirrorSequencer". With no vault mirrored, a pass is one read of the log's (empty) pending index.
-// What a pass numbered is where `peer.mirror.notify` will come from (a later piece).
+// What a pass numbered is handed to mirror::follow::Follower::numbered, which sends `peer.mirror.notify`.
 namespace vh::mirror {
 
 class Sequencer : public concurrency::AsyncService {

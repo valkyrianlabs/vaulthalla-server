@@ -39452,6 +39452,896 @@
       "variants": []
     },
     {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.ack",
+      "confirmations": [],
+      "description": "The mirror applied everything through (term, seq) and its digest there is `digest`. The core compares it with its own: equal, the acknowledgement is recorded (retention may pass it, the baseline is dropped); different, the vault stops as diverged on both servers.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
+          "generator": {
+            "attrs": [
+              "uid"
+            ],
+            "entity": "mirror.vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "term"
+            ],
+            "entity": "mirror.position",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "term",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "seq"
+            ],
+            "entity": "mirror.position",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "seq",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "64 hex digits.",
+          "generator": {
+            "attrs": [
+              "digest"
+            ],
+            "entity": "mirror.digest",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "digest",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "entries"
+            ],
+            "entity": "mirror.digest",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "entries",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "response": [
+        {
+          "description": "The core can say its digest at that position.",
+          "name": "known",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "match",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "recorded",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "core_digest",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "core_entries",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.log",
+      "confirmations": [],
+      "description": "Whole groups of the core's log after (term, seq), at most 2,000 rows and 768 KiB; a single group larger than that comes in parts (part, asked again with the group's txid and the last seq held) and is applied whole. expired below retention or when the vault is no longer the core's.",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
+          "generator": {
+            "attrs": [
+              "uid"
+            ],
+            "entity": "mirror.vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "term"
+            ],
+            "entity": "mirror.position",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "term",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "seq"
+            ],
+            "entity": "mirror.position",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "seq",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "generator": {
+                "attrs": [
+                  "txid"
+                ],
+                "entity": "mirror.group",
+                "kind": "ref",
+                "scope": "any"
+              },
+              "minimum": 0,
+              "name": "txid",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "generator": {
+                "attrs": [
+                  "after_seq"
+                ],
+                "entity": "mirror.group",
+                "kind": "ref",
+                "scope": "any"
+              },
+              "minimum": 0,
+              "name": "after_seq",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "part",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "response": [
+        {
+          "name": "expired",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "element": {
+            "fields": [
+              {
+                "minimum": 0,
+                "name": "term",
+                "required": true,
+                "types": [
+                  "integer"
+                ]
+              },
+              {
+                "minimum": 0,
+                "name": "txid",
+                "required": true,
+                "types": [
+                  "integer"
+                ]
+              },
+              {
+                "minimum": 0,
+                "name": "first_seq",
+                "required": true,
+                "types": [
+                  "integer"
+                ]
+              },
+              {
+                "minimum": 0,
+                "name": "last_seq",
+                "required": true,
+                "types": [
+                  "integer"
+                ]
+              },
+              {
+                "description": "The group's log rows in order (vault_replication_log: state documents, 64-hex hashes).",
+                "element": {
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "enum": [
+                        "upsert",
+                        "move",
+                        "trash",
+                        "restore",
+                        "purge",
+                        "delete",
+                        "vault",
+                        "key",
+                        "history"
+                      ],
+                      "name": "op",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "name": "uid",
+                      "required": true,
+                      "types": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    {
+                      "name": "type",
+                      "required": true,
+                      "types": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    {
+                      "name": "state",
+                      "required": true,
+                      "types": [
+                        "object"
+                      ]
+                    },
+                    {
+                      "name": "entry_hash",
+                      "required": true,
+                      "types": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    {
+                      "name": "prev_hash",
+                      "required": true,
+                      "types": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    {
+                      "fields": [
+                        {
+                          "name": "node",
+                          "required": true,
+                          "types": [
+                            "string"
+                          ]
+                        },
+                        {
+                          "minimum": 0,
+                          "name": "id",
+                          "required": true,
+                          "types": [
+                            "integer"
+                          ]
+                        }
+                      ],
+                      "name": "actor",
+                      "required": true,
+                      "types": [
+                        "object",
+                        "null"
+                      ]
+                    }
+                  ],
+                  "name": "",
+                  "required": true,
+                  "types": [
+                    "object"
+                  ]
+                },
+                "name": "rows",
+                "required": true,
+                "types": [
+                  "array"
+                ]
+              }
+            ],
+            "name": "",
+            "required": true,
+            "types": [
+              "object"
+            ]
+          },
+          "name": "groups",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "A place in the vault's log.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "seq",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "last",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "name": "more",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "txid",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "first_seq",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "last_seq",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The group's log rows in order (vault_replication_log: state documents, 64-hex hashes).",
+              "element": {
+                "fields": [
+                  {
+                    "minimum": 0,
+                    "name": "seq",
+                    "required": true,
+                    "types": [
+                      "integer"
+                    ]
+                  },
+                  {
+                    "enum": [
+                      "upsert",
+                      "move",
+                      "trash",
+                      "restore",
+                      "purge",
+                      "delete",
+                      "vault",
+                      "key",
+                      "history"
+                    ],
+                    "name": "op",
+                    "required": true,
+                    "types": [
+                      "string"
+                    ]
+                  },
+                  {
+                    "name": "uid",
+                    "required": true,
+                    "types": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  {
+                    "name": "type",
+                    "required": true,
+                    "types": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  {
+                    "name": "state",
+                    "required": true,
+                    "types": [
+                      "object"
+                    ]
+                  },
+                  {
+                    "name": "entry_hash",
+                    "required": true,
+                    "types": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  {
+                    "name": "prev_hash",
+                    "required": true,
+                    "types": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  {
+                    "fields": [
+                      {
+                        "name": "node",
+                        "required": true,
+                        "types": [
+                          "string"
+                        ]
+                      },
+                      {
+                        "minimum": 0,
+                        "name": "id",
+                        "required": true,
+                        "types": [
+                          "integer"
+                        ]
+                      }
+                    ],
+                    "name": "actor",
+                    "required": true,
+                    "types": [
+                      "object",
+                      "null"
+                    ]
+                  }
+                ],
+                "name": "",
+                "required": true,
+                "types": [
+                  "object"
+                ]
+              },
+              "name": "rows",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "name": "complete",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            }
+          ],
+          "name": "part",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "The vault's state on the core: diverged stops the mirror too.",
+          "enum": [
+            "live",
+            "paused",
+            "diverged",
+            "expired",
+            "stopped"
+          ],
+          "name": "core_state",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.notify",
+      "confirmations": [],
+      "description": "The core numbered groups of the vault through (term, seq): the mirror's follower looks now. Coalesced, never waited for; a lost one is harmless (the follower also polls).",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
+          "generator": {
+            "attrs": [
+              "uid"
+            ],
+            "entity": "mirror.vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "term"
+            ],
+            "entity": "mirror.position",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "term",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "seq"
+            ],
+            "entity": "mirror.position",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "seq",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "response": [],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.tree",
+      "confirmations": [],
+      "description": "The mirror's first copy: a page of the core's tree as of its baseline (the state documents of the replication log, a folder before what is under it, trashed files last), after `after`. expired once the baseline is gone (the mirror acknowledged it).",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
+          "generator": {
+            "attrs": [
+              "uid"
+            ],
+            "entity": "mirror.vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The last baseline entry the mirror holds (0 first).",
+          "generator": {
+            "kind": "int_range",
+            "max": 1000,
+            "min": 0
+          },
+          "minimum": 0,
+          "name": "after",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental"
+      ],
+      "response": [
+        {
+          "name": "expired",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "A place in the vault's log.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "seq",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "baseline",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "The baseline's digest (64 hex).",
+          "name": "digest",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "entries",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Entries the baseline serves.",
+          "minimum": 0,
+          "name": "rows",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The vault's document then (the first page only).",
+          "name": "vault",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "element": {
+            "fields": [
+              {
+                "minimum": 0,
+                "name": "ord",
+                "required": true,
+                "types": [
+                  "integer"
+                ]
+              },
+              {
+                "name": "state",
+                "required": true,
+                "types": [
+                  "object"
+                ]
+              }
+            ],
+            "name": "",
+            "required": true,
+            "types": [
+              "object"
+            ]
+          },
+          "name": "items",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "name": "more",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "The vault's state on the core: diverged stops the mirror too.",
+          "enum": [
+            "live",
+            "paused",
+            "diverged",
+            "expired",
+            "stopped"
+          ],
+          "name": "core_state",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
       "auth": "peer_pairing",
       "client_timeout_ms": 15000,
       "command": "peer.pair.confirm",
@@ -61594,5 +62484,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "68d6605bf13e6fd51fb17ec4c64acb79c37d4176bd5a002cacb12f806ba82b17"
+  "ws_hash": "aada0d38af88443b4b1643e68e3a34f5704454e231595697a37870ceb35ab1ce"
 }

@@ -71,6 +71,11 @@ public:
     // its mirror or the expectation is malformed (a generation that is neither empty nor VHF1 or GCM, a hash that is
     // not 64 hex digits).
     static void expect(const Expected& e);
+    // The log applier's (mirror::apply): in the caller's transaction, for a vault the caller has checked this server
+    // is the mirror of; the same row rules. forget() drops the file's row whatever it expects (the file is gone or in
+    // the trash).
+    static void expect(pqxx::work& txn, const Expected& e);
+    static void forget(pqxx::work& txn, uint32_t vaultId, const vh::crypto::id::ObjectUid& objectUid);
     // The file's row, nullopt when nothing is pending for it.
     [[nodiscard]] static std::optional<Expected> get(uint32_t vaultId, const vh::crypto::id::ObjectUid& objectUid);
     // What is outstanding for a vault, in the order it is fetched: priority (higher first), then the order the file was
