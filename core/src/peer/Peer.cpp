@@ -196,4 +196,13 @@ void to_json(json& j, const Record& r) {
          {"revoked", r.revoked()}};
 }
 
+std::optional<dc::PublicKey> pinnedKeyOf(const Record& row, const X509* leaf) {
+    if (!leaf) return std::nullopt;
+    auto key = dc::p256KeyOf(leaf);
+    if (!key) return std::nullopt;
+    const auto hex = dc::toHex(key->spkiSha256);
+    if (hex != row.spki_sha256 && (!row.next_spki_sha256 || hex != *row.next_spki_sha256)) return std::nullopt;
+    return key;
+}
+
 }

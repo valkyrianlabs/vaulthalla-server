@@ -4,6 +4,7 @@
 #include "peer/Fwd.hpp"
 
 #include <nlohmann/json_fwd.hpp>
+#include <openssl/types.h>
 
 #include <array>
 #include <cstdint>
@@ -83,6 +84,11 @@ struct Record {
     [[nodiscard]] bool revoked() const noexcept { return revoked_at.has_value(); }
     [[nodiscard]] std::string shortId() const { return spki_sha256.substr(0, 16); }
 };
+
+// The pin check every connection this server dials to a linked server makes (the link's websocket, the sealed lane's
+// HTTP client; design/peers/link.md "Both ends check the pin on every connection"): the certificate's P-256 key is the
+// row's pinned key or the next key the peer announced, never the trust store. The key, or nullopt.
+[[nodiscard]] std::optional<vh::device::crypto::PublicKey> pinnedKeyOf(const Record& row, const X509* leaf);
 
 // {id, node_id, name, spki_sha256, next_spki_sha256, attest_public_keys, wrap_public_key, endpoints, sharing,
 //  approved_by, compared_by, peer_protocol, product_version, linked_at, last_seen_at, revoked_at, revoked}: keys base64,

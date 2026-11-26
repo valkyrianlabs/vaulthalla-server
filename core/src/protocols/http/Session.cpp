@@ -8,6 +8,7 @@
 #include "protocols/http/Access.hpp"
 #include "protocols/http/upload/Content.hpp"
 #include "protocols/http/upload/Coordinator.hpp"
+#include "protocols/device/PeerObject.hpp"
 #include "protocols/device/Transfer.hpp"
 #include "protocols/http/upload/Resumable.hpp"
 #include "protocols/ws/ConnectionLimit.hpp"
@@ -266,8 +267,9 @@ void Session::setTimeoutsForTesting(const std::chrono::milliseconds idle, const 
 
 struct Session::Device {
     DeviceConnection connection;
-    std::shared_ptr<ws::Session> principal;  // null on a pairing-only connection
+    std::shared_ptr<ws::Session> principal;  // null on a pairing-only connection and a linked server's
     std::unique_ptr<HeaderParser> first;     // the request the listener already read the header of
+    protocols::device::peer_object::Registration linkedRegistration{};  // a linked server's: unlinking cancels it
 };
 
 Session::Session(tcp::socket socket) : lifetime_(sessionLifetimes()), socket_(std::move(socket)) {
@@ -305,7 +307,12 @@ std::shared_ptr<Session> Session::openDevice(DeviceConnection connection, std::u
     auto user = connection.user;
     auto peer = connection.peer;
     auto session = std::make_shared<Session>(std::move(connection), std::move(first), std::move(buffer));
-    if (user) {
+    if (const auto linked = session->device_->connection.linked) {
+        session->device_->linkedRegistration =
+            protocols::device::peer_object::track(linked->peer_id, [weak = std::weak_ptr<Session>(session)] {
+                if (const auto s = weak.lock()) s->cancel();
+            });
+    } else if (user) {
         // Revocation, revokeSessions and the sweeper close the principal; that ends this connection too.
         session->device_->principal = ws::Session::devicePrincipal(
             std::move(peer), std::move(user), [weak = std::weak_ptr<Session>(session)] {
@@ -422,6 +429,12 @@ bool Session::serve(HeaderParser& parser) {
             (void)write_response(std::move(response));
             return false;
         };
+        // A linked server: the sealed lane alone, never as a user (design/peers/link.md "What it is not given").
+        if (device_->connection.linked) {
+            if (!protocols::device::peer_object::isTarget(target)) return refuse("Not found", status::not_found);
+            if (stopping()) return false;
+            return handle_peer_object(parser);
+        }
         const bool transfer = protocols::device::transfer::isTarget(target);
         if (!isDeviceLaneTarget(target) && !isMcpTarget(target) && !transfer)
             return refuse("Not found", status::not_found);
@@ -712,6 +725,36 @@ bool Session::handle_transfer(HeaderParser& parser) {
     res.prepare_payload();
     res.keep_alive(keepAlive);
     return write_response(std::move(res)) && keepAlive;
+}
+
+// GET/HEAD /peer/object/<vault uid>/<object uid>/<generation>: the answer is decided from the header alone (the lane
+// takes no body: one is refused and the connection closed), then the sealed bytes stream through write_stream.
+bool Session::handle_peer_object(HeaderParser& parser) {
+    auto req = make_request_from_parser(parser);
+    const auto keepAlive = req.keep_alive();
+    const bool head = req.method() == verb::head;
+    if (parser.chunked() || (parser.content_length() && *parser.content_length() > 0)) {
+        auto res = Router::makeErrorResponse(req, "The sealed lane takes no request body", status::bad_request);
+        std::visit([](auto& r) { r.keep_alive(false); }, res);
+        (void)write_response(std::move(res));
+        return false;
+    }
+    model::preview::Response response;
+    try {
+        response = protocols::device::peer_object::serve(req, *device_->connection.linked);
+    } catch (const std::exception& e) {
+        if (stopping()) return false;
+        // Nothing of the failure crosses to the other server: it is logged here.
+        log::Registry::http()->error("[Session] Sealed lane request {} failed: {}", std::string(req.target()), e.what());
+        string_response res{status::internal_server_error, req.version()};
+        res.set(field::content_type, "application/json");
+        res.body() = nlohmann::json{{"error", "Internal error"}, {"code", "internal"}}.dump();
+        res.prepare_payload();
+        res.keep_alive(false);
+        (void)write_response(std::move(res));
+        return false;
+    }
+    return write_response(std::move(response), head) && keepAlive;
 }
 
 // PUT /upload/sessions/<id>/files/<file_id>?offset=: every rule is checked from the header (a refusal closes the

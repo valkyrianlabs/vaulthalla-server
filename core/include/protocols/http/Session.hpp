@@ -2,6 +2,7 @@
 
 #include "device/Fwd.hpp"
 #include "identities/Fwd.hpp"
+#include "peer/Fwd.hpp"
 #include "protocols/http/Router.hpp"
 #include "protocols/SessionLifetimes.hpp"
 #include "protocols/ws/Fwd.hpp"
@@ -89,7 +90,8 @@ using HeaderParser = boost::beast::http::request_parser<boost::beast::http::buff
 
 // An HTTP connection on the device listener (/preview, /download, /upload, /transfer, /mcp): TLS is up, the first request's
 // header is read, and who this is was settled by the client key. Requests run as the device's user (a Device
-// principal, never a cookie); the share lanes are refused.
+// principal, never a cookie); the share lanes are refused. A linked server's key gets the sealed lane (/peer/object)
+// alone, as no user.
 struct DeviceConnection {
     std::shared_ptr<ws::TlsTransport> transport;
     std::shared_ptr<const ::vh::device::Peer> peer;
@@ -97,6 +99,9 @@ struct DeviceConnection {
     std::unique_ptr<ws::ConnectionSlot> slot;
     // POST /mcp (Streamable HTTP) for the principal; null answers 404.
     std::function<model::preview::Response(request&&, const std::shared_ptr<ws::Session>&)> mcp;
+    // A linked server's connection (design/peers/mirror.md "Contents"; `user` is null): the sealed lane
+    // (protocols::device::peer_object) and nothing else. Unlinking closes it (peer_object::closeConnections).
+    std::shared_ptr<const ::vh::peer::Principal> linked{};
 };
 
 class Session : public std::enable_shared_from_this<Session> {
@@ -136,6 +141,8 @@ private:
     bool handle_streaming_content(boost::beast::http::request_parser<boost::beast::http::buffer_body>& parser);
     // The device listener's /transfer calibration lanes (protocols/device/Transfer.hpp).
     bool handle_transfer(HeaderParser& parser);
+    // A linked server's sealed lane (protocols/device/PeerObject.hpp).
+    bool handle_peer_object(HeaderParser& parser);
     bool handle_resumable_part(boost::beast::http::request_parser<boost::beast::http::buffer_body>& parser);
     bool write_response(model::preview::Response&& response, bool headRequest = false);
     bool write_stream(model::preview::StreamResponse&& response);

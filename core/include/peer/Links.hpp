@@ -3,6 +3,7 @@
 #include "concurrency/AsyncService.hpp"
 #include "device/Fwd.hpp"
 #include "peer/Peer.hpp"
+#include "peer/Transfers.hpp"
 #include "protocols/ws/Fwd.hpp"
 
 #include <boost/beast/http.hpp>
@@ -36,6 +37,9 @@ namespace boost::asio::ssl { class context; }
 // Pairing's dialling side (peer.link.start) runs here too, one thread per attempt: dial (pinned with expect_spki,
 // else trust on first use), peer.pair.request / confirm, show the code, poll peer.pair.status, and on approval write
 // the `peer` row.
+//
+// Bulk data (design/peers/mirror.md "Contents") goes over separate connections to the same listener with the same pins
+// (peer::object, the sealed lane), within this service's per-peer transfer slots (Transfers).
 //
 // Gate: while peers.experimental is off nothing dials, no attempt starts, and every connection closes. "PeerLinks"
 // in runtime::Manager, started after the device listener.
@@ -140,6 +144,15 @@ public:
     [[nodiscard]] std::vector<uint32_t> announceRotation(const vh::device::ServerIdentity& current,
                                                          const vh::device::crypto::Hash& nextSpki, uint64_t counter);
 
+    // The client TLS context every connection this server dials to a linked server uses (the link's websocket, the
+    // sealed lane): this server's identity certificate, TLS 1.3, no trust store (each connection checks its pin). A
+    // rotated identity gets a new context; open connections keep the one they started with.
+    [[nodiscard]] std::shared_ptr<boost::asio::ssl::context> clientTls();
+
+    // Bulk transfers to linked servers (the sealed lane's fetches): slots per peer, and the threads they run on,
+    // stopped and joined when this service stops.
+    [[nodiscard]] Transfers& transfers() noexcept { return transfers_; }
+
     // Tests: dials started since construction (invariant 6: none without peer rows).
     [[nodiscard]] std::size_t dialsStarted() const noexcept { return dials_.load(std::memory_order_relaxed); }
     // Tests: one pass of the run loop (dial what needs dialling, ping, time out), without the thread.
@@ -166,8 +179,10 @@ private:
 
     void ensureIo();
     void shutdown() noexcept;
-    std::shared_ptr<boost::asio::ssl::context> clientTls();
     void tick();
+    // Test instances only (paths::testMode): a sealed-lane fetch the Tier B drill asks for through a file
+    // (VH_TEST_FAULT_DIR/peer-object-fetch.json), run with the real client; never in a packaged daemon.
+    void pollTestFetch();
     void dialPeer(const Record& row);
     void onDialed(uint32_t peerId, std::shared_ptr<protocols::ws::TlsTransport> transport, std::string address,
                   std::shared_ptr<const Principal> principal);
@@ -204,6 +219,8 @@ private:
     bool stopping_{false};
 
     std::atomic<std::size_t> dials_{0};
+
+    Transfers transfers_;
 };
 
 // The process's service (runtime::Manager's), or null before it exists.

@@ -7,13 +7,16 @@
 #include "db/query/peer/Peer.hpp"
 #include "device/Crypto.hpp"
 #include "device/ServerIdentity.hpp"
+#include "fs/ops/file.hpp"
 #include "log/Registry.hpp"
 #include "ops/Error.hpp"
 #include "peer/Crypto.hpp"
 #include "peer/Keys.hpp"
+#include "peer/ObjectClient.hpp"
 #include "protocols/SessionLifetimes.hpp"
 #include "protocols/device/Endpoints.hpp"
 #include "protocols/device/Listener.hpp"
+#include "protocols/device/PeerObject.hpp"
 #include "protocols/ws/Client.hpp"
 #include "protocols/ws/ConnectionLimit.hpp"
 #include "protocols/ws/Handler.hpp"
@@ -21,6 +24,8 @@
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/TlsTransport.hpp"
 #include "runtime/Manager.hpp"
+
+#include <paths.h>
 
 #include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/io_context.hpp>
@@ -32,6 +37,7 @@
 #include <version.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <future>
 #include <set>
 
@@ -236,6 +242,8 @@ LinkService::~LinkService() {
 
 void LinkService::shutdown() noexcept {
     try {
+        // Transfers first: each stops within its client's cancellation slice, and holds no lock of this service.
+        transfers_.shutdown();
         {
             std::scoped_lock lock(attemptsMutex_);
             stopping_ = true;
@@ -312,6 +320,7 @@ void LinkService::runLoop() {
         std::scoped_lock lock(attemptsMutex_);
         stopping_ = false;
     }
+    transfers_.resume();
     while (!shouldStop()) {
         try {
             tick();
@@ -393,6 +402,86 @@ void LinkService::tick() {
     for (const auto& c : stale) c->session->close();  // unlinked meanwhile (by another process or a row edit)
     for (const auto& c : toPing) ping(c);
     for (const auto& row : toDial) dialPeer(row);
+    if (paths::testMode) pollTestFetch();
+}
+
+// The Tier B drill's request (tools/harness/vhh/drill_peers.py, test instances only): fetch one generation from a linked
+// server with the real client, optionally broken off after `interrupt_at` bytes and resumed, into a file next to the
+// request, and report what came back. Sealed bytes only: nothing is opened with a key.
+void LinkService::pollTestFetch() {
+    const char* dir = std::getenv("VH_TEST_FAULT_DIR");
+    if (!dir) return;
+    const std::filesystem::path base(dir);
+    const auto request = base / "peer-object-fetch.json";
+    const auto taken = base / "peer-object-fetch.taken";
+    std::error_code ec;
+    if (!std::filesystem::exists(request, ec)) return;
+    std::filesystem::remove(taken, ec);
+    std::filesystem::rename(request, taken, ec);
+    if (ec) return;
+    json ask;
+    try {
+        ask = json::parse(vh::fs::ops::readFileToString(taken));
+    } catch (const std::exception& e) {
+        log::Registry::runtime()->warn("[PeerLinks] Ignored a malformed test fetch request: {}", e.what());
+        return;
+    }
+    (void)transfers_.spawn([this, ask, base] {
+        constexpr uint64_t kMaxBytes = 64ull * 1024 * 1024;
+        json report = {{"ok", false}};
+        std::vector<uint8_t> body;
+        try {
+            const auto row = db::query::peer::Peers::liveByNodeId(ask.at("peer_node").get<std::string>());
+            if (!row) throw std::runtime_error("no live link to that node");
+            const auto vault = vl::keykit::fromBase32(ask.at("vault_uid").get<std::string>());
+            const auto object = vl::keykit::fromBase32(ask.at("object_uid").get<std::string>());
+            if (!vault || !object) throw std::runtime_error("malformed uid");
+            const object::Address what{.vault = *vault, .object = *object,
+                                       .generation = ask.at("generation").get<std::string>()};
+            const auto interruptAt = ask.value("interrupt_at", uint64_t{0});
+            bool stop = false;
+            bool interrupting = false;
+            object::FetchOptions options;
+            options.tls = clientTls();
+            options.deadline = SteadyClock::now() + std::chrono::minutes(2);
+            options.cancelled = [&] { return stop || transfers_.stopping(); };
+            const object::Sink sink = [&](const std::span<const uint8_t> bytes) {
+                if (body.size() + bytes.size() > kMaxBytes) throw std::runtime_error("larger than a drill fetch takes");
+                body.insert(body.end(), bytes.begin(), bytes.end());
+                if (interrupting && body.size() >= interruptAt) stop = true;
+            };
+            json attempts = json::array();
+            for (int i = 0; i < 4; ++i) {
+                interrupting = interruptAt > 0 && body.size() < interruptAt;
+                stop = false;
+                options.offset = body.size();
+                const auto r = object::fetch(*row, what, options, sink);
+                attempts.push_back({{"offset", options.offset}, {"status", std::string(object::toString(r.status))},
+                                    {"received", r.received}, {"total", r.total}, {"http_status", r.http_status},
+                                    {"code", r.code}, {"error", r.error}});
+                if (r.status == object::FetchStatus::Complete || r.status == object::FetchStatus::Refused ||
+                    r.status == object::FetchStatus::Unreachable)
+                    break;
+                // The interruption asked for: keep exactly interrupt_at bytes, and resume from there.
+                if (interrupting && body.size() > interruptAt) body.resize(interruptAt);
+            }
+            report = {{"ok", true}, {"attempts", attempts}, {"bytes", body.size()}};
+            const auto outPath = base / "peer-object-fetch.bin";
+            std::filesystem::remove(outPath);
+            vh::fs::ops::writeFileExclusive(outPath, body);
+        } catch (const std::exception& e) {
+            report = {{"ok", false}, {"error", e.what()}};
+        }
+        try {
+            const auto dumped = report.dump();
+            const auto tmp = base / "peer-object-fetch.result.tmp";
+            std::filesystem::remove(tmp);
+            vh::fs::ops::writeFileExclusive(tmp, std::span(reinterpret_cast<const uint8_t*>(dumped.data()), dumped.size()));
+            std::filesystem::rename(tmp, base / "peer-object-fetch.result.json");
+        } catch (const std::exception& e) {
+            log::Registry::runtime()->warn("[PeerLinks] Could not write the test fetch report: {}", e.what());
+        }
+    });
 }
 
 // ---- dialling -------------------------------------------------------------------------------------------------------
@@ -423,13 +512,10 @@ void LinkService::dialPeer(const Record& row) {
             protocols::ws::client::DialOptions options{
                 .host = endpoint.host, .port = endpoint.port, .target = "/ws", .tls = tls,
                 .acceptCertificate = [self = shared_from_this()](X509* leaf) {
-                    const auto key = dc::p256KeyOf(leaf);
-                    if (!key) return false;
-                    const auto hex = dc::toHex(key->spkiSha256);
                     // The pin, or the key the peer announced; never the trust store.
-                    if (hex != self->row.spki_sha256 && (!self->row.next_spki_sha256 || hex != *self->row.next_spki_sha256))
-                        return false;
-                    self->seen = key;
+                    auto key = pinnedKeyOf(self->row, leaf);
+                    if (!key) return false;
+                    self->seen = std::move(key);
                     return true;
                 },
                 .timeout = std::chrono::seconds(10), .userAgent = "vaulthalla-server"};
@@ -801,6 +887,8 @@ std::size_t LinkService::disconnect(const uint32_t peerId, const bool notifyUnli
         rows_.erase(std::remove_if(rows_.begin(), rows_.end(), [&](const Record& r) { return r.id == peerId; }),
                     rows_.end());
     }
+    // The sealed lane's connections of this peer go too (link.md invariant 7).
+    (void)protocols::device::peer_object::closeConnections(peerId);
     for (const auto& c : mine) {
         if (c->session.get() == spare) {
             c->session->closeAfterReply();
@@ -825,6 +913,7 @@ std::size_t LinkService::disconnectAll() {
         for (auto& [_, st] : peers_) st.active.reset();
     }
     for (const auto& c : all) c->session->close();
+    (void)protocols::device::peer_object::closeAllConnections();
     return all.size();
 }
 

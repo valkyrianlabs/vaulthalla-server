@@ -9,6 +9,7 @@
 #include "peer/Links.hpp"
 #include "protocols/device/Endpoints.hpp"
 #include "protocols/device/Mcp.hpp"
+#include "protocols/device/PeerObject.hpp"
 #include "protocols/http/Session.hpp"
 #include "protocols/ws/ConnectionLimit.hpp"
 #include "protocols/ws/Session.hpp"
@@ -213,7 +214,8 @@ private:
     }
 
     // The one place a path picks its handler: /ws (the console's Router), the HTTP lanes and /mcp (an HTTP session
-    // on its own thread, as the device's user). A pairing-only connection gets only /ws.
+    // on its own thread, as the device's user), the sealed lane (a linked server's, as no user). A pairing-only
+    // connection gets only /ws.
     void dispatch() {
         const auto& header = parser_->get();
         const std::string target{header.target()};
@@ -233,12 +235,18 @@ private:
             session->acceptDevice(transport_, *request_, authorization_.peer, authorization_.user);
             return;
         }
-        if (isHttpLane(target)) {
-            if (!authorization_.user) return respond(bhttp::status::forbidden, "device_unknown");
+        // design/peers/mirror.md "Contents": the sealed lane is a linked server's alone; to any other key it does not
+        // exist. Its connection is an HTTP session as no user, which serves that lane and nothing else.
+        const bool sealedLane = peer_object::isTarget(target);
+        if (sealedLane && !authorization_.linked) return respond(bhttp::status::not_found, "not found");
+        if (sealedLane || isHttpLane(target)) {
+            if (!sealedLane && !authorization_.user) return respond(bhttp::status::forbidden, "device_unknown");
             auto session = protocols::http::Session::openDevice(
                 protocols::http::DeviceConnection{.transport = transport_, .peer = authorization_.peer,
-                                                  .user = authorization_.user, .slot = std::move(slot_),
-                                                  .mcp = &protocols::device::mcp::handle},
+                                                  .user = sealedLane ? nullptr : authorization_.user,
+                                                  .slot = std::move(slot_),
+                                                  .mcp = sealedLane ? nullptr : &protocols::device::mcp::handle,
+                                                  .linked = sealedLane ? authorization_.linked : nullptr},
                 std::move(parser_), std::move(buffer_));
             try {
                 std::thread([session = std::move(session)] {
