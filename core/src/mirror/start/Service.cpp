@@ -151,6 +151,13 @@ void Service::tick() {
         }
         try {
             step(o);
+        } catch (const ops::Conflict& e) {
+            // A busy vault (startCore waited out its bound for the writers already running): the next pass tries again.
+            // Nothing failed, so nothing is counted; no attempt ever gives a start up anyway.
+            log::Registry::sync()->info("[MirrorStarter] Offer {} of vault {}: {}; trying again", o.id, o.core_vault_id,
+                                        e.what());
+            std::scoped_lock lock(mutex_);
+            retryAt_[o.id] = SteadyClock::now() + kInterval;
         } catch (const std::exception& e) {
             Q::noteAttempt(o.id, e.what());
             log::Registry::sync()->warn("[MirrorStarter] Offer {} of vault {} ({}): {}", o.id, o.core_vault_id, o.state,

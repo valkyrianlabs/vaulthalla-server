@@ -361,15 +361,19 @@ protected:
         return o;
     }
 
-    // A copy this server holds, its start complete (keys installed, the begin with a reader grant).
-    static std::pair<Offered, uint32_t> startedCopy() {
+    // A copy this server holds, its start complete (keys installed, the begin with a reader grant). `finished`: its
+    // first copy complete, as piece B's follower records it (mirror_vault.copy_finished, set by the applier once the
+    // last baseline page matched the core's digest; MirrorFollowDbTest drives that path, `vhh drill peers` end to end).
+    static std::pair<Offered, uint32_t> startedCopy(const bool finished = true) {
         auto o = offeredAndAccepted();
         (void)start::keysReceived(o.core, keysJson(o.offerUid, o.core, o.vaultUid, twoVersions()));
         (void)start::beginReceived(o.core, {{"offer_uid", o.offerUid}, {"vault_uid", vl::keykit::toBase32(o.vaultUid)},
                                             {"term", 1},
                                             {"grant", {{"role_name", "reader"}, {"files", 0xffffffffu},
                                                        {"directories", 0xffffffffu}, {"sync", 0}, {"roles", 0}}}});
-        return {o, *MirrorStart::vaultWithUid(o.vaultUid)};
+        const auto vaultId = *MirrorStart::vaultWithUid(o.vaultUid);
+        if (finished) sql("UPDATE mirror_vault SET copy_finished = TRUE WHERE vault_id = " + std::to_string(vaultId));
+        return {o, vaultId};
     }
 
     static json coreEnds(const Offered& o, const std::optional<bool> removeCopy) {
@@ -1008,6 +1012,18 @@ TEST_F(MirrorStartDbTest, TheMirrorRemovesAnUnfinishedCopyWhateverTheFlagOrTheSe
     const auto answer = coreEnds(o, false);
     EXPECT_EQ(answer.value("copy", ""), "removed");
     EXPECT_FALSE(MirrorStart::vaultWithUid(o.vaultUid)) << "nothing complete was held: removed";
+    EXPECT_EQ(MirrorStart::offerByUid(o.offerUid, "mirror")->state, "cancelled");
+}
+
+TEST_F(MirrorStartDbTest, AStartedCopyWhoseFirstCopyIsUnfinishedIsRemovedWhateverWasAskedOrSet) {
+    // The begin came, the follower has not finished the first copy: nothing complete is held here.
+    auto [o, vaultId] = startedCopy(false);
+    EXPECT_EQ(MirrorStart::offerByUid(o.offerUid, "mirror")->state, "started");
+    EXPECT_FALSE(start::firstCopyFinished(vaultId)) << "started is not finished: piece B's flag decides";
+    (void)ops::mirrors::setKeepRemoved(superUser, std::to_string(o.core.id), true);
+    EXPECT_EQ(coreEnds(o, std::nullopt).value("copy", ""), "removed");
+    EXPECT_FALSE(MirrorStart::vaultWithUid(o.vaultUid));
+    EXPECT_FALSE(MirrorVaults::get(vaultId));
     EXPECT_EQ(MirrorStart::offerByUid(o.offerUid, "mirror")->state, "cancelled");
 }
 
