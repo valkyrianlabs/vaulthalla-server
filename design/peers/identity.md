@@ -2,7 +2,9 @@
 
 Status: design, phase 0 of the server mirror plan (2026-11-25), partly superseded by Cooper's decision of the same day
 (below; superseded paragraphs are marked). Phase 1b (folder and symlink ids, the remote-account groundwork) is built:
-migrations 158/159, see the "As built (phase 1b)" notes; the rest is not implemented. It covers how two
+migrations 158/159, see the "As built (phase 1b)" notes; so is the mirror server's vault role as a ceiling, its
+storage and the mirror's rule (phase 2 wave 2, migration 162: "As built: the mirror server's vault role"); the rest
+is not implemented. It covers how two
 linked servers refer to the same person, who owns a mirrored vault, who may use and administer it, how two existing
 servers become one deployment, and how audits stay effective. The link is in [`link.md`](link.md); what travels for a
 vault's files is in [`mirror.md`](mirror.md).
@@ -40,6 +42,73 @@ vault's files is in [`mirror.md`](mirror.md).
   log; entries in the decisions log on Cooper's Desktop; Cooper has not reviewed them and may overturn any): the two
   sharing depths, "accounts are never matched by name", and the local effect of removals. They are marked
   **(design decision)** where they appear.
+
+## As built: the mirror server's vault role (phase 2 wave 2, migration 162)
+
+The permission model and its storage, built 2026-11-25 under Cooper's decisions above. Nothing transmits the role
+between servers yet (the mirror protocol is the next wave) and nothing enforces it on submitted changes (a later wave
+calls the resolver below). Experimental and off by default, like the rest of linking.
+
+**On the core.**
+
+- **Storage.** `vault_role_assignments.subject_type` gains `peer`: the subject is a `peer` row (a trigger refuses any
+  other id; a peer assignment takes no path override, refused by the database and by `ops::roles`). The link's default
+  is `peer_vault_policy` (peer, vault role or NULL for none, who set it, when); a role that is some link's default
+  can't be deleted. A peer is no identity: its assignments touch no user or group in `identity_change_log`.
+- **Precedence** (`rbac::resolver::PeerVault::role`, one snapshot): an unlinked (revoked) or unknown server, or a
+  deleted vault: nothing, whatever rows remain; else the per-vault assignment; else the link's default; else nothing.
+  **"No access" is an assignment of the built-in role `implicit_deny`**, recognised by name (as the S3 gateway already
+  does) and granting nothing whatever that role's bits say, so editing the role can't open it; the link's default
+  refuses it (no default already grants nothing). Only the peer's own rows are read: no user's, group's or admin
+  role's row can give a linked server anything.
+- **The API the next waves call.** `role(peer, vault)` answers the role that applies (or would, for an offer to name
+  it), its source and its definition: the core tells the mirror its name and actual permissions from it, never an
+  id. `may(peer, vault, action, path, exists, isDirectory)` answers whether a submitted change is within it, and only
+  for a vault this server is the core of and mirrors with that server: the link's default applies to every vault
+  mirrored over the link and to nothing else. Nothing calls `may()` yet, and a peer session runs only the peer wire
+  set, so nothing a linked server does reaches anything here.
+- **Who may** (design decision, from how the server governs vault role assignment and the global vault policy:
+  "someone on the core who may manage vault policies"): the `peers.experimental` switch; a person, on the host socket,
+  in the console or on a full-access, directly connected device's session, never an agent, a scoped or a relayed
+  device (`peer_forbidden`), a system-only or non-authorizing account; per vault, the right to assign or remove vault
+  roles on that vault, exactly as for a user or a group (`vault.roles.assign|revoke` from the actor's global vault
+  policy in the vault's scope; super admins); the link's default, which reaches every vault mirrored over the link
+  whoever owns it, that right in every scope (self, admin and user) to set it and `vault.roles.view` in every scope
+  to read it. Setting either is an identity.admin step-up in the console, like every vault role assignment. Audited
+  `peer.policy.set` and `rbac.vault_role.assign|unassign`, naming the server by its row and node id.
+- **Commands.** `vh peer policy show|set <server> [<role>|none]`, ws `peer.policy.get|set`; the per-vault role through
+  the existing `vh vault role assign|remove <vault> <role> --peer <server>` and `role.vault.assign|unassign` with
+  `subject_type: peer`. `vh vault role list` and `roles.vault.list.assigned` show a peer's assignment with its name,
+  node id and whether it is unlinked.
+
+**On the mirror.**
+
+- **Storage.** The vault's `mirror_vault` row records what the core granted this server: `granted_role_name`, the four
+  permission columns in `vault_role`'s layout, `granted_by_node` and `granted_at`, all or none and never on a `core`
+  row. Only `db::query::mirror` writes them (`MirrorVaults::recordGrant|clearGrant`, and `startMirror` for a held row:
+  tests and the next wave's applier); nothing local edits them.
+- **The rule** (`rbac::mirrored`): for a vault whose role here is `mirror` (and `orphaned`, design decision: a copy
+  the core stopped following is still another server's vault until it is detached, and letting local rows take effect
+  at that moment would be a grant nobody committed, invariant 4), a local account's effective permissions are exactly
+  the granted role's if it is a super admin of this server, and none otherwise; no grant recorded, nobody. It applies
+  in `rbac::resolver::Vault::has` (every vault permission; super admins no longer short-circuit there),
+  `fs::policy::Evaluator` (filesystem actions; the grant is a whole role, no overrides), `resolver::Admin` for
+  `admin.vaults.*` (no admin role's vault powers; a super admin keeps View and ViewStats, design decision: that the
+  vault exists and its size, never Edit or Remove, whose changes commit on the core or are the mirror's own Detach
+  permission, later), the listing shortcut (`fs::visibility`), the S3 gateway (principal checks, and the shortcut
+  in `ObjectStore::requireRbacPermission`), `ops::s3_gateway`'s principal checks, and `vh vault list --accessible`.
+- **Showing it.** The vault's access listing, for this server's super admins only, starts with the core's grant
+  (`subject_type: server`, `owned_by {peer_id, node_id, name}`, `editable: false`, `in_effect: true`) and lists any
+  local rows with `in_effect: false`; every assignment and override write on the vault is refused (`conflict`).
+- **The hot path.** `rbac::mirrored::find(vault)` is one atomic load while no vault is held here (every server
+  today); otherwise one more load of an immutable snapshot and a hash lookup. The snapshot is loaded at startup
+  before any engine serves (a failure stops the daemon, as for the upstream bucket locks), republished by every
+  `MirrorVaults` write that adds, changes or removes a held row or its grant before that write returns, and by the
+  `MirrorAccessWatcher` service within a second of an out-of-band change (psql); each change bumps
+  `rbac::policyEpoch()`. Removing the row restores ordinary resolution at once.
+- **Not changed** (other trees or later pieces): FUSE's own shortcuts for the mount root and a vault's root entry
+  (`fuse/Resolver.cpp`: a super admin or the owner sees the root entry; what is inside it is the evaluator's), and
+  admin-level key, recovery, read-grant and pricing operations, which keep their own admin permissions.
 
 ## Today
 
@@ -278,10 +347,11 @@ the base's, on the evidence above.
 ## Work items
 
 1. Migration: `home_node`, `home_id`, `remote`, `subject_type = 'peer'`, `mirror_local_denial`, `peer_audit_event`.
-   (Built: `home_node`, `home_id`, `remote`, in 158/159. The rest needs the link; `mirror_local_denial` and
-   per-person access lists are superseded, 2026-11-25.)
+   (Built: `home_node`, `home_id`, `remote`, in 158/159; `subject_type = 'peer'`, the link's default and the mirror's
+   grant in 162. `peer_audit_event` needs the link; `mirror_local_denial` and per-person access lists are superseded,
+   2026-11-25.)
 2. Identity loading: remote accounts refused for authentication in one place; the resolver's rule for mirrored
-   vaults; local denials. (Built: the first.)
+   vaults; local denials. (Built: the first two; the rule as "As built: the mirror server's vault role" says.)
 3. The principal record and its stream (`peer.identity.*`), ahead of first use.
 4. Shared access lists and roles for mirrored vaults, on the submit-and-confirm path of `mirror.md`.
 5. Audit: the new fields, the trail exchange with withheld events as hashes, verification, the merged view.

@@ -292,6 +292,8 @@ Linked get(const Actor& actor, const std::string& ref) {
     return withHealth(resolve(ref));
 }
 
+Record resolveRef(const std::string& ref) { return resolve(ref); }
+
 Record rename(const Actor& actor, const std::string& ref, const std::string& name) {
     requireLinker(actor, "rename linked servers");
     const auto row = resolve(ref);

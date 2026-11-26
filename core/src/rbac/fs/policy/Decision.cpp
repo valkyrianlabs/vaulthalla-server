@@ -28,6 +28,7 @@ namespace vh::rbac::fs::policy {
             case Decision::Reason::UnableToResolvePaths: return "UnableToResolvePaths";
             case Decision::Reason::LowRiskOpRequiredForOverrideTraversal: return "LowRiskOpRequiredForOverrideTraversal";
             case Decision::Reason::EntryVaultMismatch: return "EntryVaultMismatch";
+            case Decision::Reason::NotGrantedOnMirror: return "NotGrantedOnMirror";
         }
         return "unknown reason";
     }

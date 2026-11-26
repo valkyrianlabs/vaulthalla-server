@@ -458,7 +458,7 @@ TEST(PeerRouting, ScopedRelayedShareAndAgentCallersNeverManageLinks) {
     std::vector<std::string> management;
     for (const auto& c : contract::ws::commands())
         if (c.command.starts_with("peer.") && c.auth == "human") management.push_back(c.command);
-    ASSERT_EQ(management.size(), 13u) << "the twelve of the design and peer.status";
+    ASSERT_EQ(management.size(), 15u) << "the twelve of the design, peer.status and peer.policy.get|set";
     EXPECT_NE(std::ranges::find(management, std::string("peer.status")), management.end());
     // Device principals are registered with the session manager: each is closed at the end.
     const auto full = deviceSession("destructive", false);

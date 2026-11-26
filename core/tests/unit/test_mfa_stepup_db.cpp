@@ -181,6 +181,8 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
         {"auth.mfa.recovery.generate", "needs mfa_pepper; same family gate"},
         {"role.vault.assign", "needs a vault"},
         {"role.vault.unassign", "needs a vault"},
+        {"peer.policy.set", "needs a linked server and peers.experimental: PeerVaultRoleDb (ops::peer_policy::set asks "
+                            "identity.admin after its checks)"},
         {"role.vault.overrides.add", "needs a vault assignment"},
         {"role.vault.overrides.update", "needs a vault assignment"},
         {"role.vault.overrides.remove", "needs a vault assignment"},

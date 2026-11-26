@@ -520,18 +520,30 @@ static std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& par
     return cmd;
 }
 
+// Assigning and removing a vault role names a linked server too (--peer: experimental, peers.experimental); its
+// path overrides stay a user's or a group's (subjectOption).
+const auto roleSubjectOption =
+    Option::Multi("subject",
+                  "The user or group the command is targeting, or a linked server (--peer: its number from `vh peer "
+                  "list`, node id, name or key; its role on this vault, implicit_deny for no access)",
+                  {"user", "u", "group", "g", "peer"}, {"id", "name"})
+        .withGen("id", contract::gen::ref("subject", {"id"}))
+        .withGen("name", contract::gen::ref("subject", {"name"}));
+
 static std::shared_ptr<CommandUsage> role_assign(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"assign"};
     cmd->effect = CommandEffect::Write;
-    cmd->description = "Assign a role to a user or group for a specific vault.";
+    cmd->description = "Assign a role to a user, a group or a linked server (--peer) for a specific vault.";
     cmd->positionals = {vaultPos, roleId};
-    cmd->required = {subjectOption};
+    cmd->required = {roleSubjectOption};
     cmd->optional = {owner};
     cmd->examples = {
         {"vh vault role assign 42 read-only -u bob", "Add user 'bob' to the 'read-only' role for the vault with ID 42."},
         {"vh vault role assign myvault read-write --group developers --owner alice",
-         "Add group 'developers' to the 'read-write' role for the vault named 'myvault' owned by 'alice'."}
+         "Add group 'developers' to the 'read-write' role for the vault named 'myvault' owned by 'alice'."},
+        {"vh vault role assign 42 implicit_deny --peer vps",
+         "Linked server 'vps' gets no access to vault 42, whatever its link's default (vh peer policy)."}
     };
     return cmd;
 }
@@ -540,9 +552,10 @@ static std::shared_ptr<CommandUsage> role_unassign(const std::weak_ptr<CommandUs
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"unassign", "remove", "rm-assn"};
     cmd->effect = CommandEffect::Destructive;
-    cmd->description = "Remove a role assignment from a user or group for a specific vault.";
+    cmd->description = "Remove a role assignment from a user, a group or a linked server (--peer: it falls back to "
+                       "its link's default) for a specific vault.";
     cmd->positionals = {vaultPos, roleId};
-    cmd->required = {subjectOption};
+    cmd->required = {roleSubjectOption};
     cmd->optional = {owner};
     cmd->examples = {
         {"vh vault role unassign 42 read-only -u bob",

@@ -26,7 +26,10 @@ namespace vh::rbac::fs::policy {
             StorageEngineNotFound,
             UnableToResolvePaths,
             LowRiskOpRequiredForOverrideTraversal,
-            EntryVaultMismatch
+            EntryVaultMismatch,
+            // A vault held here as another server's copy, for an account its core's grant doesn't reach (not a super
+            // admin of this server, or no grant recorded): rbac/Mirrored.hpp.
+            NotGrantedOnMirror
         };
 
         bool allowed{false};

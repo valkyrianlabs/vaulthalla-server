@@ -40555,6 +40555,315 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
+      "command": "peer.policy.get",
+      "confirmations": [],
+      "description": "A linked server's default vault role on this server. Needs vault.roles.view on every vault (super admins hold it).",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Its row id, node id, name, key (64 hex) or 8+ hex digits of its key.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "peer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "peer",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "description": "A linked server's default vault role here: it holds it on every vault mirrored over the link, unless the vault assigns it another (role.vault.assign, subject_type peer; implicit_deny is no access). The ceiling on what that server may submit; nothing transmits or enforces it yet.",
+          "fields": [
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "node_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "revoked",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                }
+              ],
+              "name": "peer",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "The default vault role, with its permissions; null: none (the link grants nothing on a vault without its own assignment).",
+              "model": "VaultRole",
+              "name": "role",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "name": "set_by",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "set_by_name",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Unix seconds; null: never set.",
+              "name": "set_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "policy",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "peer.policy.set",
+      "confirmations": [],
+      "description": "Set (role: a vault role's id or name) or clear (role: null) a linked server's default vault role here. It reaches every vault mirrored over the link, whoever owns it: needs vault.roles.assign on every vault (super admins hold it). implicit_deny is refused (no access is a per-vault override). Audited peer.policy.set with the server's node id.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Its row id, node id, name, key (64 hex) or 8+ hex digits of its key.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "peer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "peer",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "A vault role's id or name; null: no default.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "role.vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "role",
+          "one_of": [
+            {
+              "description": "A vault role's id.",
+              "name": "",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "A vault role's name.",
+              "name": "",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "required": true,
+          "types": [
+            "integer",
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "description": "A linked server's default vault role here: it holds it on every vault mirrored over the link, unless the vault assigns it another (role.vault.assign, subject_type peer; implicit_deny is no access). The ceiling on what that server may submit; nothing transmits or enforces it yet.",
+          "fields": [
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "node_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "revoked",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                }
+              ],
+              "name": "peer",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "The default vault role, with its permissions; null: none (the link grants nothing on a vault without its own assignment).",
+              "model": "VaultRole",
+              "name": "role",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "name": "set_by",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "set_by_name",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Unix seconds; null: never set.",
+              "name": "set_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "policy",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "identity.admin",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
       "command": "peer.rename",
       "confirmations": [],
       "description": "Rename a linked server here (1-64 characters).",
@@ -43472,7 +43781,7 @@
       "client_timeout_ms": 15000,
       "command": "role.vault.assign",
       "confirmations": [],
-      "description": "Assign a vault role to a user or group on a vault (one assignment per subject and vault).",
+      "description": "Assign a vault role to a user, a group or a linked server on a vault (one assignment per subject and vault). A linked server: peers.experimental must be on, and a person decides (never an agent, a scoped or a relayed device: peer_forbidden). Refused (conflict) on a vault held here as another server's copy.",
       "effect": "write",
       "input": "payload",
       "operation": "roles.vault.assign",
@@ -43495,9 +43804,11 @@
           ]
         },
         {
+          "description": "peer: a linked server (peer.list's id), while peers.experimental is on; it takes the role on this vault in place of its link's default (peer.policy.set), and implicit_deny means no access.",
           "enum": [
             "user",
-            "group"
+            "group",
+            "peer"
           ],
           "name": "subject_type",
           "required": true,
@@ -43506,7 +43817,7 @@
           ]
         },
         {
-          "description": "A user id or a group id, per subject_type.",
+          "description": "A user id, a group id or a linked server's id, per subject_type.",
           "generator": {
             "attrs": [
               "id"
@@ -43546,6 +43857,8 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
         "step_up_required",
         "recovery_cooldown"
       ],
@@ -43555,6 +43868,8 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
         "step_up_required",
         "recovery_cooldown"
       ],
@@ -44210,7 +44525,7 @@
       "client_timeout_ms": 15000,
       "command": "role.vault.unassign",
       "confirmations": [],
-      "description": "Remove a subject's vault role assignment on a vault.",
+      "description": "Remove a subject's vault role assignment on a vault (a linked server's as for role.vault.assign: it falls back to its link's default).",
       "effect": "destructive",
       "input": "payload",
       "operation": "roles.vault.unassign",
@@ -44233,9 +44548,11 @@
           ]
         },
         {
+          "description": "peer: a linked server (peer.list's id), while peers.experimental is on; it takes the role on this vault in place of its link's default (peer.policy.set), and implicit_deny means no access.",
           "enum": [
             "user",
-            "group"
+            "group",
+            "peer"
           ],
           "name": "subject_type",
           "required": true,
@@ -44244,7 +44561,7 @@
           ]
         },
         {
-          "description": "A user id or a group id, per subject_type.",
+          "description": "A user id, a group id or a linked server's id, per subject_type.",
           "generator": {
             "attrs": [
               "id"
@@ -44267,6 +44584,8 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
         "step_up_required",
         "recovery_cooldown"
       ],
@@ -44276,6 +44595,8 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
         "step_up_required",
         "recovery_cooldown"
       ],
@@ -44483,7 +44804,7 @@
       "client_timeout_ms": 15000,
       "command": "roles.vault.list.assigned",
       "confirmations": [],
-      "description": "The role assignments on one vault (id is the vault id).",
+      "description": "The role assignments on one vault (id is the vault id). A linked server's carries its name and node id. On a vault held here as another server's copy: this server's super admins only; the first entry is what its core granted this server (subject_type server, owned_by, editable false), local rows have in_effect false.",
       "effect": "read",
       "input": "payload",
       "operation": null,
@@ -61273,5 +61594,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "18989ea9fb6fbeab1f54bdf40fdd1aa255e93d07632025a9e9f7119ff68690a4"
+  "ws_hash": "68d6605bf13e6fd51fb17ec4c64acb79c37d4176bd5a002cacb12f806ba82b17"
 }

@@ -41,6 +41,10 @@ namespace vh::rbac::resolver::vault {
             if (resolved.hasTargetGroup())
                 return validateAssignGroup(actor, resolved);
 
+            // A linked server: no account-shaped guard applies (it is nobody's own role, never an admin); the switch,
+            // the caller's channel and the row itself are ops::peer_policy's and ops::roles' (ops/PeerPolicy.hpp).
+            if (resolved.hasTargetPeer()) return true;
+
             return false;
         }
 
