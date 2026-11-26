@@ -55,6 +55,12 @@ public:
     static constexpr int kLockAttempts = 50;
     static MirrorVault startCore(uint32_t vaultId, uint32_t peerId, uint64_t term = 1);
 
+    // Makes this server the mirror of `vaultId` for the linked server `peerId` (its core), at `term`: the vault follows
+    // that server, and its files' contents may be waited for (PendingContents). Nothing is logged for a mirror vault.
+    // Internal API: the first copy (a later piece) creates the vault and calls this; until then only tests do.
+    // ops::NotFound without the vault or a live peer; ops::Conflict when the vault is mirrored already.
+    static MirrorVault startMirror(uint32_t vaultId, uint32_t peerId, uint64_t term = 1);
+
     // Ends the vault's mirror record on this server and drops its log and entry hashes. False when there was none.
     static bool remove(uint32_t vaultId);
 

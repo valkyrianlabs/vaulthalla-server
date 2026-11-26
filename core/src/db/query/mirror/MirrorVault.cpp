@@ -114,6 +114,21 @@ MirrorVault MirrorVaults::startCore(const uint32_t vaultId, const uint32_t peerI
     });
 }
 
+MirrorVault MirrorVaults::startMirror(const uint32_t vaultId, const uint32_t peerId, const uint64_t term) {
+    if (term < 1) throw ops::Invalid("a term starts at 1");
+    return Transactions::exec("mirror::MirrorVaults::startMirror", [&](pqxx::work& txn) {
+        if (txn.exec("SELECT 1 FROM vault WHERE id = $1 AND deleted_at IS NULL", pqxx::params{vaultId}).empty())
+            throw ops::NotFound("no such vault");
+        if (txn.exec("SELECT 1 FROM peer WHERE id = $1 AND revoked_at IS NULL", pqxx::params{peerId}).empty())
+            throw ops::NotFound("no such linked server");
+        if (!txn.exec("SELECT 1 FROM mirror_vault WHERE vault_id = $1 FOR UPDATE", pqxx::params{vaultId}).empty())
+            throw ops::Conflict("this vault is mirrored already");
+        txn.exec("INSERT INTO mirror_vault (vault_id, peer_id, role, term) VALUES ($1, $2, 'mirror', $3)",
+                 pqxx::params{vaultId, peerId, static_cast<int64_t>(term)});
+        return mirrorVaultFrom(txn.exec(selectMirrorVaults("WHERE vault_id = $1"), pqxx::params{vaultId}).one_row_ref());
+    });
+}
+
 bool MirrorVaults::remove(const uint32_t vaultId) {
     return Transactions::exec("mirror::MirrorVaults::remove", [&](pqxx::work& txn) {
         const auto gone = txn.exec("DELETE FROM mirror_vault WHERE vault_id = $1", pqxx::params{vaultId}).affected_rows();
