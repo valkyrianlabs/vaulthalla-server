@@ -577,6 +577,38 @@ it differs from the journal.
   concurrent writers, random ops with digest and replay, retention); `SqlDeployerHistoryDb.ReplicationLogMigration160*`;
   contract `tools/contracts/test_replication_log_contract.py`; cost `tools/dev/bench/replication_log_cost.sh`.
 
+### A linked server's vault role and mirrored vaults (migration 162; `design/peers/identity.md`)
+
+The mirror server's permissions as a role it holds, a ceiling (phase 2 wave 2). Storage, resolver and management
+only: nothing transmits the role or enforces it on submitted changes yet. Full text: identity.md "As built: the mirror
+server's vault role".
+- **Core:** `vault_role_assignments.subject_type = 'peer'` (a `peer` row, trigger-checked; no path overrides) and
+  `peer_vault_policy` (a link's default, NULL = none; `db::query::peer::VaultPolicy`). `rbac::resolver::PeerVault`:
+  `role(peer, vault)` = per-vault assignment (`implicit_deny`, by name: no access) else the link's default else none,
+  nothing for a revoked peer or a deleted vault, never anything from an account's rows; `may(peer, vault, action, path,
+  exists, isDirectory)` only on a vault this server is core of, mirrored with that peer. Nothing calls `may` yet.
+- **Who may** (`ops::peer_policy`, `ops::roles` for subject peer): `peers.experimental`; a person (Host, Web,
+  full-access direct device; Agent, scoped and relayed devices `peer_forbidden`); per vault `vault.roles.assign|revoke`
+  as for users and groups; the link's default needs it in every scope of the actor's global vault policy (view to
+  read). identity.admin step-up. Audited `peer.policy.set`, `rbac.vault_role.assign|unassign` with `node_id`.
+  `vh peer policy show|set`, ws `peer.policy.get|set`, `vh vault role assign|remove --peer`, `role.vault.assign|unassign`
+  `subject_type: peer`; listings annotate a peer subject (`subject_name`, `subject_node_id`, `subject_revoked`).
+- **Mirror:** `mirror_vault.granted_*` (role name, four permission columns, granting node, time; all or none, never on
+  a core row; written only by `db::query::mirror::MirrorVaults::recordGrant|clearGrant`, rows by `startMirror`).
+  `rbac::mirrored` (`rbac/Mirrored.hpp`): a vault whose role here is mirror or orphaned resolves from its grant alone,
+  for this server's super admins; nobody else, no local source, no grant = nobody. Applied in `resolver::Vault::has`
+  (before the super-admin short-circuit), `fs::policy::Evaluator` (stage 0), `resolver::Admin` (`admin.vaults.*`: super
+  admins View/ViewStats only), `fs::visibility::seesWholeSubtree`, the S3 policy evaluator and
+  `ObjectStore::requireRbacPermission`, `ops::s3_gateway` principal checks, `ops::vaults::listAccessible`; the access
+  listing shows the grant (`subject_type: server`, `owned_by`, `editable: false`) and local rows `in_effect: false`;
+  assignment and override writes refuse (`conflict`). Not FUSE's own root shortcuts (`fuse/Resolver.cpp`).
+- **Hot path and invalidation:** `rbac::mirrored::find` = one atomic load while nothing is held, else an immutable
+  snapshot lookup. Loaded in `wireStorage()` before engines serve (failure stops startup); republished by every
+  `MirrorVaults` write that changes a held row or grant before it returns; runtime service "MirrorAccessWatcher"
+  (after IdentityWatcher, 1 s) reconciles out-of-band changes; each change bumps `rbac::policyEpoch()`. Test schema
+  resets call `resetForTesting()` (`db_suite.hpp`).
+- Tests: `PeerVaultRoleDb.*` (`test_peer_vault_role_db.cpp`), `SqlDeployerHistoryDb.PeerVaultRoleMigration162*`.
+
 ### Super-admin initial credential
 
 No universal default password. `seed::initAdmin` (fresh DB only: `initDB` seeds when no `admin` row exists) calls
