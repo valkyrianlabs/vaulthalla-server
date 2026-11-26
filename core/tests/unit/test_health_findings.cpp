@@ -354,7 +354,8 @@ TEST_F(HealthFindingsDb, EachChangeIsInTheAuditTrailWithoutTheNote) {
     (void)ops::health::unsilence(superUser, "system.fuse.error_rate_elevated", "");
     (void)vh::audit::Trail::instance()->flushNow();
 
-    const auto page = ops::audit::list(superUser, {.action_prefix = std::string("health.finding.")}, 10);
+    // The three newest: earlier tests of this suite recorded their own.
+    const auto page = ops::audit::list(superUser, {.action_prefix = std::string("health.finding.")}, 3);
     std::vector<std::string> actions;
     for (const auto& event : page.events) {
         actions.push_back(event.action);

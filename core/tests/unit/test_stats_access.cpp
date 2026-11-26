@@ -87,7 +87,25 @@ TEST(StatsPermission, IsExportedAsAdminStatsViewAtAStableBit) {
         EXPECT_NE(std::ranges::find(p.flags, "--allow-stats-view"), p.flags.end());
     }
     EXPECT_TRUE(found);
-    EXPECT_EQ(Admin::SuperAdmin().stats.toBitString(), "00000001");
+    // Bit 1 is admin.stats.manage (acknowledging and silencing health findings; migration 170): super admins hold
+    // both, and a role that only watches health holds only the first.
+    EXPECT_EQ(Admin::SuperAdmin().stats.toBitString(), "00000011");
+    EXPECT_EQ(Admin::OrgAdmin().stats.toBitString(), "00000001");
+}
+
+TEST(StatsPermission, ManageIsExportedAsAdminStatsManageAtBitOne) {
+    bool found = false;
+    for (const auto& p : Admin::None().toPermissions()) {
+        if (p.qualified_name != "admin.stats.manage") continue;
+        found = true;
+        EXPECT_EQ(p.bit_position, 1u);
+        EXPECT_FALSE(p.value.value_or(false));
+        EXPECT_NE(std::ranges::find(p.flags, "--allow-stats-manage"), p.flags.end());
+    }
+    EXPECT_TRUE(found);
+    EXPECT_TRUE(granted(Admin::SuperAdmin(), "admin.stats.manage"));
+    for (const auto& role : {Admin::Auditor(), Admin::PlatformOperator(), Admin::OrgAdmin(), Admin::Support()})
+        EXPECT_FALSE(granted(role, "admin.stats.manage")) << role.name;
 }
 
 TEST(StatsPermission, BuiltInRolesThatWatchHealthHoldIt) {

@@ -251,6 +251,7 @@ void walkContract(const FieldVisitor& visit) {
 // model, inline fields, a map or a union. Paths as walkContract prints them.
 const std::map<std::string, std::string>& opaqueObjects() {
     static const std::map<std::string, std::string> kOpaque{
+        {"HealthRemedy.payload", "the payload of the existing ws command a remedy names, passed through for the client to send as it is; its shape is that command's own"},
         {"PriceBudgetNotification.metadata", "operator notification details stored as JSONB; each producer (budget preflight, gateway budgets, recovery cost alerts) records its own keys"},
         {"cloud.storage.status response.billing", "the account's billing summary as the service last answered GET /v1/billing, passed through for display"},
         {"cloud.storage.status response.ejection", "the account's ejection progress as the service reports it in GET /v1/storage, passed through for display"},
