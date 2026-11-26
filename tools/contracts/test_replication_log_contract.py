@@ -72,6 +72,7 @@ ENTRY_WRITERS_LOG: dict[str, str] = {
                                                 "row's end",
     "core/src/db/query/vault/Recover.cpp": "nothing: the restored vault is new, and not mirrored",
     "core/src/db/query/vault/Deletion.cpp": "nothing: the vault root, inodes, a soft-deleted vault",
+    "core/src/db/query/mirror/Start.cpp": "nothing: the mirror's new vault and its root; never a core vault",
 }
 
 

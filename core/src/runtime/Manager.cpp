@@ -7,6 +7,8 @@
 #include "log/Registry.hpp"
 #include "log/RotationService.hpp"
 #include "mirror/Sequencer.hpp"
+#include "mirror/start/BackgroundContents.hpp"
+#include "mirror/start/Start.hpp"
 #include "rbac/Mirrored.hpp"
 #include "audit/Trail.hpp"
 #include "notifications/OperatorEmailService.hpp"
@@ -64,6 +66,8 @@ constexpr std::array kBaseStartOrder{
     "ProtocolService",
     "DeviceServer",
     "PeerLinks",
+    "MirrorStarter",
+    "MirrorContents",
     "CloudRelayService",
     "S3GatewayService"
 };
@@ -71,6 +75,8 @@ constexpr std::array kBaseStartOrder{
 constexpr std::array kBaseStopOrder{
     "S3GatewayService",
     "CloudRelayService",
+    "MirrorContents",
+    "MirrorStarter",
     "PeerLinks",
     "DeviceServer",
     "ProtocolService",
@@ -146,6 +152,8 @@ Manager::Manager()
     services_["FsChangeNotifier"] = protocols::ws::ChangeNotifier::instance();
     services_["MirrorSequencer"] = vh::mirror::Sequencer::instance();
     services_["MirrorAccessWatcher"] = vh::rbac::mirrored::Watcher::instance();
+    services_["MirrorStarter"] = vh::mirror::start::Service::instance();
+    services_["MirrorContents"] = vh::mirror::start::BackgroundContents::instance();
 
     // A test instance serves `vh` only on a private socket (VH_TEST_CLI_SOCKET), never the system one.
     if (!paths::testMode || paths::testCliSocket) {

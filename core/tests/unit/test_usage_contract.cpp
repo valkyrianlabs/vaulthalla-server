@@ -450,7 +450,31 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         // refusals on the dialling server's side of pairing.
         // Assigning a vault role names a linked server too (migration 162): the same two refusals there.
         if (code == "peers_experimental" || code == "peer_forbidden")
-            return command.starts_with("peer.") || command == "role.vault.assign" || command == "role.vault.unassign";
+            return command.starts_with("peer.") || command.starts_with("mirror.") || command == "role.vault.assign" ||
+                   command == "role.vault.unassign";
+        // Starting a mirror (ops::mirrors, mirror::start): each refusal on the commands that send it.
+        static const std::map<std::string, std::set<std::string>> kMirrorCodes{
+            {"peer_revoked", {"peer.mirror.offer", "peer.mirror.answer", "peer.mirror.keys", "peer.mirror.begin",
+                              "peer.mirror.grant", "peer.mirror.cancel"}},
+            {"mirror_already", {"mirror.add"}}, {"mirror_start_running", {"mirror.add"}},
+            {"vault_replicated", {"mirror.add"}}, {"vault_attach_running", {"mirror.add"}},
+            {"vault_detach_running", {"mirror.add"}}, {"layout_migration_running", {"mirror.add"}},
+            {"key_rotation_running", {"mirror.add"}}, {"key_salvage_running", {"mirror.add"}},
+            {"vault_pending_deletion", {"mirror.add"}}, {"vault_unavailable", {"mirror.add"}},
+            {"legacy_content", {"mirror.add"}}, {"key_version_missing", {"mirror.add"}},
+            {"key_version_unattested", {"mirror.add"}}, {"trashed_without_uid", {"mirror.add"}},
+            {"contents_not_held", {"mirror.add"}}, {"peer_not_linked", {"mirror.add"}},
+            {"peer_link_down", {"mirror.add"}},
+            {"mirror_offer_not_pending", {"mirror.accept", "mirror.decline"}},
+            {"mirror_vault_exists", {"mirror.accept", "peer.mirror.keys"}},
+            {"mirror_name_taken", {"mirror.accept", "peer.mirror.keys"}},
+            {"mirror_no_space", {"mirror.accept", "peer.mirror.keys"}},
+            {"history_not_supported", {"mirror.accept", "peer.mirror.keys"}},
+            {"mirror_detach_required", {"mirror.cancel"}}, {"mirror_offer_finished", {"mirror.cancel"}},
+            {"mirror_keys_refused", {"peer.mirror.keys"}}, {"mirror_offer_not_accepted", {"peer.mirror.keys"}},
+            {"mirror_offer_not_installed", {"peer.mirror.begin"}},
+        };
+        if (const auto m = kMirrorCodes.find(code); m != kMirrorCodes.end() && m->second.contains(command)) return true;
         if ((code == "no_pairing_window" || code == "rate_limited" || code == "device_unknown") &&
             command.starts_with("peer.pair."))
             return true;

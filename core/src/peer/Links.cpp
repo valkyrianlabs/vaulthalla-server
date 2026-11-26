@@ -905,6 +905,19 @@ std::size_t LinkService::disconnect(const uint32_t peerId, const bool notifyUnli
     return mine.size();
 }
 
+std::optional<json> LinkService::request(const uint32_t peerId, const std::string& command, json payload,
+                                         const std::chrono::milliseconds timeout) {
+    std::shared_ptr<Connection> conn;
+    {
+        std::scoped_lock lock(mutex_);
+        if (const auto it = peers_.find(peerId); it != peers_.end() && it->second.active && !it->second.active->closed &&
+                                                 it->second.active->hello)
+            conn = it->second.active;
+    }
+    if (!conn) return std::nullopt;
+    return callAndWait(*conn->rpc, *conn->session, command, std::move(payload), timeout);
+}
+
 std::size_t LinkService::disconnectAll() {
     std::vector<std::shared_ptr<Connection>> all;
     {

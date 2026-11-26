@@ -7,6 +7,7 @@
 #include "protocols/ws/handler/StepUp.hpp"
 #include "protocols/ws/handler/Approvals.hpp"
 #include "protocols/ws/handler/Devices.hpp"
+#include "protocols/ws/handler/Mirrors.hpp"
 #include "protocols/ws/handler/PeerPolicy.hpp"
 #include "protocols/ws/handler/Peers.hpp"
 #include "protocols/ws/handler/fs/Changes.hpp"
@@ -140,6 +141,21 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("peer.endpoints", &handler::Peers::endpoints);
     r->registerPayload("peer.identity.rotate", &handler::Peers::identityRotate);
     r->registerSessionOnlyHandler("peer.unlinked", &handler::Peers::unlinked);
+    // Mirror phase 2 wave 3, piece A: starting a mirror (handler/Mirrors.hpp; design/peers/mirror.md).
+    r->registerPayload("mirror.add", &handler::Mirrors::add);
+    r->registerSessionOnlyHandler("mirror.pending", &handler::Mirrors::pending);
+    r->registerPayload("mirror.accept", &handler::Mirrors::accept);
+    r->registerPayload("mirror.decline", &handler::Mirrors::decline);
+    r->registerPayload("mirror.cancel", &handler::Mirrors::cancel);
+    r->registerSessionOnlyHandler("mirror.list", &handler::Mirrors::list);
+    r->registerPayload("mirror.get", &handler::Mirrors::get);
+    r->registerPayload("mirror.accept_all.set", &handler::Mirrors::acceptAllSet);
+    r->registerPayload("peer.mirror.offer", &handler::Mirrors::offer);
+    r->registerPayload("peer.mirror.answer", &handler::Mirrors::answer);
+    r->registerPayload("peer.mirror.keys", &handler::Mirrors::keys);
+    r->registerPayload("peer.mirror.begin", &handler::Mirrors::begin);
+    r->registerPayload("peer.mirror.grant", &handler::Mirrors::grant);
+    r->registerPayload("peer.mirror.cancel", &handler::Mirrors::cancelWire);
 }
 
 void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {

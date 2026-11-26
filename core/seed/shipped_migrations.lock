@@ -114,3 +114,4 @@ current    13ce8ce2da092bab88c98d1ea1389a44a4958d70ed644c300fbc2b361cd403d7  159
 current    9a102577f5dd25e9f4f722cf92a1bf2466c3ef008931163cbf84306d58e9505f  160_replication_log.sql  unreleased
 current    731c34c620cc142c461bfe170196355a515c8d7417f689d3778ba8e4e46dd61a  161_mirror_contents.sql  unreleased
 current    46ea5c9acdd422594980dda872b1a62a4a50538e1edcb03f1783301e79640f60  162_peer_vault_role.sql  unreleased
+current    fe9bcb4fee35bc2f1471d67491575a291085c16486c9462a004ce237eae87ec0  163_mirror_start.sql  unreleased

@@ -39,6 +39,7 @@ UsageManager::UsageManager() {
     registerBook(cloud_book::get(root_->weak_from_this()));
     registerBook(connector_book::get(root_->weak_from_this()));
     registerBook(peer_book::get(root_->weak_from_this()));
+    registerBook(mirror_book::get(root_->weak_from_this()));
     registerBook(audit_book::get(root_->weak_from_this()));
     registerBook(recovery_book::get(root_->weak_from_this()));
     registerBook(recovery_book::getSnapshot(root_->weak_from_this()));

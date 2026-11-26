@@ -508,7 +508,7 @@ the console reads to leave the Linked servers page out (`web-client.md`, "Linked
   pairing refuses a key in `peer`, `peer.pair.request` a key in `devices`. HTTP lanes answer 403 to a peer key; the
   sealed lane (`/peer/object/…`, below) is the one HTTP route it gets, and nobody else does (404).
 - **What a peer session runs:** `Router::isPeerWireCommand` (peer.hello, peer.ping, peer.endpoints,
-  peer.identity.rotate, peer.unlinked) plus meta.hello / meta.contract.get; anything else `Deny` (fail closed). A
+  peer.identity.rotate, peer.unlinked, and piece A's peer.mirror.offer|answer|keys|begin|grant|cancel) plus meta.hello / meta.contract.get; anything else `Deny` (fail closed). A
   pairing connection this server dialled (`Principal::pairing`) runs nothing. The wire set and `peer.pair.*` are
   refused on every other session kind; `peer.pair.*` runs on pairing-only connections. Answers on a Peer session
   (frames with `status`) go to the link's pending table (`PeerHooks::onResponse`), never to the router; an unknown one
@@ -659,6 +659,41 @@ server's vault role".
   (after IdentityWatcher, 1 s) reconciles out-of-band changes; each change bumps `rbac::policyEpoch()`. Test schema
   resets call `resetForTesting()` (`db_suite.hpp`).
 - Tests: `PeerVaultRoleDb.*` (`test_peer_vault_role_db.cpp`), `SqlDeployerHistoryDb.PeerVaultRoleMigration162*`.
+
+### Starting a mirror (`mirror/start/`, `ops::mirrors`, migration 163; `design/peers/mirror.md`)
+
+Phase 2 wave 3, piece A: the control plane (offer, answer, keys, the mirror's vault, begin, grant, cancel). The tree and
+the log are piece B. Full text: mirror.md "As built: starting a mirror". Experimental (peers.experimental).
+- **Tables:** `mirror_offer` (163; one row per start per side, shared `offer_uid`; core offered → accepted → keys_acked →
+  started, mirror pending → accepted → installed → started; declined | cancelled | expired | failed; `notify` = the
+  other server not told yet; 7-day expiry of unanswered offers, 30-day sweep, a started row whose vault is mirrored
+  kept), `peer.accept_vaults` (+ set_by/at), `vault_key_origin.anchor` 'peer'. `db::query::mirror::MirrorStart`
+  (offers, CAS `transition`, `told`, facts of a core vault, `createMirrorVault`: vault with the core's uid + root uid,
+  remote owner, keys sealed here with provenance and origin, `mirror` row, offer installed, one transaction).
+- **Protocol** (`mirror::start`): `checkVault` (every precondition its own `Refused` code), `offerVault`; wire
+  handlers (`handler/Mirrors.cpp`, Peer sessions only, `Router::isPeerWireCommand`): `peer.mirror.offer|answer|keys|
+  begin|grant|cancel`. Keys: KEV1 X25519 to the peer row's wrap key (`peer::keys::unwrapVaultKey` opens them), proven
+  with `vault::recover::prove` against the peer row's pinned `attest_public_keys` (node id from the row, the core's
+  vault id from the offer, own keys as self keys); one unprovable version fails the start, nothing written. The
+  core's `startCore` only after the keys answer; begin resent until answered. `stepMutex()` serializes startCore vs
+  cancel and vault creation vs removal; nothing waits on the peer under it.
+- **Services:** "MirrorStarter" (`mirror::start::Service`, after PeerLinks; 1 s, woken by operations): tells/asks per
+  `notify`, retries after 5 s, expires, sweeps, and keeps each core row's grant current (`PeerVault::role` compared
+  every pass, resent on link-up). "MirrorContents" (`BackgroundContents`, after MirrorStarter): per mirror vault with
+  the link up, a batch of 16 through `contents::fetchOutstanding` on a `Transfers::spawn` thread; jittered backoff
+  5 s..10 min after a batch that received nothing. `LinkService::request(peer, command, payload, timeout)` sends over
+  the kept connection and waits (not on the link's io threads). Transport seam: `setTransportForTesting`.
+- **Ops / commands:** `ops::mirrors` (add, pending, accept, decline, cancel, list, get, offers, acceptAll/setAcceptAll);
+  ws `mirror.add|pending|accept|decline|cancel|list|get|accept_all.set` (keys step-up on mirror.add), `vh mirror
+  add|pending|accept|decline|cancel|list|info|accept-all`. Who: the switch, a person (`peer_forbidden` otherwise); add
+  and the core's cancel: super admin or the vault's admin Edit + vault.roles.assign; the mirror's side and list: super
+  admins. Router: `mirror.` forbidden to scoped devices; MCP catalog excludes `mirror`.
+- **Cancel:** core at any step drops the core row and log, tells the mirror, which removes its copy
+  (`removeCopy`: `Manager::removeVault` + `MirrorVaults::remove` + the remote owner when unused); the mirror's own
+  cancel removes an uncompleted start and refuses a completed one (`mirror_detach_required`).
+- **Rotation guard** (`mirror/start/Guard.hpp`): `refuseIfMirrored` in `prepare_key_rotation` and `mintSalvageKey`
+  (`vault_mirrored`), `vh vault keys rotate` reports it per vault.
+- Tests: `MirrorStartDbTest.*` (`test_mirror_start_db.cpp`); Tier B `vhh drill peers` step 7.
 
 ### Super-admin initial credential
 
@@ -1862,7 +1897,7 @@ policies), `config` (every settings write: one validation, one apply step that r
 is deliberately ungated, see Stats below), `conflicts` (sync conflicts, #187: ws `sync.conflicts.*`, `vh sync resolve` /
 `vh resolve`, the HTTP `/download/conflict` lane's authorization), `upstream` (S3/R2 bucket administration and event
 sync, #237/#96: ws `upstream.*`, `vh upstream …`; see `upstream-control-plane.md`), `recovery` (file recovery: ws `recovery.*` / `vault.recovery.*`, `vh snapshot|recovery …`, `vh vault recovery …`; see `recovery.md`), `devices` (paired devices: ws `device.*`, `vh device …`; see "Device listener
-and pairing"), `peers` (linked servers: ws `peer.*`, `vh peer …`; see "Linked servers"), `vault_keys` (key backup and restoration: ws `vault.keys.status|export|export.confirm|import`, `vh vault keys
+and pairing"), `peers` (linked servers: ws `peer.*`, `vh peer …`; see "Linked servers"), `mirrors` (starting a mirror: ws `mirror.*`, `vh mirror …`; see "Starting a mirror"), `vault_keys` (key backup and restoration: ws `vault.keys.status|export|export.confirm|import`, `vh vault keys
 status|export|import`; key material only through the CLI or a paired device, D4; see `key-backup.md`), `vault_storage`
 (the bucket write-capability probe, spec 06 §7: ws `vault.storage.probe`, `vh vault storage probe`; the vault's admin
 Edit permission; audited `vault.storage.probe`; agent-available (effect write: it writes and deletes only its own
