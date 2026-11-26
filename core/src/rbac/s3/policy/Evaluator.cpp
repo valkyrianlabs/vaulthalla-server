@@ -3,6 +3,7 @@
 #include "db/query/s3/Gateway.hpp"
 #include "identities/User.hpp"
 #include "rbac/fs/policy/Evaluator.hpp"
+#include "rbac/Mirrored.hpp"
 #include "rbac/resolver/vault/all.hpp"
 #include "rbac/role/Vault.hpp"
 
@@ -14,7 +15,9 @@ using FsAction = permission::vault::FilesystemAction;
 
 bool principalHas(const S3PolicyRequest& request, const FsAction action) {
     if (!request.principal) return false;
-    if (request.principal->isSuperAdmin()) return true;
+    // Not on a vault held here as another server's copy: there the resolver answers from its core's grant alone.
+    if (request.principal->isSuperAdmin() && !vh::rbac::mirrored::find(request.vault_id))
+        return true;
     return resolver::Vault::has<FsAction>({
         .user = request.principal,
         .permission = action,

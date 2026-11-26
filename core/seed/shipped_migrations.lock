@@ -112,3 +112,5 @@ current    87e2197e5b0f3c43f6111dc2032ab9a8d3ce2bfcbec75ccac9d79c25f933a600  157
 current    dbbf57d2a6ba1c76ce6126646ea68a6cfc0f165a445b7fa4e6d61f51a6567324  158_permanent_ids.sql  unreleased
 current    13ce8ce2da092bab88c98d1ea1389a44a4958d70ed644c300fbc2b361cd403d7  159_permanent_ids_required.sql  unreleased
 current    9a102577f5dd25e9f4f722cf92a1bf2466c3ef008931163cbf84306d58e9505f  160_replication_log.sql  unreleased
+current    731c34c620cc142c461bfe170196355a515c8d7417f689d3778ba8e4e46dd61a  161_mirror_contents.sql  unreleased
+current    46ea5c9acdd422594980dda872b1a62a4a50538e1edcb03f1783301e79640f60  162_peer_vault_role.sql  unreleased

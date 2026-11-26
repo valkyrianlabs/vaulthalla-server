@@ -1,6 +1,7 @@
 #include "protocols/http/handler/Common.hpp"
 
 #include "log/Registry.hpp"
+#include "mirror/Contents.hpp"
 #include "preview/render/Raster.hpp"
 #include "preview/render/Service.hpp"
 #include "protocols/http/Access.hpp"
@@ -51,7 +52,10 @@ model::preview::Response errorFor(const request& req, const std::exception& e) {
     if (dynamic_cast<const access::NotFound*>(&e)) return jsonError(req, status::not_found, "not_found", "Not found");
     if (dynamic_cast<const access::BadRequest*>(&e)) return jsonError(req, status::bad_request, "invalid", e.what());
     if (dynamic_cast<const storage::ContentUnavailable*>(&e)) {
-        auto res = jsonError(req, status::service_unavailable, "content_unavailable", e.what());
+        // A mirror's file that has not arrived from its core (design/peers/mirror.md "Contents") says why.
+        const auto mirrorCode = ::vh::mirror::contents::reasonCodeIn(e.what());
+        auto res = jsonError(req, status::service_unavailable, mirrorCode ? *mirrorCode : "content_unavailable",
+                             e.what());
         std::get<string_response>(res).set(field::retry_after, "30");
         return res;
     }

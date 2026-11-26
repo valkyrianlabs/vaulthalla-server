@@ -9,6 +9,8 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "identities/Group.hpp"
+#include "ops/Error.hpp"
+#include "ops/Peers.hpp"
 #include "rbac/role/Vault.hpp"
 #include "rbac/role/Admin.hpp"
 
@@ -138,6 +140,17 @@ Lookup<Subject> parseSubject(const CommandCall& call, const std::string& errPref
             out.ptr = std::make_shared<Subject>(Subject{"group", group->id});
             return out;
         }
+    }
+
+    // A linked server (migration 162): its number, node id, name or key, as `vh peer` takes it. Whether it may be
+    // named here is the operation's to decide (ops/PeerPolicy.hpp).
+    if (const auto v = optVal(call, "peer")) {
+        try {
+            out.ptr = std::make_shared<Subject>(Subject{"peer", ::vh::ops::peers::resolveRef(*v).id});
+        } catch (const ::vh::ops::Error& e) {
+            out.error = errPrefix + ": " + e.what();
+        }
+        return out;
     }
 
     out.error = errPrefix + ": must specify either --user/-u or --group/-g";

@@ -137,7 +137,7 @@ void requireVaultRoleOver(const Actor& actor, const Credential& credential, cons
 
 bool principalCan(const UserPtr& principal, const uint32_t vaultId, const FsAction action) {
     if (!principal) return false;
-    if (principal->isSuperAdmin()) return true;
+    // A super admin is answered at once, except on a vault held here as another server's copy (rbac/Mirrored.hpp).
     return rbac::resolver::Vault::has<FsAction>({.user = principal, .permission = action, .vault_id = vaultId, .path = "/"});
 }
 
@@ -149,7 +149,7 @@ bool principalReaches(const UserPtr& principal, const uint32_t vaultId) {
 // Granting S3 gateway access to a vault: vault-role Assign over the principal there, and the principal must
 // already reach the vault itself.
 void requireGrantOn(const Actor& actor, const UserPtr& principal, const uint32_t vaultId) {
-    if (!actor->isSuperAdmin() && !rbac::resolver::Vault::has<RolePerm>({
+    if (!rbac::resolver::Vault::has<RolePerm>({
             .user = actor,
             .permission = RolePerm::Assign,
             .target_subject_type = std::string{"user"},

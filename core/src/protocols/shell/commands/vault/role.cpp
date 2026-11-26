@@ -39,8 +39,10 @@ namespace vh::protocols::shell::commands::vault {
         return runOp("vault role assign", [&] {
             return ops::roles::assignVaultRole(call.user, {.target = target, .role = vaultRoleCliRoleRef(call.positionals.at(1))});
         }, [&](const auto& assignment) {
-            return "Successfully assigned role '" + assignment->name + "' to " + target.subject.type + " " +
-                   std::to_string(target.subject.id) + " for vault '" + vaultName + "'";
+            const auto& a = assignment->assignment;
+            const auto subject = a && a->subject_name ? "linked server '" + *a->subject_name + "'"
+                                                      : target.subject.type + " " + std::to_string(target.subject.id);
+            return "Successfully assigned role '" + assignment->name + "' to " + subject + " for vault '" + vaultName + "'";
         });
     }
 

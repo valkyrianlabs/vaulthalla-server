@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'b5d3ee851cfeaecf896883270bc12f4800f683f3da0d2e9ea497d27a8e6149ea'
+export const WS_CONTRACT_HASH = 'e283cc7a235c9306b371afa1c93fa0144bd9ff118343b7a0bc8c139e4bc0a356'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = '1dcc4ec0758290448af3adf97d902575a84103eac755dde8c309456d621d38e1'
@@ -5934,6 +5934,40 @@ export interface WsContract {
     response: { time: number }
   }
   /**
+   * A linked server's default vault role on this server. Needs vault.roles.view on every vault (super admins
+   * hold it).
+   */
+  'peer.policy.get': {
+    payload: { peer: string }
+    response: {
+      policy: {
+        peer: { id: number; node_id: string; name: string; revoked: boolean }
+        role: WsModels['VaultRole'] | null
+        set_by: number | null
+        set_by_name: string | null
+        set_at: number | null
+      }
+    }
+  }
+  /**
+   * Set (role: a vault role's id or name) or clear (role: null) a linked server's default vault role here. It
+   * reaches every vault mirrored over the link, whoever owns it: needs vault.roles.assign on every vault
+   * (super admins hold it). implicit_deny is refused (no access is a per-vault override). Audited
+   * peer.policy.set with the server's node id.
+   */
+  'peer.policy.set': {
+    payload: { peer: string; role: number | string | null }
+    response: {
+      policy: {
+        peer: { id: number; node_id: string; name: string; revoked: boolean }
+        role: WsModels['VaultRole'] | null
+        set_by: number | null
+        set_by_name: string | null
+        set_at: number | null
+      }
+    }
+  }
+  /**
    * Rename a linked server here (1-64 characters).
    */
   'peer.rename': {
@@ -6299,10 +6333,12 @@ export interface WsContract {
     response: { role: WsModels['VaultRole'] }
   }
   /**
-   * Assign a vault role to a user or group on a vault (one assignment per subject and vault).
+   * Assign a vault role to a user, a group or a linked server on a vault (one assignment per subject and
+   * vault). A linked server: peers.experimental must be on, and a person decides (never an agent, a scoped or
+   * a relayed device: peer_forbidden). Refused (conflict) on a vault held here as another server's copy.
    */
   'role.vault.assign': {
-    payload: { vault_id: number; subject_type: 'user' | 'group'; subject_id: number; id: number }
+    payload: { vault_id: number; subject_type: 'user' | 'group' | 'peer'; subject_id: number; id: number }
     response: { assignment: WsModels['VaultRole'] }
   }
   /**
@@ -6370,10 +6406,11 @@ export interface WsContract {
     response: { override: WsModels['PermissionOverride'] }
   }
   /**
-   * Remove a subject's vault role assignment on a vault.
+   * Remove a subject's vault role assignment on a vault (a linked server's as for role.vault.assign: it falls
+   * back to its link's default).
    */
   'role.vault.unassign': {
-    payload: { vault_id: number; subject_type: 'user' | 'group'; subject_id: number }
+    payload: { vault_id: number; subject_type: 'user' | 'group' | 'peer'; subject_id: number }
     response: { unassigned: boolean }
   }
   /**
@@ -6403,7 +6440,10 @@ export interface WsContract {
     response: { roles: WsModels['VaultRole'][] }
   }
   /**
-   * The role assignments on one vault (id is the vault id).
+   * The role assignments on one vault (id is the vault id). A linked server's carries its name and node id.
+   * On a vault held here as another server's copy: this server's super admins only; the first entry is what
+   * its core granted this server (subject_type server, owned_by, editable false), local rows have in_effect
+   * false.
    */
   'roles.vault.list.assigned': {
     payload: { id: number }
@@ -8706,6 +8746,8 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.pairing.open',
   'peer.pairing.pending',
   'peer.ping',
+  'peer.policy.get',
+  'peer.policy.set',
   'peer.rename',
   'peer.status',
   'peer.unlink',
@@ -8975,6 +9017,7 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'group.remove': 'identity.admin',
   'peer.link.start': 'device.trust',
   'peer.pairing.approve': 'device.trust',
+  'peer.policy.set': 'identity.admin',
   'recovery.point.delete': 'data.destroy',
   'role.admin.add': 'identity.admin',
   'role.admin.delete': 'identity.admin',
@@ -9171,6 +9214,8 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.pairing.open': 15000,
   'peer.pairing.pending': 15000,
   'peer.ping': 15000,
+  'peer.policy.get': 15000,
+  'peer.policy.set': 15000,
   'peer.rename': 15000,
   'peer.status': 15000,
   'peer.unlink': 15000,

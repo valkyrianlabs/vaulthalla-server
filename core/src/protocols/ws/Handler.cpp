@@ -7,6 +7,7 @@
 #include "protocols/ws/handler/StepUp.hpp"
 #include "protocols/ws/handler/Approvals.hpp"
 #include "protocols/ws/handler/Devices.hpp"
+#include "protocols/ws/handler/PeerPolicy.hpp"
 #include "protocols/ws/handler/Peers.hpp"
 #include "protocols/ws/handler/fs/Changes.hpp"
 #include "protocols/ws/handler/fs/Storage.hpp"
@@ -130,6 +131,8 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("peer.get", &handler::Peers::get);
     r->registerPayload("peer.rename", &handler::Peers::rename);
     r->registerPayload("peer.unlink", &handler::Peers::unlink);
+    r->registerPayload("peer.policy.get", &handler::PeerPolicy::get);
+    r->registerPayload("peer.policy.set", &handler::PeerPolicy::set);
     r->registerPayload("peer.pair.request", &handler::Peers::pairRequest);
     r->registerPayload("peer.pair.confirm", &handler::Peers::pairConfirm);
     r->registerPayload("peer.pair.status", &handler::Peers::pairStatus);

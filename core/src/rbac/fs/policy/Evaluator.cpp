@@ -5,6 +5,7 @@
 #include "identities/Group.hpp"
 #include "identities/User.hpp"
 #include "rbac/permission/admin/VaultGlobals.hpp"
+#include "rbac/Mirrored.hpp"
 #include "rbac/fs/glob/Matcher.hpp"
 #include "rbac/resolver/VaultScope.hpp"
 #include "rbac/permission/Override.hpp"
@@ -74,6 +75,23 @@ Decision Evaluator::evaluate(const Request &req) {
         return *invalid;
 
     const auto vaultId = target.engine->vault->id;
+
+    // 0) A vault this server holds as another server's copy: the role its core granted this server, for this server's
+    // super admins, and nothing else (rbac/Mirrored.hpp). The grant is a whole role: no path overrides.
+    if (const auto held = vh::rbac::mirrored::find(vaultId)) {
+        if (!view.isSuperAdmin() || !held->grant || !held->grant->role)
+            return {
+                .allowed = false,
+                .reason = Decision::Reason::NotGrantedOnMirror,
+                .evaluated_path = target.vaultPath
+            };
+        const auto stage = resolveStage(held->grant->role->fs, target, req.action);
+        return {
+            .allowed = stage.allowed.value_or(false),
+            .reason = stage.reason,
+            .evaluated_path = target.vaultPath
+        };
+    }
 
     // 1) Local/direct vault role: base policy + local overrides
     if (const auto it = view.user->roles.vaults.find(vaultId); it != view.user->roles.vaults.end()) {

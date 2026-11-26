@@ -9,6 +9,7 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "rbac/permission/admin/VaultGlobals.hpp"
+#include "rbac/Mirrored.hpp"
 #include "runtime/Deps.hpp"
 #include "db/query/vault/APIKey.hpp"
 #include "storage/Manager.hpp"
@@ -177,12 +178,33 @@ namespace vh::rbac::resolver {
             return resolved;
         }
 
+        // admin.vaults.* on a vault this server holds as another server's copy (rbac/Mirrored.hpp): no admin role's
+        // vault powers apply there. A super admin of this server still sees the vault and its statistics (View,
+        // ViewStats: that it exists, its size; the files themselves are the grant's); nobody edits or removes it here
+        // (its settings commit on its core; leaving a mirror is the mirror's own Detach permission, a later piece).
+        template<typename EnumT>
+        static bool hasOnMirror(const admin::Context<EnumT> &ctx) {
+            using VaultPerm = vh::rbac::permission::admin::VaultPermissions;
+            if (!ctx.user->isSuperAdmin()) return false;
+            for (const auto permission : collectPermissions(ctx))
+                if (permission != VaultPerm::View && permission != VaultPerm::ViewStats) return false;
+            return true;
+        }
+
     public:
         template<typename EnumT>
         static bool has(admin::Context<EnumT> &&ctx) {
             if (!ctx.isValid()) return false;
             // A deactivated or deleted account (a tombstone still held somewhere) authorizes nothing.
             if (!ctx.user->authorizing()) return false;
+
+            // One atomic load while no vault is held as another server's copy.
+            if constexpr (AdminResolverTraits<EnumT>::domain == Domain::Vault) {
+                if (vh::rbac::mirrored::any()) {
+                    const auto resolved = resolveContext(ctx);
+                    if (resolved.vault && vh::rbac::mirrored::find(resolved.vault->id)) return hasOnMirror(ctx);
+                }
+            }
 
             if (ctx.user->isSuperAdmin()) return true;
 

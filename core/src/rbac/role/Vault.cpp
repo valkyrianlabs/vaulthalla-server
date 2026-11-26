@@ -163,6 +163,14 @@ namespace vh::rbac::role {
             {"vault_id", std::to_string(r.vault_id)},
             {"subject_type", r.subject_type}
         };
+        if (r.subject_name) j["subject_name"] = *r.subject_name;
+        if (r.subject_node_id) j["subject_node_id"] = *r.subject_node_id;
+        if (r.subject_revoked) j["subject_revoked"] = *r.subject_revoked;
+        if (r.in_effect) j["in_effect"] = *r.in_effect;
+        if (r.editable) j["editable"] = *r.editable;
+        if (r.owned_by)
+            j["owned_by"] = {{"peer_id", r.owned_by->peer_id}, {"node_id", r.owned_by->node_id},
+                             {"name", r.owned_by->name}};
     }
 
     void from_json(const nlohmann::json &j, Vault::AssignmentInfo &r) {

@@ -2101,7 +2101,8 @@ TEST_F(SqlDeployerHistoryDb, PermanentIdsMigration158BackfillsEveryRowKeepsEvery
             txn.exec(std::string("DROP TRIGGER IF EXISTS vh_remote_account_guard ON ") + t);
         for (const auto* t : {"refresh_tokens", "webauthn_credentials", "totp_factors", "recovery_code_batches",
                               "recovery_codes", "devices", "connector_grants", "key_backup_grants",
-                              "admin_role_assignments", "user_global_vault_policy", "s3_gateway_credentials"})
+                              "admin_role_assignments", "user_global_vault_policy", "s3_gateway_credentials",
+                              "peer_vault_policy" /* 162's, on 158's function */})
             txn.exec(std::string("DROP TRIGGER IF EXISTS vh_refuse_remote_account ON ") + t);
         txn.exec("DROP FUNCTION IF EXISTS vh_remote_account_guard()");
         txn.exec("DROP FUNCTION IF EXISTS vh_refuse_remote_account()");
@@ -2360,6 +2361,131 @@ TEST_F(SqlDeployerHistoryDb, ReplicationLogMigration160IsAdditiveAndWritesNothin
         EXPECT_EQ(count("SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'vh\\_mirror\\_track%' AND NOT tgisinternal"),
                   23);
         EXPECT_EQ(count("SELECT count(*) FROM vault_replication_log"), 0);
+    });
+}
+
+// Migration 162 (a linked server's vault role): on an upgraded database with assignments and a mirrored vault in it,
+// the peer subject, the link's default and the mirror's grant columns are added, existing rows are untouched, and a
+// second run of the file changes nothing. Afterwards a peer assignment must name a peer row, takes no override, and a
+// grant is all or nothing and never on a core row.
+TEST_F(SqlDeployerHistoryDb, PeerVaultRoleMigration162IsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        const std::string file = "162_peer_vault_role.sql";
+        const auto count = [&](const std::string& q) { return txn.exec(q).one_field_ref().as<int64_t>(); };
+
+        // ---- back to the 161 schema
+        txn.exec("DROP TRIGGER IF EXISTS vh_peer_vault_assignment_check ON vault_role_assignments");
+        txn.exec("DROP TRIGGER IF EXISTS vh_peer_vault_override_check ON vault_permission_overrides");
+        txn.exec("DROP FUNCTION IF EXISTS vh_peer_vault_assignment_check(), vh_peer_vault_override_check()");
+        txn.exec("DROP TABLE IF EXISTS peer_vault_policy");
+        txn.exec("ALTER TABLE mirror_vault DROP CONSTRAINT IF EXISTS mirror_vault_grant_check");
+        for (const auto* c : {"granted_role_name", "granted_files_permissions", "granted_directories_permissions",
+                              "granted_sync_permissions", "granted_roles_permissions", "granted_by_node", "granted_at"})
+            txn.exec(std::string("ALTER TABLE mirror_vault DROP COLUMN IF EXISTS ") + c);
+        txn.exec("ALTER TABLE vault_role_assignments DROP CONSTRAINT vault_role_assignments_subject_type_check");
+        txn.exec("ALTER TABLE vault_role_assignments ADD CONSTRAINT vault_role_assignments_subject_type_check "
+                 "CHECK (subject_type IN ('user', 'group'))");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
+
+        // ---- what an upgraded install holds: a user's and a group's assignments, a linked server, a mirrored vault
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_162_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto group = txn.exec("INSERT INTO groups (name) VALUES ('claude_test_162_group') RETURNING id")
+                               .one_field_ref().as<int>();
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES "
+                                    "('claude_test_162', $1, 'local', 'claude_test_162', gen_random_uuid()) RETURNING id",
+                                    pqxx::params{owner}).one_field_ref().as<int>();
+        const auto role = txn.exec("INSERT INTO vault_role (name, files_permissions, directories_permissions, "
+                                   "  sync_permissions, roles_permissions) "
+                                   "VALUES ('claude_test_162_role', 1::bigint::bit(32), 0::bit(32), 0::bit(32), 0::bit(16)) "
+                                   "RETURNING id").one_field_ref().as<int>();
+        txn.exec("INSERT INTO vault_role_assignments (vault_id, subject_type, subject_id, role_id) VALUES "
+                 "($1, 'user', $2, $3), ($1, 'group', $4, $3)",
+                 pqxx::params{vault, owner, role, group});
+        const auto peer = txn.exec("INSERT INTO peer (node_id, name, spki_sha256, wrap_public_key) "
+                                   "VALUES ('claude-162-node', 'vps', repeat('ab', 32), decode(repeat('00', 32), 'hex')) "
+                                   "RETURNING id")
+                              .one_field_ref().as<int>();
+        txn.exec("INSERT INTO mirror_vault (vault_id, peer_id, role) VALUES ($1, $2, 'core')", pqxx::params{vault, peer});
+        const auto rows = [&] {
+            return txn.exec("SELECT md5(string_agg(t, ',' ORDER BY t)) FROM ("
+                            "  SELECT (id, vault_id, subject_type, subject_id, role_id, assigned_at)::text AS t "
+                            "  FROM vault_role_assignments "
+                            "  UNION ALL SELECT (vault_id, peer_id, role, term, last_seq, digest, state)::text "
+                            "  FROM mirror_vault) x").one_field_ref().as<std::string>();
+        };
+        const auto rowsBefore = rows();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, file));
+        EXPECT_EQ(report.applied.size(), 1u) << "only 162 was missing";
+        EXPECT_EQ(recordedHash(txn, file), currentHash(file));
+        EXPECT_TRUE(columnExists(txn, "peer_vault_policy", "role_id"));
+        for (const auto* c : {"granted_role_name", "granted_files_permissions", "granted_by_node", "granted_at"})
+            EXPECT_TRUE(columnExists(txn, "mirror_vault", c)) << c;
+        EXPECT_EQ(rows(), rowsBefore) << "existing assignments and mirror rows untouched";
+        EXPECT_EQ(count("SELECT count(*) FROM mirror_vault WHERE granted_role_name IS NOT NULL"), 0);
+
+        // A second run of the file, and of the deployer, changes nothing.
+        const auto schema = [&] {
+            return txn.exec("SELECT md5(string_agg(conname || ':' || pg_get_constraintdef(oid), ',' ORDER BY conname)) "
+                            "FROM pg_constraint WHERE conrelid IN ('vault_role_assignments'::regclass, "
+                            "  'mirror_vault'::regclass, 'peer_vault_policy'::regclass)").one_field_ref().as<std::string>();
+        };
+        const auto schemaBefore = schema();
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / file)));
+        EXPECT_EQ(schema(), schemaBefore);
+        EXPECT_EQ(rows(), rowsBefore);
+        EXPECT_EQ(count("SELECT count(*) FROM pg_constraint WHERE conrelid = 'vault_role_assignments'::regclass "
+                        "AND contype = 'c' AND pg_get_constraintdef(oid) LIKE '%subject_type%'"), 1);
+        EXPECT_EQ(count("SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'vh\\_peer\\_vault\\_%' AND NOT tgisinternal"), 2);
+
+        // ---- what it allows and refuses
+        const auto refused = [&](const std::string& q, const pqxx::params& params) {
+            pqxx::subtransaction sub(txn, "claude_162");
+            try {
+                sub.exec(q, params);
+            } catch (const pqxx::sql_error&) {
+                sub.abort();
+                return true;
+            }
+            sub.abort();
+            return false;
+        };
+        txn.exec("INSERT INTO vault_role_assignments (vault_id, subject_type, subject_id, role_id) VALUES ($1, 'peer', $2, $3)",
+                 pqxx::params{vault, peer, role});
+        EXPECT_TRUE(refused("INSERT INTO vault_role_assignments (vault_id, subject_type, subject_id, role_id) "
+                            "VALUES ($1, 'peer', $2, $3)", pqxx::params{vault, peer + 100000, role}))
+            << "a peer assignment names a peer row";
+        EXPECT_TRUE(refused("INSERT INTO vault_role_assignments (vault_id, subject_type, subject_id, role_id) "
+                            "VALUES ($1, 'device', 1, $2)", pqxx::params{vault, role}));
+        const auto peerAssignment = txn.exec("SELECT id FROM vault_role_assignments WHERE subject_type = 'peer' AND vault_id = $1",
+                                             pqxx::params{vault}).one_field_ref().as<int>();
+        const auto perm = txn.exec("SELECT id FROM permission ORDER BY id LIMIT 1").one_field_ref().as<int>();
+        EXPECT_TRUE(refused("INSERT INTO vault_permission_overrides (assignment_id, permission_id, glob_path, effect) "
+                            "VALUES ($1, $2, '/**', 'allow')", pqxx::params{peerAssignment, perm}))
+            << "a linked server's role takes no path override";
+        txn.exec("INSERT INTO peer_vault_policy (peer_id, role_id, set_by) VALUES ($1, $2, $3)",
+                 pqxx::params{peer, role, owner});
+        EXPECT_TRUE(refused("DELETE FROM vault_role WHERE id = $1", pqxx::params{role})) << "a default role in use stays";
+        EXPECT_TRUE(refused("UPDATE mirror_vault SET granted_role_name = 'reader' WHERE vault_id = $1", pqxx::params{vault}))
+            << "a grant is all or nothing";
+        EXPECT_TRUE(refused("UPDATE mirror_vault SET granted_role_name = 'reader', granted_files_permissions = 0::bit(32), "
+                            "  granted_directories_permissions = 0::bit(32), granted_sync_permissions = 0::bit(32), "
+                            "  granted_roles_permissions = 0::bit(16), granted_by_node = 'n', granted_at = now() "
+                            "WHERE vault_id = $1", pqxx::params{vault}))
+            << "never on a vault this server is the core of";
+        txn.exec("UPDATE mirror_vault SET role = 'mirror', granted_role_name = 'reader', "
+                 "  granted_files_permissions = 5::bigint::bit(32), granted_directories_permissions = 0::bit(32), "
+                 "  granted_sync_permissions = 0::bit(32), granted_roles_permissions = 0::bit(16), "
+                 "  granted_by_node = 'claude-162-node', granted_at = now() WHERE vault_id = $1",
+                 pqxx::params{vault});
+        EXPECT_EQ(count("SELECT granted_files_permissions::bigint FROM mirror_vault WHERE vault_id = " +
+                        std::to_string(vault)), 5);
     });
 }
 

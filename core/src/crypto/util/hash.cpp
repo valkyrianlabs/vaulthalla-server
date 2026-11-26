@@ -9,6 +9,9 @@
 #include <iomanip>
 #include <stdexcept>
 #include <array>
+#include <cerrno>
+#include <system_error>
+#include <unistd.h>
 
 constexpr std::size_t OPSLIMIT = crypto_pwhash_OPSLIMIT_MODERATE;
 constexpr std::size_t MEMLIMIT = crypto_pwhash_MEMLIMIT_MODERATE;
@@ -47,6 +50,30 @@ std::string blake2b(const std::filesystem::path& filepath) {
     for (size_t i = 0; i < hash_len; ++i)
         result << std::hex << std::setw(2) << std::setfill('0') << (int)hash[i];
 
+    return result.str();
+}
+
+std::string blake2bFd(const int fd) {
+    constexpr size_t hash_len = crypto_generichash_BYTES;
+    unsigned char hash[hash_len];
+    crypto_generichash_state state;
+    crypto_generichash_init(&state, nullptr, 0, hash_len);
+    std::array<unsigned char, 64 * 1024> buffer{};
+    off_t offset = 0;
+    for (;;) {
+        const auto n = ::pread(fd, buffer.data(), buffer.size(), offset);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            throw std::system_error(errno, std::generic_category(), "read for hashing");
+        }
+        if (n == 0) break;
+        crypto_generichash_update(&state, buffer.data(), static_cast<unsigned long long>(n));
+        offset += n;
+    }
+    crypto_generichash_final(&state, hash, hash_len);
+    std::ostringstream result;
+    for (size_t i = 0; i < hash_len; ++i)
+        result << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(hash[i]);
     return result.str();
 }
 
