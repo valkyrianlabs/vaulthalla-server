@@ -15,6 +15,7 @@
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/TlsTransport.hpp"
 #include "device/Peer.hpp"
+#include "peer/Peer.hpp"
 #include "identities/User.hpp"
 #include "log/AuditOrigin.hpp"
 #include "storage/PlaintextReader.hpp"
