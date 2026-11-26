@@ -133,9 +133,10 @@ public:
     // A request to a linked server over its kept connection (after peer.hello), waiting at most `timeout` for the
     // answer frame ({status, data, error}). For threads that may block: never this service's io threads, which deliver
     // the answer. nullopt when not connected, when the connection ended, or when no answer came in time.
-    [[nodiscard]] std::optional<nlohmann::json> request(uint32_t peerId, const std::string& command,
-                                                        nlohmann::json payload,
-                                                        std::chrono::milliseconds timeout = kRequestTimeout);
+    // (`request` below is the same with the frame taken apart; this one hands back the frame itself.)
+    [[nodiscard]] std::optional<nlohmann::json> requestFrame(uint32_t peerId, const std::string& command,
+                                                             nlohmann::json payload,
+                                                             std::chrono::milliseconds timeout = kRequestTimeout);
 
     // peer.link.start: returns the attempt's id at once; the attempt runs on a thread of its own. `comparedBy`
     // (person | desktop) is who compares the code, from the starting call's channel; the row written here gets it.

@@ -38,7 +38,7 @@ Transport linkTransport() {
                    const std::chrono::milliseconds timeout) -> std::optional<json> {
         const auto links = vh::peer::linkService();
         if (!links) return std::nullopt;
-        return links->request(peerId, command, payload, timeout);
+        return links->requestFrame(peerId, command, payload, timeout);
     };
     t.upSince = [](const uint32_t peerId) -> std::optional<std::time_t> {
         const auto links = vh::peer::linkService();

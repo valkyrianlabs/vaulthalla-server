@@ -457,6 +457,7 @@ bool MirrorVaults::recordAcknowledged(const uint32_t vaultId, const Position at)
                         pqxx::params{vaultId, static_cast<int64_t>(at.term), static_cast<int64_t>(at.seq)})
                    .affected_rows() > 0;
     });
+}
 
 bool MirrorVaults::orphan(const uint32_t vaultId) {
     return mirrorAccessRepublished(Transactions::exec("mirror::MirrorVaults::orphan", [&](pqxx::work& txn) {

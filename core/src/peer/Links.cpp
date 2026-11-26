@@ -946,7 +946,7 @@ std::size_t LinkService::disconnect(const uint32_t peerId, const bool notifyUnli
     return mine.size();
 }
 
-std::optional<json> LinkService::request(const uint32_t peerId, const std::string& command, json payload,
+std::optional<json> LinkService::requestFrame(const uint32_t peerId, const std::string& command, json payload,
                                          const std::chrono::milliseconds timeout) {
     std::shared_ptr<Connection> conn;
     {
