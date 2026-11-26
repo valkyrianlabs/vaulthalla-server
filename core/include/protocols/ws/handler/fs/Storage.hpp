@@ -59,12 +59,7 @@ public:
     static void resetShareResolverFactoryForTesting();
 
 private:
-    // Moving or renaming an entry into another folder puts it there (#256): it needs what creating it there needs.
-    static void enforceCreateAtDestination(const std::shared_ptr<Session>& session,
-                                           const std::shared_ptr<storage::Engine>& engine,
-                                           const std::filesystem::path& from,
-                                           const std::filesystem::path& to);
-
+    // The read commands' check (fs.metadata, fs.dir.list). Mutations authorize inside ops::fs (ops/Fs.hpp).
     template<typename EnumT>
     static void enforcePermission(const std::shared_ptr<Session>& session,
                                   const std::shared_ptr<storage::Engine>& engine,

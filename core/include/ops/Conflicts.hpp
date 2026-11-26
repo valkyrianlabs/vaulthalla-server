@@ -77,7 +77,7 @@ constexpr std::size_t kMaxResolveBatch = 500;
 struct PreviewTarget {
     ConflictRecord record;
     std::shared_ptr<storage::CloudEngine> engine;
-    std::shared_ptr<fs::model::File> file;
+    std::shared_ptr<vh::fs::model::File> file;
 };
 [[nodiscard]] PreviewTarget previewTarget(const Actor& actor, uint32_t conflictId);
 

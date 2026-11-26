@@ -333,9 +333,9 @@ Result recover(const Actor& actor, const Request& req, const vault_keys::Channel
     if (const auto cache = runtime::Deps::get().fsCache)
         in.inode_for = [cache, mount = in.mount_point](const std::string& fuseName,
                                                        const std::string& vaultPath) -> std::optional<uint64_t> {
-            const fs::model::Path paths(fs::model::makeAbsolute(fuseName), mount);
-            return cache->assignInode(paths.absRelToAbsRel(vaultPath, fs::model::PathType::VAULT_ROOT,
-                                                           fs::model::PathType::FUSE_ROOT));
+            const vh::fs::model::Path paths(vh::fs::model::makeAbsolute(fuseName), mount);
+            return cache->assignInode(paths.absRelToAbsRel(vaultPath, vh::fs::model::PathType::VAULT_ROOT,
+                                                           vh::fs::model::PathType::FUSE_ROOT));
         };
     if (plan.content.vault && plan.content.vault->quota_bytes) in.quota = *plan.content.vault->quota_bytes;
     in.description = "Recovered from bucket " + req.bucket;

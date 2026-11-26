@@ -5,6 +5,9 @@
 #include "log/Registry.hpp"
 #include "fs/Filesystem.hpp"
 #include "ops/Error.hpp"
+#include "ops/Fs.hpp"
+#include "storage/Engine.hpp"
+#include "vault/model/Vault.hpp"
 
 #include <filesystem>
 #include <stdexcept>
@@ -181,9 +184,14 @@ namespace vh::protocols::ws::handler::fs {
         log::Registry::ws()->debug("[UploadHandler] Finishing upload (uploadId: {}, fuseFrom: {}, fuseTo: {}, userId: {})",
                                  upload.uploadId, upload.fuseFrom.string(), upload.fuseTo.string(), session->user->id);
 
-        if (const auto err = Filesystem::rename(upload.fuseFrom, upload.fuseTo, session->user, upload.engine); err) {
+        // The commit (authorized again, then the staged entry renamed onto the target, never replacing it) is ops::fs's.
+        try {
+            vh::ops::fs::commitStaged(session->user, {.vault_id = upload.engine->vault->id,
+                                                      .path = upload.engine->fusePathToVaultPath(upload.fuseTo),
+                                                      .staged = upload.engine->fusePathToVaultPath(upload.fuseFrom)});
+        } catch (...) {
             abortHumanUpload("upload_finish_failed");
-            throw std::runtime_error(std::string("Failed to move uploaded file to final location: ") + std::strerror(err));
+            throw;
         }
 
         currentUpload_.reset();

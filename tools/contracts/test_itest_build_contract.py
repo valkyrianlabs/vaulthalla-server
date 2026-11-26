@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -57,6 +58,8 @@ class ItestEnsureBuild(unittest.TestCase):
         self.build = self.root / "build-itest"
         self.env = {**os.environ, "PATH": f"{fakebin}:{os.environ['PATH']}", "FAKE_LOG": str(self.log),
                     "FAKE_OPTIONS": str(self.options)}
+        # A fixed job count, so the compile call is the same on every host (CI's container sets its own).
+        self.env["VH_BUILD_JOBS"] = "3"
 
     def ensure(self) -> list[str]:
         """Runs itest_ensure_build once and returns the meson calls it made."""
@@ -73,7 +76,7 @@ class ItestEnsureBuild(unittest.TestCase):
     def test_configures_once_then_only_compiles(self) -> None:
         calls = self.ensure()
         self.assertTrue(calls[0].startswith(f"setup {self.build} {self.root} -Dbuildtype=debug"), calls)
-        self.assertEqual(calls[-1], f"compile -C {self.build} core/vh_unit_tests")
+        self.assertEqual(calls[-1], f"compile -C {self.build} -j 3 core/vh_unit_tests")
         self.assertEqual(self.reconfigures(self.ensure()), [])
 
     def test_an_added_source_file_reconfigures(self) -> None:
@@ -81,7 +84,7 @@ class ItestEnsureBuild(unittest.TestCase):
         (self.root / "core/src/b.cpp").write_text("")
         calls = self.ensure()
         self.assertEqual(self.reconfigures(calls), [f"setup --reconfigure {self.build} {self.root}"])
-        self.assertEqual(calls[-1], f"compile -C {self.build} core/vh_unit_tests")
+        self.assertEqual(calls[-1], f"compile -C {self.build} -j 3 core/vh_unit_tests")
         self.assertEqual(self.reconfigures(self.ensure()), [], "the new set is recorded")
 
     def test_a_removed_or_renamed_source_file_reconfigures(self) -> None:
@@ -110,6 +113,37 @@ class ItestEnsureBuild(unittest.TestCase):
         (self.build / ".itest-sources").unlink()
         self.assertEqual(len(self.reconfigures(self.ensure())), 1)
         self.assertEqual(self.reconfigures(self.ensure()), [])
+
+    def compile_call(self, jobs: str | None) -> str:
+        if jobs is None:
+            self.env.pop("VH_BUILD_JOBS", None)
+        else:
+            self.env["VH_BUILD_JOBS"] = jobs
+        return self.ensure()[-1]
+
+    def test_the_compile_is_bounded_by_vh_build_jobs(self) -> None:
+        self.assertEqual(self.compile_call("7"), f"compile -C {self.build} -j 7 core/vh_unit_tests")
+
+    def test_without_vh_build_jobs_the_compile_is_sized_from_memory(self) -> None:
+        # ninja's own default (processors + 2) got the sanitizer build OOM-killed: where the host says how much memory
+        # is available, the compile gets one job per 2.4 GiB of it, at least 2 and at most one per processor.
+        call = self.compile_call(None)
+        if not Path("/proc/meminfo").is_file():
+            self.assertEqual(call, f"compile -C {self.build} core/vh_unit_tests")  # macOS: ninja picks
+            return
+        match = re.fullmatch(rf"compile -C {re.escape(str(self.build))} -j (\d+) core/vh_unit_tests", call)
+        self.assertIsNotNone(match, call)
+        self.assertGreaterEqual(int(match.group(1)), 2)
+        self.assertLessEqual(int(match.group(1)), max(2, os.cpu_count() or 2))
+
+    def test_a_job_count_that_is_not_a_number_is_refused(self) -> None:
+        self.env["VH_BUILD_JOBS"] = "many"
+        self.log.write_text("")
+        done = subprocess.run(["bash", "-c", f'source "{self.root}/bin/tests/lib/itest.sh"; '
+                                             f'itest_ensure_build "{self.build}" core/vh_unit_tests'],
+                              env=self.env, capture_output=True, text=True)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertNotIn("compile", self.log.read_text())
 
     def test_changed_options_reconfigure_with_just_those_options(self) -> None:
         self.ensure()

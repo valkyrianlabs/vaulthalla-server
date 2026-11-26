@@ -1,6 +1,8 @@
 # Server mirror: one vault on two linked servers
 
-Status: design, phase 0 of the server mirror plan (2026-11-25); nothing here is implemented. It covers how a vault
+Status: design, phase 0 of the server mirror plan (2026-11-25). Built so far: permanent ids for every entry (phase 1b,
+migrations 158/159) and the core side of the replication log (phase 2 piece 1, migration 160; "As built: the
+replication log" below). The rest is not implemented. It covers how a vault
 is kept identical on two linked servers: the core role, the replication log, applying it, changes made on the
 mirror, behaviour while the link is down, moving the core, leaving a mirror, and vaults that also have a remote. The
 link is in [`link.md`](link.md); accounts, ownership and audits are in [`identity.md`](identity.md). Section "What
@@ -90,6 +92,7 @@ A dedicated log, written only for mirrored vaults, on the core.
 
 ```sql
 vault_replication_log (
+  id            bigserial primary key,  -- insertion order (the sequencer's tie-break)
   vault_id      integer not null,
   term          bigint  not null,
   seq           bigint,                 -- assigned in commit order by the sequencer; NULL until then
@@ -99,13 +102,14 @@ vault_replication_log (
   entry_type    text,                   -- file | directory | symlink
   parent_uid    uuid,
   name          text,
-  state         jsonb   not null,       -- the entry as this transaction left it (below)
+  state         jsonb   not null,       -- the entry as this change left it (below)
   entry_hash    bytea,                  -- of the new state; NULL for a removal
   prev_hash     bytea,                  -- of the state it replaced; NULL for a creation
-  actor_node    text,                   -- the acting account's home server (NULL: this one) and its id there
-  actor_id      integer,
+  actor_node    text,                   -- the acting account's home server's node id (this server's for a local one)
+  actor_id      integer,                -- and its id there
   origin        text,                   -- a mirror's request id when the change was submitted by it
-  primary key (vault_id, term, seq)
+  logged_at     timestamptz not null,
+  unique (vault_id, term, seq) where seq is not null
 )
 ```
 
@@ -115,7 +119,8 @@ vault_replication_log (
   value. The mirror assigns none of them. This is what makes the digest comparable and a later merge meaningful
   (spike finding 12).
 - **Self-contained rows.** `state` is the entry's row as the transaction left it: parent uid, name, type, mode,
-  hidden flag, owner uid and gid, created and modified times, creator and last modifier (permanent ids), and for a
+  hidden flag, owner uid and gid, created and modified times, creator and last modifier (each named by its home
+  server's node id and its id there, `identity.md`), and for a
   file its size, content hash, MIME type, generation (the header salt), key version and content format; for a
   symlink its target; for a trashed file who trashed it, when, and its last path. A consumer never has to read the
   core's current state to apply a row, which is what makes strict in-order replay correct.
@@ -128,7 +133,7 @@ vault_replication_log (
 - **Retention:** 30 days or 5,000,000 rows per vault, whichever is smaller, and never past what the mirror has
   acknowledged while the link is up. A mirror that falls behind retention resynchronises (below).
 - **Cost.** One more trigger insert on the seal path, for mirrored vaults only. The budget is the one measured for
-  migration 115 (about 0.3 ms per operation); it is measured again before this ships.
+  migration 115 (about 0.3 ms per operation). Measured for migration 160: "As built: the replication log", Cost.
 
 ### Permanent ids for every entry
 
@@ -144,6 +149,115 @@ runs in a read-only transaction. Trashed files: a row without `object_uid` got o
 where the bucket names the trashed object by a uid the database no longer holds (rows from before 125); those keep
 NULL, stay out of the manifest as before, and are still restored and purged by path. `files_trashed.object_uid` stays
 nullable for them (deviation from "NOT NULL" for trash).
+
+### As built: the replication log (phase 2 piece 1, migration 160)
+
+The core side only: the tables, the triggers, the sequencer, the reader, the digest and retention. No wire protocol,
+no applier, no command: nothing makes a vault mirrored yet but tests and the internal `db::query::mirror` API.
+
+- **`mirror_vault`**, one row per mirrored vault: the peer, this server's role (`core`, `mirror`, `orphaned`), the
+  term, `last_seq` (core: the last row numbered; mirror: the last applied), the position the mirror acknowledged
+  (`acked_term`, `acked_seq`), how far retention pruned, the running digest and its entry count, the state (`live`,
+  `paused`, `diverged`) and timestamps. A `core` row is what switches the log on. `MirrorVaults::startCore` takes the
+  baseline: under a SHARE lock on the entry tables (writers wait for the time it takes to hash the vault; each wait
+  for a writer already running is capped at 200 ms and retried, so it never sits in a deadlock with one) it records
+  every entry's hash and the tree's digest, so no change is half in the baseline and half missing from the log.
+- **Triggers** on `fs_entry` (update, delete), `files`, `directories`, `symlinks` (insert, delete; files and
+  symlinks update), `files_trashed` (insert, update, delete), the settings tables (`vault`, `sync`, `fsync`, `rsync`,
+  `vault_recovery_policy`) and `vault_keys`. For a vault with no `core` row they return after one lookup; with none
+  anywhere (every server today) after a read of the empty `mirror_vault`. `tools/contracts/test_replication_log_contract.py`
+  keeps every SQL writer of these tables classified and nothing but `db::query::mirror` writing the log or setting
+  `vh.mirror_apply`.
+- **Ops.** `upsert` (created, or changed in place), `move` (an existing entry's parent or name), `trash` (one row: the
+  live entry's delete in the same transaction is folded into it, whichever of the two statements came first),
+  `restore` (a trash row ends while a live file of the vault holds its uid: the transaction's `upsert` of that file
+  becomes the restore), `purge`, `delete` (a live entry removed without the trash), `vault`, `key`. A row is written
+  only when the entry's replicated state changed, so path-only rewrites, inodes, aliases and totals write nothing.
+- **Accounts** are `(home node, id there)` everywhere: `actor_node`/`actor_id`, and `created_by`, `modified_by` and
+  `trashed.by` in the state as `{node, id}` (this server's node id and `users.id` for a local account, `home_node`
+  and `home_id` for a remote one). The actor is the transaction's `vh.actor` (users.id) when a write path sets it
+  (none does yet; `ops::fs` will), else the row's own attribution (creator, last modifier, who trashed it), else
+  none (a delete). `origin` is the transaction's `vh.mirror_origin` (set by the submit path, later).
+- **State documents** (`vh_mirror_entry_state`, `vh_mirror_trash_state`, `vh_mirror_vault_state`,
+  `vh_mirror_key_state`): an entry's uid, type, parent uid, name, mode, hidden flag, owner uid and gid, created time,
+  modified time (not for a folder, below), creator, last modifier; a file's size, content hash, MIME type,
+  generation (`files.encryption_iv` as stored), key version and content format; a symlink's target; a trashed file's
+  size and `trashed: {path, at, by}` (all `files_trashed` holds). Times are microseconds since the epoch. A vault
+  row carries name, description, quota, owner, the deleted flag, the sync policy and the recovery policy; a key row
+  the version, key check, attestation, the attestation key's public half and the creation time, never key material.
+- **The entry hash** is SHA-256 over a canonical encoding of exactly the replicated fields, defined with a test
+  vector in `core/include/mirror/Hash.hpp` and computed identically by `vh_mirror_state_hash` (checked against each
+  other in `MirrorReplicationLogDbTest`). **The digest** is the per-word sum, modulo 2^64, of the entry hashes read as
+  four big-endian 64-bit words, with an entry count; `Log::sequence` moves it by `+entry_hash - prev_hash` as it
+  numbers groups, `Digests::recompute` (the scrub) recomputes it from the tables (`vh_mirror_tree`), and
+  `Digests::stored` sums the last-recorded entry hashes.
+- **`mirror_entry_hash`** keeps every entry's hash as the log last recorded it. It supplies `prev_hash`, and it makes
+  a statement that touches two tables of one entry (fs_entry and files in one CTE, whose row triggers fire at the end
+  of the statement) log one exact before/after pair. A change to an entry's type row first takes the entry's
+  `fs_entry` row lock, so two transactions changing different tables of one entry log in lock order and each sees
+  the other's committed half.
+- **Sequencer** (`mirror::Sequencer`, service "MirrorSequencer", every 250 ms; one read of the empty pending index
+  when nothing is mirrored): per vault under its `mirror_vault` row lock, it numbers whole groups (at most 10,000
+  rows a transaction; a larger group alone), ordered by each group's last row. That is commit order wherever order
+  matters: a transaction that had to wait for another's row lock wrote its last row after the other committed.
+  `(term, seq)` counts rows, consecutive within a group and with no gaps. Rows stamped with an older term, or of a
+  vault that is no longer this server's core, are left unnumbered (a term change drains the log first, "Planned
+  switch") and swept by the Janitor.
+- **Reader** `Log::groupsAfter(vault, (term, seq), limit)`: whole numbered groups after the position, a page never
+  ending inside a group (a first group larger than the limit comes whole), `more`, and `expired` for a position below
+  retention, above what was numbered, or on a vault that is not this server's core.
+- **Retention** (the Janitor): numbered rows older than 30 days or more than 5,000,000 behind the newest go, never one
+  the mirror has not acknowledged and never part of a group; pending rows never. Rows and entry hashes of a vault
+  with no `core` row are removed.
+- **Cost**, measured on the dev VM (`tools/dev/bench/replication_log_cost.sh`: one FUSE seal's statements per
+  transaction, pgbench, the median of three runs of 3,000, 2026-11-25, PostgreSQL 16 as Ubuntu 24.04
+  packages it):
+
+  | Per seal (files row, the entry's mtime, four ancestors' totals) | ms | of which triggers |
+  |---|---|---|
+  | No triggers | 0.315 | |
+  | The journal (115) only: the state before this change | 0.424 | journal +0.109 |
+  | With 160, no vault mirrored anywhere (every server today) | 0.497 | log +0.073 |
+  | With 160, this vault not mirrored, another one is | 0.514 | log +0.090 |
+  | With 160, this vault mirrored (2 log rows per seal) | 1.017 | log +0.593 |
+
+  The sequencer numbers about 9 us a row (18,000 rows in 168 ms). On the FUSE path a seal is 12 to 15 ms of wall
+  time (encryption and fsync, "Seal benchmark" in `.claude/context/change-journal.md`), so a mirrored vault's seal
+  costs about 4 % more and every other vault's nothing measurable. The builders are plpgsql and the hash a single
+  inlined expression: as SQL functions planned on every call, the mirrored seal cost 1.7 ms of triggers.
+
+Deviations from the sketch above, forced by the code or decided while building it:
+
+1. **Primary key.** `seq` is NULL until numbered and cannot be in a primary key: rows have an `id`, and
+   `(vault_id, term, seq)` is unique among numbered rows.
+2. **`actor_node` is never NULL for a known account:** a local account is named by this server's node id, so a row
+   reads the same on both servers.
+3. **A folder's modification time is not replicated** (not in its state or hash): the totals statements stamp every
+   ancestor on every change below it, which would write a row per ancestor per seal. The mirror's own totals stamp its
+   folders the same way. Directory totals are derived and not replicated either.
+4. **Rows are not merged within a group:** an entry changed by several statements of one transaction has several rows
+   (each with the state at that point and a chained `prev_hash`). A consumer applies a group as a whole: per uid the
+   first row's `prev_hash` is the compare-and-set and the last row's state the result. A cascade logs the folder
+   before what is under it.
+5. **Vault settings and key records are not in the digest** (it covers entries: live entries and trashed files). A
+   `vault` row's `entry_uid` is the vault's uid.
+6. **Trashed files without an object uid** (opaque_v1 rows from before 125) are not entries of the log or the digest,
+   as they are not of the manifest; starting a mirror will have to refuse or convert them.
+7. **Retention never passes the acknowledged position,** link up or down (the sketch allows passing it while the link
+   is down). A mirror that never acknowledges holds the log; ending the mirror (later) or `MirrorVaults::remove`
+   releases it.
+8. **Every folder rename re-stamps what is under it:** `Filesystem::rename` rewrites each descendant with a new
+   modification time and last modifier (existing behaviour), so a folder move is one group with a row per entry under
+   it, not one row.
+
+**Known limit (not fixed here): FUSE `utimens`, `chmod` and `chown` never reach the database.** `fuse::setattr`
+(`core/src/fuse/Bridge.cpp`, the `FUSE_SET_ATTR_ATIME`/`MTIME` branch) sets the backing file's times with
+`utimensat` and re-stats it for the reply; mode, uid and gid only log "no-op" (`warnSetattrMetadataNoOpOncePerMinute`).
+No row changes, so no trigger fires: neither the journal nor the replication log sees a `touch -d` or a `chmod`
+through the mount, and the next getattr after a cache refresh answers from the row again. Recommended fix, for the
+`ops::fs` piece: setattr writes `fs_entry.updated_at` (with `vh.keep_mtime`) and mode/owner through the operation
+layer, under Write (mode, times) and the owner rules, in one transaction; the log then records it like any other
+attribute change.
 
 ## Starting a mirror
 
@@ -242,10 +356,12 @@ each file into memory. A mirror that is unreachable blocks step 2; the core's ad
 1. **Local.** The mirror checks that the person is allowed by the link's policy (a super admin of the mirror by
    default, or an account the core added; `identity.md`) and within the server's role, applies the change locally,
    and records it in `mirror_pending` (vault, entry uid, operation, the generation it was based on, the new
-   generation, the actor's uid, the origin). People on the mirror see it at once.
+   generation, the acting account (the mirror's node id and the account's id there), the origin). People on the
+   mirror see it at once.
 2. **Contents first.** For a new or changed file the mirror sends the sealed bytes to the core's lane. The core
    verifies them and keeps them staged by generation.
-3. **Submit.** `peer.mirror.submit` names the person by uid, the origin on the mirror, the `(term, seq)` the mirror
+3. **Submit.** `peer.mirror.submit` names the person (the mirror's node id and the account's id there), the origin on
+   the mirror, the `(term, seq)` the mirror
    had applied, and the operations by uid with the generation each was based on.
 4. **The core executes it** through the operation layer as that person:
    - the peer's vault role is checked first, as a ceiling;

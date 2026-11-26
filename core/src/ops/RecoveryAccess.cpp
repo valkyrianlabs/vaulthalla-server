@@ -54,9 +54,9 @@ bool Gate::evaluate(const std::string& vaultPath, const FsAction action, const b
     } else {
         // Judged as it was: a synthetic entry at the historical path (overrides match it), plus the folder that still
         // exists above it.
-        std::shared_ptr<fs::model::Entry> was;
-        if (directory) was = std::make_shared<fs::model::Directory>();
-        else was = std::make_shared<fs::model::File>();
+        std::shared_ptr<vh::fs::model::Entry> was;
+        if (directory) was = std::make_shared<vh::fs::model::Directory>();
+        else was = std::make_shared<vh::fs::model::File>();
         was->path = vaultPath;
         was->fuse_path = engine_->vaultPathToFusePath(vaultPath);
         was->vault_id = static_cast<int32_t>(engine_->vault->id);

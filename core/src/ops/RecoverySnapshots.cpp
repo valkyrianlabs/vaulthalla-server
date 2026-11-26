@@ -56,7 +56,7 @@ PointDetail createSnapshot(const Actor& actor, const uint32_t vaultId, const Sna
 
     // Every entry passes before anything is captured: Read + Copy on each file (a snapshot is a copy that can be
     // restored anywhere, so it must not route around a download or copy deny), List on each directory.
-    const auto authorize = [&](const fs::model::Entry& entry) {
+    const auto authorize = [&](const vh::fs::model::Entry& entry) {
         if (entry.isSymlink()) return;   // not captured
         if (entry.isDirectory()) {
             if (!snapshotAllows(actor, *engine, entry.path, SnapshotFsAction::List))

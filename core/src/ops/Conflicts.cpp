@@ -47,8 +47,8 @@ bool fsAllows(const Actor& actor, const storage::Engine& engine, const std::stri
     });
 }
 
-std::shared_ptr<fs::model::File> previewFile(const ConflictRecord& r) {
-    auto f = std::make_shared<fs::model::File>();
+std::shared_ptr<vh::fs::model::File> previewFile(const ConflictRecord& r) {
+    auto f = std::make_shared<vh::fs::model::File>();
     f->id = r.file_id;
     f->vault_id = r.vault_id;
     f->name = r.name;

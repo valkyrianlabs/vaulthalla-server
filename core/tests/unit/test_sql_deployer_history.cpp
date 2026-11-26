@@ -2282,4 +2282,76 @@ TEST_F(SqlDeployerHistoryDb, PermanentIdsMigration158BackfillsEveryRowKeepsEvery
     });
 }
 
+// Migration 160 (the replication log of a mirrored vault): new tables, functions and triggers only. On an upgraded
+// database with a tree in it, it changes no existing row and writes no log row (nothing is mirrored), and a second run
+// of the file changes nothing.
+TEST_F(SqlDeployerHistoryDb, ReplicationLogMigration160IsAdditiveAndWritesNothingUntilAVaultIsMirrored) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        const std::string file = "160_replication_log.sql";
+        const auto count = [&](const std::string& q) { return txn.exec(q).one_field_ref().as<int64_t>(); };
+
+        // ---- back to the 159 schema
+        for (const auto* t : {"fs_entry", "files", "directories", "symlinks", "files_trashed", "vault", "sync", "fsync",
+                              "rsync", "vault_recovery_policy", "vault_keys"})
+            for (const auto* trigger : {"vh_mirror_track", "vh_mirror_track_update", "vh_mirror_track_delete"})
+                txn.exec(std::string("DROP TRIGGER IF EXISTS ") + trigger + " ON " + t);
+        txn.exec("DROP TABLE IF EXISTS vault_replication_log, mirror_entry_hash, mirror_vault");
+        txn.exec("DO $$ DECLARE f RECORD; BEGIN "
+                 "  FOR f IN SELECT p.oid::regprocedure AS sig, p.prokind FROM pg_proc p "
+                 "           WHERE p.proname LIKE 'vh\\_mirror\\_%' AND p.pronamespace = current_schema()::regnamespace "
+                 "           ORDER BY p.prokind = 'a' DESC LOOP "
+                 "    EXECUTE format(CASE WHEN f.prokind = 'a' THEN 'DROP AGGREGATE %s' ELSE 'DROP FUNCTION %s' END, f.sig); "
+                 "  END LOOP; END $$");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
+        ASSERT_EQ(count("SELECT count(*) FROM pg_proc WHERE proname LIKE 'vh\\_mirror\\_%'"), 0);
+
+        // ---- a tree as an upgraded install has it
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_160_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES "
+                                    "('claude_test_160', $1, 'local', 'claude_test_160', gen_random_uuid()) RETURNING id", pqxx::params{owner}).one_field_ref().as<int>();
+        const auto root = txn.exec("INSERT INTO fs_entry (vault_id, name, path) VALUES ($1, '', '/') RETURNING id",
+                                   pqxx::params{vault}).one_field_ref().as<int>();
+        txn.exec("INSERT INTO directories (fs_entry_id, uid) VALUES ($1, gen_random_uuid())", pqxx::params{root});
+        const auto file1 = txn.exec("INSERT INTO fs_entry (vault_id, parent_id, name, path, created_by) "
+                                    "VALUES ($1, $2, 'a.txt', '/a.txt', $3) RETURNING id",
+                                    pqxx::params{vault, root, owner}).one_field_ref().as<int>();
+        txn.exec("INSERT INTO files (fs_entry_id, size_bytes, encryption_iv, encrypted_with_key_version, object_uid) "
+                 "VALUES ($1, 1, '', 0, gen_random_uuid())", pqxx::params{file1});
+        const auto rows = [&] {
+            return txn.exec("SELECT md5(string_agg(t, ',' ORDER BY t)) FROM ("
+                            "  SELECT e::text AS t FROM fs_entry e WHERE e.vault_id = $1 "
+                            "  UNION ALL SELECT f::text FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id "
+                            "  WHERE e.vault_id = $1) x", pqxx::params{vault}).one_field_ref().as<std::string>();
+        };
+        const auto rowsBefore = rows();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, file));
+        EXPECT_EQ(report.applied.size(), 1u) << "only 160 was missing";
+        EXPECT_EQ(recordedHash(txn, file), currentHash(file));
+        for (const auto* t : {"mirror_vault", "mirror_entry_hash", "vault_replication_log"})
+            EXPECT_TRUE(columnExists(txn, t, "vault_id")) << t;
+        EXPECT_EQ(count("SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'vh\\_mirror\\_track%' AND NOT tgisinternal"),
+                  23);
+        EXPECT_EQ(rows(), rowsBefore) << "no existing row changes";
+
+        // Nothing is mirrored: writes log nothing, and no existing row changed.
+        txn.exec("UPDATE fs_entry SET name = 'b.txt', path = '/b.txt' WHERE id = $1", pqxx::params{file1});
+        txn.exec("UPDATE fs_entry SET name = 'a.txt', path = '/a.txt' WHERE id = $1", pqxx::params{file1});
+        EXPECT_EQ(count("SELECT count(*) FROM vault_replication_log"), 0);
+        EXPECT_EQ(count("SELECT count(*) FROM mirror_entry_hash"), 0);
+
+        // A second run of the file, and of the deployer, changes nothing.
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / file)));
+        EXPECT_EQ(count("SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'vh\\_mirror\\_track%' AND NOT tgisinternal"),
+                  23);
+        EXPECT_EQ(count("SELECT count(*) FROM vault_replication_log"), 0);
+    });
+}
+
 } // namespace vh_sql_deployer_history_test

@@ -1,8 +1,6 @@
 #include "protocols/ws/handler/fs/Storage.hpp"
-#include "audit/Trail.hpp"
 #include "protocols/ws/handler/RequestErrors.hpp"
 #include "db/encoding/timestamp.hpp"
-#include "db/query/sync/Operation.hpp"
 #include "protocols/ws/Session.hpp"
 #include "storage/Manager.hpp"
 #include "fs/model/Directory.hpp"
@@ -10,7 +8,6 @@
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
 #include "rbac/Actor.hpp"
-#include "rbac/fs/Placement.hpp"
 #include "rbac/fs/Visibility.hpp"
 #include "rbac/role/Vault.hpp"
 #include "vault/model/Vault.hpp"
@@ -20,15 +17,13 @@
 #include "storage/Engine.hpp"
 #include "runtime/Deps.hpp"
 #include "fs/Filesystem.hpp"
-#include "sync/Controller.hpp"
 #include "fs/cache/Registry.hpp"
 #include "share/Manager.hpp"
 #include "share/Principal.hpp"
 #include "share/TargetResolver.hpp"
-#include "sync/model/Operation.hpp"
-#include "log/Registry.hpp"
 #include "preview/Plan.hpp"
 #include "ops/Error.hpp"
+#include "ops/Fs.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -48,25 +43,6 @@ using namespace vh::fs::model;
 
 namespace {
 
-// Console file operations go to the audit trail (#323), by entry id: never a file or folder name.
-std::optional<uint64_t> entryIdAt(const std::shared_ptr<vh::storage::Engine>& engine, const std::filesystem::path& path) {
-    try {
-        if (const auto entry = vh::runtime::Deps::get().fsCache->getEntry(engine->vaultPathToFusePath(path)))
-            return entry->id;
-    } catch (const std::exception&) {}
-    return std::nullopt;
-}
-
-void auditFs(const std::shared_ptr<vh::protocols::ws::Session>& session, const std::shared_ptr<vh::storage::Engine>& engine,
-             const std::string& action, const std::string& verb, const std::optional<uint64_t> entryId,
-             nlohmann::json details = nlohmann::json::object()) {
-    if (!session || !session->user) return;
-    vh::audit::record({.action = action, .actor_id = session->user->id, .actor = session->user->name(),
-                       .vault_id = engine->vault->id, .entry_id = entryId, .details = std::move(details)},
-                      "[fs] " + session->user->name() + " " + verb + " entry " +
-                          (entryId ? std::to_string(*entryId) : std::string("?")) + " in vault " +
-                          std::to_string(engine->vault->id));
-}
 enum class ShareReadPathStyle { Native, Compatibility };
 
 struct SharePathRequest {
@@ -249,50 +225,6 @@ void requireShareMode(const std::shared_ptr<vh::protocols::ws::Session>& session
     };
 }
 
-using SyncOperation = vh::sync::model::Operation;
-
-[[nodiscard]] std::shared_ptr<SyncOperation> startMutationOperation(
-    const std::shared_ptr<vh::storage::Engine>& engine,
-    const std::filesystem::path& from,
-    const std::filesystem::path& to,
-    const unsigned int userId,
-    const SyncOperation::Op op
-) noexcept {
-    try {
-        if (!engine || !engine->paths) return nullptr;
-
-        const auto fuseFrom = engine->vaultPathToFusePath(from);
-        const auto entry = vh::runtime::Deps::get().fsCache->getEntry(fuseFrom);
-        if (!entry) return nullptr;
-
-        auto operation = std::make_shared<SyncOperation>(entry, to, userId, op);
-        operation->status = SyncOperation::Status::InProgress;
-        vh::db::query::sync::Operation::createOperation(operation);
-        return operation;
-    } catch (const std::exception& e) {
-        vh::log::Registry::ws()->warn("[Storage] Failed to record pending filesystem operation: {}", e.what());
-        return nullptr;
-    } catch (...) {
-        vh::log::Registry::ws()->warn("[Storage] Failed to record pending filesystem operation");
-        return nullptr;
-    }
-}
-
-void finishMutationOperation(
-    const std::shared_ptr<SyncOperation>& operation,
-    const SyncOperation::Status status,
-    const std::optional<std::string>& error = std::nullopt
-) noexcept {
-    if (!operation || operation->id == 0) return;
-
-    try {
-        vh::db::query::sync::Operation::markOperationStatus(operation->id, status, error);
-    } catch (const std::exception& e) {
-        vh::log::Registry::ws()->warn("[Storage] Failed to finish filesystem operation stat {}: {}", operation->id, e.what());
-    } catch (...) {
-        vh::log::Registry::ws()->warn("[Storage] Failed to finish filesystem operation stat {}", operation->id);
-    }
-}
 }
 
 json Storage::startUpload(const json& payload, const std::shared_ptr<Session>& session) try {
@@ -302,20 +234,12 @@ json Storage::startUpload(const json& payload, const std::shared_ptr<Session>& s
     const auto vaultId = payload.at("vault_id").get<uint32_t>();
     const auto path = std::filesystem::path(payload.at("path").get<std::string>());
 
-    const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw vh::ops::NotFound("Unknown storage engine");
+    // The upload's bytes go through the mount to a staged entry beside the target; ops::fs commits it at the finish.
+    const auto engine = vh::ops::fs::authorizeUpload(session ? session->user : nullptr, vaultId, path);
 
     const auto uploadId = Session::generateUUIDv4();
     const auto absPath = engine->paths->absPath(path, PathType::VAULT_ROOT);
     const auto tmpPath = absPath.parent_path() / (".upload-" + uploadId + ".part");
-
-    enforcePermission(
-        session,
-        engine,
-        path,
-        permission::vault::FilesystemAction::Write,
-        "Permission denied: User does not have upload permission for this path in the vault"
-    );
 
     session->getUploadHandler()->startUpload({
         .uploadId = uploadId,
@@ -339,17 +263,7 @@ json Storage::finishUpload(const json& payload, const std::shared_ptr<Session>& 
     const auto vaultId = payload.at("vault_id").get<uint32_t>();
     const auto path = std::filesystem::path(payload.at("path").get<std::string>());
 
-    const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw vh::ops::NotFound("Unknown storage engine");
-
-    enforcePermission(
-        session,
-        engine,
-        path,
-        permission::vault::FilesystemAction::Write,
-        "Permission denied: User does not have upload permission for this path in the vault"
-    );
-
+    (void)vh::ops::fs::authorizeUpload(session ? session->user : nullptr, vaultId, path);
     session->getUploadHandler()->finishUpload();
     return {{"path", path.string()}};
 } catch (...) {
@@ -371,94 +285,10 @@ json Storage::mkdir(const json& payload, const std::shared_ptr<Session>& session
     const auto vaultId = payload.at("vault_id").get<uint32_t>();
     const auto path = std::filesystem::path(payload.at("path").get<std::string>());
 
-    const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw vh::ops::NotFound("No storage engine found for vault with ID: " + std::to_string(vaultId));
-
-    enforcePermission(
-        session,
-        engine,
-        path,
-        permission::vault::FilesystemAction::Touch,
-        "Permission denied: User does not have create-directory permission for this path in the vault"
-    );
-
-    // The engine refuses both with one untyped error; tell them apart first (same text) so the answer is typed.
-    if (Filesystem::exists(engine->vaultPathToFusePath(path)))
-        throw vh::ops::Conflict("Failed to create directory: " + path.string());
-    if (const auto parent = path.parent_path(); !parent.empty() && !Filesystem::exists(engine->vaultPathToFusePath(parent)))
-        throw vh::ops::NotFound("Failed to create directory: " + path.string());
-
-    engine->mkdir(path, session->user);
-    auditFs(session, engine, "fs.mkdir", "created folder", entryIdAt(engine, path));
-    runtime::Deps::get().syncController->runNow(vaultId);
-
+    vh::ops::fs::mkdir(session ? session->user : nullptr, vaultId, path);
     return {{"path", path.string()}};
 } catch (...) {
     rethrowRequestErrorsAsInvalid();
-}
-
-namespace {
-
-// The folder an entry at `path` (vault-relative) is in; "/" for a top-level entry.
-[[nodiscard]] std::filesystem::path parentFolder(const std::filesystem::path& path) {
-    auto normal = path.lexically_normal();
-    if (!normal.has_filename() && normal.has_relative_path()) normal = normal.parent_path();  // "/a/b/" -> "/a/b"
-    const auto parent = normal.parent_path();
-    return parent.empty() || parent == normal ? std::filesystem::path("/") : parent;
-}
-
-}
-
-// The rule fs.entry.copy applies to every entry it writes, and what fs.dir.create and an upload check: Touch for a
-// folder, Write for a file or symlink, judged at the new path, for the entry and (a folder) everything it carries. A
-// rename within the entry's own folder adds nothing to that folder, so the source's Move/Rename is enough there, as
-// before. Checked before the endpoints are looked up, so a refused caller learns nothing about the destination.
-void Storage::enforceCreateAtDestination(const std::shared_ptr<Session>& session,
-                                         const std::shared_ptr<Engine>& engine,
-                                         const std::filesystem::path& from,
-                                         const std::filesystem::path& to) {
-    if (parentFolder(from) == parentFolder(to)) return;
-
-    // A missing source is requireTransferEndpoints' not_found.
-    const auto source = runtime::Deps::get().fsCache->getEntry(engine->vaultPathToFusePath(from));
-    if (!source) return;
-
-    enforcePermission(session, engine, to, vh::rbac::fs::placement::createAction(*source),
-                      "Permission denied: User cannot create " + to.string() + " in the vault");
-    if (const auto refused = vh::rbac::fs::placement::firstRefusedDescendant(session->user, source,
-                                                                             engine->vaultPathToFusePath(to)))
-        throw vh::ops::Denied("Permission denied: User cannot create " +
-                              engine->fusePathToVaultPath(*refused).string() + " in the vault");
-}
-
-namespace {
-
-// A move/rename/copy whose source or destination folder is missing is a typed not_found for the console (the FUSE
-// equivalent is ENOENT), checked after the source permission so nothing is revealed to a caller without it. Before,
-// the engine threw an untyped "Failed to rename" error (found by the integration engine, tools/harness).
-void requireTransferEndpoints(const std::shared_ptr<Engine>& engine, const std::filesystem::path& from,
-                              const std::filesystem::path& to) {
-    if (!Filesystem::exists(engine->vaultPathToFusePath(from)))
-        throw vh::ops::NotFound("source does not exist: " + from.string());
-    auto parent = to.parent_path();
-    if (parent.empty()) parent = "/";
-    if (!Filesystem::exists(engine->vaultPathToFusePath(parent)))
-        throw vh::ops::NotFound("destination folder does not exist: " + parent.string());
-}
-
-// The engine reports a taken destination (EEXIST) and a folder moved or copied into itself (EINVAL) with the same
-// untyped error as a fault. Once it has failed (nothing changed), tell those refusals apart and rethrow them typed,
-// with the engine's text unchanged; anything else (an ops refusal from the copy authorizer included) as it was.
-[[noreturn]] void rethrowTransferRefusal(const std::shared_ptr<Engine>& engine, const std::filesystem::path& from,
-                                         const std::filesystem::path& to, const std::exception& e) {
-    if (dynamic_cast<const vh::ops::Error*>(&e)) throw;
-    const auto source = from.lexically_normal().string();
-    const auto destination = to.lexically_normal().string();
-    if (destination != source && Filesystem::exists(engine->vaultPathToFusePath(to))) throw vh::ops::Conflict(e.what());
-    if (destination.starts_with(source.ends_with('/') ? source : source + "/")) throw vh::ops::Invalid(e.what());
-    throw;
-}
-
 }
 
 json Storage::move(const json& payload, const std::shared_ptr<Session>& session) try {
@@ -466,31 +296,7 @@ json Storage::move(const json& payload, const std::shared_ptr<Session>& session)
     const auto from = std::filesystem::path(payload.at("from").get<std::string>());
     const auto to = std::filesystem::path(payload.at("to").get<std::string>());
 
-    const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw vh::ops::NotFound("No storage engine found for vault with ID: " + std::to_string(vaultId));
-
-    enforcePermission(
-        session,
-        engine,
-        from,
-        permission::vault::FilesystemAction::Move,
-        "Permission denied: User does not have move permission for the source path in the vault"
-    );
-    enforceCreateAtDestination(session, engine, from, to);
-    requireTransferEndpoints(engine, from, to);
-
-    const auto movedId = entryIdAt(engine, from);
-    auto operation = startMutationOperation(engine, from, to, session->user->id, SyncOperation::Op::Move);
-    try {
-        engine->move(from, to, session->user);
-        finishMutationOperation(operation, SyncOperation::Status::Success);
-        auditFs(session, engine, "fs.move", "moved", movedId);
-    } catch (const std::exception& e) {
-        finishMutationOperation(operation, SyncOperation::Status::Failed, e.what());
-        rethrowTransferRefusal(engine, from, to, e);
-    }
-    runtime::Deps::get().syncController->runNow(vaultId);
-
+    vh::ops::fs::move(session ? session->user : nullptr, vaultId, from, to);
     return {
         {"from", from.string()},
         {"to", to.string()}
@@ -504,31 +310,7 @@ json Storage::rename(const json& payload, const std::shared_ptr<Session>& sessio
     const auto from = std::filesystem::path(payload.at("from").get<std::string>());
     const auto to = std::filesystem::path(payload.at("to").get<std::string>());
 
-    const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw vh::ops::NotFound("No storage engine found for vault with ID: " + std::to_string(vaultId));
-
-    enforcePermission(
-        session,
-        engine,
-        from,
-        permission::vault::FilesystemAction::Rename,
-        "Permission denied: User does not have rename permission for the source path in the vault"
-    );
-    enforceCreateAtDestination(session, engine, from, to);
-    requireTransferEndpoints(engine, from, to);
-
-    auto operation = startMutationOperation(engine, from, to, session->user->id, SyncOperation::Op::Rename);
-    const auto renamedId = entryIdAt(engine, from);
-    try {
-        engine->rename(from, to, session->user);
-        finishMutationOperation(operation, SyncOperation::Status::Success);
-        auditFs(session, engine, "fs.rename", "renamed", renamedId);
-    } catch (const std::exception& e) {
-        finishMutationOperation(operation, SyncOperation::Status::Failed, e.what());
-        rethrowTransferRefusal(engine, from, to, e);
-    }
-    runtime::Deps::get().syncController->runNow(vaultId);
-
+    vh::ops::fs::rename(session ? session->user : nullptr, vaultId, from, to);
     return {
         {"from", from.string()},
         {"to", to.string()}
@@ -542,46 +324,7 @@ json Storage::copy(const json& payload, const std::shared_ptr<Session>& session)
     const auto from = std::filesystem::path(payload.at("from").get<std::string>());
     const auto to = std::filesystem::path(payload.at("to").get<std::string>());
 
-    const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw vh::ops::NotFound("No storage engine found for vault with ID: " + std::to_string(vaultId));
-
-    enforcePermission(
-        session,
-        engine,
-        from,
-        permission::vault::FilesystemAction::Copy,
-        "Permission denied: User does not have copy permission for the source path in the vault"
-    );
-    requireTransferEndpoints(engine, from, to);
-
-    // Every copied entry passes the checks a single one would (#167), before anything is written: Copy on the source,
-    // Read on a source file (the copy is readable wherever it lands, so it must not route around a download deny),
-    // and creating it at the destination: Write for a file or symlink (as an upload), Touch for a folder (as mkdir).
-    const auto authorize = [&](const vh::fs::model::Entry& source, const std::filesystem::path& destinationFuse) {
-        const auto destination = engine->fusePathToVaultPath(destinationFuse);
-        enforcePermission(session, engine, source.path, permission::vault::FilesystemAction::Copy,
-                          "Permission denied: User does not have copy permission for " + source.path.string());
-        if (!source.isDirectory())
-            enforcePermission(session, engine, source.path, permission::vault::FilesystemAction::Read,
-                              "Permission denied: User does not have read permission for " + source.path.string());
-        enforcePermission(session, engine, destination,
-                          source.isDirectory() ? permission::vault::FilesystemAction::Touch
-                                               : permission::vault::FilesystemAction::Write,
-                          "Permission denied: User cannot create " + destination.string() + " in the vault");
-    };
-
-    auto operation = startMutationOperation(engine, from, to, session->user->id, SyncOperation::Op::Copy);
-    try {
-        engine->copy(from, to, session->user->id, authorize);
-        finishMutationOperation(operation, SyncOperation::Status::Success);
-        auditFs(session, engine, "fs.copy", "copied", entryIdAt(engine, from),
-                {{"copy_entry_id", entryIdAt(engine, to).value_or(0)}});
-    } catch (const std::exception& e) {
-        finishMutationOperation(operation, SyncOperation::Status::Failed, e.what());
-        rethrowTransferRefusal(engine, from, to, e);
-    }
-    runtime::Deps::get().syncController->runNow(vaultId);
-
+    vh::ops::fs::copy(session ? session->user : nullptr, vaultId, from, to);
     return {
         {"from", from.string()},
         {"to", to.string()}
@@ -701,29 +444,12 @@ json Storage::listDir(const json& payload, const std::shared_ptr<Session>& sessi
 json Storage::remove(const json& payload, const std::shared_ptr<Session>& session) try {
     const auto user = session->user;
     if (!user) throw std::runtime_error("User not authenticated");
-
-    const auto userId = user->id;
-    if (userId == 0) throw std::runtime_error("User not authenticated");
+    if (user->id == 0) throw std::runtime_error("User not authenticated");
 
     const auto vaultId = payload.at("vault_id").get<uint32_t>();
     const auto path = std::filesystem::path(payload.at("path").get<std::string>());
 
-    const auto engine = runtime::Deps::get().storageManager->getEngine(vaultId);
-    if (!engine) throw vh::ops::NotFound("No storage engine found for vault with ID: " + std::to_string(vaultId));
-
-    enforcePermission(
-        session,
-        engine,
-        path,
-        permission::vault::FilesystemAction::Delete,
-        "Permission denied: User does not have delete permission for this path in the vault"
-    );
-
-    const auto removedId = entryIdAt(engine, path);
-    engine->remove(path, userId);
-    auditFs(session, engine, "fs.delete", "deleted", removedId);
-    runtime::Deps::get().syncController->runNow(vaultId);
-
+    vh::ops::fs::remove(user, vaultId, path);
     return {{"path", path.string()}};
 } catch (...) {
     rethrowRequestErrorsAsInvalid();

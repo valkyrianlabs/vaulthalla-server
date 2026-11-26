@@ -66,7 +66,7 @@ std::shared_ptr<storage::CloudEngine> rpCloud(const EnginePtr& engine) {
 
 std::string rpNormalize(const std::string& path) { return access::normalize(path); }
 
-std::shared_ptr<fs::model::Entry> rpEntry(const storage::Engine& engine, const std::string& vaultPath) {
+std::shared_ptr<vh::fs::model::Entry> rpEntry(const storage::Engine& engine, const std::string& vaultPath) {
     const auto& cache = runtime::Deps::get().fsCache;
     return cache ? cache->getEntry(engine.vaultPathToFusePath(vaultPath)) : nullptr;
 }
