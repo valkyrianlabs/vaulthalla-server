@@ -1639,6 +1639,18 @@ Range ignored; HEAD answers from the recorded artifact without contacting the bu
 `core/src/fuse/Service.cpp` validates the mountpoint, mounts a low-level session with `allow_other,auto_unmount`
 (subtype `vaulthalla-fuse`), and dispatches to a thread pool. Mount path: `/mnt/vaulthalla` (prod/dev),
 `/tmp/vh_mount` (integration harness).
+- **The mount never forks.** `platform::mount::mountWithHelper` starts `fusermount3 -o rw,nosuid,nodev,allow_other,
+  auto_unmount,subtype=vaulthalla-fuse -- <mount>` (the command libfuse runs) with `posix_spawn`, its socket as fd 3
+  (`_FUSE_COMMFD`) and every other descriptor closed, receives `/dev/fuse` over it and hands libfuse `/dev/fd/<n>`.
+  The helper stays (auto_unmount) until its socket closes (`releaseHelper` at the loop's end, or the daemon dying),
+  then unmounts. Why: libfuse forks and calls `setenv` in the child, which allocates; in this multithreaded process a
+  sanitizer build's allocator (GCC 14's libasan has no fork handling) could be locked by another thread at the fork,
+  so the child hung before exec, the mount never came, and the child kept the daemon's listening sockets (the wave 3
+  drill's "daemon not ready within 90s" and EADDRINUSE on restart). glibc's malloc is fork-safe, so packaged builds
+  never hung, but the child was outside POSIX's async-signal-safe rule there too. libfuse's own unmount fork is gone
+  with it (a `/dev/fd` session has no mountpoint; `platform::mount::detach` and the helper unmount). Other children:
+  the preview runner uses `_Fork` with everything prepared before it; `gpg` (key export) builds its argv before
+  fork; `std::system` and `posix_spawn` users allocate nothing in a child (glibc's `system` is posix_spawn).
 - **FUSE ops still hit the DB for content and metadata writes**, but no longer for identity: the caller (by uid), its
   groups and the vault owner come from `identities::Manager` in memory (see Identities below). If the DB pool wedges,
   writes, opens of uncached entries and anything else that queries still hang. See P0 in `production-hardening.md`.

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "concurrency/AsyncService.hpp"
+#include "platform/Mount.hpp"
 #include "storage/Fwd.hpp"
 
 #include <atomic>
@@ -56,6 +57,7 @@ protected:
 private:
     fuse_session* session_{nullptr};
     std::atomic<bool> loopActive_{false};
+    platform::mount::HelperMount helper_{};  // fusermount3, alive as long as the mount (auto_unmount)
 };
 
 }
