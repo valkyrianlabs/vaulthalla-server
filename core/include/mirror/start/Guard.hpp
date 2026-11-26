@@ -15,6 +15,13 @@ namespace vh::mirror::start {
 // ops::Refused("vault_mirrored") naming `what` when mirroredOrStarting.
 void refuseIfMirrored(uint32_t vaultId, const std::string& what);
 
+// Deleting a mirrored vault is refused until its mirror is ended (owner, 2026-11-26; mirror.md "Ending a mirror"), at
+// every entry point that deletes, schedules or purges a vault (ops::vaults::remove, the S3 gateway's DeleteBucket):
+// ops::Refused "vault_mirrored" on the core (or while a start runs: end the mirror first, vh mirror cancel <id>
+// [--remove-copy]) and on a mirror (another server's vault); "vault_orphaned_copy" for an orphaned copy, which is
+// removed only through vh mirror cancel <id> (one way, so the step-up and the audit line are always the same).
+void refuseDeletionIfMirrored(uint32_t vaultId);
+
 // Tests only: lets a rotation through on a mirrored vault (the replication log's own test drives the `key` rows a
 // rotation over the link will write). Never set by the daemon.
 void allowRotationOnMirroredForTesting(bool allow);

@@ -91,6 +91,11 @@ public:
 
     // live | paused | diverged. False without a row.
     static bool setState(uint32_t vaultId, const std::string& state);
+
+    // The core ended a finished mirror and this server keeps its copy (wave 3, the ending rule): the `mirror` row
+    // becomes `orphaned`; the last recorded grant and the pending-contents rows stay (rbac::mirrored resolves an
+    // orphaned copy like a mirror). False when the vault has no `mirror` row here.
+    static bool orphan(uint32_t vaultId);
 };
 
 }

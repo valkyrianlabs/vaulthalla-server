@@ -6,7 +6,7 @@
 
 // ws mirror.* and peer.mirror.* (design/peers/mirror.md "Starting a mirror"; ops/Mirrors.hpp, mirror/start/Start.hpp).
 // Management (mirror.add, mirror.pending, mirror.accept, mirror.decline, mirror.cancel, mirror.list, mirror.get,
-// mirror.accept_all.set) on a signed-in person's session or a full-access device's; the wire set of piece A
+// mirror.accept_all.set, mirror.keep_removed.set) on a signed-in person's session or a full-access device's; the wire set of piece A
 // (peer.mirror.offer, .answer, .keys, .begin, .grant, .cancel) only on a linked server's Peer session
 // (Router::classifyCommand, isPeerWireCommand).
 namespace vh::protocols::ws::handler {
@@ -22,6 +22,7 @@ struct Mirrors {
     static json list(const std::shared_ptr<Session>& session);
     static json get(const json& payload, const std::shared_ptr<Session>& session);
     static json acceptAllSet(const json& payload, const std::shared_ptr<Session>& session);
+    static json keepRemovedSet(const json& payload, const std::shared_ptr<Session>& session);
 
     // A linked server's session.
     static json offer(const json& payload, const std::shared_ptr<Session>& session);

@@ -93,6 +93,10 @@ json Mirrors::decline(const json& payload, const std::shared_ptr<Session>& sessi
 json Mirrors::cancel(const json& payload, const std::shared_ptr<Session>& session) {
     mirrors::CancelRequest req{.vault_id = mirrorOptionalId(payload, "vault_id")};
     if (payload.is_object() && payload.contains("offer") && !payload.at("offer").is_null()) req.offer = mirrorOfferRef(payload);
+    if (payload.is_object() && payload.contains("remove_copy") && !payload.at("remove_copy").is_null()) {
+        if (!payload.at("remove_copy").is_boolean()) throw ops::Invalid("remove_copy must be a boolean");
+        req.remove_copy = payload.at("remove_copy").get<bool>();
+    }
     return mirrors::toJson(mirrors::cancel(mirrorActorOf(session), req));
 }
 
@@ -111,6 +115,13 @@ json Mirrors::acceptAllSet(const json& payload, const std::shared_ptr<Session>& 
     if (!payload.contains("enabled") || !payload.at("enabled").is_boolean()) throw ops::Invalid("enabled is required (a boolean)");
     const auto& actor = mirrorActorOf(session);
     const auto set = mirrors::setAcceptAll(actor, peerRef, payload.at("enabled").get<bool>());
+    return mirrors::toJson(set, ::vh::ops::peers::resolveRef(peerRef));
+}
+
+json Mirrors::keepRemovedSet(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto peerRef = mirrorRequiredText(payload, "peer");
+    if (!payload.contains("enabled") || !payload.at("enabled").is_boolean()) throw ops::Invalid("enabled is required (a boolean)");
+    const auto set = mirrors::setKeepRemoved(mirrorActorOf(session), peerRef, payload.at("enabled").get<bool>());
     return mirrors::toJson(set, ::vh::ops::peers::resolveRef(peerRef));
 }
 

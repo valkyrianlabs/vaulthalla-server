@@ -5,6 +5,7 @@
 #include "crypto/id/Generator.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "db/query/mirror/MirrorVault.hpp"
+#include "db/query/peer/Peer.hpp"
 #include "db/query/vault/Key.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "log/Registry.hpp"
@@ -513,33 +514,108 @@ json cancelReceived(const vh::peer::Record& from, const json& payload) {
         const auto row = MirrorVaults::get(*vaultId);
         const auto coreOffer = Q::activeOffer(vaultUid, "core");
         if ((row && row->role == "core" && row->peer_id == from.id) || (coreOffer && coreOffer->peer_id == from.id))
-            return {{"cancelled", cancelOnCore(*vaultId, "peer_" + why, false, std::nullopt, "")}};
+            return {{"cancelled", cancelOnCore(*vaultId, "peer_" + why, false, false, std::nullopt, "")},
+                    {"copy", "none"}};
     }
 
-    // This server is the mirror: the core cancelled the start, or ended a completed one.
+    // This server is the mirror: the core cancelled the start, or ended a completed one. The ending rule (owner,
+    // 2026-11-26; mirror.md "Ending a mirror"): a copy whose first copy is not finished is removed (that server holds
+    // nothing complete here); a finished one is removed when the core asks and this link's keep setting is off, and
+    // otherwise kept, orphaned. No extra confirmation here: the trust holds until a party acts to end it.
+    const bool removeAsked = payload.contains("remove_copy") && payload.at("remove_copy").is_boolean() &&
+                             payload.at("remove_copy").get<bool>();
     std::optional<Offer> offer;
     if (offerUid) offer = Q::offerByUid(*offerUid, "mirror");
     if (!offer) offer = Q::activeOffer(vaultUid, "mirror");
     if (!offer) offer = Q::latestOffer(vaultUid, "mirror");
     if (offer && offer->peer_id != from.id) offer.reset();
     const auto held = heldFrom(vaultUid, from);
-    if (!offer && !held) return {{"cancelled", false}};
+    if (!offer && !held) return {{"cancelled", false}, {"copy", "none"}};
+    std::string copy = "none";
     {
         std::scoped_lock lock(stepMutex());
-        if (held) removeCopy(*held);
+        const auto row = held ? MirrorVaults::get(*held) : std::nullopt;
+        if (held && row && row->role == "orphaned") {
+            copy = "kept";  // told again (a retry): it stays as it was left
+        } else if (held) {
+            const bool finished = firstCopyFinished(*held);
+            const bool keepSet = Q::keepVaults(from.id).enabled;
+            if (!finished || (removeAsked && !keepSet)) {
+                removeCopy(*held);
+                copy = "removed";
+            } else {
+                (void)MirrorVaults::orphan(*held);
+                copy = "kept";
+            }
+        }
         if (offer)
             (void)Q::transition(offer->id, {"pending", "accepted", "installed", "started"},
-                                {.to = "cancelled", .notify = false, .reason = "core_" + why});
+                                {.to = copy == "kept" ? "orphaned" : "cancelled", .notify = false,
+                                 .reason = "core_" + why});
     }
     audit::record({.action = "mirror.cancel", .outcome = audit::Outcome::Info, .vault_id = held,
                    .details = {{"peer", from.id}, {"node_id", from.node_id}, {"side", "mirror"}, {"reason", why},
-                               {"removed", held.has_value()}, {"by", "peer"}}},
-                  fmt::format("[mirror] linked server {} cancelled the mirror of its vault{}{}", from.node_id,
+                               {"remove_copy", removeAsked}, {"copy", copy}, {"by", "peer"}}},
+                  fmt::format("[mirror] linked server {} ended the mirror of its vault{}{}", from.node_id,
                               offer ? " " + std::to_string(offer->core_vault_id) : std::string(),
-                              held ? fmt::format(": vault {} and its keys were removed here", *held) : std::string()),
+                              copy == "removed" ? fmt::format(": vault {} and its keys were removed here", held.value_or(0))
+                              : copy == "kept"  ? fmt::format(": vault {} is kept here as an orphaned copy (read-only; "
+                                                              "a super admin can remove it: vh mirror cancel {})",
+                                                              held.value_or(0), held.value_or(0))
+                                                : std::string()),
                   spdlog::level::warn);
     Service::instance()->wake();
-    return {{"cancelled", true}};
+    return {{"cancelled", true}, {"copy", copy}};
+}
+
+bool firstCopyFinished(const uint32_t vaultId) {
+    // LEAD: at the merge, answer from piece B's first-copy column on mirror_vault instead (keep the "no offer: true").
+    using namespace start_mirror_detail;
+    const auto vault = vh::db::query::vault::Vault::getVault(vaultId);
+    if (!vault || !vault->uid) return true;
+    const auto offer = Q::latestOffer(*vault->uid, "mirror");
+    if (!offer) return true;
+    return offer->state == "started" || offer->state == "orphaned";
+}
+
+void removeOrphaned(const uint32_t vaultId, const std::optional<uint32_t> actorId, const std::string& actorName) {
+    const auto row = vh::db::query::mirror::MirrorVaults::get(vaultId);
+    if (!row || row->role != "orphaned") throw ops::Conflict("vault " + std::to_string(vaultId) + " is not an orphaned copy");
+    {
+        std::scoped_lock lock(stepMutex());
+        removeCopy(vaultId);
+    }
+    audit::record({.action = "mirror.remove", .actor_id = actorId, .actor = actorName, .vault_id = vaultId,
+                   .details = {{"peer", row->peer_id}, {"side", "mirror"}, {"role", "orphaned"}}},
+                  fmt::format("[mirror] {} removed vault {}, an orphaned copy of linked server {}'s vault, with its keys",
+                              actorName, vaultId, row->peer_id),
+                  spdlog::level::warn);
+}
+
+std::size_t reconcileUnlinked() {
+    std::size_t orphaned = 0;
+    std::set<uint32_t> revoked;
+    for (const auto& row : vh::db::query::mirror::MirrorVaults::list()) {
+        if (row.role != "mirror") continue;
+        const auto peer = vh::db::query::peer::Peers::byId(row.peer_id);
+        if (peer && !peer->revoked()) continue;
+        if (vh::db::query::mirror::MirrorVaults::orphan(row.vault_id)) {
+            ++orphaned;
+            revoked.insert(row.peer_id);
+            audit::record({.action = "mirror.orphan", .outcome = audit::Outcome::Info, .vault_id = row.vault_id,
+                           .details = {{"peer", row.peer_id}, {"reason", "unlinked"}}},
+                          fmt::format("[mirror] vault {} is kept as an orphaned copy: its core, linked server {}, was "
+                                      "unlinked", row.vault_id, row.peer_id),
+                          spdlog::level::warn);
+        }
+    }
+    for (const auto& o : start_mirror_detail::Q::offersWithWork()) {
+        if (!o.notify) continue;
+        const auto peer = vh::db::query::peer::Peers::byId(o.peer_id);
+        if (!peer || peer->revoked()) revoked.insert(o.peer_id);
+    }
+    for (const auto p : revoked) (void)start_mirror_detail::Q::dropNotices(p);
+    return orphaned;
 }
 
 json answerReceived(const vh::peer::Record& from, const json& payload) {

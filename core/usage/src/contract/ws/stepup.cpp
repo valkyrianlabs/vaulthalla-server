@@ -100,6 +100,7 @@ std::vector<WsStepUp> stepUpTable() {
         {"email.config.update", "settings", false, "the email sections of settings.update"},
         // data.destroy: target-bound, single use
         {"storage.vault.remove", "data.destroy", kTarget, ""},
+        {"mirror.cancel", "data.destroy", kTarget, "with remove_copy on a mirror that has begun, or removing an orphaned copy"},
         {"recovery.point.delete", "data.destroy", kTarget, ""},
         {"vault.recovery.suspend", "data.destroy", kTarget, ""},
         {"vault.recovery.update", "data.destroy", kTarget,

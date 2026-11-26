@@ -473,6 +473,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"mirror_detach_required", {"mirror.cancel"}}, {"mirror_offer_finished", {"mirror.cancel"}},
             {"mirror_keys_refused", {"peer.mirror.keys"}}, {"mirror_offer_not_accepted", {"peer.mirror.keys"}},
             {"mirror_offer_not_installed", {"peer.mirror.begin"}},
+            {"vault_mirrored", {"storage.vault.remove"}}, {"vault_orphaned_copy", {"storage.vault.remove"}},
         };
         if (const auto m = kMirrorCodes.find(code); m != kMirrorCodes.end() && m->second.contains(command)) return true;
         if ((code == "no_pairing_window" || code == "rate_limited" || code == "device_unknown") &&

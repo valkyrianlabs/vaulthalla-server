@@ -50,11 +50,14 @@ std::vector<WsField> mcOfferFields() {
                 .desc("The vault's owner on the core: its home server's node id and its id there."),
             mcRoleObject("role", "The role the core proposes for the mirror server; null: none."),
             str("state").oneOf({"offered", "pending", "accepted", "keys_acked", "installed", "started", "declined",
-                                "cancelled", "expired", "failed"}),
+                                "cancelled", "expired", "failed", "orphaned"}),
             str("step").desc("What the start is doing, in words: offering, waiting_for_answer, delivering_keys, "
                              "beginning, waiting_for_a_super_admin, answering, waiting_for_keys, waiting_for_begin, or "
                              "the state once it finished."),
             boolean("told").desc("The other server was told this state."),
+            boolean("remove_copy").desc("core: its cancel asked the mirror to remove its copy."),
+            str("copy").oneOf({"removed", "kept", "none"}).nullable().desc(
+                "core: what the mirror said it did with its copy when it was told of the cancel."),
             str("reason").nullable().desc("A decline's, cancel's or failure's code."), str("detail").nullable(),
             uinteger("attempts"), str("last_error").nullable(), uinteger("created_at"), uinteger("updated_at"),
             uinteger("expires_at").desc("An offer nobody answered expires (7 days)."),
@@ -151,13 +154,20 @@ std::vector<WsCommandUsage> mirrorCommands() {
 
     out.push_back({
         .command = "mirror.cancel",
-        .description = "Cancel a vault's mirror at any step. On the core: the core row and the log go and the mirror is "
-                       "told (it removes its copy). On the mirror (super admins): a start that has not completed is "
-                       "removed here and the core is told; a completed one is refused (mirror_detach_required). Name "
-                       "the vault, or the offer when its vault doesn't exist here yet.",
-        .payload = {uinteger("vault_id").opt().gen(gen::ref("vault", {"id"})), mcOfferRef().opt()},
+        .description = "End a vault's mirror at any step. On the core: the core row and the log go at once and the "
+                       "mirror is told (queued while the link is down; dropped if the servers are unlinked first), "
+                       "with remove_copy. On the mirror (super admins): a start that has not completed is removed here "
+                       "and the core is told; a completed one is refused (mirror_detach_required); an orphaned copy "
+                       "is removed. Name the vault, or the offer when its vault doesn't exist here yet.",
+        .payload = {uinteger("vault_id").opt().gen(gen::ref("vault", {"id"})), mcOfferRef().opt(),
+                    boolean("remove_copy").opt().gen(gen::boolean()).desc(
+                        "On the core: ask the mirror to remove its copy (default false: it keeps it, orphaned). The "
+                        "mirror removes it unless its link keeps the vaults this server removes; a copy whose first "
+                        "copy isn't finished is removed anyway. The data-destroy step-up for a mirror that has begun.")},
         .response = {str("side").oneOf({"core", "mirror"}), integer("vault_id").nullable(),
-                     boolean("removed").desc("mirror: the vault this server was given went."),
+                     boolean("removed").desc("mirror: the vault this server was given, or an orphaned copy, went."),
+                     boolean("remove_copy").desc("core: what was asked; what the mirror did comes later (mirror.get: "
+                                                 "start.copy)."),
                      object("offer", "", mcOfferFields()).nullable()},
         .refusal_codes = mcMirrorRefusals({"mirror_detach_required", "mirror_offer_finished"}),
         .client_timeout = kDefaultTimeout,
@@ -179,6 +189,18 @@ std::vector<WsCommandUsage> mirrorCommands() {
                        "admins; on the core also the vault's admin View.",
         .payload = {mcVaultIdField()},
         .response = {object("vault", "", mcMirroredFields())},
+        .refusal_codes = mcMirrorRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "mirror.keep_removed.set",
+        .description = "Whether this server keeps the vaults a linked server (their core) removes: a cancel that asks "
+                       "to remove a finished copy leaves it here as an orphaned copy instead (default off). Super "
+                       "admins; audited mirror.keep_removed.set.",
+        .payload = {str("peer").gen(gen::ref("peer", {"id"})), boolean("enabled").gen(gen::boolean())},
+        .response = {object("peer", "", {uinteger("id"), str("node_id"), str("name")}), boolean("enabled"),
+                     integer("set_by").nullable(), integer("set_at").nullable()},
         .refusal_codes = mcMirrorRefusals(),
         .client_timeout = kDefaultTimeout,
     });
@@ -275,12 +297,17 @@ std::vector<WsCommandUsage> mirrorCommands() {
 
     out.push_back({
         .command = "peer.mirror.cancel",
-        .description = "Either side cancels a start, or the core ends a completed mirror: the core drops its core row "
-                       "and log; the mirror removes the vault it was given, its keys and its rows. Answers whether "
-                       "anything was cancelled.",
+        .description = "Either side cancels a start, or the core ends a mirror (remove_copy: it asks the mirror to "
+                       "remove its copy). The core drops its core row and log. The mirror removes a copy whose first "
+                       "copy isn't finished; a finished one it removes when asked and its keep setting is off, and "
+                       "otherwise keeps orphaned (read-only, the last grant kept). Answers what it did.",
         .auth = "peer",
-        .payload = mcGenerated("peer.mirror.cancel", {str("offer_uid").opt().nullable(), str("vault_uid"), str("reason").opt()}),
-        .response = {boolean("cancelled")},
+        .payload = mcGenerated("peer.mirror.cancel", {str("offer_uid").opt().nullable(), str("vault_uid"), str("reason").opt(),
+                                                       boolean("remove_copy").opt()}),
+        .response = {boolean("cancelled"),
+                     str("copy").oneOf({"removed", "kept", "none"}).desc(
+                         "What the mirror did with its copy: removed (the first copy wasn't finished, or removal was "
+                         "asked and its link keeps nothing), kept (orphaned), or none (it held none).")},
         .refusal_codes = mcWireRefusals(),
         .client_timeout = kDefaultTimeout,
     });

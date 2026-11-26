@@ -65,6 +65,12 @@ std::string mirroredText(const mirrors::Mirrored& m) {
     if (m.start)
         out += fmt::format("  start: offer {} {} ({}){}\n", m.start->id, m.start->state, j["start"].value("step", ""),
                            m.start->reason ? ", " + *m.start->reason : std::string());
+    if (m.start && m.start->side == "core" && m.start->state == "cancelled")
+        out += fmt::format("  ended here{}; the linked server's copy: {}\n",
+                           m.start->remove_copy ? " (its removal asked)" : "",
+                           m.start->copy_outcome.value_or(m.start->notify ? "not told yet" : "unknown"));
+    if (m.row && m.row->role == "orphaned")
+        out += fmt::format("  an orphaned copy: its core ended the mirror; remove it with vh mirror cancel {}\n", m.vault_id);
     return out;
 }
 
@@ -122,12 +128,17 @@ CommandResult handleCancel(const CommandCall& call) {
     mirrors::CancelRequest req;
     if (const auto v = parseUInt(call.positionals.at(0)); v && *v > 0) req.vault_id = static_cast<uint32_t>(*v);
     req.offer = optVal(call, "offer");
+    req.remove_copy = hasFlag(call, "remove-copy");
     return runMirrorOp("mirror cancel", [&] { return mirrors::cancel(call.user, req); },
                        [&](const mirrors::Cancelled& c) {
                            if (json) return mirrorPretty(mirrors::toJson(c));
                            if (c.side == "core")
-                               return fmt::format("Cancelled the mirror of vault {} here; the linked server is told and "
-                                                  "removes its copy.\n", c.vault_id.value_or(0));
+                               return fmt::format("Ended the mirror of vault {} here. The linked server is told (when "
+                                                  "it is reachable){}; vh mirror info {} shows what it did.\n",
+                                                  c.vault_id.value_or(0),
+                                                  c.remove_copy ? " and asked to remove its copy"
+                                                                : " and keeps its copy, orphaned",
+                                                  c.vault_id.value_or(0));
                            return std::string(c.removed ? "Cancelled: the vault and its keys were removed here; the core "
                                                           "is told.\n"
                                                         : "Cancelled; the core is told.\n");
@@ -176,6 +187,20 @@ CommandResult handleAcceptAll(const CommandCall& call) {
                        });
 }
 
+CommandResult handleKeep(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"mirror", "keep-removed"}));
+    const auto json = hasFlag(call, "json");
+    const auto& peerRef = call.positionals.at(0);
+    const auto& state = call.positionals.at(1);
+    if (state != "on" && state != "off") return invalid("mirror keep-removed: the state is on or off");
+    return runMirrorOp("mirror keep-removed", [&] { return mirrors::setKeepRemoved(call.user, peerRef, state == "on"); },
+                       [&](const ::vh::db::query::mirror::AcceptVaults& a) {
+                           if (json) return mirrorPretty(mirrors::toJson(a, ::vh::ops::peers::resolveRef(peerRef)));
+                           return std::string(a.enabled ? "Vaults that server removes are kept here, orphaned.\n"
+                                                        : "Vaults that server removes are removed here when it asks.\n");
+                       });
+}
+
 CommandResult handleMirror(const CommandCall& call) {
     if (call.positionals.empty()) return usage(call.constructFullArgs());
     const auto [sub, subcall] = descend(call);
@@ -188,6 +213,7 @@ CommandResult handleMirror(const CommandCall& call) {
     if (is("list")) return handleList(subcall);
     if (is("info")) return handleInfo(subcall);
     if (is("accept-all")) return handleAcceptAll(subcall);
+    if (is("keep-removed")) return handleKeep(subcall);
     return invalid(call.constructFullArgs(), "Unknown mirror subcommand: '" + std::string(sub) + "'");
 }
 

@@ -398,7 +398,7 @@ TEST_F(MirrorStartDbTest, EveryPreconditionRefusesWithItsOwnCode) {
         const auto v = coreVault();
         (void)start::offerVault(v, peer, superUser->id, superUser->name());
         EXPECT_EQ(check(v), "mirror_start_running");
-        EXPECT_TRUE(start::cancelOnCore(v, "test", false, superUser->id, superUser->name()));
+        EXPECT_TRUE(start::cancelOnCore(v, "test", false, false, superUser->id, superUser->name()));
     }
     {   // bucket-replicated
         const auto v = coreVault();

@@ -211,4 +211,13 @@ bool MirrorVaults::setState(const uint32_t vaultId, const std::string& state) {
     });
 }
 
+bool MirrorVaults::orphan(const uint32_t vaultId) {
+    return mirrorAccessRepublished(Transactions::exec("mirror::MirrorVaults::orphan", [&](pqxx::work& txn) {
+        return txn.exec("UPDATE mirror_vault SET role = 'orphaned', updated_at = CURRENT_TIMESTAMP "
+                        "WHERE vault_id = $1 AND role = 'mirror'",
+                        pqxx::params{vaultId})
+                   .affected_rows() > 0;
+    }));
+}
+
 }

@@ -28,7 +28,7 @@ using json = nlohmann::json;
 constexpr const char* kOfferColumns = R"SQL(
     id, offer_uid::text AS offer_uid, side, peer_id, vault_uid::text AS vault_uid, vault_id, core_vault_id,
     root_uid::text AS root_uid, term, name, description, quota, size_bytes, file_count, history, owner::text AS owner,
-    role::text AS role, state, notify, reason, detail, started_by, decided_by, attempts, last_error,
+    role::text AS role, state, notify, remove_copy, copy_outcome, reason, detail, started_by, decided_by, attempts, last_error,
     EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at, EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at,
     EXTRACT(EPOCH FROM expires_at)::BIGINT AS expires_at, EXTRACT(EPOCH FROM finished_at)::BIGINT AS finished_at
 )SQL";
@@ -38,7 +38,7 @@ constexpr const char* kFinishedStates = "('started', 'declined', 'cancelled', 'e
 std::string selectOffers(const std::string& where) { return std::string("SELECT ") + kOfferColumns + " FROM mirror_offer " + where; }
 
 bool finishedState(const std::string& s) {
-    return s == "started" || s == "declined" || s == "cancelled" || s == "expired" || s == "failed";
+    return s == "started" || s == "declined" || s == "cancelled" || s == "expired" || s == "failed" || s == "orphaned";
 }
 
 json roleJson(const OfferedRole& r) {
@@ -80,6 +80,8 @@ Offer offerFrom(const pqxx::row_ref row) {
     }
     o.state = row["state"].as<std::string>();
     o.notify = row["notify"].as<bool>();
+    o.remove_copy = row["remove_copy"].as<bool>();
+    o.copy_outcome = opt<std::string>(row["copy_outcome"]);
     o.reason = opt<std::string>(row["reason"]);
     o.detail = opt<std::string>(row["detail"]);
     o.started_by = opt<uint32_t>(row["started_by"]);
@@ -202,11 +204,12 @@ std::optional<Offer> MirrorStart::transition(const uint32_t id, const std::vecto
         const auto res = txn.exec(
             "UPDATE mirror_offer SET state = $3, notify = $4, reason = COALESCE($5, reason), "
             "  detail = COALESCE($6, detail), decided_by = COALESCE($7, decided_by), vault_id = COALESCE($8, vault_id), "
+            "  remove_copy = COALESCE($10, remove_copy), "
             "  updated_at = CURRENT_TIMESTAMP, finished_at = CASE WHEN $9 THEN CURRENT_TIMESTAMP END, "
             "  attempts = 0, last_error = NULL "
             "WHERE id = $1 AND state = ANY($2::text[]) RETURNING id",
             pqxx::params{id, states, c.to, c.notify, clipped(c.reason, 64), clipped(c.detail, 2000), c.decided_by,
-                         c.vault_id, finishedState(c.to)});
+                         c.vault_id, finishedState(c.to), c.remove_copy});
         if (res.empty()) return std::nullopt;
         return offerFrom(txn.exec(selectOffers("WHERE id = $1"), pqxx::params{id}).one_row_ref());
     });
@@ -218,6 +221,25 @@ bool MirrorStart::told(const uint32_t id, const std::string& state) {
                         "  updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = $2 AND notify",
                         pqxx::params{id, state})
                    .affected_rows() > 0;
+    });
+}
+
+bool MirrorStart::recordCopyOutcome(const uint32_t id, const std::string& outcome) {
+    if (outcome != "removed" && outcome != "kept" && outcome != "none") throw ops::Invalid("unknown copy outcome");
+    return Transactions::exec("mirror::MirrorStart::recordCopyOutcome", [&](pqxx::work& txn) {
+        return txn.exec("UPDATE mirror_offer SET copy_outcome = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+                        pqxx::params{id, outcome})
+                   .affected_rows() > 0;
+    });
+}
+
+std::size_t MirrorStart::dropNotices(const uint32_t peerId) {
+    return Transactions::exec("mirror::MirrorStart::dropNotices", [&](pqxx::work& txn) {
+        return static_cast<std::size_t>(
+            txn.exec("UPDATE mirror_offer SET notify = FALSE, last_error = 'the link was unlinked before it was told', "
+                     "  updated_at = CURRENT_TIMESTAMP WHERE peer_id = $1 AND notify",
+                     pqxx::params{peerId})
+                .affected_rows());
     });
 }
 
@@ -280,6 +302,30 @@ void MirrorStart::setAcceptVaults(const uint32_t peerId, const bool enabled, con
     Transactions::exec("mirror::MirrorStart::setAcceptVaults", [&](pqxx::work& txn) {
         if (txn.exec("UPDATE peer SET accept_vaults = $2, accept_vaults_set_by = $3, "
                      "  accept_vaults_set_at = CURRENT_TIMESTAMP WHERE id = $1 AND revoked_at IS NULL",
+                     pqxx::params{peerId, enabled, setBy})
+                .affected_rows() == 0)
+            throw ops::NotFound("no such linked server");
+    });
+}
+
+AcceptVaults MirrorStart::keepVaults(const uint32_t peerId) {
+    return Transactions::exec("mirror::MirrorStart::keepVaults", [&](pqxx::work& txn) {
+        AcceptVaults out;
+        const auto res = txn.exec("SELECT keep_vaults, keep_vaults_set_by, "
+                                  "  EXTRACT(EPOCH FROM keep_vaults_set_at)::BIGINT FROM peer WHERE id = $1",
+                                  pqxx::params{peerId});
+        if (res.empty()) return out;
+        out.enabled = res[0][0].as<bool>();
+        if (!res[0][1].is_null()) out.set_by = res[0][1].as<uint32_t>();
+        if (!res[0][2].is_null()) out.set_at = static_cast<std::time_t>(res[0][2].as<int64_t>());
+        return out;
+    });
+}
+
+void MirrorStart::setKeepVaults(const uint32_t peerId, const bool enabled, const std::optional<uint32_t> setBy) {
+    Transactions::exec("mirror::MirrorStart::setKeepVaults", [&](pqxx::work& txn) {
+        if (txn.exec("UPDATE peer SET keep_vaults = $2, keep_vaults_set_by = $3, "
+                     "  keep_vaults_set_at = CURRENT_TIMESTAMP WHERE id = $1 AND revoked_at IS NULL",
                      pqxx::params{peerId, enabled, setBy})
                 .affected_rows() == 0)
             throw ops::NotFound("no such linked server");

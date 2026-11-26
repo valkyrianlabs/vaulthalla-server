@@ -138,6 +138,8 @@ void Service::runLoop() {
 void Service::tick() {
     using namespace start_service_detail;
     if (!config::Registry::get().peers.experimental) return;
+    // Unlinking ends the trust: the copies of an unlinked core are kept orphaned, its queued notices dropped.
+    (void)reconcileUnlinked();
     for (const auto& o : Q::expireOffers())
         log::Registry::sync()->info("[MirrorStarter] The offer of vault {} ({} side) expired unanswered", o.core_vault_id,
                                     o.side);
@@ -179,7 +181,7 @@ void Service::step(const Offer& o) {
     };
     const auto cancelPayload = [&] {
         return json{{"offer_uid", o.offer_uid}, {"vault_uid", vl::keykit::toBase32(o.vault_uid)},
-                    {"reason", o.reason.value_or("cancelled")}};
+                    {"reason", o.reason.value_or("cancelled")}, {"remove_copy", o.side == "core" && o.remove_copy}};
     };
 
     if (o.side == "core") {
@@ -239,7 +241,20 @@ void Service::step(const Offer& o) {
         }
         if ((o.state == "cancelled" || o.state == "expired") && o.notify) {
             const auto a = ask("peer.mirror.cancel", cancelPayload(), std::chrono::seconds(15));
-            if (ok(a) || (a && codeOf(*a) == "not_found")) (void)Q::told(o.id, o.state);
+            if (ok(a) || (a && codeOf(*a) == "not_found")) {
+                (void)Q::told(o.id, o.state);
+                // What the mirror did with its copy: recorded and shown (mirror info), audited.
+                const auto copy = ok(a) ? dataOf(*a).value("copy", std::string("none")) : std::string("none");
+                const auto outcome = copy == "removed" || copy == "kept" ? copy : std::string("none");
+                (void)Q::recordCopyOutcome(o.id, outcome);
+                audit::record({.action = "mirror.cancel.copy", .outcome = audit::Outcome::Info, .vault_id = o.vault_id,
+                               .details = {{"peer", o.peer_id}, {"node_id", peer->node_id},
+                                           {"remove_copy", o.remove_copy}, {"copy", outcome}}},
+                              fmt::format("[mirror] linked server {} {} its copy of vault {}{}", peer->node_id,
+                                          outcome == "removed" ? "removed" : outcome == "kept" ? "kept" : "held no",
+                                          o.vault_id.value_or(0),
+                                          o.remove_copy && outcome == "kept" ? " (removal was asked; it keeps copies)" : ""));
+            }
             return;
         }
         return;

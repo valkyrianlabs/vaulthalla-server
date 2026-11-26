@@ -1039,6 +1039,7 @@ export interface WebSocketCommandMap {
   'mirror.list': WsContract['mirror.list']
   'mirror.get': WsContract['mirror.get']
   'mirror.accept_all.set': WsContract['mirror.accept_all.set']
+  'mirror.keep_removed.set': WsContract['mirror.keep_removed.set']
   'peer.mirror.offer': WsContract['peer.mirror.offer']
   'peer.mirror.answer': WsContract['peer.mirror.answer']
   'peer.mirror.keys': WsContract['peer.mirror.keys']

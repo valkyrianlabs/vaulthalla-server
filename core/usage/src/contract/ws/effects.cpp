@@ -147,6 +147,7 @@ std::vector<WsEffect> effectTable() {
         {"mirror.cancel", "destructive"},
         {"mirror.decline", "write"},
         {"mirror.get", "read"},
+        {"mirror.keep_removed.set", "write"},
         {"mirror.list", "read"},
         {"mirror.pending", "read"},
         {"peer.endpoints", "write"},

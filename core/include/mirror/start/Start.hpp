@@ -109,10 +109,11 @@ void checkLink(const vh::peer::Record& peer);
 [[nodiscard]] json beginPayload(const Offer& offer);
 
 // Ends the vault's mirror here (mirror.cancel on the core, or the mirror's peer.mirror.cancel): drops the core row and
-// the log, and the open or started offer becomes cancelled (to be told when `tell`). Audited mirror.cancel. False when
-// there was nothing to cancel.
-bool cancelOnCore(uint32_t vaultId, const std::string& reason, bool tell, std::optional<uint32_t> actorId,
-                  const std::string& by);
+// the log at once, and the open or started offer becomes cancelled (the mirror to be told when `tell`, with
+// `removeCopy`: the core asks the mirror to remove its copy; the mirror decides by the ending rule, mirror.md "Ending a
+// mirror"). Audited mirror.cancel with what was asked. False when there was nothing to cancel.
+bool cancelOnCore(uint32_t vaultId, const std::string& reason, bool tell, bool removeCopy,
+                  std::optional<uint32_t> actorId, const std::string& by);
 
 // ---- the mirror ----------------------------------------------------------------------------------------------------
 
@@ -126,8 +127,19 @@ bool cancelOnCore(uint32_t vaultId, const std::string& reason, bool tell, std::o
 // A person here cancels: a start that has not completed (its vault, keys and rows go; the core is told); a completed
 // one is refused (mirror_detach_required: detach is a later wave). Audited mirror.cancel.
 [[nodiscard]] Offer cancelOnMirror(const Offer& offer, std::optional<uint32_t> actorId, const std::string& actorName);
-// Removes the vault this server holds as `peerId`'s copy and every row of it (keys, pending contents, mirror row).
+// Removes the vault this server holds as another server's copy and every row of it (keys, pending contents, mirror row).
 void removeCopy(uint32_t vaultId);
+// Whether this server holds the vault's first copy complete. The one place this is asked (the ending rule). Piece A
+// answers from the start: true once its offer here is `started`, or when no offer of it is left (erring towards
+// "finished" errs towards keeping the copy). The lead rewires it to piece B's first-copy column at the merge.
+[[nodiscard]] bool firstCopyFinished(uint32_t vaultId);
+// A super admin here removes an orphaned copy (ops::mirrors authorizes, with the data-destroy step-up). Audited
+// mirror.remove.
+void removeOrphaned(uint32_t vaultId, std::optional<uint32_t> actorId, const std::string& actorName);
+// Linked servers unlinked meanwhile (any path: unlink, peer.unlinked, a rotation that dropped the link): their mirror
+// rows here become orphaned and the notices still queued for them are dropped (unlinking invalidated the trust; a
+// queued removal is never delivered). Returns how many copies were orphaned. The Service runs it every pass.
+std::size_t reconcileUnlinked();
 
 // ---- the wire (a linked server's session; the handlers check the switch) --------------------------------------------
 

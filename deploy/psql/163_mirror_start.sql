@@ -13,17 +13,26 @@
 --                       up, and again after a restart). An offer a person has not answered expires (expires_at, 7 days);
 --                       a finished row (started, declined, cancelled, expired, failed) is swept 30 days after it ended.
 --                       Public facts only: no key material is ever stored here.
+--                       On the core, remove_copy is what its cancel asked of the mirror's copy and copy_outcome
+--                       what the mirror answered it did (removed | kept); on the mirror, a finished copy the core's
+--                       cancel left in place ends its offer as 'orphaned'.
 --   peer.accept_vaults  a linked server whose offers this server accepts without asking (default off; only a super
 --                       admin here changes it), who set it and when.
+--   peer.keep_vaults    keep the vaults this linked server, their core, removes: a cancel that asks to remove the copy
+--                       leaves it orphaned here instead (default off; only a super admin here changes it), who set it
+--                       and when.
 --   vault_key_origin.anchor gains 'peer': a key version a linked server delivered for a vault this server mirrors,
 --                       proven against the attestation key pinned at pairing (vault::recover::prove).
 --
--- Additive and idempotent: one new table, three new columns with defaults, one widened CHECK; nothing existing changes
+-- Additive and idempotent: one new table, six new columns with defaults, one widened CHECK; nothing existing changes
 -- and a second run changes nothing.
 
 ALTER TABLE peer ADD COLUMN IF NOT EXISTS accept_vaults BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE peer ADD COLUMN IF NOT EXISTS accept_vaults_set_by INTEGER REFERENCES users (id) ON DELETE SET NULL;
 ALTER TABLE peer ADD COLUMN IF NOT EXISTS accept_vaults_set_at TIMESTAMPTZ;
+ALTER TABLE peer ADD COLUMN IF NOT EXISTS keep_vaults BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE peer ADD COLUMN IF NOT EXISTS keep_vaults_set_by INTEGER REFERENCES users (id) ON DELETE SET NULL;
+ALTER TABLE peer ADD COLUMN IF NOT EXISTS keep_vaults_set_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS mirror_offer
 (
@@ -46,8 +55,11 @@ CREATE TABLE IF NOT EXISTS mirror_offer
     owner         JSONB       NOT NULL CHECK (jsonb_typeof(owner) = 'object'),
     role          JSONB       CHECK (role IS NULL OR jsonb_typeof(role) = 'object'),
     state         TEXT        NOT NULL CHECK (state IN ('offered', 'pending', 'accepted', 'keys_acked', 'installed',
-                                                        'started', 'declined', 'cancelled', 'expired', 'failed')),
+                                                        'started', 'declined', 'cancelled', 'expired', 'failed',
+                                                        'orphaned')),
     notify        BOOLEAN     NOT NULL DEFAULT FALSE,
+    remove_copy   BOOLEAN     NOT NULL DEFAULT FALSE,
+    copy_outcome  TEXT        CHECK (copy_outcome IS NULL OR copy_outcome IN ('removed', 'kept', 'none')),
     reason        TEXT        CHECK (reason IS NULL OR length(reason) <= 64),
     detail        TEXT        CHECK (detail IS NULL OR length(detail) <= 2000),
     started_by    INTEGER     REFERENCES users (id) ON DELETE SET NULL,
@@ -61,7 +73,7 @@ CREATE TABLE IF NOT EXISTS mirror_offer
     CHECK ((side = 'core' AND state IN ('offered', 'accepted', 'keys_acked', 'started', 'declined', 'cancelled',
                                         'expired', 'failed'))
         OR (side = 'mirror' AND state IN ('pending', 'accepted', 'installed', 'started', 'declined', 'cancelled',
-                                          'expired', 'failed'))),
+                                          'expired', 'failed', 'orphaned'))),
     CHECK ((finished_at IS NULL) = (state IN ('offered', 'pending', 'accepted', 'keys_acked', 'installed')))
 );
 

@@ -1,3 +1,4 @@
+#include "mirror/start/Guard.hpp"
 #include "protocols/s3/ObjectStore.hpp"
 
 #include "config/Registry.hpp"
@@ -397,6 +398,17 @@ ResolvedBucket ObjectStore::createBucket(
     return resolveBucket(bucket, actor);
 }
 
+namespace object_store_mirror {
+// A mirrored vault's bucket is never deleted while it is mirrored (mirror/start/Guard.hpp): 409, so a client stops.
+void refuseMirroredBucketOf(const uint32_t vaultId, const std::string& bucket) {
+    try {
+        vh::mirror::start::refuseDeletionIfMirrored(vaultId);
+    } catch (const vh::ops::Refused& e) {
+        throw S3Error{"InvalidBucketState", e.what(), http::status::conflict, bucket};
+    }
+}
+}
+
 void ObjectStore::deleteBucket(const std::string& bucket, const AuthContext& auth) const {
     auto resolved = resolveBucket(bucket, auth);
     const auto hasGatewayAdminAccess =
@@ -407,6 +419,7 @@ void ObjectStore::deleteBucket(const std::string& bucket, const AuthContext& aut
         requireRbacPermission(resolved, "/", Action::Delete);
         if (!credentialAllowsAdmin(resolved)) throw accessDenied(bucket);
     }
+    object_store_mirror::refuseMirroredBucketOf(resolved.vault_id, bucket);
     const auto empty = bucketIsEmpty(resolved);
     if (!empty.empty)
         throw S3Error{"BucketNotEmpty", "The bucket you tried to delete is not empty", http::status::conflict, bucket};
@@ -418,6 +431,7 @@ void ObjectStore::deleteBucket(const std::string& bucket, const AuthContext& aut
 void ObjectStore::deleteBucket(const std::string& bucket, const std::shared_ptr<identities::User>& actor) const {
     auto resolved = resolveBucket(bucket, actor);
     requirePermission(resolved, "/", Action::Delete);
+    object_store_mirror::refuseMirroredBucketOf(resolved.vault_id, bucket);
     const auto empty = bucketIsEmpty(resolved);
     if (!empty.empty)
         throw S3Error{"BucketNotEmpty", "The bucket you tried to delete is not empty", http::status::conflict, bucket};

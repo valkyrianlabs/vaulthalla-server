@@ -133,13 +133,25 @@ Cancelled cancel(const Actor& actor, const CancelRequest& request) {
         if (!vaultId) throw NotFound("that offer names no vault here");
         const auto vault = liveVault(*vaultId);
         requireManager(actor, vault, "cancel a vault's mirror");
-        if (!vh::mirror::start::cancelOnCore(*vaultId, "cancelled_by_core", true, actor->id, actor->name()))
+        // Removing a copy the mirror holds of a mirror that has begun destroys data there: the data-destroy step-up.
+        const auto latest = vault->uid ? Q::latestOffer(*vault->uid, "core") : std::nullopt;
+        if (request.remove_copy && (row || (latest && latest->state == "keys_acked")))
+            auth::stepup::require(auth::stepup::Family::DataDestroy, "mirror.cancel:" + std::to_string(*vaultId));
+        if (!vh::mirror::start::cancelOnCore(*vaultId, "cancelled_by_core", true, request.remove_copy, actor->id,
+                                             actor->name()))
             throw NotFound("vault '" + vault->name + "' is not mirrored and no start of it is running");
-        Cancelled out{.side = "core", .vault_id = vaultId, .offer = Q::latestOffer(*vault->uid, "core")};
+        Cancelled out{.side = "core", .vault_id = vaultId, .offer = Q::latestOffer(*vault->uid, "core"),
+                      .remove_copy = request.remove_copy};
         return out;
     }
 
     requireSuperAdmin(actor, "cancel the mirror of another server's vault");
+    // An orphaned copy (its core ended the mirror and it was kept): a super admin here removes it.
+    if (row && row->role == "orphaned") {
+        auth::stepup::require(auth::stepup::Family::DataDestroy, "mirror.cancel:" + std::to_string(*vaultId));
+        vh::mirror::start::removeOrphaned(*vaultId, actor->id, actor->name());
+        return {.side = "mirror", .vault_id = vaultId, .removed = true};
+    }
     if (!offer && vaultId)
         if (const auto v = db::query::vault::Vault::getVault(*vaultId); v && v->uid) {
             offer = Q::activeOffer(*v->uid, "mirror");
@@ -228,6 +240,27 @@ db::query::mirror::AcceptVaults setAcceptAll(const Actor& actor, const std::stri
     return Q::acceptVaults(peer.id);
 }
 
+db::query::mirror::AcceptVaults keepRemoved(const Actor& actor, const std::string& peerRef) {
+    using namespace ops_mirrors_detail;
+    requireSuperAdmin(actor, "see which linked servers' removed vaults this server keeps");
+    return Q::keepVaults(peers::resolveRef(peerRef).id);
+}
+
+db::query::mirror::AcceptVaults setKeepRemoved(const Actor& actor, const std::string& peerRef, const bool enabled) {
+    using namespace ops_mirrors_detail;
+    requireSuperAdmin(actor, "decide whether this server keeps the vaults a linked server removes");
+    const auto peer = peers::resolveRef(peerRef);
+    if (peer.revoked()) throw Conflict("that server is unlinked: link it again first");
+    const auto before = Q::keepVaults(peer.id);
+    Q::setKeepVaults(peer.id, enabled, actor->id);
+    audit::record({.action = "mirror.keep_removed.set", .actor_id = actor->id, .actor = actor->name(),
+                   .details = {{"peer", peer.id}, {"node_id", peer.node_id}, {"enabled", enabled},
+                               {"was", before.enabled}}},
+                  fmt::format("[mirror] {} turned {} keeping the vaults linked server {} ('{}') removes", actor->name(),
+                              enabled ? "on" : "off", peer.node_id, peer.name));
+    return Q::keepVaults(peer.id);
+}
+
 // ---- json ---------------------------------------------------------------------------------------------------------
 
 namespace ops_mirrors_detail {
@@ -268,7 +301,8 @@ nlohmann::json toJson(const Offer& o) {
             {"core_vault_id", o.core_vault_id}, {"term", o.term}, {"name", o.name}, {"description", o.description},
             {"quota", o.quota}, {"size_bytes", o.size_bytes}, {"file_count", o.file_count}, {"history", o.history},
             {"owner", {{"node", o.owner.node}, {"id", o.owner.id}, {"name", o.owner.name}}}, {"role", std::move(role)},
-            {"state", o.state}, {"step", stepOf(o)}, {"told", !o.notify}, {"reason", opt(o.reason)},
+            {"state", o.state}, {"step", stepOf(o)}, {"told", !o.notify}, {"remove_copy", o.remove_copy},
+            {"copy", opt(o.copy_outcome)}, {"reason", opt(o.reason)},
             {"detail", opt(o.detail)}, {"attempts", o.attempts}, {"last_error", opt(o.last_error)},
             {"created_at", static_cast<int64_t>(o.created_at)}, {"updated_at", static_cast<int64_t>(o.updated_at)},
             {"expires_at", static_cast<int64_t>(o.expires_at)}, {"finished_at", optTime(o.finished_at)}};
@@ -309,7 +343,7 @@ nlohmann::json toJson(const Mirrored& m) {
 
 nlohmann::json toJson(const Cancelled& c) {
     using namespace ops_mirrors_detail;
-    return {{"side", c.side}, {"vault_id", opt(c.vault_id)}, {"removed", c.removed},
+    return {{"side", c.side}, {"vault_id", opt(c.vault_id)}, {"removed", c.removed}, {"remove_copy", c.remove_copy},
             {"offer", c.offer ? toJson(*c.offer) : nlohmann::json(nullptr)}};
 }
 

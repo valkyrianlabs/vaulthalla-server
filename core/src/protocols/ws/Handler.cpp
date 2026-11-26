@@ -150,6 +150,7 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerSessionOnlyHandler("mirror.list", &handler::Mirrors::list);
     r->registerPayload("mirror.get", &handler::Mirrors::get);
     r->registerPayload("mirror.accept_all.set", &handler::Mirrors::acceptAllSet);
+    r->registerPayload("mirror.keep_removed.set", &handler::Mirrors::keepRemovedSet);
     r->registerPayload("peer.mirror.offer", &handler::Mirrors::offer);
     r->registerPayload("peer.mirror.answer", &handler::Mirrors::answer);
     r->registerPayload("peer.mirror.keys", &handler::Mirrors::keys);

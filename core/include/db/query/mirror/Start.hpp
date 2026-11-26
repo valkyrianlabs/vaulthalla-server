@@ -47,9 +47,12 @@ struct Offer {
     OfferOwner owner{};
     std::optional<OfferedRole> role{};
     // core: offered | accepted | keys_acked | started | declined | cancelled | expired | failed
-    // mirror: pending | accepted | installed | started | declined | cancelled | expired | failed
+    // mirror: pending | accepted | installed | started | declined | cancelled | expired | failed | orphaned (the core
+    // ended a finished mirror and the copy was kept here)
     std::string state{};
     bool notify{false};
+    bool remove_copy{false};                 // core: what its cancel asked of the mirror's copy
+    std::optional<std::string> copy_outcome{};  // core: what the mirror said it did (removed | kept | none)
     std::optional<std::string> reason{}, detail{};
     std::optional<uint32_t> started_by{}, decided_by{};
     uint32_t attempts{};
@@ -135,12 +138,17 @@ public:
         std::optional<std::string> reason{}, detail{};
         std::optional<uint32_t> decided_by{};
         std::optional<uint32_t> vault_id{};
+        std::optional<bool> remove_copy{};
     };
     // Compare-and-set: moves the offer from one of `from` to `change.to` (finished_at set for a finished state). The row
     // after the change, or nullopt when it was in none of them.
     static std::optional<Offer> transition(uint32_t id, const std::vector<std::string>& from, const Change& change);
     // The other server was told the offer's state `state` (nothing changes when it moved on meanwhile).
     static bool told(uint32_t id, const std::string& state);
+    // What the mirror answered it did with its copy (removed | kept | none). False without such an offer.
+    static bool recordCopyOutcome(uint32_t id, const std::string& outcome);
+    // The other server can no longer be told (its link was unlinked): queued notices of its offers are dropped.
+    static std::size_t dropNotices(uint32_t peerId);
     // A failed attempt to tell or ask the other server: counted, its error kept.
     static void noteAttempt(uint32_t id, const std::string& error);
     // Offers not answered by expires_at: the pre-key states become `expired`, the other server to be told. Returns them.
@@ -152,6 +160,9 @@ public:
 
     [[nodiscard]] static AcceptVaults acceptVaults(uint32_t peerId);
     static void setAcceptVaults(uint32_t peerId, bool enabled, std::optional<uint32_t> setBy);
+    // Keep the vaults this linked server (their core) asks to remove: peer.keep_vaults (same shape).
+    [[nodiscard]] static AcceptVaults keepVaults(uint32_t peerId);
+    static void setKeepVaults(uint32_t peerId, bool enabled, std::optional<uint32_t> setBy);
 
     // ---- the core's vault
 

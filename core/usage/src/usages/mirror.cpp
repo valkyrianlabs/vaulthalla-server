@@ -78,16 +78,21 @@ std::shared_ptr<CommandUsage> cancel(const std::weak_ptr<CommandUsage>& parent) 
     auto cmd = build(parent);
     cmd->effect = CommandEffect::Destructive;
     cmd->aliases = {"cancel", "remove"};
-    cmd->description = "Cancel a vault's mirror, at any step. On the core: the mirror is ended here and the other server "
-                       "is told, and removes the copy it was given. On the mirror: a start that has not completed is "
-                       "removed here (the vault, its keys) and the core is told; a completed mirror is refused here (the "
-                       "core cancels it; leaving with the copy is a later version's detach). --offer names a start whose "
-                       "vault does not exist here yet.";
+    cmd->description = "End a vault's mirror, at any step. On the core: the mirror is ended here at once and the other "
+                       "server is told when it is reachable; it keeps its copy as an orphaned copy, or removes it with "
+                       "--remove-copy (unless it keeps the vaults this server removes; an unfinished copy is removed "
+                       "anyway). On the mirror: a start that has not completed is removed here and the core is told; "
+                       "a completed mirror is refused (leaving with the copy is a later version's detach); an orphaned "
+                       "copy is removed with its keys. --offer names a start whose vault does not exist here yet.";
     cmd->positionals = {Positional::WithAliases("vault", "The vault's number here (or 0 with --offer)", {"vault"},
                                                 contract::gen::pattern("{9}"))};
     cmd->optional = {Optional::ManyToOne("offer", "The offer's number or uid instead of a vault", {"offer"}, "offer")};
-    cmd->optional_flags = {jsonFlag};
-    cmd->examples = {{"vh mirror cancel 3", "End vault 3's mirror (or its start)."},
+    cmd->optional_flags = {Flag::WithAliases("remove_copy", "On the core: ask the mirror to remove its copy (it keeps "
+                                                            "it, orphaned, without this or when it keeps removed vaults)",
+                                             {"remove-copy"}),
+                           jsonFlag};
+    cmd->examples = {{"vh mirror cancel 3", "End vault 3's mirror; the other server keeps its copy, orphaned."},
+                     {"vh mirror cancel 3 --remove-copy", "End it and ask the other server to remove its copy."},
                      {"vh mirror cancel 0 --offer 4", "Cancel offer 4 before its vault exists here."}};
     return cmd;
 }
@@ -115,6 +120,19 @@ std::shared_ptr<CommandUsage> info(const std::weak_ptr<CommandUsage>& parent) {
     return cmd;
 }
 
+std::shared_ptr<CommandUsage> keep(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
+    cmd->aliases = {"keep-removed"};
+    cmd->description = "Whether this server keeps the vaults a linked server (their core) removes: with it on, a "
+                       "removal the core asks for leaves the copy here as an orphaned copy (off by default). Super "
+                       "admins only; audited.";
+    cmd->positionals = {peerPos, Positional::Alias("state", "on or off", "state", contract::gen::constant("off"))};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh mirror keep-removed vps on", "Keep every vault \"vps\" removes, orphaned."}};
+    return cmd;
+}
+
 std::shared_ptr<CommandUsage> acceptAll(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->effect = CommandEffect::Write;
@@ -139,7 +157,8 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
                         "config.yaml). One server is the vault's core; the other holds a copy and the vault's keys.";
     root->subcommands = {add(root->weak_from_this()),    pending(root->weak_from_this()), accept(root->weak_from_this()),
                          decline(root->weak_from_this()), cancel(root->weak_from_this()), list(root->weak_from_this()),
-                         info(root->weak_from_this()),    acceptAll(root->weak_from_this())};
+                         info(root->weak_from_this()),    acceptAll(root->weak_from_this()),
+                         keep(root->weak_from_this())};
     root->examples = {
         {"vh mirror add <vault> --to <server>", "On the core: offer a vault."},
         {"vh mirror pending", "On the other server: offers waiting."},

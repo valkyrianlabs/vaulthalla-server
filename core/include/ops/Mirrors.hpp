@@ -47,16 +47,23 @@ struct AddRequest {
 struct CancelRequest {
     std::optional<uint32_t> vault_id{};  // a vault on this server (either role)
     std::optional<std::string> offer{};  // or an offer (a start whose vault does not exist here yet)
+    // On the core: ask the mirror to remove its copy (it removes it unless its link keeps the vaults this server
+    // removes; a copy whose first copy isn't finished is removed anyway). For a mirror that has begun this needs the
+    // data-destroy step-up in the console.
+    bool remove_copy{false};
 };
 struct Cancelled {
     std::string side{};                  // core | mirror
     std::optional<uint32_t> vault_id{};
     std::optional<Offer> offer{};
     bool removed{false};                 // mirror: the vault this server was given went
+    bool remove_copy{false};             // core: what was asked of the mirror's copy (the answer comes later: mirror.get)
 };
-// From either side, at any step. On the core: the core row and the log go, and the mirror is told (it removes what it
-// was given). On the mirror: a start that has not completed is removed here and the core is told; a completed one is
-// refused (mirror_detach_required).
+// From either side, at any step. On the core: the core row and the log go at once, and the mirror is told (when the
+// link is up; the request waits while it is down, and is dropped if the servers are unlinked first), with
+// remove_copy. On the mirror: a start that has not completed is removed here and the core is told; a completed one is
+// refused (mirror_detach_required); an orphaned copy is removed (super admins, data-destroy step-up; audited
+// mirror.remove).
 [[nodiscard]] Cancelled cancel(const Actor& actor, const CancelRequest& request);
 
 struct Mirrored {
@@ -75,6 +82,10 @@ struct Mirrored {
 // The link's "accept every vault from this server" (default off).
 [[nodiscard]] db::query::mirror::AcceptVaults acceptAll(const Actor& actor, const std::string& peer);
 [[nodiscard]] db::query::mirror::AcceptVaults setAcceptAll(const Actor& actor, const std::string& peer, bool enabled);
+// The link's "keep the vaults this server's core removes" (default off): a removal the core asks for leaves the copy
+// here, orphaned, instead. Super admins; audited mirror.keep_removed.set.
+[[nodiscard]] db::query::mirror::AcceptVaults keepRemoved(const Actor& actor, const std::string& peer);
+[[nodiscard]] db::query::mirror::AcceptVaults setKeepRemoved(const Actor& actor, const std::string& peer, bool enabled);
 
 [[nodiscard]] nlohmann::json toJson(const Offer& offer);
 [[nodiscard]] nlohmann::json toJson(const Mirrored& m);

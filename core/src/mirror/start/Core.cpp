@@ -197,6 +197,21 @@ void refuseIfMirrored(const uint32_t vaultId, const std::string& what) {
                                                      vaultId, what, vaultId));
 }
 
+void refuseDeletionIfMirrored(const uint32_t vaultId) {
+    const auto row = vh::db::query::mirror::MirrorVaults::get(vaultId);
+    if (row && row->role == "orphaned")
+        throw ops::Refused("vault_orphaned_copy",
+                           fmt::format("vault {} is an orphaned copy of another server's vault: remove it with vh mirror "
+                                       "cancel {}", vaultId, vaultId));
+    if (row && row->role == "mirror")
+        throw ops::Refused("vault_mirrored", fmt::format("vault {} is another server's vault, held here as its mirror: "
+                                                         "only that server (its core) ends the mirror", vaultId));
+    if (mirroredOrStarting(vaultId))
+        throw ops::Refused("vault_mirrored", fmt::format("vault {} is mirrored with a linked server (or a mirror of it is "
+                                                         "starting): end the mirror first: vh mirror cancel {} "
+                                                         "[--remove-copy]", vaultId, vaultId));
+}
+
 void checkLink(const vh::peer::Record& peer) {
     if (peer.revoked()) throw ops::Refused("peer_not_linked", "server '" + peer.name + "' is unlinked: link it again first");
     const auto t = transport();
@@ -310,8 +325,8 @@ json beginPayload(const Offer& o) {
 
 // ---- cancelling on the core -------------------------------------------------------------------------------------------
 
-bool cancelOnCore(const uint32_t vaultId, const std::string& reason, const bool tell, const std::optional<uint32_t> actorId,
-                  const std::string& by) {
+bool cancelOnCore(const uint32_t vaultId, const std::string& reason, const bool tell, const bool removeCopy,
+                  const std::optional<uint32_t> actorId, const std::string& by) {
     using namespace start_core_detail;
     std::scoped_lock lock(stepMutex());
     const auto facts = Q::facts(vaultId);
@@ -328,10 +343,11 @@ bool cancelOnCore(const uint32_t vaultId, const std::string& reason, const bool 
     if (row) (void)MirrorVaults::remove(vaultId);
     if (offer)
         (void)Q::transition(offer->id, {"offered", "accepted", "keys_acked", "started"},
-                            {.to = "cancelled", .notify = tell, .reason = reason});
+                            {.to = "cancelled", .notify = tell, .reason = reason, .remove_copy = removeCopy});
     audit::record({.action = "mirror.cancel", .actor_id = actorId, .actor = by, .vault_id = vaultId,
                    .details = {{"peer", peerId}, {"side", "core"}, {"reason", reason},
-                               {"started", row.has_value()}, {"by", actorId ? "this_server" : "peer"}}},
+                               {"started", row.has_value()}, {"remove_copy", removeCopy},
+                               {"by", actorId ? "this_server" : "peer"}}},
                   fmt::format("[mirror] the mirror of vault {} with linked server {} was cancelled on this server, the "
                               "core ({}; {})", vaultId, peerId, reason, by.empty() ? "the linked server" : by),
                   spdlog::level::warn);
