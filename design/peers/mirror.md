@@ -1,8 +1,9 @@
 # Server mirror: one vault on two linked servers
 
 Status: design, phase 0 of the server mirror plan (2026-11-25). Built so far: permanent ids for every entry (phase 1b,
-migrations 158/159) and the core side of the replication log (phase 2 piece 1, migration 160; "As built: the
-replication log" below). The rest is not implemented. It covers how a vault
+migrations 158/159), the core side of the replication log (phase 2 piece 1, migration 160; "As built: the
+replication log" below) and the sealed contents lane with the mirror's receive path (phase 2 wave 2, migration 161;
+"As built: sealed contents" below). The rest is not implemented. It covers how a vault
 is kept identical on two linked servers: the core role, the replication log, applying it, changes made on the
 mirror, behaviour while the link is down, moving the core, leaving a mirror, and vaults that also have a remote. The
 link is in [`link.md`](link.md); accounts, ownership and audits are in [`identity.md`](identity.md). Section "What
@@ -335,6 +336,72 @@ created on the mirror.
 - **Derived artifacts** (thumbnails, renders) are regenerated on the mirror; their encryption binds local ids.
 - **History.** File versions, snapshot records and their blobs are the same sealed bytes and travel the same way.
   They are phase 3; until then the mirror's status says history is not mirrored.
+
+### As built: sealed contents (phase 2 wave 2, migration 161)
+
+The lane, the fetching client, receive-verify-link and the "not yet received" state. Not the mirror protocol: nothing
+marks a file as expected in production yet (the log applier will), no `PUT`, no hydrating from a bucket, no ws
+command. Decided while building (owner's instruction to build without waiting for review):
+
+- **The address.** `GET|HEAD /peer/object/<vault uid>/<object uid>/<generation>`: the uids in their text form
+  (vl-keykit base32, as object keys), the generation as the unpadded base64url of its bytes (`files.encryption_iv` is
+  standard base64, with `/` and `+`), one spelling only. The entity tag is that string, quoted. No query.
+- **Who gets it.** The listener hands the lane to a linked key alone, as an HTTP session with no user that serves
+  nothing else; to a device, a pairing-only key, the relay or anything else the path does not exist (404). Per request,
+  before a byte is read: the switch (off: 404), the row still live with the key of the handshake (else 403
+  `peer_revoked`), the vault's `mirror_vault` row naming this peer whichever role this server has, core or mirror (an
+  orphaned copy serves nobody; another server, no such vault or no such file: the same 404 `not_found`, so a peer
+  learns nothing about vaults it is not the linked server of), the file's current generation (else 410
+  `generation_not_current`), VHF1 (gcm0 or plain with bytes: 422 `format_not_portable`; an empty plain file is 0
+  bytes), and the bytes on this disk at that generation's sealed length (else 404 `not_held`: a bucket-only file's
+  hydration is the next piece's decision). The row is read again after the file is opened: every content replacement
+  writes the row before it renames the new bytes in, so the descriptor holds the generation asked for. Unlinking
+  closes the peer's lane connections with its websocket.
+- **The client** (`peer::object::fetch`) dials the row's endpoints with the link's TLS context and the same pin check
+  as the websocket dial (`peer::pinnedKeyOf`, now shared), asks `Range: bytes=<held>-` with `If-Range` on the tag, and
+  streams the body into its sink at the sink's pace (TCP back-pressure). Every wait is bounded: a 200 ms slice for
+  cancellation, a deadline for the whole call, 30 s of inactivity per step.
+- **Slots.** 4 transfers per peer, both directions (only fetching exists yet); background work never takes the last
+  one, and a person's open is granted before any waiting background transfer. A transfer runs on a thread the link
+  service joins when it stops.
+- **"Contents not yet received"** is `mirror_content_pending` (161), a side table: generation, key version, plaintext
+  size, BLAKE2b content hash and modification time expected, a priority, attempts and the last error, waiting or
+  failed. No column on `files`, and no foreign key to it (that would add a trigger to its delete path): a row whose
+  file is gone or names another generation is dropped as superseded when next looked at. Only a vault whose role here
+  is `mirror` gets rows. `MirrorVaults::remove` keeps them: they are exactly the list of missing files a detach shows.
+- **Receiving** (invariant 8): an unnamed temporary file (O_TMPFILE) in the backing file's directory (a private O_EXCL
+  sibling where there is none, macOS), interrupted transfers resumed by range (at most 5 per attempt), then the size,
+  the BLAKE2b content hash, `content::verifyFd` with the vault key, then under the file's content lock
+  (`Filesystem::contentWriteMutex`, the one overwrites, seals and rotation take) and in one transaction the
+  compare-and-set (the pending row FOR UPDATE: exactly this generation, key version, size and hash, still waiting; the
+  file's row FOR SHARE: still this generation), the modification time set, the bytes flushed, linked at the content
+  sidecar and renamed over the backing path, the pending row deleted. A crash after the link leaves either the
+  sidecar (startup recovery promotes it: it authenticates under the row) or the bytes in place with the row still
+  pending (the next attempt finds them, checks them the same way and settles the row).
+  **Deviation:** the binding checks the vault, the generation and the key version, not the object uid. A local vault's
+  copy keeps its source's sealed bytes (`Filesystem::copy`), whose header names the source's uid under the same
+  generation; binding the object would refuse every copy for good. Bytes sealed for another object carry another
+  generation (a random 32-byte salt), which is refused.
+- **Failures.** Counted: a refusal from the serving side, a transfer that broke off more than 5 times, and a size, hash
+  or authentication failure. Not counted: the link down, cancellation, the row or the file moving on meanwhile. Three
+  mark the file `failed` with the reason; it is not fetched again (by an open either) until
+  `PendingContents::retry`. **Deviation from "three failures stop the vault":** they stop the file. Stopping the vault
+  is the applier's decision, with the vault's state (`mirror_vault.state`), in the next piece.
+- **Opening such a file** through the mount, the download and preview lanes and the ws (share) download, which all
+  read through `Engine::openPlaintextReader` or the working copies' materialize hook: fetched ahead of the queue on an
+  interactive slot (one transfer per file however many wait; it goes on after a waiter gives up), waiting at most
+  **15 s**. With the link down (or the switch off) it fails at once, without a transfer. The reasons and the errnos
+  the mount answers: link down `mirror_link_down` **ENOLINK** ("Link has been severed": exactly the case); still
+  coming after 15 s `mirror_fetch_timeout` **ETIMEDOUT**; failed `mirror_fetch_failed` **ENODATA** ("No data
+  available": the file is there, its contents are not). The HTTP lanes answer 503 with the code and `Retry-After`. A
+  file pending for another generation than the row a reader holds is read as that row describes (the newer row comes
+  with the log).
+- **Proof split.** Two daemons over a real link (`vhh drill peers`, step 6): one serves a real sealed file of a vault
+  it holds (its `mirror_vault` row written by hand: no command makes a vault mirrored yet), the other fetches it with
+  the real client, broken off and resumed by range, byte for byte; refusals of a stale generation and of a vault the
+  fetcher is not the linked server of. The fetching daemon cannot hold the same vault yet (key delivery and vault
+  creation are the next piece), so receiving into a vault is proven in process with a test source of bytes
+  (`MirrorContentsDbTest`).
 
 ### Key rotation
 

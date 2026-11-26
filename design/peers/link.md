@@ -313,6 +313,10 @@ the owner's instruction to build without waiting for review; compatibility polic
   `beast::tcp_stream`); only its reconnect backoff moved to the shared `concurrency::jitteredBackoff`.
 - **Not built here** (later phases): the principal kind in RBAC tables and vault roles for peers (identity.md, with the
   mirror), any `peer.mirror.*` or `peer.identity.*` command, bulk lanes, Desktop's brokered flow.
+- **Bulk lanes** (mirror phase 2 wave 2): the sealed lane, `GET /peer/object/…` on the same listener over separate
+  connections with the same pins (`mirror.md` "As built: sealed contents"). A linked key gets it and nothing else over
+  HTTP; unlinking closes its connections with the websocket (invariant 7). The dialling side's pin check is one function
+  for both (`peer::pinnedKeyOf`).
 - **The console page** (built after phase 1a, same day): `/linked-servers` for super admins, shown only while the switch
   is on. The console learns the switch from `peer.status {enabled}`, the one management command that answers while it
   is off (the same callers as the rest), so no page load provokes `peers_experimental` and nothing advertises a
