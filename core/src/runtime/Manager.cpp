@@ -6,6 +6,7 @@
 #include "identities/Manager.hpp"
 #include "log/Registry.hpp"
 #include "log/RotationService.hpp"
+#include "mirror/Sequencer.hpp"
 #include "audit/Trail.hpp"
 #include "notifications/OperatorEmailService.hpp"
 #include "protocols/ProtocolService.hpp"
@@ -47,6 +48,7 @@ constexpr std::array kBaseStartOrder{
     "SyncController",
     "UpstreamEventService",
     "DBJanitor",
+    "MirrorSequencer",
     "VaultRetentionService",
     "FormatConversionService",
     "LayoutMigrationService",
@@ -80,6 +82,7 @@ constexpr std::array kBaseStopOrder{
     "LayoutMigrationService",
     "FormatConversionService",
     "VaultRetentionService",
+    "MirrorSequencer",
     "DBJanitor",
     "IdentityWatcher",
     "LogRotationService",
@@ -138,6 +141,7 @@ Manager::Manager()
     services_["OperatorEmailService"] = operatorEmailService;
     services_["UpstreamEventService"] = upstreamEventService;
     services_["FsChangeNotifier"] = protocols::ws::ChangeNotifier::instance();
+    services_["MirrorSequencer"] = vh::mirror::Sequencer::instance();
 
     // A test instance serves `vh` only on a private socket (VH_TEST_CLI_SOCKET), never the system one.
     if (!paths::testMode || paths::testCliSocket) {

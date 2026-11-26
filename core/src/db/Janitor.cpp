@@ -3,6 +3,7 @@
 #include "auth/mfa/Factors.hpp"
 #include "config/Registry.hpp"
 #include "db/query/fs/ChangeLog.hpp"
+#include "db/query/mirror/Log.hpp"
 #include "db/query/sync/Event.hpp"
 #include "db/query/auth/RefreshToken.hpp"
 #include "db/query/upstream/Inbox.hpp"
@@ -39,6 +40,11 @@ constexpr std::chrono::hours kRecoveryPlanRetention{24 * 30};
 // revisions behind, is expired and its client enumerates again.
 constexpr std::chrono::hours kFsChangeRetention{24 * 7};
 constexpr uint64_t kFsChangeMaxRevisions = 1'000'000;
+
+// The replication log of a mirrored vault (design/peers/mirror.md, migration 160): 30 days or 5,000,000 rows per vault,
+// whichever keeps less, and never a row the mirror has not acknowledged.
+constexpr std::chrono::hours kReplicationLogRetention{24 * 30};
+constexpr uint64_t kReplicationLogMaxRows = 5'000'000;
 
 void maintainRecovery(const bool sweepStores) {
     // Snapshots left `creating` by a crash: at the first run after startup nothing of this process is in flight.
@@ -113,6 +119,18 @@ void pruneFsChanges() {
 }
 
 // Best effort: a failure here never blocks the other sweeps.
+void pruneReplicationLog() {
+    try {
+        const auto r = vh::db::query::mirror::Log::prune(kReplicationLogRetention, kReplicationLogMaxRows);
+        if (r.rows > 0 || r.orphans > 0)
+            log::Registry::vaulthalla()->info("[DBSweeper] Pruned {} replication log row(s) and {} row(s) of vaults no "
+                                              "longer mirrored", r.rows, r.orphans);
+    } catch (const std::exception& e) {
+        log::Registry::vaulthalla()->warn("[DBSweeper] Replication log prune failed: {}", e.what());
+    }
+}
+
+// Best effort: a failure here never blocks the other sweeps.
 void sweepUpstreamEvents() {
     try {
         const auto events = query::upstream::Inbox::sweepFinished(kUpstreamInboxRetention);
@@ -148,6 +166,7 @@ void vh::db::Janitor::runLoop() {
             }
             janitor_impl::sweepUpstreamEvents();
             janitor_impl::pruneFsChanges();
+            janitor_impl::pruneReplicationLog();
             janitor_impl::purgeTotpEnrollments();
             janitor_impl::reconcileBackupGrants();
             janitor_impl::reconcileConnectorGrants();
