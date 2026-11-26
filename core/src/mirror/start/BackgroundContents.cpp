@@ -50,7 +50,8 @@ std::size_t BackgroundContents::tick() {
     const auto now = std::chrono::steady_clock::now();
     std::size_t started = 0;
     for (const auto& row : MirrorVaults::list()) {
-        if (row.role != "mirror") continue;
+        // A vault that stopped (diverged, expired, stopped) fetches nothing until it is followed again.
+        if (row.role != "mirror" || row.state != "live") continue;
         {
             std::scoped_lock lock(shared_->mutex);
             const auto& v = shared_->vaults[row.vault_id];

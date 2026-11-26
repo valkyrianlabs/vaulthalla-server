@@ -660,7 +660,7 @@ that a `mirror` row exists (`MirrorVaults::startMirror`) and that `MirrorVaults:
   removed or made, derived artifacts dropped, `tree_apply::cacheFresh`.
 - **Follower (`mirror::follow::Follower`, service "MirrorFollower" after PeerLinks):** visits each `mirror` row (1 s
   while the first copy runs, at once on a notice or link-up, 30 s otherwise; errors back off to 60 s), 3 s per visit,
-  acknowledges after it applied; a second thread runs `contents::fetchOutstanding`. The sequencer's numbered vaults
+  acknowledges after it applied; contents are fetched by MirrorContents alone (one drainer of the pending queue). The sequencer's numbered vaults
   become notices (`Follower::numbered`), sent from the follower's thread.
 - **Shared tree-apply module (`fs/tree_apply`):** the uid lookup for local vaults and the after-commit cache and folder
   effects; the manifest applier's executors call its effects (its own lookup keeps reading the bucket index).

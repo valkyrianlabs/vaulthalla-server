@@ -27,8 +27,8 @@
 // digest. A vault is visited on a short timer while its first copy is unfinished, when its link comes up, when the core
 // sends a notice, and on a slow timer otherwise; errors back off; a vault that stops (diverged, expired, stopped) or
 // whose row goes is left alone. Every request is bounded (the link's request timeout), every pass is bounded in time,
-// and nothing runs on a FUSE worker or on the link's read thread. Contents are fetched in the background by wave 2's
-// lane (mirror::contents::fetchOutstanding) on a thread of its own.
+// and nothing runs on a FUSE worker or on the link's read thread. Contents are fetched in the background by the
+// MirrorContents service (mirror/start/BackgroundContents.hpp), the one drainer of the pending queue; not here.
 //
 // Core side: the sequencer reports each vault it numbered (numbered()); the notice (peer.mirror.notify) is sent from
 // this service's thread, coalesced per vault, never blocking the sequencer. A lost notice is harmless: the follower
@@ -87,7 +87,6 @@ public:
     // One visit of one vault applies for at most this long.
     static constexpr std::chrono::seconds kStepBudget{3};
     // Files fetched per visit of the contents thread.
-    static constexpr std::size_t kFetchPerPass = 4;
 
     Follower();
     ~Follower() override;
@@ -125,7 +124,6 @@ private:
     std::size_t sendNotices(Transport& transport);
     bool acknowledge(Transport& transport, const vh::db::query::mirror::MirrorVault& mv, const std::string& vaultUid,
                      vh::db::query::mirror::Position at, const vh::mirror::Digest& digest);
-    void fetchLoop();
     std::shared_ptr<Transport> transport();
 
     std::mutex mutex_;
@@ -135,8 +133,6 @@ private:
     std::map<uint32_t, Partial> partials_;
     std::map<uint32_t, Schedule> schedule_;
     std::shared_ptr<Transport> testTransport_;
-    std::thread fetcher_;
-    std::atomic<bool> fetchStop_{false};
 };
 
 }

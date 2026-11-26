@@ -87,10 +87,7 @@ std::shared_ptr<Transport> linkTransport() {
 
 Follower::Follower() : AsyncService("MirrorFollower") {}
 
-Follower::~Follower() {
-    fetchStop_.store(true);
-    if (fetcher_.joinable()) fetcher_.join();
-}
+Follower::~Follower() = default;
 
 const std::shared_ptr<Follower>& Follower::instance() {
     static const auto follower = std::make_shared<Follower>();
@@ -314,32 +311,11 @@ StepResult Follower::step(const uint32_t vaultId, Transport& transport, const ap
     return out;
 }
 
-void Follower::fetchLoop() {
-    while (!fetchStop_.load() && !shouldStop()) {
-        std::size_t fetched = 0;
-        try {
-            if (followExperimental())
-                for (const auto& mv : mq::MirrorVaults::list()) {
-                    if (fetchStop_.load() || shouldStop()) break;
-                    if (mv.role != "mirror" || mv.state != "live") continue;
-                    if (mq::PendingContents::countOutstanding(mv.vault_id) == 0) continue;
-                    fetched += vh::mirror::contents::fetchOutstanding(mv.vault_id, kFetchPerPass);
-                }
-        } catch (const std::exception& e) {
-            log::Registry::sync()->debug("[MirrorFollower] Contents pass failed: {}", e.what());
-        }
-        if (fetched == 0) lazySleep(std::chrono::seconds(2));
-    }
-}
-
 void Follower::onStop() {
-    fetchStop_.store(true);
     cv_.notify_all();
 }
 
 void Follower::runLoop() {
-    fetchStop_.store(false);
-    fetcher_ = std::thread([this] { fetchLoop(); });
     auto lastRows = SteadyClock::time_point{};
     std::vector<mq::MirrorVault> rows;
     while (!shouldStop()) {
@@ -429,8 +405,6 @@ void Follower::runLoop() {
         std::unique_lock lock(mutex_);
         cv_.wait_for(lock, wait, [this] { return shouldStop() || !woken_.empty() || !notices_.empty(); });
     }
-    fetchStop_.store(true);
-    if (fetcher_.joinable()) fetcher_.join();
 }
 
 }

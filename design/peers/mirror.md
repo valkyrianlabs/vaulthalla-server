@@ -595,7 +595,8 @@ without waiting for review); each is listed for confirmation in the hand-off:
   copy is unfinished, at once on a notice or when its link comes up, every 30 s otherwise; an error backs off from 1 s
   to 60 s; a visit applies for at most 3 s; a vault that is not `live` or whose row is gone is not asked anything.
   Requests are bounded by the link's request timeout (15 s). It runs on its own thread, never on a FUSE worker or the
-  link's read thread; wave 2's `contents::fetchOutstanding` runs on a second thread of it (4 files a pass). For a drill:
+  link's read thread; contents are not fetched here: the MirrorContents service is the one drainer of the pending queue (the follower's own
+  fetch thread was removed at the merge, so no file is fetched twice). For a drill:
   the mirror's `mirror_vault` row (`last_seq`, `copy_finished`, `copy_cursor`, `digest`, `state`, `stop_reason`) and the
   log lines "first copy finished at (t, s), digest D, N entries" and "applied through (t, s), digest D".
 - **The applier** (`mirror::apply`): one transaction per page or group, under the apply switch and `vh.keep_mtime`
