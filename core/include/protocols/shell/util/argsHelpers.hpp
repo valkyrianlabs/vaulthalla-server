@@ -42,7 +42,7 @@ namespace vh::protocols::shell {
     };
 
     struct Subject {
-        std::string type; // "user" or "group"
+        std::string type; // "user", "group" or "peer" (a linked server: `vh vault role assign|remove --peer`)
         unsigned int id = 0;
     };
 

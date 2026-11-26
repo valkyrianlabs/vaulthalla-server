@@ -1020,6 +1020,9 @@ export interface WebSocketCommandMap {
   'peer.get': WsContract['peer.get']
   'peer.rename': WsContract['peer.rename']
   'peer.unlink': WsContract['peer.unlink']
+  // A linked server's default vault role here (migration 162; no console page yet).
+  'peer.policy.get': WsContract['peer.policy.get']
+  'peer.policy.set': WsContract['peer.policy.set']
   'peer.pair.request': WsContract['peer.pair.request']
   'peer.pair.confirm': WsContract['peer.pair.confirm']
   'peer.pair.status': WsContract['peer.pair.status']

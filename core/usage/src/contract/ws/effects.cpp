@@ -157,6 +157,8 @@ std::vector<WsEffect> effectTable() {
         {"peer.pairing.deny", "write"},
         {"peer.pairing.open", "write"},
         {"peer.pairing.pending", "read"},
+        {"peer.policy.get", "read"},
+        {"peer.policy.set", "write"},
         {"peer.ping", "read"},
         {"peer.rename", "write"},
         {"peer.status", "read"},

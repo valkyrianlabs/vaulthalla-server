@@ -86,6 +86,9 @@ struct Linked {
 [[nodiscard]] std::vector<Linked> list(const Actor& actor, bool all = false);
 // A peer by its row id, node id, key (64 hex) or an unambiguous prefix of 8+ hex digits of its key, or its name.
 [[nodiscard]] Linked get(const Actor& actor, const std::string& ref);
+// The same lookup with no caller and no switch (trusted: ops::peer_policy and `vh vault role --peer` authorize).
+// ops::NotFound, or ops::Invalid when the reference is ambiguous.
+[[nodiscard]] vh::peer::Record resolveRef(const std::string& ref);
 [[nodiscard]] vh::peer::Record rename(const Actor& actor, const std::string& ref, const std::string& name);
 // Revokes the row, closes its connections at once, and tells the peer (peer.unlinked) when it is connected.
 // Audited peer.unlink.

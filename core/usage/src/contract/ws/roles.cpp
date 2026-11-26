@@ -14,6 +14,17 @@ std::vector<WsField> vaultSubjectPayload() {
             uinteger("subject_id").gen(gen::ref("subject", {"id"})).desc("A user id or a group id, per subject_type.")};
 }
 
+// Assigning or removing a role names a linked server too (migration 162; experimental, off by default): its role on
+// the vault, the ceiling on what it may submit. Path overrides stay a user's or a group's.
+std::vector<WsField> vaultAssignSubjectPayload() {
+    return {vaultId(),
+            str("subject_type").oneOf({"user", "group", "peer"}).desc(
+                "peer: a linked server (peer.list's id), while peers.experimental is on; it takes the role on this "
+                "vault in place of its link's default (peer.policy.set), and implicit_deny means no access."),
+            uinteger("subject_id").gen(gen::ref("subject", {"id"})).desc(
+                "A user id, a group id or a linked server's id, per subject_type.")};
+}
+
 WsField vaultRoleIdField(std::string name = "id") { return uinteger(std::move(name)).gen(gen::ref("role.vault", {"id"})); }
 
 WsField adminRoleIdField() { return uinteger("id").gen(gen::ref("role.admin", {"id"})); }
@@ -46,24 +57,38 @@ WsField vaultRoleOverrideId() {
 std::vector<WsCommandUsage> roleCommands() {
     std::vector<WsCommandUsage> out;
 
-    auto assignPayload = vaultSubjectPayload();
+    auto assignPayload = vaultAssignSubjectPayload();
     assignPayload.push_back(vaultRoleIdField().desc("The vault role to assign."));
     out.push_back({
         .command = "role.vault.assign",
-        .description = "Assign a vault role to a user or group on a vault (one assignment per subject and vault).",
+        .description = "Assign a vault role to a user, a group or a linked server on a vault (one assignment per "
+                       "subject and vault). A linked server: peers.experimental must be on, and a person decides "
+                       "(never an agent, a scoped or a relayed device: peer_forbidden). Refused (conflict) on a vault "
+                       "held here as another server's copy.",
         .payload = assignPayload,
         .response = {object("assignment", "VaultRole")},
-        .refusal_codes = opsRefusals(),
+        .refusal_codes = [] {
+            auto r = opsRefusals();
+            r.emplace_back("peers_experimental");
+            r.emplace_back("peer_forbidden");
+            return r;
+        }(),
         .operation = "roles.vault.assign",
         .client_timeout = kDefaultTimeout,
     });
 
     out.push_back({
         .command = "role.vault.unassign",
-        .description = "Remove a subject's vault role assignment on a vault.",
-        .payload = vaultSubjectPayload(),
+        .description = "Remove a subject's vault role assignment on a vault (a linked server's as for "
+                       "role.vault.assign: it falls back to its link's default).",
+        .payload = vaultAssignSubjectPayload(),
         .response = {boolean("unassigned")},
-        .refusal_codes = opsRefusals(),
+        .refusal_codes = [] {
+            auto r = opsRefusals();
+            r.emplace_back("peers_experimental");
+            r.emplace_back("peer_forbidden");
+            return r;
+        }(),
         .operation = "roles.vault.unassign",
         .client_timeout = kDefaultTimeout,
     });
@@ -88,7 +113,10 @@ std::vector<WsCommandUsage> roleCommands() {
 
     out.push_back({
         .command = "roles.vault.list.assigned",
-        .description = "The role assignments on one vault (id is the vault id).",
+        .description = "The role assignments on one vault (id is the vault id). A linked server's carries its name "
+                       "and node id. On a vault held here as another server's copy: this server's super admins only; "
+                       "the first entry is what its core granted this server (subject_type server, owned_by, "
+                       "editable false), local rows have in_effect false.",
         .payload = {uinteger("id").gen(gen::ref("vault", {"id"})).desc("Vault id.")},
         .response = {objectArray("assigned_roles", "VaultRole")},
         .refusal_codes = opsRefusals(),

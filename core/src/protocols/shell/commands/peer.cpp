@@ -3,6 +3,7 @@
 #include "config/Registry.hpp"
 #include "device/Crypto.hpp"
 #include "ops/Error.hpp"
+#include "ops/PeerPolicy.hpp"
 #include "ops/Peers.hpp"
 #include "peer/Links.hpp"
 #include "peer/Peer.hpp"
@@ -11,6 +12,7 @@
 #include "protocols/shell/commands/helpers.hpp"
 #include "protocols/shell/util/argsHelpers.hpp"
 #include "protocols/shell/util/runOp.hpp"
+#include "rbac/role/Vault.hpp"
 #include "runtime/Deps.hpp"
 #include "usage/include/UsageManager.hpp"
 #include "CommandUsage.hpp"
@@ -350,6 +352,48 @@ CommandResult handleUnlink(const CommandCall& call) {
                  });
 }
 
+std::string policyText(const ::vh::ops::peer_policy::LinkPolicy& p) {
+    std::string out = fmt::format("Linked server {} (\"{}\", node {}){}: default vault role {}\n", p.peer.id, p.peer.name,
+                                  p.peer.node_id, p.peer.revoked() ? ", unlinked" : "",
+                                  p.role ? "'" + p.role->name + "'" : std::string("none"));
+    if (p.set_at)
+        out += fmt::format("  set by {} at {}\n", p.set_by_name.empty() ? std::string("(a removed account)") : p.set_by_name,
+                           clock(*p.set_at));
+    out += "  It holds this role on every vault mirrored with it, unless the vault assigns it another (`vh vault role "
+           "list <vault>`).\n";
+    return out;
+}
+
+CommandResult handlePolicyShow(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"peer", "policy", "show"}));
+    const bool json = hasFlag(call, "json");
+    return runOp("peer policy show", [&] { return ::vh::ops::peer_policy::get(call.user, call.positionals.at(0)); },
+                 [&](const ::vh::ops::peer_policy::LinkPolicy& p) {
+                     return json ? pretty(::vh::ops::peer_policy::toJson(p)) : policyText(p);
+                 });
+}
+
+CommandResult handlePolicySet(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"peer", "policy", "set"}));
+    const auto& roleArg = call.positionals.at(1);
+    std::optional<::vh::ops::roles::Ref> role;
+    if (roleArg != "none") {
+        if (const auto id = parseUInt(roleArg)) role = static_cast<unsigned int>(*id);
+        else role = roleArg;
+    }
+    return runOp("peer policy set", [&] { return ::vh::ops::peer_policy::set(call.user, call.positionals.at(0), role); },
+                 [](const ::vh::ops::peer_policy::LinkPolicy& p) { return policyText(p); });
+}
+
+CommandResult handlePolicy(const CommandCall& call) {
+    if (call.positionals.empty()) return usage(call.constructFullArgs());
+    const auto [sub, subcall] = descend(call);
+    const auto is = [&](const char* name) { return isCommandMatch({"peer", "policy", name}, sub); };
+    if (is("show")) return handlePolicyShow(subcall);
+    if (is("set")) return handlePolicySet(subcall);
+    return invalid(call.constructFullArgs(), "Unknown peer policy subcommand: '" + std::string(sub) + "'");
+}
+
 CommandResult handlePeer(const CommandCall& call) {
     if (call.positionals.empty()) return usage(call.constructFullArgs());
     const auto [sub, subcall] = descend(call);
@@ -363,6 +407,7 @@ CommandResult handlePeer(const CommandCall& call) {
     if (is("info")) return handleInfo(subcall);
     if (is("rename")) return handleRename(subcall);
     if (is("unlink")) return handleUnlink(subcall);
+    if (is("policy")) return handlePolicy(subcall);
     return invalid(call.constructFullArgs(), "Unknown peer subcommand: '" + std::string(sub) + "'");
 }
 

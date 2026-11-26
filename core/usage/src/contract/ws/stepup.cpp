@@ -70,6 +70,7 @@ std::vector<WsStepUp> stepUpTable() {
         {"role.vault.delete", "identity.admin", false, ""},
         {"role.vault.assign", "identity.admin", false, ""},
         {"role.vault.unassign", "identity.admin", false, ""},
+        {"peer.policy.set", "identity.admin", false, ""},
         {"role.vault.overrides.add", "identity.admin", false, ""},
         {"role.vault.overrides.update", "identity.admin", false, ""},
         {"role.vault.overrides.remove", "identity.admin", false, ""},
