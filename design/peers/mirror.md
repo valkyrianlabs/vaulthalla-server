@@ -396,6 +396,14 @@ command. Decided while building (owner's instruction to build without waiting fo
   available": the file is there, its contents are not). The HTTP lanes answer 503 with the code and `Retry-After`. A
   file pending for another generation than the row a reader holds is read as that row describes (the newer row comes
   with the log).
+- **The mount waits for few files at once.** The mount serves every vault from one FUSE worker pool
+  (`ThreadPoolManager::fusePool`, fixed at max(3 × cores, 8) / 6 workers: 2 on a host of up to 4 cores, 9 on 18), so
+  a recursive reader on a freshly mirrored vault (an indexer, `grep -r`, a backup) could otherwise park every worker on
+  a fetch and stall the whole mount for 15 s at a time. At most a quarter of the pool (at least 1, at most 4:
+  `mirror::contents::mountWaitCap`) of mount opens wait at once; that leaves three quarters (half on the smallest hosts)
+  serving every other request. An open over the cap still starts or joins its file's fetch ahead of the queue, so
+  opening it again soon succeeds, and answers ETIMEDOUT at once. The place is held only while waiting and given back
+  on every way out. The HTTP, ws, CLI and S3 paths run on threads of their own and keep the full 15 s wait.
 - **Proof split.** Two daemons over a real link (`vhh drill peers`, step 6): one serves a real sealed file of a vault
   it holds (its `mirror_vault` row written by hand: no command makes a vault mirrored yet), the other fetches it with
   the real client, broken off and resumed by range, byte for byte; refusals of a stale generation and of a vault the

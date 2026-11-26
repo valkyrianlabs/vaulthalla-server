@@ -1,5 +1,6 @@
 #include "mirror/Contents.hpp"
 
+#include "concurrency/ThreadPoolManager.hpp"
 #include "config/Registry.hpp"
 #include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
@@ -23,9 +24,12 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <future>
+#include <algorithm>
+#include <atomic>
 #include <map>
 #include <mutex>
 #include <sys/stat.h>
+#include <thread>
 #include <tuple>
 #include <unistd.h>
 
@@ -196,6 +200,41 @@ std::optional<std::string> linkDownReason(const MirrorVault& mirror, peer::LinkS
     if (!links.health(mirror.peer_id).connected) return "the link to " + row->name + " is down";
     return std::nullopt;
 }
+
+// Mount opens waiting now, and a cap fixed by a test.
+std::atomic<unsigned>& mountWaiters() {
+    static std::atomic<unsigned> n{0};
+    return n;
+}
+
+std::atomic<unsigned>& testMountCap() {
+    static std::atomic<unsigned> n{0};
+    return n;
+}
+
+// One waiting mount open, released on every way out of the wait.
+class MountWait {
+public:
+    // Takes a place when one is free under the cap.
+    MountWait() {
+        const auto cap = mountWaitCap();
+        auto n = mountWaiters().load(std::memory_order_relaxed);
+        while (n < cap)
+            if (mountWaiters().compare_exchange_weak(n, n + 1, std::memory_order_acq_rel)) {
+                held_ = true;
+                return;
+            }
+    }
+    ~MountWait() {
+        if (held_) mountWaiters().fetch_sub(1, std::memory_order_acq_rel);
+    }
+    MountWait(const MountWait&) = delete;
+    MountWait& operator=(const MountWait&) = delete;
+    [[nodiscard]] bool held() const noexcept { return held_; }
+
+private:
+    bool held_{false};
+};
 
 // One fetch per file however many opens wait for it.
 using Key = std::tuple<uint32_t, std::string, std::string>;  // vault, object uid, generation
@@ -396,7 +435,20 @@ Result receive(const Expected& expected, Source& source, const std::function<boo
     return result;
 }
 
-bool awaitIfPending(const vh::fs::model::File& file, const std::chrono::milliseconds wait) {
+unsigned mountWaitCap() {
+    if (const auto fixed = testMountCap().load(std::memory_order_relaxed)) return fixed;
+    unsigned workers = 0;
+    if (const auto& pool = vh::concurrency::ThreadPoolManager::instance().fusePool()) workers = pool->workerCount();
+    // Before the pools exist (tests, early startup): the size the manager would give the FUSE pool.
+    if (workers == 0) workers = std::max(std::thread::hardware_concurrency() * 3u, 8u) / 6u + 1u;
+    return std::clamp(workers / 4u, 1u, 4u);
+}
+
+void setMountWaitCapForTesting(const unsigned cap) { testMountCap().store(cap, std::memory_order_relaxed); }
+
+unsigned mountWaitersForTesting() { return mountWaiters().load(std::memory_order_acquire); }
+
+bool awaitIfPending(const vh::fs::model::File& file, const std::chrono::milliseconds wait, const Opener opener) {
     if (!file.vault_id || !file.object_uid) return false;
     const auto vaultId = *file.vault_id;
     if (!PendingContents::mayHavePending(vaultId)) return false;
@@ -451,6 +503,13 @@ bool awaitIfPending(const vh::fs::model::File& file, const std::chrono::millisec
             }
         }
     }
+    // The mount's opens share one worker pool with every other vault: past the cap, the fetch goes on (started above)
+    // and the open answers at once.
+    std::optional<MountWait> place;
+    if (opener == Opener::Mount) place.emplace();
+    if (place && !place->held() && outcome.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready)
+        throw NotReceived(Reason::TimedOut, "the file is on its way from the vault's linked server, and the mount's "
+                                            "opens that may wait for one are all waiting; open it again shortly");
     if (outcome.wait_for(wait) != std::future_status::ready)
         throw NotReceived(Reason::TimedOut, fmt::format("the file has not arrived from the vault's linked server within "
                                                         "{} s; it is still coming",

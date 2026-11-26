@@ -104,11 +104,27 @@ struct Result {
 [[nodiscard]] Result receive(const db::query::mirror::Expected& expected, Source& source,
                              const std::function<bool()>& cancelled = {});
 
+// Who is opening: the mount's opens run on the FUSE worker pool, which serves every vault, so only a few may wait at a
+// time (mountWaitCap); every other surface runs on threads of its own and waits the full kOpenWait.
+enum class Opener { Mount, Other };
+
+// How many mount opens may wait for a pending file at once: a quarter of the FUSE worker pool (concurrency::
+// ThreadPoolManager::fusePool, fixed at max(3 x cores, 8) / 6 workers: 2 on a 1-4 core host, 9 on 18 cores), at
+// least 1 and at most 4, so a recursive reader on a freshly mirrored vault never parks more than a quarter of the
+// mount's workers (half on the smallest hosts) and the rest keeps serving every vault.
+[[nodiscard]] unsigned mountWaitCap();
+// Tests: a fixed cap (0 restores the pool's share); mount opens waiting now.
+void setMountWaitCapForTesting(unsigned cap);
+[[nodiscard]] unsigned mountWaitersForTesting();
+
 // An open on the mirror: false when nothing is pending for `file` (the caller reads as usual; costs no query for a
 // vault with no pending contents once known). Otherwise fetches it ahead of everything else (an interactive transfer
 // slot; one transfer per file however many wait) and waits at most `wait`: true once its bytes are in place. Throws
-// NotReceived (LinkDown, TimedOut or Failed). Holds no database connection while it waits.
-[[nodiscard]] bool awaitIfPending(const vh::fs::model::File& file, std::chrono::milliseconds wait = kOpenWait);
+// NotReceived (LinkDown, TimedOut or Failed). Holds no database connection while it waits. A mount open over
+// mountWaitCap does not wait at all: its fetch is still started (or joined) ahead of the queue, so a retry soon finds the
+// file, and it fails with TimedOut at once.
+[[nodiscard]] bool awaitIfPending(const vh::fs::model::File& file, std::chrono::milliseconds wait = kOpenWait,
+                                  Opener opener = Opener::Other);
 
 // Background work (the log applier's, a later piece; tests): up to `max` outstanding files of a mirror vault, in
 // priority order, each in a background slot taken without waiting (stops when none is free). Returns how many were

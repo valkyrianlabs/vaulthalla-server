@@ -115,7 +115,11 @@ WorkingCopyHooks runtimeHooks() {
             // A mirror's file whose contents have not arrived (design/peers/mirror.md "Contents"): fetched from the
             // vault's core first, waiting at most mirror::contents::kOpenWait. Otherwise NotReceived, a system_error
             // whose errno is the open's: ENOLINK (the link is down), ETIMEDOUT (still coming), ENODATA (failed).
-            if (file.size_bytes > 0) (void)vh::mirror::contents::awaitIfPending(file);
+            // Only mirror::contents::mountWaitCap() opens wait at once (the FUSE pool serves every vault); the
+            // others get ETIMEDOUT at once while their fetch goes on.
+            if (file.size_bytes > 0)
+                (void)vh::mirror::contents::awaitIfPending(file, vh::mirror::contents::kOpenWait,
+                                                           vh::mirror::contents::Opener::Mount);
             if (!std::filesystem::exists(file.backing_path)) {
                 if (file.size_bytes == 0) return;
                 // An index-only cloud file (Cache strategy): its bytes live in the bucket. Fetch them (price-gated,

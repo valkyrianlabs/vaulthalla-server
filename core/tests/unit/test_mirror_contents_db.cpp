@@ -44,6 +44,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <map>
 #include <mutex>
 #include <random>
 #include <sys/stat.h>
@@ -184,7 +185,10 @@ protected:
         contents::setSourceFactoryForTesting({});
     }
 
-    void TearDown() override { contents::setSourceFactoryForTesting({}); }
+    void TearDown() override {
+        contents::setSourceFactoryForTesting({});
+        contents::setMountWaitCapForTesting(0);
+    }
 
     // A file whose row is on this server and whose sealed bytes are only at the core: written, its bytes taken away,
     // and marked expected with the row's generation, hash and size (what the log applier will do).
@@ -478,6 +482,99 @@ TEST_F(MirrorContentsDbTest, WithTheLinkDownAnOpenFailsWithItsReasonWithinTheBou
     EXPECT_THROW((void)contents::awaitIfPending(*h.file), contents::NotReceived);
     cfg.peers.experimental = true;
     config::Registry::set(cfg);
+}
+
+// The mount's opens share one FUSE worker pool with every vault: only mountWaitCap() of them wait on pending files at
+// once. The others answer ETIMEDOUT at once while their fetch still runs ahead of the queue, and every way out of a
+// wait (success, timeout, failure, link down) gives its place back.
+TEST_F(MirrorContentsDbTest, OnlyAFewMountOpensWaitAndTheRestAnswerAtOnceWhileTheirFetchesGoOn) {
+    contents::setMountWaitCapForTesting(2);
+    EXPECT_EQ(contents::mountWaitCap(), 2u);
+    std::vector<Held> files;
+    std::map<std::string, std::shared_ptr<Script>> scripts;
+    for (int i = 0; i < 4; ++i) {
+        files.push_back(notYetReceived("/many" + std::to_string(i) + ".bin", 90'000));
+        auto s = std::make_shared<Script>();
+        s->bytes = files.back().sealed;
+        s->holdAt = 4096;
+        scripts[vl::keykit::toBase32(files.back().expected.object_uid)] = s;
+    }
+    contents::setSourceFactoryForTesting([scripts](const auto&, const Expected& e) {
+        return std::make_unique<ScriptedSource>(scripts.at(vl::keykit::toBase32(e.object_uid)));
+    });
+    const auto scriptOf = [&](const Held& h) { return scripts.at(vl::keykit::toBase32(h.expected.object_uid)); };
+
+    // Two opens through the mount wait (their transfers held mid-way)...
+    std::vector<std::future<bool>> waiting;
+    for (int i = 0; i < 2; ++i)
+        waiting.push_back(std::async(std::launch::async, [&, i] {
+            return contents::awaitIfPending(*files[i].file, 20s, contents::Opener::Mount);
+        }));
+    for (int i = 0; i < 100 && contents::mountWaitersForTesting() < 2; ++i) std::this_thread::sleep_for(20ms);
+    ASSERT_EQ(contents::mountWaitersForTesting(), 2u);
+    // ...and the next ones, through the working copies' open (what fuse::open calls), answer at once.
+    auto& copies = fuse::WorkingCopies::instance();
+    std::filesystem::create_directories(copies.root());
+    for (int i = 2; i < 4; ++i) {
+        const auto row = db::query::fs::File::getFileById(files[i].file->id);
+        const auto started = std::chrono::steady_clock::now();
+        try {
+            (void)copies.open(*row->inode, row, O_RDONLY);
+            ADD_FAILURE() << "an open over the cap waited and opened";
+        } catch (const std::system_error& e) {
+            EXPECT_EQ(e.code().value(), ETIMEDOUT) << e.what();
+        }
+        EXPECT_LT(std::chrono::steady_clock::now() - started, 1s) << "over the cap: no wait";
+        scriptOf(files[i])->waitHeld();  // its fetch started all the same
+    }
+    // Other surfaces are not capped: they wait their full bound (here, a short one).
+    EXPECT_THROW((void)contents::awaitIfPending(*files[2].file, 200ms, contents::Opener::Other), contents::NotReceived);
+    EXPECT_EQ(contents::mountWaitersForTesting(), 2u);
+
+    for (auto& [_, s] : scripts) s->release();
+    for (auto& w : waiting) EXPECT_TRUE(w.get());
+    EXPECT_EQ(contents::mountWaitersForTesting(), 0u) << "released on success";
+    for (int i = 0; i < 4; ++i) {
+        for (int t = 0; t < 250 && PendingContents::get(files[i].expected.vault_id, files[i].expected.object_uid); ++t)
+            std::this_thread::sleep_for(20ms);
+        EXPECT_FALSE(PendingContents::get(files[i].expected.vault_id, files[i].expected.object_uid)) << i;
+        EXPECT_EQ(readBack(files[i]), files[i].plaintext) << "the fetch of an open that did not wait completed";
+    }
+    // A retry of an open that answered at once now opens (nothing is pending any more).
+    EXPECT_FALSE(contents::awaitIfPending(*files[3].file, 1s, contents::Opener::Mount));
+
+    // Released on a timeout...
+    const auto slow = notYetReceived("/slow.bin", 90'000);
+    auto held = std::make_shared<Script>();
+    held->bytes = slow.sealed;
+    held->holdAt = 4096;
+    contents::setSourceFactoryForTesting([held](const auto&, const auto&) { return std::make_unique<ScriptedSource>(held); });
+    EXPECT_THROW((void)contents::awaitIfPending(*slow.file, 200ms, contents::Opener::Mount), contents::NotReceived);
+    EXPECT_EQ(contents::mountWaitersForTesting(), 0u) << "released on a timeout";
+    held->release();
+    // ...on a failure (bad bytes, reported after the wait)...
+    const auto bad = notYetReceived("/bad.bin", 50'000);
+    auto damaged = bad.sealed;
+    damaged[300] ^= 0x10;
+    (void)serve(damaged);
+    try {
+        (void)contents::awaitIfPending(*bad.file, 10s, contents::Opener::Mount);
+        ADD_FAILURE();
+    } catch (const contents::NotReceived& e) {
+        EXPECT_EQ(e.reason(), contents::Reason::Failed) << e.what();
+    }
+    EXPECT_EQ(contents::mountWaitersForTesting(), 0u) << "released on a failure";
+    // ...and the link down (said before any wait: no place taken).
+    contents::setSourceFactoryForTesting({});
+    auto cfg = config::Registry::get();
+    cfg.peers.experimental = true;
+    config::Registry::set(cfg);
+    const auto down = notYetReceived("/down.bin", 20'000);
+    EXPECT_THROW((void)contents::awaitIfPending(*down.file, 10s, contents::Opener::Mount), contents::NotReceived);
+    EXPECT_EQ(contents::mountWaitersForTesting(), 0u) << "the link down";
+    contents::setMountWaitCapForTesting(0);
+    EXPECT_GE(contents::mountWaitCap(), 1u);
+    EXPECT_LE(contents::mountWaitCap(), 4u);
 }
 
 TEST_F(MirrorContentsDbTest, OutstandingFilesComeInPriorityOrderAndOnlyForAMirror) {

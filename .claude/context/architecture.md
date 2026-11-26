@@ -619,7 +619,8 @@ internal API do.
   (downloads, previews, the ws/share download, CLI, S3 gateway: `ContentUnavailable` with `mirror_link_down|
   mirror_fetch_timeout|mirror_fetch_failed: …`, which `handler::errorFor` answers as 503 with that code) and from the
   working copies' materialize hook (FUSE open: `NotReceived`, a `std::system_error` with ENOLINK | ETIMEDOUT | ENODATA,
-  which `fuse::errnoFrom` returns). Link down is said at once (no transfer); one transfer per file however many wait,
+  which `fuse::errnoFrom` returns; only `mountWaitCap()` mount opens wait at once, a quarter of the FUSE pool within
+  1..4, the rest get ETIMEDOUT at once with their fetch started). Link down is said at once (no transfer); one transfer per file however many wait,
   on an interactive slot, continuing after a waiter gives up. `fetchOutstanding(vault, max)` drains background slots.
 - **Test hook:** in test instances only, `LinkService::pollTestFetch` runs `VH_TEST_FAULT_DIR/peer-object-fetch.json`
   (the Tier B drill's request) with the real client.
