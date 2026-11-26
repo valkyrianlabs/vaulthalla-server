@@ -64,6 +64,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -248,6 +249,41 @@ TEST_F(ShellServerTest, RebindsWhenSocketPathIsTakenOver) {
 TEST_F(ShellServerTest, StopUnlinksOnlyItsOwnSocket) {
     server->stop();
     EXPECT_FALSE(fs::exists(socketPath));
+}
+
+// The two CI flakes (StopUnlinksOnlyItsOwnSocket on macOS, IdleClientDoesNotBlockOtherClients on Linux) were one race:
+// the socket path appeared at bind(), before listen() and before the server recorded the inode it owns. A stop in that
+// window left the path behind; a connect in it was refused. Now the path appears only once the socket listens and is
+// known to be the server's, and a stopped loop always removes it. Many short lives make the window likely to be hit.
+TEST_F(ShellServerTest, ThePathAppearsOnlyListeningAndAStopAtAnyMomentRemovesIt) {
+    server->stop();
+    server.reset();
+    for (int i = 0; i < 200; ++i) {
+        auto s = std::make_shared<protocols::shell::Server>();
+        s->setSocketPath(socketPath.string());
+        s->setTimingForTesting(protocols::shell::Server::kRequestTimeout, 100ms);
+        s->start();
+        if (i % 2 == 0) {
+            // Connect at the first moment the path exists, with no retry: it must already listen.
+            const auto deadline = std::chrono::steady_clock::now() + 5s;
+            while (!fs::exists(socketPath) && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+            ASSERT_TRUE(fs::exists(socketPath)) << "iteration " << i;
+            sockaddr_un addr{};
+            addr.sun_family = AF_UNIX;
+            std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", socketPath.c_str());
+            const int fd = vh::platform::fd::socket(AF_UNIX, SOCK_STREAM, 0);
+            ASSERT_GE(fd, 0);
+            EXPECT_EQ(::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)), 0)
+                << "iteration " << i << ": the path named a socket that refused: " << std::strerror(errno);
+            ::close(fd);
+        }
+        // Stop at once (odd iterations: wherever the loop is, binding included).
+        s->stop();
+        EXPECT_FALSE(fs::exists(socketPath)) << "iteration " << i << ": a stopped server left its path behind";
+        s.reset();
+        std::error_code ec;
+        fs::remove(socketPath, ec);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
