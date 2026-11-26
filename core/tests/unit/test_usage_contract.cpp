@@ -448,7 +448,9 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
                    });
         // Linked servers: the switch and who may link (ops::peers), on every peer.* command; the window's own
         // refusals on the dialling server's side of pairing.
-        if (code == "peers_experimental" || code == "peer_forbidden") return command.starts_with("peer.");
+        // Assigning a vault role names a linked server too (migration 162): the same two refusals there.
+        if (code == "peers_experimental" || code == "peer_forbidden")
+            return command.starts_with("peer.") || command == "role.vault.assign" || command == "role.vault.unassign";
         if ((code == "no_pairing_window" || code == "rate_limited" || code == "device_unknown") &&
             command.starts_with("peer.pair."))
             return true;
