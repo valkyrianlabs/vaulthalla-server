@@ -10,8 +10,11 @@
 #include <vector>
 
 // The `mirror_vault` table (migration 160; design/peers/mirror.md "Moving the core"): one row per mirrored vault on
-// this server. A row whose role is `core` is what switches the replication log on for its vault. Internal API: nothing
-// creates rows yet but tests (no ws, CLI or peer command); callers authorize.
+// this server. A row whose role is `core` is what switches the replication log on for its vault; a `mirror` (or
+// `orphaned`) row is a vault this server holds as another server's copy, with what that server granted it (migration
+// 162; rbac::mirrored resolves it). Internal API: nothing creates rows yet but tests (no ws, CLI or peer command);
+// callers authorize. Every write that adds, removes or changes a row's role or grant republishes rbac::mirrored before
+// it returns.
 namespace vh::db::query::mirror {
 
 // A place in a vault's replication log. Within a term, seq counts rows from 1 with no gaps.
@@ -19,6 +22,16 @@ struct Position {
     uint64_t term{};
     uint64_t seq{};
     auto operator<=>(const Position&) const = default;
+};
+
+// What the core granted this server for a vault it mirrors (migration 162): the role by name with its actual
+// permissions, in vault_role's bit layout (rbac::role::Vault's masks), the granting server's node id and when. Never
+// matched to a role of this server (design/peers/identity.md).
+struct Grant {
+    std::string role_name{};
+    uint64_t files{}, directories{}, sync{}, roles{};
+    std::string granted_by_node{};
+    std::time_t granted_at{};
 };
 
 struct MirrorVault {
@@ -35,6 +48,7 @@ struct MirrorVault {
     std::time_t updated_at{};
     std::optional<std::time_t> numbered_at{};
     std::optional<std::time_t> acked_at{};
+    std::optional<Grant> grant{};      // mirror, orphaned: what the core granted this server; never on a core row
 
     [[nodiscard]] Position position() const { return {term, last_seq}; }
 };
@@ -54,6 +68,17 @@ public:
     static constexpr int kLockWaitMs = 200;
     static constexpr int kLockAttempts = 50;
     static MirrorVault startCore(uint32_t vaultId, uint32_t peerId, uint64_t term = 1);
+
+    // Records `vaultId` as a vault this server holds as the copy of the linked server `peerId` (role `mirror`, no
+    // grant yet: nobody here has access until one is recorded). For tests and the mirror's applier (a later piece).
+    // ops::NotFound without the vault or a live peer; ops::Conflict when the vault is mirrored already.
+    static MirrorVault startMirror(uint32_t vaultId, uint32_t peerId, uint64_t term = 1);
+
+    // What the core granted this server for a vault it mirrors (replacing any earlier grant): role name 1-50
+    // characters, node id 1-64; granted_at 0 means now. False when the vault has no mirror or orphaned row here.
+    static bool recordGrant(uint32_t vaultId, const Grant& grant);
+    // Forgets the grant (nobody here has access). False when there was none.
+    static bool clearGrant(uint32_t vaultId);
 
     // Ends the vault's mirror record on this server and drops its log and entry hashes. False when there was none.
     static bool remove(uint32_t vaultId);

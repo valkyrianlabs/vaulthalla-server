@@ -7,6 +7,7 @@
 #include "log/Registry.hpp"
 #include "log/RotationService.hpp"
 #include "mirror/Sequencer.hpp"
+#include "rbac/Mirrored.hpp"
 #include "audit/Trail.hpp"
 #include "notifications/OperatorEmailService.hpp"
 #include "protocols/ProtocolService.hpp"
@@ -45,6 +46,7 @@ constexpr std::array kBaseStartOrder{
     "AuditTrail",  // first in, last out: it records what every other service does
     "FUSE",
     "IdentityWatcher",
+    "MirrorAccessWatcher",
     "SyncController",
     "UpstreamEventService",
     "DBJanitor",
@@ -84,6 +86,7 @@ constexpr std::array kBaseStopOrder{
     "VaultRetentionService",
     "MirrorSequencer",
     "DBJanitor",
+    "MirrorAccessWatcher",
     "IdentityWatcher",
     "LogRotationService",
     "UpstreamEventService",
@@ -142,6 +145,7 @@ Manager::Manager()
     services_["UpstreamEventService"] = upstreamEventService;
     services_["FsChangeNotifier"] = protocols::ws::ChangeNotifier::instance();
     services_["MirrorSequencer"] = vh::mirror::Sequencer::instance();
+    services_["MirrorAccessWatcher"] = vh::rbac::mirrored::Watcher::instance();
 
     // A test instance serves `vh` only on a private socket (VH_TEST_CLI_SOCKET), never the system one.
     if (!paths::testMode || paths::testCliSocket) {

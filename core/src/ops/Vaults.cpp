@@ -22,6 +22,7 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "rbac/Mirrored.hpp"
 #include "rbac/resolver/admin/all.hpp"
 #include "rbac/resolver/vault/all.hpp"
 #include "runtime/Deps.hpp"
@@ -764,19 +765,26 @@ std::vector<AccessibleVault> listAccessible(const Actor& actor) {
             entry.manage = canOnVault(actor, VaultPerm::View, vault->id);
         }
 
-        const bool direct = heldBy(view.user->roles.vaults, vault->id);
-        const bool group = std::ranges::any_of(view.groups, [&](const auto& g) {
-            return g && !g->deleted && heldBy(g->roles.vaults, vault->id);
-        });
+        // A vault held here as another server's copy: only its core's grant applies (rbac/Mirrored.hpp), so no local
+        // relationship (ownership, a role, a group's role, the admin role) is a way in. A super admin is listed as one.
+        if (vh::rbac::mirrored::find(vault->id)) {
+            if (!superAdmin) continue;
+            entry.via.push_back(AccessVia::SuperAdmin);
+        } else {
+            const bool direct = heldBy(view.user->roles.vaults, vault->id);
+            const bool group = std::ranges::any_of(view.groups, [&](const auto& g) {
+                return g && !g->deleted && heldBy(g->roles.vaults, vault->id);
+            });
 
-        if (vault->owner_id == actor->id) entry.via.push_back(AccessVia::Owner);
-        if (direct) entry.via.push_back(AccessVia::VaultRole);
-        if (group) entry.via.push_back(AccessVia::GroupRole);
-        // The admin role grants here: its vault permissions (manage), or its global vault filesystem policy, the
-        // evaluator's last stage, which decides browse only when no vault role (own or group) applies.
-        if (!superAdmin && (entry.manage || (entry.browse && !direct && !group)))
-            entry.via.push_back(AccessVia::AdminPolicy);
-        if (superAdmin) entry.via.push_back(AccessVia::SuperAdmin);
+            if (vault->owner_id == actor->id) entry.via.push_back(AccessVia::Owner);
+            if (direct) entry.via.push_back(AccessVia::VaultRole);
+            if (group) entry.via.push_back(AccessVia::GroupRole);
+            // The admin role grants here: its vault permissions (manage), or its global vault filesystem policy, the
+            // evaluator's last stage, which decides browse only when no vault role (own or group) applies.
+            if (!superAdmin && (entry.manage || (entry.browse && !direct && !group)))
+                entry.via.push_back(AccessVia::AdminPolicy);
+            if (superAdmin) entry.via.push_back(AccessVia::SuperAdmin);
+        }
         if (entry.via.empty()) continue;
 
         auto it = owners.find(vault->owner_id);

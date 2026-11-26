@@ -861,15 +861,15 @@ void ObjectStore::requireRbacPermission(
     const rbac::permission::vault::FilesystemAction action) {
     if (!bucket.actor) throw accessDenied(bucket.bucket_name);
     const auto fusePath = bucket.engine->vaultPathToFusePath(makeAbsolute(vaultPath));
-    if (!bucket.actor->isSuperAdmin()) {
-        if (!rbac::resolver::Vault::has<rbac::permission::vault::FilesystemAction>({
-                .user = bucket.actor,
-                .permission = action,
-                .vault_id = bucket.vault_id,
-                .path = fusePath
-            }))
-            throw accessDenied(fusePath.string());
-    }
+    // The resolver answers a super admin at once, except on a vault held here as another server's copy, where only
+    // its core's grant applies (rbac/Mirrored.hpp).
+    if (!rbac::resolver::Vault::has<rbac::permission::vault::FilesystemAction>({
+            .user = bucket.actor,
+            .permission = action,
+            .vault_id = bucket.vault_id,
+            .path = fusePath
+        }))
+        throw accessDenied(fusePath.string());
 }
 
 void ObjectStore::requirePermission(

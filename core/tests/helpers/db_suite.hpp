@@ -19,6 +19,7 @@
 #include "fs/cache/Registry.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
+#include "rbac/Mirrored.hpp"
 #include "runtime/Deps.hpp"
 #include "seed/include/init_db_tables.hpp"
 #include "seed/include/seed_db.hpp"
@@ -42,13 +43,16 @@ inline bool available() {
     return true;
 }
 
-// Every process-wide cache keyed by database ids, started over: the fs cache (entries by id, inode and path) and the
-// storage engines (by vault id). A schema reset restarts every id sequence, so an entry left from the dropped schema
+// Every process-wide cache keyed by database ids, started over: the fs cache (entries by id, inode and path), the
+// storage engines (by vault id) and the vaults held as another server's copy (rbac::mirrored). A schema reset
+// restarts every id sequence, so an entry left from the dropped schema
 // would answer for whatever row of the new one takes its id: a File cached under an id that is a Directory now was
 // static-cast and written as one (fs::cache::Registry, the parent stats of cacheEntry), corrupting the heap of a later
 // suite (VaultRecoverDb under ASan, 2026-11-12). An unseeded schema has no root entry for a cache to start from, so
 // it gets none: its suites build one once they have written their rows (FsCacheDeleteTest) or need none.
 inline void resetIdKeyedState(const bool seeded = true) {
+    // Vaults held as another server's copy, by vault id (rbac::mirrored): a fresh schema holds none.
+    vh::rbac::mirrored::resetForTesting();
     auto& deps = vh::runtime::Deps::get();
     deps.fsCache = seeded ? std::make_shared<vh::fs::cache::Registry>() : nullptr;
     if (deps.storageManager) deps.storageManager->initStorageEngines();
