@@ -311,15 +311,13 @@ the owner's instruction to build without waiting for review; compatibility polic
   handshake with a caller's certificate check, the upgrade, one deadline), used by the link for both directions'
   dialling side. `cloud::RelayService` keeps its own (it also speaks plain ws to a loopback relay over a
   `beast::tcp_stream`); only its reconnect backoff moved to the shared `concurrency::jitteredBackoff`.
-- **Not built here** (later phases): the principal kind in RBAC tables and vault roles for peers (identity.md, with the
-  mirror), any `peer.mirror.*` or `peer.identity.*` command, bulk lanes, Desktop's brokered flow.
+- **Not built in phase 1a:** the principal kind in RBAC tables and vault roles for peers (built since, migration 162:
+  identity.md "As built: the mirror server's vault role"), bulk lanes (built since, below), any `peer.mirror.*` or
+  `peer.identity.*` command, and Desktop's brokered flow (built since, in vaulthalla-desktop).
 - **Bulk lanes** (mirror phase 2 wave 2): the sealed lane, `GET /peer/object/…` on the same listener over separate
   connections with the same pins (`mirror.md` "As built: sealed contents"). A linked key gets it and nothing else over
   HTTP; unlinking closes its connections with the websocket (invariant 7). The dialling side's pin check is one function
   for both (`peer::pinnedKeyOf`).
-
-  mirror; built since, migration 162: identity.md "As built: the mirror server's vault role"), any `peer.mirror.*` or
-  `peer.identity.*` command, bulk lanes, Desktop's brokered flow.
 - **The console page** (built after phase 1a, same day): `/linked-servers` for super admins, shown only while the switch
   is on. The console learns the switch from `peer.status {enabled}`, the one management command that answers while it
   is off (the same callers as the rest), so no page load provokes `peers_experimental` and nothing advertises a
