@@ -149,11 +149,33 @@ itest_source_fingerprint() {
   } | cksum)
 }
 
+# itest_build_jobs: how many compile jobs `meson compile` gets. VH_BUILD_JOBS when set (ci/run-ci sets it from the
+# container's memory cap); otherwise sized from the memory available now, one job per 2.4 GiB as ci/run-ci does, at
+# least 2 and at most one per processor. A sanitizer unity translation unit takes about that much, and ninja's own
+# default (processors + 2) got this build OOM-killed on a 32 GB box with 18 processors. Prints nothing where
+# /proc/meminfo doesn't exist (macOS): ninja picks.
+itest_build_jobs() {
+  if [[ -n "${VH_BUILD_JOBS:-}" ]]; then
+    [[ "$VH_BUILD_JOBS" =~ ^[1-9][0-9]*$ ]] || itest_die "VH_BUILD_JOBS takes a positive number, got: $VH_BUILD_JOBS"
+    printf '%s\n' "$VH_BUILD_JOBS"
+    return 0
+  fi
+  [[ -r /proc/meminfo ]] || return 0
+  local avail_kb cpus jobs
+  avail_kb="$(awk '/^MemAvailable:/ {print $2; exit}' /proc/meminfo)"
+  [[ "$avail_kb" =~ ^[0-9]+$ ]] || return 0
+  cpus="$(nproc 2>/dev/null || echo 2)"
+  jobs=$((avail_kb / 2516582))
+  ((jobs >= 2)) || jobs=2
+  ((jobs <= cpus)) || jobs="$cpus"
+  printf '%s\n' "$jobs"
+}
+
 # itest_ensure_build DIR TARGET... : configure DIR with ITEST_BUILD_OPTS if it has no build.ninja; re-configure it when
 # options differ or the source set changed since it was last configured (DIR/.itest-sources), then compile just the
-# targets. Never with sudo (root-owned files would break later builds).
+# targets, with itest_build_jobs jobs. Never with sudo (root-owned files would break later builds).
 itest_ensure_build() {
-  local dir="$1" root opt key want have sources changed=()
+  local dir="$1" root opt key want have sources jobs changed=() jobs_flag=()
   shift
   root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
   sources="$(itest_source_fingerprint "$root")"
@@ -180,7 +202,11 @@ print(",".join(v) if isinstance(v, list) else str(v).lower() if isinstance(v, bo
     fi
   fi
   printf '%s\n' "$sources" >"$dir/.itest-sources"
-  meson compile -C "$dir" "$@" >/dev/null || meson compile -C "$dir" "$@"
+  jobs="$(itest_build_jobs)" || exit 1 # itest_die there ends only the substitution's subshell
+  [[ -z "$jobs" ]] || jobs_flag=(-j "$jobs")
+  # ${a[@]+"${a[@]}"}: an empty array is an unbound variable under `set -u` before bash 4.4 (macOS ships 3.2).
+  meson compile -C "$dir" ${jobs_flag[@]+"${jobs_flag[@]}"} "$@" >/dev/null ||
+    meson compile -C "$dir" ${jobs_flag[@]+"${jobs_flag[@]}"} "$@"
 }
 
 # The migrated template for the current deploy/psql, built once per migration set with the daemon's own SqlDeployer

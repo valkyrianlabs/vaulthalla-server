@@ -24,6 +24,9 @@
   drops `#pragma GCC diagnostic`/`push_options` state across one (see the header comments).
 - `make build` is **broken**: it calls `conan install . -r vaulthalla` but there is no conanfile. Use meson directly.
   Tests never use `build/`: they build `build-itest/` (pinned options, configured only when they differ).
+  The compile is bounded (`itest_build_jobs` in `bin/tests/lib/itest.sh`): `VH_BUILD_JOBS` when set, otherwise one job
+  per 2.4 GiB of memory available now (at least 2, at most one per processor), as `ci/run-ci` sizes it. Unbounded,
+  ninja ran processors + 2 sanitizer compiles and was OOM-killed on a 32 GB, 18-processor box.
 - **Zero-warning bar (2026-10-04):** the tree builds with no output but `[n/N]` progress at `-O3 -Werror`, both unity
   (`meson setup build-o3 -Dbuildtype=release -Dwerror=true -Dbuild_unit_tests=true -Dintegration_tests=true`) and
   per-file (the same plus `-Dunity=off`; `core/meson.build` forces `unity=on` on `lib_usage_native`, so drop that
