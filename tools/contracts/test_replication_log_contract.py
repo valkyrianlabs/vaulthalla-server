@@ -55,6 +55,9 @@ TRASH_WRITERS: dict[str, dict[str, int]] = {
     "core/src/db/query/sync/ManifestApply.cpp": {"INSERT INTO": 1},
     # The applier's restore (the trash row ends with the live file back under its uid): `restore`.
     "core/src/sync/vault_manifest/Applier.cpp": {"UPDATE": 1},
+    # The mirror's log applier (db::query::mirror::ApplyRows): the core's trash rows (insert), their changes (update)
+    # and their end (purge or restore: update). On the mirror only, under the apply switch: nothing logged.
+    "core/src/db/query/mirror/Apply.cpp": {"INSERT INTO": 1, "UPDATE": 2},
     # `vh vault recover`: the restored vault's trash, written before it could be mirrored.
     "core/src/db/query/vault/Recover.cpp": {"INSERT INTO": 1},
 }
@@ -71,6 +74,8 @@ ENTRY_WRITERS_LOG: dict[str, str] = {
     "core/src/db/query/sync/ManifestApply.cpp": "upsert / move for another writer's entries, restore with the trash "
                                                 "row's end",
     "core/src/db/query/vault/Recover.cpp": "nothing: the restored vault is new, and not mirrored",
+    "core/src/db/query/mirror/Apply.cpp": "nothing: the mirror's applier writes under the apply switch, and a vault "
+                                          "whose role here is mirror is never logged",
     "core/src/db/query/vault/Deletion.cpp": "nothing: the vault root, inodes, a soft-deleted vault",
 }
 

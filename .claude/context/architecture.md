@@ -558,15 +558,15 @@ the console reads to leave the Linked servers page out (`web-client.md`, "Linked
 
 ### Replication log of a mirrored vault (`mirror/`, `db::query::mirror`, migration 160; `design/peers/mirror.md`)
 
-Core side only (phase 2 piece 1): no wire protocol, applier or command; nothing creates a `mirror_vault` row but tests
-and `MirrorVaults::startCore`. Full description: mirror.md "As built: the replication log"; `change-journal.md` for how
+Core side (phase 2 piece 1; the wire protocol and applier are wave 3, below). Full description: mirror.md "As built: the replication log"; `change-journal.md` for how
 it differs from the journal.
 - **Tables:** `mirror_vault` (per mirrored vault: peer, role core | mirror | orphaned, term, last_seq, acknowledged and
   pruned positions, running digest, state), `mirror_entry_hash` (each entry's hash as the log last recorded it: the next
   `prev_hash`), `vault_replication_log` (`seq` NULL until numbered, `txid` = the transaction, state JSON, hashes,
   actor as home node + id, origin). Triggers on fs_entry, files, directories, symlinks, files_trashed, vault, sync,
   fsync, rsync, vault_recovery_policy, vault_keys return at once unless the vault's role is core; `vh.mirror_apply`
-  (SET LOCAL, `Log::markMirrorApply`) silences them. Type-row triggers take the entry's fs_entry row lock first.
+  (SET LOCAL, `Log::markMirrorApply`) silences them. Type-row triggers take the entry's fs_entry row lock (its writers
+  take it first too, migration 164's lock order).
 - **Hash and digest:** `core/include/mirror/Hash.hpp` (canonical encoding, test vector; SQL twin
   `vh_mirror_state_hash`); digest = per-word sum mod 2^64, `vh_mirror_digest` aggregate, `vh_mirror_tree` (scrub).
 - **Sequencer:** `mirror::Sequencer` ("MirrorSequencer", after DBJanitor, 250 ms; `Log::pending()` on the empty pending
@@ -627,6 +627,47 @@ internal API do.
 - Tests: `PeerObjectLaneDbTest.*` (`test_peer_object_lane_db.cpp`: every refusal, the bytes, ranges, the real client
   resuming against the listener); `MirrorContentsDbTest.*`, `PeerTransfersTest.*` (`test_mirror_contents_db.cpp`);
   Tier B `vhh drill peers` step 6 (two daemons, the real link, a resumed transfer, byte for byte).
+
+### Following the core: the first copy and the log applier (`mirror/apply`, `mirror/follow`, `fs/tree_apply`, migration 164)
+
+Phase 2 wave 3 piece B of the server mirror (`design/peers/mirror.md` "As built: following the core"): the data plane.
+The control plane (offer, keys, creating the mirror's vault, the grant) is piece A; the only contract between them is
+that a `mirror` row exists (`MirrorVaults::startMirror`) and that `MirrorVaults::startCore` takes the baseline.
+- **Baseline (core):** `startCore` is per vault: a committed `mirror_vault` row with state `starting` makes the vault's
+  writers wait in `vh_mirror_core_term` (FOR SHARE on that row; VOLATILE since 164); writers of the entry tables
+  already running are waited for (pg_locks RowExclusive holders, bounded); then under the row's lock the tree's state
+  documents go to `mirror_baseline` (ord: a folder before what is under it, trashed files last) with their hashes,
+  `mirror_entry_hash` and the digest; state `live`, `baseline_*` columns set. Writers of other vaults never wait.
+  Dropped by the first matching acknowledgement and by `remove`. An entry directly under the root names the vault's
+  uid as its parent in its state (164's `vh_mirror_entry_state`): each server's root folder has its own uid.
+- **Per-group digest:** the sequencer writes `digest_after`/`entries_after` on each group's last log row;
+  `MirrorVaults::digestAt` answers the baseline's position or a group's end; `acknowledgeChecked` compares, records or
+  stops the vault as `diverged` (`mirror_digest_mismatch`). New states `expired`, `stopped`; `stop_reason`,
+  `stop_detail`, `stopped_at`.
+- **Wire (`mirror::follow::Protocol`, ws `handler/MirrorFollow`):** `peer.mirror.tree|log|ack` (core answers),
+  `peer.mirror.notify` (mirror wakes); peer wire set only (`Router::isPeerWireCommand`), `peers_experimental` when off,
+  a vault the caller is not the linked server of answers `not_found` ("Not found"), as the sealed lane. Answers under
+  768 KiB (the link's ws frame limit is 1 MiB, `kWebSocketReadBufferMaxBytes`); a group larger than that comes in
+  `part`s. `peer::LinkService::request|notify|connected` carry them.
+- **Applier (`mirror::apply`):** one transaction per tree page or log group (`ApplyRows::begin`: the apply switch and
+  `vh.keep_mtime`); per uid the compare-and-set on `mirror_entry_hash` (kept on the mirror: the Janitor's orphan sweep
+  spares mirror rows), entries by uid (`fs::tree_apply::locate`), removals and placements in a work loop with
+  `.vh-mirror-<uid>` temporary names for swaps and cycles, every field the core's (accounts {node, id} mapped by
+  `ApplyRows::account`: this server's own node id is a local account, any other a remote account created on first use),
+  `mirror_content_pending` rows in the same transaction (pending rows locked first: the receive path's order), then each
+  entry's hash from this server's tables must equal the core's (else `diverged`, `mirror_apply_mismatch`). A file open
+  on the mount defers the whole group. After the commit: backing files and folders moved (via a staging directory),
+  removed or made, derived artifacts dropped, `tree_apply::cacheFresh`.
+- **Follower (`mirror::follow::Follower`, service "MirrorFollower" after PeerLinks):** visits each `mirror` row (1 s
+  while the first copy runs, at once on a notice or link-up, 30 s otherwise; errors back off to 60 s), 3 s per visit,
+  acknowledges after it applied; a second thread runs `contents::fetchOutstanding`. The sequencer's numbered vaults
+  become notices (`Follower::numbered`), sent from the follower's thread.
+- **Shared tree-apply module (`fs/tree_apply`):** the uid lookup for local vaults and the after-commit cache and folder
+  effects; the manifest applier's executors call its effects (its own lookup keeps reading the bucket index).
+- **Lock order:** a type row's writer locks the entry's fs_entry row first (`set_file_encryption_iv_and_version`, its
+  compare-and-set, `ManifestApply::replaceContent`), as the type trigger does: no crossing with fs_entry-then-files.
+- Tests: `MirrorFollowDbTest.*` (`test_mirror_follow_db.cpp`: capture and replay, serving, retention, the per-vault
+  baseline, the deadlock); contracts as for 160; `SqlDeployerHistoryDb.*` for 164.
 
 ### A linked server's vault role and mirrored vaults (migration 162; `design/peers/identity.md`)
 
