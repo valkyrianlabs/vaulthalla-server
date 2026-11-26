@@ -15,15 +15,25 @@ Then on (config.yaml appended, both restarted):
   5. A rotates its identity: B is told first (signed by the old key), keeps the link and pins the new key once it sees
      it; then A's emergency rotation (--revoke-peers) drops the link, and B can't reach A under its old pins.
 
+Between 1 and 2, the sealed lane (design/peers/mirror.md "Contents"): A writes a file through its mount into a vault
+it holds and is made that vault's core with B as its linked server (a mirror_vault row written by hand: no command
+makes a vault mirrored yet); B fetches the file's sealed bytes with the real client over the real link, broken off and
+resumed by range (a test-only request file, VH_TEST_FAULT_DIR/peer-object-fetch.json), and gets them byte for byte as
+A's disk holds them; a generation that is not current and a vault B is not the linked server of are refused. B cannot
+hold the vault itself yet (key delivery and vault creation are the next piece): receiving into a vault is proven in
+process (MirrorContentsDbTest).
+
 Nothing secret is printed or kept: the drill's directory holds only its report.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import pwd
 import secrets
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -104,6 +114,82 @@ def _pending(b: Node) -> list[dict]:
     return j.get("requests", [])
 
 
+def _sql(node: Node, query: str) -> str:
+    cp = subprocess.run(["runuser", "-u", "postgres", "--", "psql", "-d", node.inst.db_name, "-tAc", query],
+                        capture_output=True, text=True, timeout=60)
+    if cp.returncode != 0:
+        raise DrillError(f"psql on {node.inst.db_name} failed: {cp.stderr.strip()[:300]}")
+    return cp.stdout.strip()
+
+
+def _b32(uuid_text: str) -> str:
+    """A uid's text form (vl-keykit: lower-case Crockford base32, 26 symbols, MSB first, zero padding)."""
+    alphabet, n = "0123456789abcdefghjkmnpqrstvwxyz", int(uuid_text.replace("-", ""), 16) << 2
+    return "".join(alphabet[(n >> (5 * i)) & 31] for i in reversed(range(26)))
+
+
+def _fetch(b: Node, faults: Path, ask: dict, timeout: float = 120) -> dict:
+    """B's daemon runs one sealed-lane fetch with the real client (test instances only) and reports it."""
+    result = faults / "peer-object-fetch.result.json"
+    for f in (result, faults / "peer-object-fetch.bin"):
+        f.unlink(missing_ok=True)
+    tmp = faults / "peer-object-fetch.json.tmp"
+    tmp.write_text(json.dumps(ask))
+    tmp.rename(faults / "peer-object-fetch.json")
+    _wait("B's sealed-lane fetch", result.exists, timeout=timeout, every=0.5)
+    return json.loads(result.read_text())
+
+
+def _sealed_lane(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, report: Report) -> None:
+    a.vh("vault", "create", "sealed", "--local")
+    vid = int(_sql(a, "SELECT id FROM vault WHERE name = 'sealed' AND deleted_at IS NULL"))
+    _wait("A's mount showing the vault", lambda: (a.inst.mount / "sealed").is_dir(), timeout=60)
+    a.sh("head -c 700001 /dev/urandom > MNT/sealed/blob.bin && head -c 1000 /dev/urandom > MNT/sealed/other.bin")
+    row = _wait("the sealed file's row", lambda: _sql(a, (
+        "SELECT v.uid, f.object_uid, f.encryption_iv, f.content_hash, f.size_bytes FROM files f "
+        "JOIN fs_entry e ON e.id = f.fs_entry_id JOIN vault v ON v.id = e.vault_id "
+        f"WHERE v.id = {vid} AND e.name = 'blob.bin' AND f.size_bytes = 700001 AND length(f.encryption_iv) = 44")),
+        timeout=60)
+    vault_uid, object_uid, generation, content_hash, _size = row.split("|")
+    # A is the vault's core, B its linked server: by hand (no command makes a vault mirrored yet).
+    peer_b = _sql(a, f"SELECT id FROM peer WHERE node_id = '{node_b}' AND revoked_at IS NULL")
+    _sql(a, f"INSERT INTO mirror_vault (vault_id, peer_id, role) VALUES ({vid}, {peer_b}, 'core')")
+    sealed_on_a = None
+    for f in a.inst.backing.rglob("*"):
+        if f.is_file() and f.stat().st_size == 120 + 700001 + 16 * ((700001 + 65535) // 65536):
+            data = f.read_bytes()
+            if hashlib.blake2b(data, digest_size=32).hexdigest() == content_hash:
+                sealed_on_a = data
+                break
+    report.check("6: A's backing file is the generation its row names (BLAKE2b over the sealed bytes)",
+                 sealed_on_a is not None)
+    ask = {"peer_node": node_a, "vault_uid": _b32(vault_uid), "object_uid": _b32(object_uid),
+           "generation": generation, "interrupt_at": 300000}
+    got = _fetch(b, faults_b, ask)
+    attempts = got.get("attempts", [])
+    fetched = (faults_b / "peer-object-fetch.bin").read_bytes() if got.get("ok") else b""
+    report.check("6: B fetched the sealed bytes over the real link, broken off at 300,000 bytes and resumed by range",
+                 got.get("ok") and len(attempts) == 2 and attempts[0]["status"] == "cancelled"
+                 and attempts[1]["status"] == "complete" and attempts[1]["offset"] == 300000
+                 and attempts[1]["http_status"] == 206, json.dumps(got)[:800])
+    report.check("6: byte for byte what A's disk holds (and what A's log names)",
+                 sealed_on_a is not None and fetched == sealed_on_a
+                 and hashlib.blake2b(fetched, digest_size=32).hexdigest() == content_hash,
+                 f"{len(fetched)} bytes fetched")
+    stale = _fetch(b, faults_b, {**ask, "generation": "A" * 43 + "=", "interrupt_at": 0})
+    first = (stale.get("attempts") or [{}])[0]
+    report.check("6: a generation that is not current is refused (410 generation_not_current)",
+                 first.get("status") == "refused" and first.get("http_status") == 410
+                 and first.get("code") == "generation_not_current", json.dumps(stale)[:400])
+    a.vh("vault", "create", "unmirrored", "--local")
+    other_uid = _sql(a, "SELECT uid FROM vault WHERE name = 'unmirrored' AND deleted_at IS NULL")
+    foreign = _fetch(b, faults_b, {**ask, "vault_uid": _b32(other_uid), "interrupt_at": 0})
+    first = (foreign.get("attempts") or [{}])[0]
+    report.check("6: a vault B is not the linked server of is not there for B (404)",
+                 first.get("status") == "refused" and first.get("http_status") == 404, json.dumps(foreign)[:400])
+    _sql(a, f"DELETE FROM mirror_vault WHERE vault_id = {vid}")
+
+
 def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bool, dict]:
     report = Report()
     run_id = time.strftime("%Y%m%dT%H%M%S") + "_" + secrets.token_hex(3)
@@ -116,8 +202,13 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
     summary: dict = {"run_id": run_id, "report": str(out)}
     nodes: list[Node] = []
     try:
+        faults = {t: private / f"faults_{t}" for t in ("a", "b")}
+        for d in faults.values():
+            d.mkdir(mode=0o700)
+
         def node(tag: str) -> Node:
-            inst = Instance(build, run_id=f"peers{tag}_{run_id}", own_tpm=True, device_server=True)
+            inst = Instance(build, run_id=f"peers{tag}_{run_id}", own_tpm=True, device_server=True,
+                            extra_env={"VH_TEST_FAULT_DIR": str(faults[tag])})
             inst.start()
             n = Node(inst, admin, private)
             nodes.append(n)
@@ -190,6 +281,10 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
                      json.dumps({"a": pa.get("endpoints"), "b": _live(b, node_a).get("endpoints")})[:500])
         report.check("1: the peer's version is reported", pa["health"].get("peer_version") and
                      pa["health"].get("protocol_compatible") is True, json.dumps(pa["health"]))
+
+        # ------------------------------------------------------------------ 6. the sealed lane
+        print("vhh drill peers: 6. the sealed lane: B fetches a file's sealed bytes from A, resumed", flush=True)
+        _sealed_lane(a, b, faults["b"], node_a, node_b, report)
 
         # ------------------------------------------------------------------ 2. restarts
         print("vhh drill peers: 2. B restarts, then A restarts: the link comes back", flush=True)
