@@ -837,7 +837,9 @@ TEST_F(MirrorReplicationLogDbTest, TheDigestHoldsAndReplayingTheLogReproducesThe
                                                                                      << state.dump();
     }
     // Parents resolve inside the replayed tree (or to the vault root).
-    const auto rootUid = uidOf(engine, "/");
+    // An entry directly under the root names the vault's uid as its parent (migration 164: each server's root folder
+    // has a uid of its own; the vault's uid is the one both share).
+    const auto rootUid = *mq::MirrorVaults::vaultUidOf(vid(engine));
     for (const auto& [uid, state] : model) {
         if (state.contains("parent")) {
             EXPECT_TRUE(state["parent"] == rootUid || model.contains(state["parent"].get<std::string>()))

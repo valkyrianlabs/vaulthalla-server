@@ -189,6 +189,8 @@ void ManifestApply::deleteIndex(pqxx::work& txn, const uint32_t vaultId, const s
 bool ManifestApply::replaceContent(pqxx::work& txn, const unsigned int fileId, const vl::vaultfmt::manifest::Entry& e,
                                    const std::optional<std::string>& expectedHex) {
     const auto gen = b64OfHex(e.generation);
+    // The entry's row before its files row: one lock order for an entry's rows (files.cpp, set_file_encryption_iv...).
+    txn.exec("SELECT 1 FROM fs_entry WHERE id = $1 FOR NO KEY UPDATE", pqxx::params{fileId});
     const auto before = txn.exec("SELECT f.size_bytes, f.encryption_iv, e.parent_id FROM files f "
                                  "JOIN fs_entry e ON e.id = f.fs_entry_id WHERE f.fs_entry_id = $1 FOR UPDATE",
                                  pqxx::params{fileId});

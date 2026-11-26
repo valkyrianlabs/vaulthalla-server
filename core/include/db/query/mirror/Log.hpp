@@ -9,6 +9,7 @@
 #include <ctime>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -96,6 +97,13 @@ public:
     // Up to `limit` rows (1..kMaxPageRows) of whole groups numbered after `after`, oldest first. A first group larger
     // than `limit` comes whole. Does not sequence.
     [[nodiscard]] static Page groupsAfter(uint32_t vaultId, Position after, std::size_t limit);
+    // Up to `limit` numbered rows of one group (term, txid) after `afterSeq`, in order: a group too large for one answer
+    // is served in parts (peer.mirror.log). Does not check retention: the caller pages from a groupsAfter it read.
+    [[nodiscard]] static std::vector<Row> groupRows(uint32_t vaultId, uint64_t term, uint64_t txid, uint64_t afterSeq,
+                                                    std::size_t limit);
+    // The first and last numbered seq of one group, nullopt when no numbered row of it is in the log.
+    [[nodiscard]] static std::optional<std::pair<uint64_t, uint64_t>> groupSpan(uint32_t vaultId, uint64_t term,
+                                                                                uint64_t txid);
 
     // Retention (the Janitor): numbered rows older than `maxAge`, or more than `maxRows` behind the vault's last
     // number, go, but never one the mirror has not acknowledged; pending rows never. Rows and entry hashes of vaults
