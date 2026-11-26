@@ -596,9 +596,15 @@ std::size_t reconcileUnlinked() {
     std::size_t orphaned = 0;
     std::set<uint32_t> revoked;
     for (const auto& row : vh::db::query::mirror::MirrorVaults::list()) {
-        if (row.role != "mirror") continue;
+        if (row.role == "orphaned") continue;
         const auto peer = vh::db::query::peer::Peers::byId(row.peer_id);
         if (peer && !peer->revoked()) continue;
+        if (row.role == "core") {
+            // This server is the core: its mirror's link is gone, so is the mirror (the log is no longer held for it).
+            (void)cancelOnCore(row.vault_id, "unlinked", false, false, std::nullopt, "");
+            revoked.insert(row.peer_id);
+            continue;
+        }
         if (vh::db::query::mirror::MirrorVaults::orphan(row.vault_id)) {
             ++orphaned;
             revoked.insert(row.peer_id);

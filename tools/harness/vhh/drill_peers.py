@@ -26,8 +26,9 @@ process (MirrorContentsDbTest).
 Then 7, starting a mirror: A offers a vault (`vh mirror add`), B accepts (`vh mirror accept`), the keys go over the link
 and are proven on B against A's attestation key pinned at pairing, B creates the vault with A's vault uid and root uid
 (empty: the tree is piece B's) owned by A's account as a remote account, A's grant follows a `vh peer policy set`, key
-rotation is refused on A, B's own cancel of a completed mirror is refused, A's cancel removes B's copy; a second offer
-B declines is reported declined on A.
+rotation is refused on A, B's own cancel of a completed mirror is refused; A's cancel without --remove-copy leaves B an
+orphaned copy that B's super admin removes, --remove-copy with B's keep setting on leaves it, and with it off removes
+it; an offer B declines is reported declined on A.
 
 Nothing secret is printed or kept: the drill's directory holds only its report.
 """
@@ -263,15 +264,55 @@ def _start_mirror(a: Node, b: Node, node_a: str, node_b: str, report: Report) ->
     report.check("7: B can't remove a completed mirror (mirror_detach_required)",
                  cp.returncode != 0 and "mirror_detach_required" in (cp.stdout + cp.stderr),
                  (cp.stdout + cp.stderr)[-300:])
-    cp = a.vh("mirror", "cancel", str(vid), check=False)
-    report.check("7: A cancels the mirror", cp.returncode == 0, (cp.stdout + cp.stderr)[-300:])
-    _wait("B's copy removed", lambda: _sql(b, f"SELECT count(*) FROM vault WHERE uid = '{vault_uid}'") == "0" or None,
-          timeout=60)
-    report.check("7: B's copy, its keys and its mirror row are gone; A has no core row",
-                 _sql(b, f"SELECT count(*) FROM vault_keys WHERE vault_id = {bvid}") == "0"
-                 and _sql(b, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {bvid}") == "0"
-                 and _sql(a, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {vid}") == "0")
     a.vh("peer", "policy", "set", node_b, "none")
+
+    # The ending rule (owner, 2026-11-26): the core chooses, the mirror keeps or removes.
+    cp = a.vh("mirror", "cancel", str(vid), check=False)
+    report.check("7: A ends the mirror without --remove-copy", cp.returncode == 0, (cp.stdout + cp.stderr)[-300:])
+    _wait("B's copy orphaned", lambda: _mirror_info(b, bvid).get("role") == "orphaned" or None, timeout=60)
+    told = _wait("A told B kept its copy", lambda: (lambda m: m if (m.get("start") or {}).get("copy") == "kept" else None)(
+        _mirror_info(a, vid)), timeout=60)
+    report.check("7: B keeps an orphaned copy (its keys, the last grant) and A records it kept; A has no core row",
+                 bool(told) and _sql(b, f"SELECT count(*) FROM vault_keys WHERE vault_id = {bvid}") == "1"
+                 and _sql(a, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {vid}") == "0",
+                 json.dumps(told)[:300])
+    cp = b.vh("mirror", "cancel", str(bvid), check=False)
+    report.check("7: B's super admin removes the orphaned copy",
+                 cp.returncode == 0 and _sql(b, f"SELECT count(*) FROM vault WHERE uid = '{vault_uid}'") == "0"
+                 and _sql(b, f"SELECT count(*) FROM vault_keys WHERE vault_id = {bvid}") == "0",
+                 (cp.stdout + cp.stderr)[-300:])
+
+    def mirrored_pair(name: str) -> tuple[int, int, str]:
+        a.vh("vault", "create", name, "--local")
+        v = int(_sql(a, f"SELECT id FROM vault WHERE name = '{name}' AND deleted_at IS NULL"))
+        uid = _sql(a, f"SELECT uid FROM vault WHERE id = {v}")
+        _json(a, "mirror", "add", str(v), "--to", node_b)
+        offer = _wait(f"B's offer of {name}", lambda: [o for o in (_json(b, "mirror", "pending")[1].get("offers") or [])
+                                                      if o.get("name") == name], timeout=60)[0]
+        b.vh("mirror", "accept", str(offer["id"]))
+        _wait(f"{name} started", lambda: (_mirror_info(a, v).get("start") or {}).get("state") == "started" or None,
+              timeout=90)
+        bv = int(_wait(f"B's {name}", lambda: _sql(b, f"SELECT id FROM vault WHERE uid = '{uid}'"), timeout=30))
+        return v, bv, uid
+
+    v2, bv2, uid2 = mirrored_pair("kept")
+    b.vh("mirror", "keep-removed", node_a, "on")
+    a.vh("mirror", "cancel", str(v2), "--remove-copy")
+    _wait("B's kept copy orphaned", lambda: _mirror_info(b, bv2).get("role") == "orphaned" or None, timeout=60)
+    told = _wait("A told", lambda: (_mirror_info(a, v2).get("start") or {}).get("copy") or None, timeout=60)
+    report.check("7: with B's keep setting on, A's --remove-copy leaves B's copy (orphaned, kept)",
+                 told == "kept" and _sql(b, f"SELECT count(*) FROM vault WHERE uid = '{uid2}'") == "1", str(told))
+    b.vh("mirror", "cancel", str(bv2))
+    b.vh("mirror", "keep-removed", node_a, "off")
+
+    v3, bv3, uid3 = mirrored_pair("removed")
+    a.vh("mirror", "cancel", str(v3), "--remove-copy")
+    _wait("B's copy removed", lambda: _sql(b, f"SELECT count(*) FROM vault WHERE uid = '{uid3}'") == "0" or None,
+          timeout=60)
+    told = _wait("A told", lambda: (_mirror_info(a, v3).get("start") or {}).get("copy") or None, timeout=60)
+    report.check("7: with the setting off, A's --remove-copy removes B's copy, its keys and its row",
+                 told == "removed" and _sql(b, f"SELECT count(*) FROM vault_keys WHERE vault_id = {bv3}") == "0"
+                 and _sql(b, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {bv3}") == "0", str(told))
 
     # A declined offer: A learns it.
     a.vh("vault", "create", "declined", "--local")

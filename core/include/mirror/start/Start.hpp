@@ -136,9 +136,10 @@ void removeCopy(uint32_t vaultId);
 // A super admin here removes an orphaned copy (ops::mirrors authorizes, with the data-destroy step-up). Audited
 // mirror.remove.
 void removeOrphaned(uint32_t vaultId, std::optional<uint32_t> actorId, const std::string& actorName);
-// Linked servers unlinked meanwhile (any path: unlink, peer.unlinked, a rotation that dropped the link): their mirror
-// rows here become orphaned and the notices still queued for them are dropped (unlinking invalidated the trust; a
-// queued removal is never delivered). Returns how many copies were orphaned. The Service runs it every pass.
+// Linked servers unlinked meanwhile (any path: unlink, peer.unlinked, a rotation that dropped the link): the vaults this
+// server holds as their copies become orphaned (kept), the mirrors this server is the core of end (core row and log
+// dropped), and the notices still queued for them are dropped (unlinking invalidated the trust; a queued removal is
+// never delivered). Returns how many copies were orphaned. The Service runs it every pass.
 std::size_t reconcileUnlinked();
 
 // ---- the wire (a linked server's session; the handlers check the switch) --------------------------------------------

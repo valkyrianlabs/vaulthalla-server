@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'e08969bdcb44b823fa1d6f676a364e37cd9ce04bc5a2ff0b3929d734d70fa7b0'
+export const WS_CONTRACT_HASH = '7519dab3e9e9ec1728391313e2b75f7f58a27855188b698d0613055a41617d97'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
@@ -5506,9 +5506,11 @@ export interface WsContract {
         history: boolean
         owner: { node: string; id: number; name: string }
         role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
-        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed'
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned'
         step: string
         told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | null
         reason: string | null
         detail: string | null
         attempts: number
@@ -5562,9 +5564,11 @@ export interface WsContract {
         history: boolean
         owner: { node: string; id: number; name: string }
         role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
-        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed'
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned'
         step: string
         told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | null
         reason: string | null
         detail: string | null
         attempts: number
@@ -5577,17 +5581,19 @@ export interface WsContract {
     }
   }
   /**
-   * Cancel a vault's mirror at any step. On the core: the core row and the log go and the mirror is told (it
-   * removes its copy). On the mirror (super admins): a start that has not completed is removed here and the
-   * core is told; a completed one is refused (mirror_detach_required). Name the vault, or the offer when its
-   * vault doesn't exist here yet.
+   * End a vault's mirror at any step. On the core: the core row and the log go at once and the mirror is told
+   * (queued while the link is down; dropped if the servers are unlinked first), with remove_copy. On the
+   * mirror (super admins): a start that has not completed is removed here and the core is told; a completed
+   * one is refused (mirror_detach_required); an orphaned copy is removed. Name the vault, or the offer when
+   * its vault doesn't exist here yet.
    */
   'mirror.cancel': {
-    payload: { vault_id?: number; offer?: number | string }
+    payload: { vault_id?: number; offer?: number | string; remove_copy?: boolean }
     response: {
       side: 'core' | 'mirror'
       vault_id: number | null
       removed: boolean
+      remove_copy: boolean
       offer: {
         id: number
         offer_uid: string
@@ -5605,9 +5611,11 @@ export interface WsContract {
         history: boolean
         owner: { node: string; id: number; name: string }
         role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
-        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed'
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned'
         step: string
         told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | null
         reason: string | null
         detail: string | null
         attempts: number
@@ -5642,9 +5650,11 @@ export interface WsContract {
         history: boolean
         owner: { node: string; id: number; name: string }
         role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
-        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed'
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned'
         step: string
         told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | null
         reason: string | null
         detail: string | null
         attempts: number
@@ -5699,9 +5709,11 @@ export interface WsContract {
           history: boolean
           owner: { node: string; id: number; name: string }
           role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
-          state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed'
+          state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned'
           step: string
           told: boolean
+          remove_copy: boolean
+          copy: 'removed' | 'kept' | 'none' | null
           reason: string | null
           detail: string | null
           attempts: number
@@ -5712,6 +5724,20 @@ export interface WsContract {
           finished_at: number | null
         } | null
       }
+    }
+  }
+  /**
+   * Whether this server keeps the vaults a linked server (their core) removes: a cancel that asks to remove a
+   * finished copy leaves it here as an orphaned copy instead (default off). Super admins; audited
+   * mirror.keep_removed.set.
+   */
+  'mirror.keep_removed.set': {
+    payload: { peer: string; enabled: boolean }
+    response: {
+      peer: { id: number; node_id: string; name: string }
+      enabled: boolean
+      set_by: number | null
+      set_at: number | null
     }
   }
   /**
@@ -5757,9 +5783,11 @@ export interface WsContract {
           history: boolean
           owner: { node: string; id: number; name: string }
           role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
-          state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed'
+          state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned'
           step: string
           told: boolean
+          remove_copy: boolean
+          copy: 'removed' | 'kept' | 'none' | null
           reason: string | null
           detail: string | null
           attempts: number
@@ -5795,9 +5823,11 @@ export interface WsContract {
         history: boolean
         owner: { node: string; id: number; name: string }
         role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
-        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed'
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned'
         step: string
         told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | null
         reason: string | null
         detail: string | null
         attempts: number
@@ -6008,12 +6038,14 @@ export interface WsContract {
     response: { started: boolean }
   }
   /**
-   * Either side cancels a start, or the core ends a completed mirror: the core drops its core row and log;
-   * the mirror removes the vault it was given, its keys and its rows. Answers whether anything was cancelled.
+   * Either side cancels a start, or the core ends a mirror (remove_copy: it asks the mirror to remove its
+   * copy). The core drops its core row and log. The mirror removes a copy whose first copy isn't finished; a
+   * finished one it removes when asked and its keep setting is off, and otherwise keeps orphaned (read-only,
+   * the last grant kept). Answers what it did.
    */
   'peer.mirror.cancel': {
-    payload: { offer_uid?: string | null; vault_uid: string; reason?: string }
-    response: { cancelled: boolean }
+    payload: { offer_uid?: string | null; vault_uid: string; reason?: string; remove_copy?: boolean }
+    response: { cancelled: boolean; copy: 'removed' | 'kept' | 'none' }
   }
   /**
    * What the core grants the mirror server for a vault now (its role's name and actual permissions; null:
@@ -8096,7 +8128,8 @@ export interface WsContract {
   /**
    * Delete a vault: restorable until the retention window ends, or purged on the next pass with `now`.
    * Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or 'vault_delete_now'
-   * (resend with confirm_now).
+   * (resend with confirm_now). A mirrored vault is refused (vault_mirrored: end the mirror first;
+   * vault_orphaned_copy: remove it with mirror.cancel).
    */
   'storage.vault.remove': {
     payload: {
@@ -9023,6 +9056,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'mirror.cancel',
   'mirror.decline',
   'mirror.get',
+  'mirror.keep_removed.set',
   'mirror.list',
   'mirror.pending',
   'peer.endpoints',
@@ -9318,6 +9352,7 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'group.member.remove': 'identity.admin',
   'group.remove': 'identity.admin',
   'mirror.add': 'keys',
+  'mirror.cancel': 'data.destroy',
   'peer.link.start': 'device.trust',
   'peer.pairing.approve': 'device.trust',
   'peer.policy.set': 'identity.admin',
@@ -9502,6 +9537,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'mirror.cancel': 15000,
   'mirror.decline': 15000,
   'mirror.get': 15000,
+  'mirror.keep_removed.set': 15000,
   'mirror.list': 15000,
   'mirror.pending': 15000,
   'peer.endpoints': 15000,

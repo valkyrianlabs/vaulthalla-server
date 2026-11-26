@@ -19,16 +19,24 @@
   account of the other server), and empty until its contents are copied (a later step). Nobody on the mirror can use
   it until the core says what it grants; after that, the mirror's super admins get exactly that role, and the grant
   follows every change on the core (`vh peer policy set`, `vh vault role assign ... --peer`, the role's permissions).
-- **Cancelling** (`vh mirror cancel <vault>`) works from either side at any step: on the core it ends the mirror and the
-  mirror removes the copy it was given; on the mirror it removes a start that has not completed. Removing a completed
-  mirror from the mirror's side is refused for now (leaving a mirror with its copy comes later).
+- **Ending a mirror.** `vh mirror cancel <vault>` ends it from either side at any step. On the core it ends at once,
+  and the other server is told (when it is reachable again, if it isn't now). By default the other server **keeps its
+  copy** as an orphaned copy (read-only); `--remove-copy` asks it to remove the copy, which it does unless it was set to
+  keep the vaults this server removes (`vh mirror keep-removed <server> on`, off by default). A copy that was never
+  completed is removed either way. `vh mirror info` on the core shows what the other server did. A super admin on the
+  other server removes an orphaned copy with `vh mirror cancel <vault>`; a mirror that is still live can't be removed
+  from that side (leaving a mirror with its copy comes later). Unlinking the two servers keeps every copy as an
+  orphaned copy and drops a removal that was not delivered yet.
+- **A mirrored vault can't be deleted** on either server until its mirror is ended (`vh mirror cancel` first), and an
+  orphaned copy is removed through `vh mirror cancel`, not `vh vault delete`.
 - **Key rotation is refused on a mirrored vault** (on both servers) until rotation over the link exists: cancel the
   mirror first.
 - `vh mirror list` and `vh mirror info <vault>` show each mirrored vault, this server's role, the linked server, the
   grant and what step a start is at. Like the rest of linking, every command is **experimental and off by default**
   (`peers.experimental: true` in `/etc/vaulthalla/config.yaml`), for a person only (never an agent or a device with
   limited access), and audited (`mirror.offer`, `mirror.accept`, `mirror.decline`, `mirror.keys`, `mirror.start`,
-  `mirror.cancel`, `mirror.accept_all.set`), never with key material.
+  `mirror.cancel`, `mirror.cancel.copy`, `mirror.remove`, `mirror.orphan`, `mirror.accept_all.set`,
+  `mirror.keep_removed.set`), never with key material.
 
-Requires migration 163 (additive: a `mirror_offer` table, the per-link `accept_vaults` setting, and `peer` as a
-recorded origin of a key version). Nothing to do before or after upgrading.
+Requires migration 163 (additive: a `mirror_offer` table, the per-link `accept_vaults` and `keep_vaults` settings,
+and `peer` as a recorded origin of a key version). Nothing to do before or after upgrading.

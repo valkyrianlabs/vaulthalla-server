@@ -38153,7 +38153,8 @@
                 "declined",
                 "cancelled",
                 "expired",
-                "failed"
+                "failed",
+                "orphaned"
               ],
               "name": "state",
               "required": true,
@@ -38175,6 +38176,28 @@
               "required": true,
               "types": [
                 "boolean"
+              ]
+            },
+            {
+              "description": "core: its cancel asked the mirror to remove its copy.",
+              "name": "remove_copy",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: what the mirror said it did with its copy when it was told of the cancel.",
+              "enum": [
+                "removed",
+                "kept",
+                "none"
+              ],
+              "name": "copy",
+              "required": true,
+              "types": [
+                "string",
+                "null"
               ]
             },
             {
@@ -38683,7 +38706,8 @@
                 "declined",
                 "cancelled",
                 "expired",
-                "failed"
+                "failed",
+                "orphaned"
               ],
               "name": "state",
               "required": true,
@@ -38705,6 +38729,28 @@
               "required": true,
               "types": [
                 "boolean"
+              ]
+            },
+            {
+              "description": "core: its cancel asked the mirror to remove its copy.",
+              "name": "remove_copy",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: what the mirror said it did with its copy when it was told of the cancel.",
+              "enum": [
+                "removed",
+                "kept",
+                "none"
+              ],
+              "name": "copy",
+              "required": true,
+              "types": [
+                "string",
+                "null"
               ]
             },
             {
@@ -38791,7 +38837,7 @@
       "client_timeout_ms": 15000,
       "command": "mirror.cancel",
       "confirmations": [],
-      "description": "Cancel a vault's mirror at any step. On the core: the core row and the log go and the mirror is told (it removes its copy). On the mirror (super admins): a start that has not completed is removed here and the core is told; a completed one is refused (mirror_detach_required). Name the vault, or the offer when its vault doesn't exist here yet.",
+      "description": "End a vault's mirror at any step. On the core: the core row and the log go at once and the mirror is told (queued while the link is down; dropped if the servers are unlinked first), with remove_copy. On the mirror (super admins): a start that has not completed is removed here and the core is told; a completed one is refused (mirror_detach_required); an orphaned copy is removed. Name the vault, or the offer when its vault doesn't exist here yet.",
       "effect": "destructive",
       "input": "payload",
       "operation": null,
@@ -38846,6 +38892,17 @@
             "integer",
             "string"
           ]
+        },
+        {
+          "description": "On the core: ask the mirror to remove its copy (default false: it keeps it, orphaned). The mirror removes it unless its link keeps the vaults this server removes; a copy whose first copy isn't finished is removed anyway. The data-destroy step-up for a mirror that has begun.",
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "remove_copy",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
         }
       ],
       "refusal_codes": [
@@ -38857,7 +38914,8 @@
         "peers_experimental",
         "peer_forbidden",
         "mirror_detach_required",
-        "mirror_offer_finished"
+        "mirror_offer_finished",
+        "step_up_required"
       ],
       "refusal_kinds": [
         "denied",
@@ -38868,7 +38926,8 @@
         "peers_experimental",
         "peer_forbidden",
         "mirror_detach_required",
-        "mirror_offer_finished"
+        "mirror_offer_finished",
+        "step_up_required"
       ],
       "response": [
         {
@@ -38891,8 +38950,16 @@
           ]
         },
         {
-          "description": "mirror: the vault this server was given went.",
+          "description": "mirror: the vault this server was given, or an orphaned copy, went.",
           "name": "removed",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "core: what was asked; what the mirror did comes later (mirror.get: start.copy).",
+          "name": "remove_copy",
           "required": true,
           "types": [
             "boolean"
@@ -39111,7 +39178,8 @@
                 "declined",
                 "cancelled",
                 "expired",
-                "failed"
+                "failed",
+                "orphaned"
               ],
               "name": "state",
               "required": true,
@@ -39133,6 +39201,28 @@
               "required": true,
               "types": [
                 "boolean"
+              ]
+            },
+            {
+              "description": "core: its cancel asked the mirror to remove its copy.",
+              "name": "remove_copy",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: what the mirror said it did with its copy when it was told of the cancel.",
+              "enum": [
+                "removed",
+                "kept",
+                "none"
+              ],
+              "name": "copy",
+              "required": true,
+              "types": [
+                "string",
+                "null"
               ]
             },
             {
@@ -39211,6 +39301,7 @@
         }
       ],
       "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -39494,7 +39585,8 @@
                 "declined",
                 "cancelled",
                 "expired",
-                "failed"
+                "failed",
+                "orphaned"
               ],
               "name": "state",
               "required": true,
@@ -39516,6 +39608,28 @@
               "required": true,
               "types": [
                 "boolean"
+              ]
+            },
+            {
+              "description": "core: its cancel asked the mirror to remove its copy.",
+              "name": "remove_copy",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: what the mirror said it did with its copy when it was told of the cancel.",
+              "enum": [
+                "removed",
+                "kept",
+                "none"
+              ],
+              "name": "copy",
+              "required": true,
+              "types": [
+                "string",
+                "null"
               ]
             },
             {
@@ -40055,7 +40169,8 @@
                     "declined",
                     "cancelled",
                     "expired",
-                    "failed"
+                    "failed",
+                    "orphaned"
                   ],
                   "name": "state",
                   "required": true,
@@ -40077,6 +40192,28 @@
                   "required": true,
                   "types": [
                     "boolean"
+                  ]
+                },
+                {
+                  "description": "core: its cancel asked the mirror to remove its copy.",
+                  "name": "remove_copy",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "core: what the mirror said it did with its copy when it was told of the cancel.",
+                  "enum": [
+                    "removed",
+                    "kept",
+                    "none"
+                  ],
+                  "name": "copy",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
                   ]
                 },
                 {
@@ -40158,6 +40295,120 @@
           "required": true,
           "types": [
             "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.keep_removed.set",
+      "confirmations": [],
+      "description": "Whether this server keeps the vaults a linked server (their core) removes: a cancel that asks to remove a finished copy leaves it here as an orphaned copy instead (default off). Super admins; audited mirror.keep_removed.set.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "peer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "peer",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "peer",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "set_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "set_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
           ]
         }
       ],
@@ -40606,7 +40857,8 @@
                     "declined",
                     "cancelled",
                     "expired",
-                    "failed"
+                    "failed",
+                    "orphaned"
                   ],
                   "name": "state",
                   "required": true,
@@ -40628,6 +40880,28 @@
                   "required": true,
                   "types": [
                     "boolean"
+                  ]
+                },
+                {
+                  "description": "core: its cancel asked the mirror to remove its copy.",
+                  "name": "remove_copy",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "core: what the mirror said it did with its copy when it was told of the cancel.",
+                  "enum": [
+                    "removed",
+                    "kept",
+                    "none"
+                  ],
+                  "name": "copy",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
                   ]
                 },
                 {
@@ -40959,7 +41233,8 @@
                 "declined",
                 "cancelled",
                 "expired",
-                "failed"
+                "failed",
+                "orphaned"
               ],
               "name": "state",
               "required": true,
@@ -40981,6 +41256,28 @@
               "required": true,
               "types": [
                 "boolean"
+              ]
+            },
+            {
+              "description": "core: its cancel asked the mirror to remove its copy.",
+              "name": "remove_copy",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "core: what the mirror said it did with its copy when it was told of the cancel.",
+              "enum": [
+                "removed",
+                "kept",
+                "none"
+              ],
+              "name": "copy",
+              "required": true,
+              "types": [
+                "string",
+                "null"
               ]
             },
             {
@@ -42900,7 +43197,7 @@
       "client_timeout_ms": 15000,
       "command": "peer.mirror.cancel",
       "confirmations": [],
-      "description": "Either side cancels a start, or the core ends a completed mirror: the core drops its core row and log; the mirror removes the vault it was given, its keys and its rows. Answers whether anything was cancelled.",
+      "description": "Either side cancels a start, or the core ends a mirror (remove_copy: it asks the mirror to remove its copy). The core drops its core row and log. The mirror removes a copy whose first copy isn't finished; a finished one it removes when asked and its keep setting is off, and otherwise keeps orphaned (read-only, the last grant kept). Answers what it did.",
       "effect": "destructive",
       "input": "payload",
       "operation": null,
@@ -42950,6 +43247,21 @@
           "types": [
             "string"
           ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "remove_copy"
+            ],
+            "entity": "peer.mirror.cancel",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "remove_copy",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
         }
       ],
       "refusal_codes": [
@@ -42976,6 +43288,19 @@
           "required": true,
           "types": [
             "boolean"
+          ]
+        },
+        {
+          "description": "What the mirror did with its copy: removed (the first copy wasn't finished, or removal was asked and its link keeps nothing), kept (orphaned), or none (it held none).",
+          "enum": [
+            "removed",
+            "kept",
+            "none"
+          ],
+          "name": "copy",
+          "required": true,
+          "types": [
+            "string"
           ]
         }
       ],
@@ -59528,7 +59853,7 @@
           "description": "Deleting now skips the restore window: resend with confirm_now."
         }
       ],
-      "description": "Delete a vault: restorable until the retention window ends, or purged on the next pass with `now`. Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or 'vault_delete_now' (resend with confirm_now).",
+      "description": "Delete a vault: restorable until the retention window ends, or purged on the next pass with `now`. Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or 'vault_delete_now' (resend with confirm_now). A mirrored vault is refused (vault_mirrored: end the mirror first; vault_orphaned_copy: remove it with mirror.cancel).",
       "effect": "destructive",
       "input": "payload",
       "operation": "vaults.delete",
@@ -59586,6 +59911,8 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "vault_mirrored",
+        "vault_orphaned_copy",
         "step_up_required",
         "vault_upstream_key_loss",
         "vault_delete_now"
@@ -59596,6 +59923,8 @@
         "not_found",
         "conflict",
         "unauthorized",
+        "vault_mirrored",
+        "vault_orphaned_copy",
         "step_up_required"
       ],
       "response": [
@@ -65771,5 +66100,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "e08969bdcb44b823fa1d6f676a364e37cd9ce04bc5a2ff0b3929d734d70fa7b0"
+  "ws_hash": "7519dab3e9e9ec1728391313e2b75f7f58a27855188b698d0613055a41617d97"
 }

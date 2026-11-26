@@ -478,16 +478,33 @@ building (owner's instruction to build without waiting for review):
   a per-vault assignment or its removal, the role's permissions edited, the role deleted), and a link-up resends it.
   The mirror records it with `granted_by_node` = the sending server's node id from its session, never a field, and
   only for a vault whose `mirror` row names that server (`not_found` otherwise).
-- **Cancel** (`mirror.cancel`, `peer.mirror.cancel`). On the core, at any step (also after the start completed): the
-  `core` row and the log go (`MirrorVaults::remove`) and the mirror is told; the mirror removes the vault it was given
-  (`storage::Manager::removeVault`: rows, keys, origins, pending contents and the mirror row cascade; its backing
-  directory goes), then the remote owner account when nothing else names it. On the mirror, a start that has not
-  completed (`pending`, `accepted`, `installed`) is removed the same way and the core is told; a **completed** one is
-  refused (`mirror_detach_required`: removing it here would destroy a copy, and leaving with it is wave 5's detach).
-  **Deviation to confirm:** the core's cancel of a completed mirror removes the mirror's copy (the brief's "ending a
-  mirror in its simplest form"), where "Ending a mirror from the core" above says the copy becomes orphaned and
-  invariant 11 says the core never deletes the mirror's copy. Nothing on the mirror can have been written locally yet
-  (writes on the mirror are wave 4), so no unique data is lost today; once wave 4 lands this must become orphaning.
+- **Cancel** (`mirror.cancel`, `peer.mirror.cancel`; the ending rule, owner's decision of 2026-11-26, "Ending a mirror
+  from the core, and deleting" above). On the core, at any step: the `core` row and the log go at once
+  (`MirrorVaults::remove`), the offer becomes `cancelled` with `remove_copy` recorded, and `peer.mirror.cancel` carries
+  it to the mirror, queued while the link is down. The mirror's answer carries `copy` (removed | kept | none), which the
+  core stores on its offer (`copy_outcome`, shown by `vh mirror info`) and audits (`mirror.cancel.copy`). On the
+  mirror: unfinished (`firstCopyFinished` false) is removed (`storage::Manager::removeVault`: rows, keys, origins,
+  pending contents and the mirror row cascade, the backing directory goes, then the remote owner account when nothing
+  else names it); finished with `remove_copy` and `peer.keep_vaults` off is removed; otherwise `MirrorVaults::orphan`
+  and the offer ends `orphaned`. A cancel told again after that answers `kept` and changes nothing. On the mirror's
+  own side, a start that has not completed (`pending`, `accepted`, `installed`) is removed and the core told; a
+  completed one is refused (`mirror_detach_required`); an orphaned copy is removed (`removeOrphaned`, data-destroy
+  step-up, audited `mirror.remove`). `firstCopyFinished(vault)` is the one place "finished" is decided: on this branch,
+  true once the mirror's offer is `started` (or orphaned, or gone); **the lead rewires it to piece B's first-copy
+  column at the merge** (erring towards "finished" errs towards keeping).
+- **Keep setting:** `peer.keep_vaults` (163, who and when), `vh mirror keep-removed <server> on|off`, ws
+  `mirror.keep_removed.set`; super admins; audited `mirror.keep_removed.set`.
+- **Deletion refused** (`mirror/start/Guard.hpp` `refuseDeletionIfMirrored`): `ops::vaults::remove` (a live vault and
+  an already deleted one; a super admin is told why even where the mirror's rule leaves no Remove permission) and the S3
+  gateway's DeleteBucket (both overloads; 409 `InvalidBucketState`). Codes `vault_mirrored` (core, a start running, or
+  a mirror) and `vault_orphaned_copy` (removed through `vh mirror cancel` only: one way, one step-up, one audit line).
+  The retention pass only purges what `ops::vaults::remove` scheduled, and a vault pending deletion can't be mirrored.
+- **Unlinked meanwhile** (`reconcileUnlinked`, every MirrorStarter pass, so every revocation path counts: `vh peer
+  unlink`, `peer.unlinked`, a rotation that dropped the link): the queued notices for that server are dropped (a
+  removal never delivered), its copies here become orphaned (`mirror.orphan` audited), and the mirrors this server is
+  the core of with it end here (core row and log dropped, so the log is not held for a server that can't acknowledge).
+  A mirror that never learns of the unlink (it was down and the notice was lost) keeps its `mirror` row until it is
+  unlinked there too, then orphans it.
 - **Rotation refused** (`vault_mirrored`) on both servers while the vault has any `mirror_vault` row or a core-side
   start runs: `EncryptionManager::prepare_key_rotation` (so `vh vault keys rotate`, an attach's rotation and an
   import's salvage) and `EncryptionManager::mintSalvageKey`; `vh vault keys rotate` reports it per vault. No scheduled
@@ -511,9 +528,8 @@ building (owner's instruction to build without waiting for review):
 background-job skips are wave 4): a super admin with a granted role that writes can write through every surface (no
 gate yet); the sync controller runs the local task (FSTask) for it on its interval; local versioning and its retention
 (`recovery/local/Versions.cpp`) run on its writes; the format conversion service would visit it (a mirror holds only
-VHF1, so it finds nothing); the vault can be soft-deleted by nothing (rbac::mirrored refuses admin Remove), but
-`storage::Manager` and `vault::retention` have no mirror check of their own. Unlinking the core while this server
-holds its vault is not refused yet ("Ending a mirror from the core").
+VHF1, so it finds nothing). `storage::Manager::removeVault` itself (the trusted primitive behind rollbacks and the
+removals above) has no mirror check.
 
 ### Key rotation
 
@@ -746,11 +762,35 @@ alone. Never an agent, a scoped device or a relayed browser.
 
 ### Ending a mirror from the core, and deleting
 
-- **The core ends the mirror** (`mirror.remove`): the mirror is told and its copy becomes **orphaned**: read-only,
-  kept, waiting for an admin there to delete it or detach it. The core never deletes another server's copy.
-- **The core's vault is deleted:** the same. The mirror's copy is orphaned, not deleted.
-- **Unlinking the servers** is refused on a mirror while it holds mirrored vaults, until each is detached or
-  deleted there. On the core it orphans the mirrors.
+> "Assume the trust boundary is valid until either party acts to make it invalidated." (Cooper, 2026-11-26)
+
+While two servers are linked and a vault is mirrored, each side does what the other asks, without second-guessing or
+defensive extra steps. What invalidates the trust is an explicit act: the core ending the mirror, the mirror turning on
+its keep setting or detaching (wave 5), either side unlinking. The rule (Cooper, 2026-11-26: the core may choose to
+try to remove the mirror's copy, the mirror may keep what its core removes, and mirrors should not accumulate junk):
+
+- **The core chooses.** `mirror.cancel` on the core (`vh mirror cancel <vault> [--remove-copy]`) ends the mirror on
+  the core at once (its `core` row and log go) and tells the mirror, with `remove_copy` (default false). Asking for
+  removal of a mirror that has begun needs the data-destroy step-up. The audit says which was asked.
+- **The mirror applies the rule, with no confirmation of its own:**
+  - a copy whose first copy is not finished is removed, whatever was asked or set: the mirror holds nothing complete;
+  - a finished copy is removed when the core asked for it and the mirror's keep setting for that link is off;
+  - otherwise it is kept as an **orphaned** copy: `mirror_vault.role = 'orphaned'`, read-only, its last grant and its
+    pending-contents rows kept (rbac::mirrored resolves it as it did).
+  It answers what it did (removed or kept), and the core records and shows it (audit `mirror.cancel.copy`,
+  `vh mirror info`).
+- **The keep setting** ("keep the vaults this server's core removes", per link, on the mirror, default off; a super
+  admin there): turning it on is the mirror's act that limits what the core may remove.
+- **Orphaned copies do not pile up:** a super admin on the server holding one removes it (`vh mirror cancel <vault>`,
+  with the data-destroy step-up; audited `mirror.remove`). A live mirror is not removed from the mirror's side (detach,
+  wave 5).
+- **Deleting a mirrored vault is refused until its mirror is ended,** on both servers and at every entry point that
+  deletes a vault: on the core "end the mirror first: vh mirror cancel <id> [--remove-copy]", on the mirror "this is
+  another server's vault"; an orphaned copy is removed only through `vh mirror cancel`. Deleting and choosing what
+  happens to the mirror's copy in one step is wave 5.
+- **The mirror unreachable:** the core ends its side at once and the request waits (`notify`) until the link is back.
+- **Unlinking the servers** invalidates the trust: a request still queued is dropped, never delivered; the mirror's
+  copies of that core become orphaned (kept), and the core's mirrors with that server end on the core.
 - **After any of these** the server that left still holds the keys. The core is offered a key rotation.
 
 ## A mirrored vault with a remote
@@ -804,7 +844,8 @@ CLI: `vh mirror add <vault> --to <peer>`, `vh mirror status [<vault>]`, `vh mirr
 8. No file is linked into place before its size, hash and authentication checks pass.
 9. A key version is installed on the mirror only after `prove` accepts it against a pinned attestation key.
 10. Detach completes with the peer unreachable, deletes nothing, and touches no bucket.
-11. The core never deletes or alters the mirror's copy when a mirror ends.
+11. When a mirror ends, the mirror's copy is removed only by the rule above: unfinished, or removal asked by the core
+    with the mirror's keep setting off; otherwise it is kept, orphaned. Nothing else on either side removes it.
 12. Two servers never both accept changes as core of one vault in the same term.
 
 **The drill** (exit criterion for phase 2): two private daemons; mirror a vault; write on both sides; kill the core

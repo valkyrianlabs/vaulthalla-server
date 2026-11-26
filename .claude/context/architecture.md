@@ -683,14 +683,21 @@ the log are piece B. Full text: mirror.md "As built: starting a mirror". Experim
   the link up, a batch of 16 through `contents::fetchOutstanding` on a `Transfers::spawn` thread; jittered backoff
   5 s..10 min after a batch that received nothing. `LinkService::request(peer, command, payload, timeout)` sends over
   the kept connection and waits (not on the link's io threads). Transport seam: `setTransportForTesting`.
-- **Ops / commands:** `ops::mirrors` (add, pending, accept, decline, cancel, list, get, offers, acceptAll/setAcceptAll);
-  ws `mirror.add|pending|accept|decline|cancel|list|get|accept_all.set` (keys step-up on mirror.add), `vh mirror
-  add|pending|accept|decline|cancel|list|info|accept-all`. Who: the switch, a person (`peer_forbidden` otherwise); add
+- **Ops / commands:** `ops::mirrors` (add, pending, accept, decline, cancel, list, get, offers, acceptAll/setAcceptAll,
+  keepRemoved/setKeepRemoved); ws `mirror.add|pending|accept|decline|cancel|list|get|accept_all.set|keep_removed.set`
+  (keys step-up on mirror.add, data.destroy on a removing cancel), `vh mirror
+  add|pending|accept|decline|cancel [--remove-copy]|list|info|accept-all|keep-removed`. Who: the switch, a person (`peer_forbidden` otherwise); add
   and the core's cancel: super admin or the vault's admin Edit + vault.roles.assign; the mirror's side and list: super
   admins. Router: `mirror.` forbidden to scoped devices; MCP catalog excludes `mirror`.
-- **Cancel:** core at any step drops the core row and log, tells the mirror, which removes its copy
-  (`removeCopy`: `Manager::removeVault` + `MirrorVaults::remove` + the remote owner when unused); the mirror's own
-  cancel removes an uncompleted start and refuses a completed one (`mirror_detach_required`).
+- **Ending** (owner's rule, 2026-11-26; mirror.md "Ending a mirror from the core, and deleting"): the core's cancel
+  drops its core row and log at once and sends `peer.mirror.cancel {remove_copy}` (queued while the link is down);
+  the mirror removes an unfinished copy (`firstCopyFinished`, rewired to piece B's flag at the merge), removes a
+  finished one when asked and `peer.keep_vaults` is off, else `MirrorVaults::orphan` (offer state orphaned); its
+  answer's `copy` is stored as the core offer's `copy_outcome`. The mirror's own cancel removes an uncompleted start,
+  refuses a live one (`mirror_detach_required`), removes an orphaned copy (data.destroy, audited mirror.remove).
+  `reconcileUnlinked` (every pass): an unlinked server's queued notices dropped, its copies orphaned, its core rows
+  ended. Deletion refused while mirrored (`refuseDeletionIfMirrored` in `ops::vaults::remove` and
+  `ObjectStore::deleteBucket`: `vault_mirrored`, `vault_orphaned_copy`).
 - **Rotation guard** (`mirror/start/Guard.hpp`): `refuseIfMirrored` in `prepare_key_rotation` and `mintSalvageKey`
   (`vault_mirrored`), `vh vault keys rotate` reports it per vault.
 - Tests: `MirrorStartDbTest.*` (`test_mirror_start_db.cpp`); Tier B `vhh drill peers` step 7.
