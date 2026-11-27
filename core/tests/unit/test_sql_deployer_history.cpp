@@ -2697,6 +2697,9 @@ TEST_F(SqlDeployerHistoryDb, MirrorLeaveMigration167MatchesFreshSeedAndIsAdditiv
         for (const auto* c : {"mirror_offer_state_check", "mirror_offer_copy_outcome_check", "mirror_offer_side_state_check",
                               "mirror_offer_finished_check"})
             txn.exec(std::string("ALTER TABLE mirror_offer DROP CONSTRAINT IF EXISTS ") + c);
+        // Rows only 167 allows, left in this database by a suite that ran before (a detach): a 166 install holds none.
+        txn.exec("DELETE FROM mirror_offer WHERE state = 'detached' OR copy_outcome = 'detached'");
+        txn.exec("DELETE FROM mirror_content_pending WHERE state NOT IN ('waiting', 'failed')");
         txn.exec("ALTER TABLE mirror_offer ADD CHECK (state IN ('offered', 'pending', 'accepted', 'keys_acked', "
                  "'installed', 'started', 'declined', 'cancelled', 'expired', 'failed', 'orphaned'))");
         txn.exec("ALTER TABLE mirror_offer ADD CHECK (copy_outcome IS NULL OR copy_outcome IN ('removed', 'kept', 'none'))");
