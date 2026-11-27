@@ -3,6 +3,8 @@
 #include "audit/Trail.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "db/query/mirror/Contents.hpp"
+#include "db/query/mirror/Detach.hpp"
+#include "db/query/mirror/MirrorVault.hpp"
 #include "db/query/mirror/Pending.hpp"
 #include "db/query/mirror/Start.hpp"
 #include "db/query/peer/Peer.hpp"
@@ -107,7 +109,7 @@ std::string positionText(const mq::Position& p) { return fmt::format("({}, {})",
 Preview preview(const uint32_t vaultId) {
     namespace mq = vh::db::query::mirror;
     const auto row = mq::MirrorVaults::get(vaultId);
-    if (!row || (row->role != "mirror" && row->role != "orphaned"))
+    if (!row || !mq::MirrorDetach::detachable(*row))
         throw ops::Refused("mirror_not_held", "vault " + std::to_string(vaultId) +
                                                   " is not held here as another server's copy: there is nothing to detach");
     const auto vault = vh::db::query::vault::Vault::getVault(vaultId);
@@ -146,7 +148,8 @@ Detached detach(const uint32_t vaultId, const uint32_t ownerId, const std::optio
         std::scoped_lock local(vh::mirror::submit::vaultMutex(vaultId));
         out.before = preview(vaultId);
         const auto changes = changesOf(vaultId);
-        const bool tell = out.before.role == "mirror" && out.before.peer && !out.before.peer->revoked();
+        // A core row (the other server took over, or this one did and its old core may return) tells as a mirror does.
+        const bool tell = out.before.role != "orphaned" && out.before.peer && !out.before.peer->revoked();
         done = mq::MirrorDetach::detach({.vault_id = vaultId, .owner_id = ownerId, .actor_id = actorId,
                                          .changes = changes, .tell_core = tell});
         out.core_told_later = tell;

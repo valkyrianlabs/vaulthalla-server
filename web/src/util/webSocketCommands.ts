@@ -1048,6 +1048,8 @@ export interface WebSocketCommandMap {
   'mirror.resync': WsContract['mirror.resync']
   // A planned switch of the core role, asked on either server (super admins); answers its outcome.
   'mirror.switch': WsContract['mirror.switch']
+  // A mirror whose core is gone takes over as the vault's core (super admins; the vault's name typed).
+  'mirror.takeover': WsContract['mirror.takeover']
   'peer.mirror.offer': WsContract['peer.mirror.offer']
   'peer.mirror.answer': WsContract['peer.mirror.answer']
   'peer.mirror.keys': WsContract['peer.mirror.keys']
@@ -1078,6 +1080,8 @@ export interface WebSocketCommandMap {
   'peer.mirror.switch.request': WsContract['peer.mirror.switch.request']
   'peer.mirror.switch.prepare': WsContract['peer.mirror.switch.prepare']
   'peer.mirror.switch.commit': WsContract['peer.mirror.switch.commit']
+  // The new core tells its old core it took over.
+  'peer.mirror.promoted': WsContract['peer.mirror.promoted']
   // Any signed-in user pairs devices to their own account: open a 10-minute window, then approve a request by picking
   // the one of its three code_choices the device shows (a wrong pick denies the request).
   'device.pairing.open': WsContract['device.pairing.open']

@@ -73,13 +73,25 @@ std::vector<WsField> mcMirroredFields() {
                 "mirror.cancel); detached: a former copy, standalone here now."),
             object("peer", "", {uinteger("id"), str("node_id"), str("name"), boolean("revoked")}).nullable(),
             integer("term").nullable(), integer("last_seq").nullable(),
-            str("state").oneOf({"starting", "live", "paused", "diverged", "expired", "stopped", "switching"}).nullable(),
+            str("state").oneOf({"starting", "live", "paused", "diverged", "expired", "stopped", "switching", "rejoining",
+                                "forked"})
+                .nullable(),
             object("grant", "", {str("role_name"), uinteger("files"), uinteger("directories"), uinteger("sync"),
                                  uinteger("roles"), str("granted_by_node"), uinteger("granted_at")})
                 .nullable()
                 .desc("mirror: what the core granted this server (its super admins get exactly that); null: nothing."),
             object("acked", "", {uinteger("term"), uinteger("seq")}).nullable(), integer("created_at").nullable(),
             object("start", "", mcOfferFields()).nullable().desc("The latest start of the vault on this side."),
+            object("switch", "", {str("switch_id"), str("side").oneOf({"core", "mirror"}),
+                                  str("phase").oneOf({"requested", "draining", "preparing", "prepared", "switched",
+                                                      "abandoned"}),
+                                  uinteger("term"), str("reason").nullable(), uinteger("created_at"),
+                                  integer("ended_at").nullable()})
+                .nullable().desc("The vault's latest planned switch here."),
+            object("takeover", "", {uinteger("term"), object("fork", "", {uinteger("term"), uinteger("seq")}),
+                                    uinteger("peer_id"), uinteger("contents_missing"), uinteger("created_at")})
+                .nullable().desc("A take over here still waiting for its old core to return."),
+            str("advice").nullable().desc("What a person does next when the vault waits on the other server."),
             object("detached", "", {uinteger("id"), str("side").oneOf({"mirror", "core"}), uinteger("vault_id"),
                                     uinteger("peer_id"), object("fork", "", {uinteger("term"), uinteger("seq")}),
                                     boolean("digest_matched").nullable(), str("was_state").nullable(),
@@ -345,6 +357,34 @@ std::vector<WsCommandUsage> mirrorCommands() {
                                            "mirror_switch_refused", "mirror_orphaned", "peer_link_down",
                                            "mirror_vault_deleting"}),
         .client_timeout = std::chrono::milliseconds(60'000),
+    });
+
+    out.push_back({
+        .command = "mirror.takeover",
+        .description = "On a mirror whose core is gone or cannot be reached: take over as the vault's core. This server "
+                       "records the next term with itself as the core, the last change it applied from the old core as "
+                       "the fork point and its tree as the old core last confirmed it as the fork base (kept for the "
+                       "old core's return); changes made here and still pending become ordinary changes, held ones stay "
+                       "listed. Refused while the core answers (mirror_core_reachable: use mirror.switch). Also the way "
+                       "out of a planned switch whose core never came back. `confirm` is the vault's name, typed. "
+                       "Super admins, or holders of admin.mirror.takeover (Take over as core); the data.destroy "
+                       "step-up in the console; audited mirror.takeover.",
+        .payload = {mcVaultIdField(),
+                    str("confirm").gen(gen::ref("vault", {"name"})).desc("The vault's name, typed exactly.")},
+        .response = {uinteger("id"), uinteger("vault_id"), uinteger("peer_id").desc("The old core."),
+                     uinteger("from_term"), uinteger("term").desc("This server's term as the core."),
+                     object("fork", "", {uinteger("term"), uinteger("seq"), str("digest"), integer("entries")})
+                         .desc("The fork point: the last change applied from the old core, and the digest there."),
+                     uinteger("fork_rows").desc("Entries in the fork base."),
+                     uinteger("pending_made_local"), uinteger("held"),
+                     uinteger("contents_missing").desc("Files whose contents never arrived here."),
+                     object("by", "", {integer("id").nullable(), str("name")}), uinteger("created_at"),
+                     integer("settled_at").nullable(), str("settled_how").nullable(),
+                     object("detail").desc("The fork base's own digest and whether it is the fork point's."),
+                     str("warning"), boolean("fork_base_matches")},
+        .refusal_codes = mcMirrorRefusals({"mirror_not_mirror", "mirror_orphaned", "mirror_first_copy", "mirror_diverged",
+                                           "mirror_core_reachable", "mirror_name_mismatch"}),
+        .client_timeout = kDefaultTimeout,
     });
 
     // ---- a linked server's own session (mirror/start/Start.hpp)

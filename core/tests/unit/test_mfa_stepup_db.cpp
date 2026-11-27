@@ -155,6 +155,7 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
         {"mirror.add", "needs a linked server and its link up: MirrorStartDbTest.TheConsoleStepsUpToSendAVaultsKeys..."},
         {"mirror.cancel", "with remove_copy on a mirror that has begun, or an orphaned copy: MirrorStartDbTest."
                           "TheConsoleStepsUpToSendAVaultsKeysToRemoveACopyOrAnOrphanedCopyAndForNothingElse"},
+        {"mirror.takeover", "needs a mirror whose core is gone: MirrorTakeoverDbTest.TheConsoleStepsUpBoundToTheVault..."},
         {"vault.keys.import", "console: import_requires_device first; needs a sealed vault key (test_vault_keys)"},
         {"vault.keys.recipients.add", "console: recipient_requires_device first; device refusal and host exemption in "
                                       "RecoveryRecipient.EnrollmentIsForTheCliAndPairedDevicesWithTheExportPermission"},

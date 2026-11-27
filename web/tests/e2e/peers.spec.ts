@@ -221,7 +221,7 @@ test.describe.serial('linked servers', () => {
     await page.goto('/linked-servers')
     await expect(page.getByRole('heading', { level: 1 })).toContainText('Linked servers')
     await expect(page.getByTestId('peers-experimental')).toHaveText('Experimental')
-    await expect(page.getByTestId('peers-purpose')).toHaveText(/vault mirroring will use in a later release; today it carries nothing else/)
+    await expect(page.getByTestId('peers-purpose')).toHaveText(/mirrored vaults travel over; it carries nothing else/)
     await expect(page.getByRole('link', { name: 'Linked servers' }).first()).toBeVisible()
     expect(sent.find(f => f.command === 'peer.list')?.payload).toEqual({ all: true })
 

@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '0a41b8dc5e8a8d8d9eb3b518bd86d8571059e389ad22f23bfd44bea0e48cdcff'
+export const WS_CONTRACT_HASH = 'bbf4aad5ca1cd380384c549ab8a1ceb28a7df3e6ae5f04d4d32359715df3762d'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = '340de841a7a45bc8da2d720dd791cb0e378bf45cdf8f66ae7b484ce08837aa0c'
@@ -5879,7 +5879,7 @@ export interface WsContract {
         peer: { id: number; node_id: string; name: string; revoked: boolean } | null
         term: number | null
         last_seq: number | null
-        state: 'starting' | 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | null
+        state: 'starting' | 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked' | null
         grant: {
           role_name: string
           files: number
@@ -5922,6 +5922,23 @@ export interface WsContract {
           expires_at: number
           finished_at: number | null
         } | null
+        switch: {
+          switch_id: string
+          side: 'core' | 'mirror'
+          phase: 'requested' | 'draining' | 'preparing' | 'prepared' | 'switched' | 'abandoned'
+          term: number
+          reason: string | null
+          created_at: number
+          ended_at: number | null
+        } | null
+        takeover: {
+          term: number
+          fork: { term: number; seq: number }
+          peer_id: number
+          contents_missing: number
+          created_at: number
+        } | null
+        advice: string | null
         detached: {
           id: number
           side: 'mirror' | 'core'
@@ -6076,7 +6093,7 @@ export interface WsContract {
         peer: { id: number; node_id: string; name: string; revoked: boolean } | null
         term: number | null
         last_seq: number | null
-        state: 'starting' | 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | null
+        state: 'starting' | 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked' | null
         grant: {
           role_name: string
           files: number
@@ -6119,6 +6136,23 @@ export interface WsContract {
           expires_at: number
           finished_at: number | null
         } | null
+        switch: {
+          switch_id: string
+          side: 'core' | 'mirror'
+          phase: 'requested' | 'draining' | 'preparing' | 'prepared' | 'switched' | 'abandoned'
+          term: number
+          reason: string | null
+          created_at: number
+          ended_at: number | null
+        } | null
+        takeover: {
+          term: number
+          fork: { term: number; seq: number }
+          peer_id: number
+          contents_missing: number
+          created_at: number
+        } | null
+        advice: string | null
         detached: {
           id: number
           side: 'mirror' | 'core'
@@ -6224,6 +6258,37 @@ export interface WsContract {
       ended_at: number | null
       peer_role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
       peer_access: 'read-only' | 'read-write' | 'none'
+    }
+  }
+  /**
+   * On a mirror whose core is gone or cannot be reached: take over as the vault's core. This server records
+   * the next term with itself as the core, the last change it applied from the old core as the fork point and
+   * its tree as the old core last confirmed it as the fork base (kept for the old core's return); changes
+   * made here and still pending become ordinary changes, held ones stay listed. Refused while the core
+   * answers (mirror_core_reachable: use mirror.switch). Also the way out of a planned switch whose core never
+   * came back. `confirm` is the vault's name, typed. Super admins, or holders of admin.mirror.takeover (Take
+   * over as core); the data.destroy step-up in the console; audited mirror.takeover.
+   */
+  'mirror.takeover': {
+    payload: { vault_id: number; confirm: string }
+    response: {
+      id: number
+      vault_id: number
+      peer_id: number
+      from_term: number
+      term: number
+      fork: { term: number; seq: number; digest: string; entries: number }
+      fork_rows: number
+      pending_made_local: number
+      held: number
+      contents_missing: number
+      by: { id: number | null; name: string }
+      created_at: number
+      settled_at: number | null
+      settled_how: string | null
+      detail: object
+      warning: string
+      fork_base_matches: boolean
     }
   }
   /**
@@ -6579,7 +6644,7 @@ export interface WsContract {
         })[]
         complete: boolean
       }
-      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching'
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked'
     }
   }
   /**
@@ -6618,6 +6683,23 @@ export interface WsContract {
       offer_uid: string
       state: 'pending' | 'accepted' | 'declined' | 'installed' | 'started' | 'cancelled' | 'expired' | 'failed'
     }
+  }
+  /**
+   * The new core tells its old core it took over (mirror.takeover), on every pass while the link is up until
+   * answered: the new term, the fork point and its digest, and the new core's digest at (term, 0). The old
+   * core stops taking changes for the vault at once (read-only) and answers pending until it decided:
+   * following (it committed nothing after the fork point: the vault's mirror in the new term), rejoining (it
+   * did: read-only with them until the merge; changes is their count) or forced (it had taken over too: both
+   * read-only until an operator picks one).
+   */
+  'peer.mirror.promoted': {
+    payload: {
+      vault_uid: string
+      term: number
+      fork: { term: number; seq: number; digest: string; entries: number }
+      baseline?: { digest: string; entries: number }
+    }
+    response: { outcome: 'pending' | 'following' | 'rejoining' | 'forced'; changes?: number }
   }
   /**
    * The mirror starts its copy over (mirror.resync on the mirror): the core takes its baseline again in the
@@ -6664,7 +6746,7 @@ export interface WsContract {
       groups?: number
       code?: string
       error?: string
-      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching'
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked'
     }
   }
   /**
@@ -6731,7 +6813,7 @@ export interface WsContract {
       vault?: object
       items?: ({ ord: number; state: object })[]
       more?: boolean
-      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching'
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked'
     }
   }
   /**
@@ -9698,6 +9780,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'mirror.pending',
   'mirror.resync',
   'mirror.switch',
+  'mirror.takeover',
   'mirror.versions.set',
   'peer.endpoints',
   'peer.get',
@@ -9718,6 +9801,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.mirror.log',
   'peer.mirror.notify',
   'peer.mirror.offer',
+  'peer.mirror.promoted',
   'peer.mirror.resync',
   'peer.mirror.submit',
   'peer.mirror.switch.commit',
@@ -10004,6 +10088,7 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'group.remove': 'identity.admin',
   'mirror.add': 'keys',
   'mirror.cancel': 'data.destroy',
+  'mirror.takeover': 'data.destroy',
   'peer.link.start': 'device.trust',
   'peer.pairing.approve': 'device.trust',
   'peer.policy.set': 'identity.admin',
@@ -10202,6 +10287,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'mirror.pending': 15000,
   'mirror.resync': 15000,
   'mirror.switch': 60000,
+  'mirror.takeover': 15000,
   'mirror.versions.set': 15000,
   'peer.endpoints': 15000,
   'peer.get': 15000,
@@ -10222,6 +10308,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.mirror.log': 15000,
   'peer.mirror.notify': 15000,
   'peer.mirror.offer': 15000,
+  'peer.mirror.promoted': 15000,
   'peer.mirror.resync': 15000,
   'peer.mirror.submit': 15000,
   'peer.mirror.switch.commit': 15000,

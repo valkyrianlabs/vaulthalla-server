@@ -745,6 +745,13 @@ through on a Live mirror.
   is told until answered (`becomeCore`: core in term + 1, baseline (term + 1, 0) at the digest, grant cleared), then
   the old core goes live. A deadline (30 s), a refusal or a vault that stopped abandons it (`abandonCore`, told too).
   All steps run from `Follower::runLoop` (`switching::tick`); the wire handlers only change rows.
+- **Take over (`mirror/takeover`, `db::query::mirror::Takeovers`, migration 168 `mirror_takeover`,
+  `mirror_fork_base`; wave 5 piece B):** `ops::mirrors::takeover` (`requireTakeover`, the name typed, data.destroy
+  step-up) refuses while the core answers `peer.mirror.log`; `Takeovers::take` in one transaction records the fork point
+  and fork base (the confirmed tree: `mirror_dirty` for dirty entries), drops pending/dirty rows (held kept), rehashes
+  the tree into `mirror_entry_hash`, makes the row core in term + 1 (baseline (term + 1, 0)), ends an open switch
+  (`mirror_taken_over`). A later `switched` commit from the old core for that switch is answered as switched when the
+  fork point and term agree (`takeover::settledBySwitch`). `Switches::endUnlinked` ends a switch of an unlinked peer.
 - **Submit (`mirror::submit::submitPending`, from `Follower::step` before the log):** `peer.mirror.submit` (peer wire
   set), one change at a time per vault in order. Core: `serveSubmit` answers at once from `mirror_submission` (queued,
   running, executed with groups, refused with code: never executed twice) and `drain`s on the sync pool, one vault's in

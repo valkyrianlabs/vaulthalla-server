@@ -140,6 +140,12 @@ public:
     // goes live again; the switch is `abandoned`. False when it had ended already.
     static bool abandonMirror(uint64_t id, const std::string& reason, const nlohmann::json& detail = nlohmann::json::object());
 
+    // The link to the switch's other server is gone (unlinked, or its row removed): the switch ends here, open or not
+    // (abandoned, mirror_unlinked, when it was open), nothing is left to tell, and the vault's row is no longer held
+    // `switching` whatever its role now (a core goes live again; a copy the unlink orphaned keeps its role). False when
+    // there was nothing to end.
+    static bool endUnlinked(uint64_t id);
+
     // Whether the follower applies the core's log to the vault while it is switching here: the mirror's switch is
     // still `preparing` (it catches up to the core's position).
     [[nodiscard]] static bool following(uint32_t vaultId);

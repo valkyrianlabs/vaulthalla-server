@@ -280,6 +280,24 @@ std::shared_ptr<CommandUsage> switchCore(const std::weak_ptr<CommandUsage>& pare
     return cmd;
 }
 
+std::shared_ptr<CommandUsage> takeover(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
+    cmd->aliases = {"takeover"};
+    cmd->description = "On a mirror whose core is gone or cannot be reached: take over as the vault's core. This server "
+                       "records the next term with itself as the core, the last change it applied from the old core as "
+                       "the fork point and its tree then as the fork base; changes made here and still pending become "
+                       "ordinary changes, held ones stay listed. The old core may hold changes this server never "
+                       "received; they are merged when it returns. Refused while the core answers (use vh mirror "
+                       "switch). Also the way out of a planned switch whose core never came back. Type the vault's name "
+                       "with --confirm. Super admins, or holders of admin.mirror.takeover (Take over as core); audited.";
+    cmd->positionals = {vaultPos};
+    cmd->required = {Option::Single("confirm", "The vault's name, typed exactly", "confirm", "name")};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh mirror takeover 4 --confirm photos", "Make this server vault 4's core while its core is gone."}};
+    return cmd;
+}
+
 std::shared_ptr<CommandUsage> acceptAll(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->effect = CommandEffect::Write;
@@ -308,7 +326,7 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
                          keep(root->weak_from_this()),    held(root->weak_from_this()),    discard(root->weak_from_this()),
                          retry(root->weak_from_this()), save(root->weak_from_this()), detach(root->weak_from_this()),
                          versions(root->weak_from_this()), resync(root->weak_from_this()),
-                         switchCore(root->weak_from_this())};
+                         switchCore(root->weak_from_this()), takeover(root->weak_from_this())};
     root->examples = {
         {"vh mirror add <vault> --to <server>", "On the core: offer a vault."},
         {"vh mirror pending", "On the other server: offers waiting."},

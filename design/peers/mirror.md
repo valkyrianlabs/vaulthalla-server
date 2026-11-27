@@ -1230,9 +1230,19 @@ the hand-off:
 - **Local vaults only:** a vault whose type is not local (an S3 vault can be mirrored today when every file is on
   disk) is refused (`mirror_has_remote`): its remote sync would have to move with the role (phase 3).
 
-Known limits: a mirror whose core decided `switched` but which can no longer take the role (it detached meanwhile)
-leaves the old core read-only as the mirror of nobody, told again every 5 s; ending the mirror there (later pieces) is
-the way out. A long-running writer of any vault holds the freeze until the deadline (it cannot tell which vault an open
+**A prepared mirror whose core never comes back** waits read-only: it never decides on its own. `vh mirror info` says
+what the person does there: take over as the core (`vh mirror takeover <vault> --confirm <name>`, "As built: take
+over" below) or detach the copy (piece A). A take over ends the mirror's open switch (`mirror_taken_over`); if the old
+core had decided `switched` and tells it later, the two agree (the same fork point and the same next term, nothing it
+committed since): the commit is answered as switched, the take over settles (`switched`) and the old core follows. If
+it had abandoned, its telling is answered and nothing is undone (its return is step 4). **An unlink ends a switch on
+both sides** (`Switches::endUnlinked`, from the follower's pass: nothing is asked or told any more, the row is no longer
+held `switching`).
+
+Known limits: a mirror whose core decided `switched` but which can no longer take the role because it detached
+meanwhile leaves the old core read-only as the mirror of nobody, told again every 5 s, until piece A's
+`peer.mirror.detached` tells it (handled at the merge with piece A: whichever server learns the other left ends its
+side). A long-running writer of any vault holds the freeze until the deadline (it cannot tell which vault an open
 transaction changed), which abandons the switch.
 
 ### Forced promotion ("take over")
@@ -1244,6 +1254,80 @@ The core is gone or cannot be reached, and someone holding **Take over as core**
 2. It lifts the read-only gate. Pending changes become ordinary local changes.
 3. It audits the promotion with the fork point and warns that the old core may hold changes this server never
    received.
+
+### As built: take over (phase 2 wave 5, piece B, migration 168)
+
+Decided while building (owner's instruction to build without waiting for review); each is listed for confirmation in
+the hand-off:
+
+- **Who:** `mirror.takeover` / `vh mirror takeover <vault> --confirm <name>`, on the mirror, through one check,
+  `ops::mirrors::requireTakeover` (a person, never an agent, a scoped or relayed device or a linked server; a super
+  admin, and once piece A lands its admin bit `admin.mirror.takeover`, "Take over as core"). The vault's name is typed
+  exactly (`mirror_name_mismatch`); the console asks the **data.destroy** step-up bound to the vault
+  (`mirror.takeover:<vault>`: the old core's unseen changes are left to a merge). Audited `mirror.takeover` (a warning).
+- **When:** the copy is this server's `mirror` (never orphaned: that is a detach, `mirror_orphaned`), its first copy
+  finished (`mirror_first_copy`), not diverged (`mirror_diverged`: resync while the core answers, or detach). With the
+  link up it asks the core for its log at its own position (`peer.mirror.log`): an answer means the core is there and
+  the take over is refused (`mirror_core_reachable`: the planned switch); no answer, the link down, or `not_found` (the
+  core holds the vault no longer as mirrored with this server) lets it go on. Live, paused, expired, stopped and
+  switching (preparing or prepared) copies may take over.
+- **What it records,** in one transaction under the vault row's lock and the vault's local-change lock
+  (`Takeovers::take`): `mirror_takeover` (the term left and the new one, **the fork point** = the position it applied
+  and its digest, what became of its changes, the files whose contents never arrived, who and when) and **the fork base**
+  (`mirror_fork_base`: every entry's state document and hash as the old core last confirmed it: an entry a change made
+  here holds dirty is its confirmed state from `mirror_dirty`, one made here is left out; the baseline's form, a folder
+  before what is under it). Its digest must be the fork point's (`fork_base_matches`, recorded and logged when not).
+  Size: one state document per entry, as the baseline (about 2 s for 100,000 entries on the dev VM, measured for
+  164), kept until the old core rejoins (step 4) or the mirror ends (`MirrorVaults::remove` drops it, settled `ended`).
+- **The promotion:** pending changes become ordinary changes of the vault (their rows and dirty entries go, their
+  sealed copies in the pending store are dropped: the files hold the bytes); held changes stay listed; the entry hashes
+  and the digest are taken again from the tables (the tree as it is here, the person's changes in it); the row becomes
+  the vault's `core` in term + 1, live (the gate lifted), its log from `(term + 1, 1)`, its baseline position
+  `(term + 1, 0)` at that digest, the grant gone; the start offer changes side; an open switch ends
+  `mirror_taken_over`. Files whose contents never arrived keep their pending rows (the missing list; the old core can
+  serve them when it returns) and are counted.
+- **Accounts and owner:** unchanged; the vault's owner stays the old core's person (a remote account here) and this
+  server's super admins hold it by ordinary RBAC now.
+- **The old core,** until step 4: it does not know; if it comes back it is still the core of the old term (two cores,
+  never in one term: invariant 12). The take over waits for it (`vh mirror info` says so).
+
+### As built: the old core learns (phase 2 wave 5, piece B, step 4a, migration 168)
+
+The merge itself (step 4b) is not built; this is how the old core learns and stops. Decided while building:
+
+- **The telling:** `peer.mirror.promoted {vault_uid, term, fork: {term, seq, digest, entries}, baseline: {digest,
+  entries}}`, from the new core on every follower pass while the link is up and the old core has not answered
+  (`mirror_takeover.old_core_outcome` empty; nothing after an unlink). The old core answers `pending` until it decided,
+  then `following`, `rejoining` (with `changes`) or `forced`, the same answer when told again. **Decision:** the telling
+  is the new core's; the old core does not ask. Nothing of the vault is served by the old core to the new one meanwhile
+  (the new core asks its old core nothing: it is the core); what the old core accepted between reconnecting and the
+  first pass (about a second) is past the fork point like any other change it made while cut off.
+- **It stops at once:** the old core's row becomes `rejoining` (a new state: read-only through `mirror::access`, reason
+  `mirror_rejoining`, every surface, and the backstop: `vh_mirror_core_term` and `vh_mirror_track_vault` refuse a
+  `rejoining` or `forked` core's changes) and a `mirror_rejoin` row records the new term, the fork point and the new
+  core's digest at `(term, 0)`, in one transaction. The writers then running are waited for and numbered (as the switch's
+  freeze), then its pass decides, in one transaction under the row's lock (`Rejoins::decide`):
+  - **following:** nothing numbered past the fork point and its digest is the fork point's: the vault's mirror in the
+    new term at `(term, 0)`, live, its first copy complete (nothing copied, nothing fetched), the start offer changes
+    side; the new core then settles its take over (`returned`) and drops the fork base. When the new core made pending
+    changes ordinary at the take over, its tree at `(term, 0)` is not the fork point's: the take over then kept a
+    baseline of it, and the old core's first copy runs again over its own entries (the resync copy, reusing every byte
+    it holds).
+  - **rejoining:** it numbered changes past the fork point: its row stays `core`, `rejoining`, read-only, its tree and
+    log as they are (its log rows past the fork point are the list, `changes` their count, kept: retention never passes
+    what its mirror acknowledged). `vh mirror info` on both servers says the old core holds N changes the new one never
+    received and that the merge is the next step; the way out today is `vh mirror resync` on the old core (it becomes
+    the new core's mirror in its term, then starts over from its tree; what it holds that the new core does not is kept
+    as held changes by resync's rule, and the take over settles) or detach (piece A).
+- **Both forced:** a server told while a take over of its own is still open, by a term above the one it took over from
+  (the other server took over too, for example from a switch both had prepared or decided while cut off), is `forked`
+  (and tells the other so, which marks it `forked` too); a telling of a term not above its own refuses
+  (`mirror_term_stale`): read-only on both (`mirror_both_forced`), neither
+  follows the other, nothing is merged; `vh mirror info` says pick the server whose vault stays and run `vh mirror
+  resync` (or detach) on the other. Resync from a forked server works as from a rejoining one; the kept server's own
+  forked record closes.
+- **Invariant 12:** from the moment the old core was told, it accepts no change as core (the state is written before the
+  answer; a restart keeps it; the decision only ever turns it into a mirror or keeps it read-only).
 
 ### The old core returns
 
