@@ -37,5 +37,6 @@ test('linking a server names what it trusts, though it asks for the device.trust
   assert.equal(stepUpAction({ family: 'keys', target: 'peer.x' }), 'Handle vault encryption keys')
   assert.equal(stepUpAction({ family: 'keys', target: 'mirror.add:5' }), 'Give a linked server this vault’s keys')
   assert.equal(stepUpAction({ family: 'data.destroy', target: 'mirror.cancel:5' }), 'End a vault’s mirror')
+  assert.equal(stepUpAction({ family: 'data.destroy', target: 'mirror.takeover:5' }), 'Take over as a vault’s core')
   assert.equal(stepUpAction({ family: 'data.destroy', target: 'storage.vault.remove:5' }), 'Permanently remove data')
 })
