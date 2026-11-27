@@ -249,6 +249,17 @@ TEST_F(MirrorRotateDbTest, ARotationOnTheCoreEndsWithEqualDigestsAndEveryFileRea
         << "the version records where it came from";
     audit::Trail::instance()->flushNow();
     EXPECT_GE(one<int>("SELECT count(*) FROM audit_event WHERE action = 'mirror.key'"), 2) << "both sides audited";
+
+    // What the console reads of the copy now (mirror.get): nothing pending, the first copy done, the link up, the
+    // last acknowledgement's time, its settings.
+    const auto row = ops::mirrors::toJson(ops::mirrors::get(superUser, s.mirrorId));
+    EXPECT_EQ(row.value("pending_changes", 99), 0) << row.dump();
+    EXPECT_TRUE(row.at("first_copy").value("finished", false)) << row.dump();
+    EXPECT_TRUE(row.value("link_up", false)) << row.dump();
+    EXPECT_TRUE(row.at("confirmed_at").is_number_integer()) << row.dump();
+    ASSERT_TRUE(row.at("settings").is_object()) << row.dump();
+    EXPECT_FALSE(row.at("settings").at("versions").value("enabled", true)) << "a mirror's versions setting, off";
+    EXPECT_FALSE(row.at("settings").value("mirror_all", true));
 }
 
 TEST_F(MirrorRotateDbTest, WithTheLinkDownOrTheMirrorNotLiveTheRotationIsRefusedAndNothingChanges) {

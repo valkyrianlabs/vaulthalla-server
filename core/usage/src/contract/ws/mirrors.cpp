@@ -109,7 +109,15 @@ std::vector<WsField> mcMirroredFields() {
                 .desc("The vault's core is deleting it (its retention window): when the purge is due and what it does "
                       "to the copy (mirror: `here`, what this server will do by its keep setting). null: not deleting."),
             str("stop_reason").nullable().desc("Why the copy is not live (mirror_core_deleting while its core deletes "
-                                               "the vault).")};
+                                               "the vault)."),
+            uinteger("pending_changes").desc("mirror: changes made here the core has not confirmed yet; core: changes "
+                                             "numbered here the mirror has not acknowledged (in this term). 0 without "
+                                             "a mirror row."),
+            object("first_copy", "MirrorFirstCopy").nullable().desc("null without a mirror row."),
+            boolean("link_up").desc("The link to the row's linked server is up now."),
+            integer("confirmed_at").nullable().desc("When the last position was acknowledged (core: by its mirror; "
+                                                    "mirror: to its core)."),
+            object("settings", "MirrorSettings").nullable().desc("null without a linked server.")};
 }
 
 WsField mcVaultIdField() { return vaultId(); }

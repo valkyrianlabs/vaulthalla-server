@@ -15,12 +15,14 @@
 #include "mirror/access/Access.hpp"
 #include "mirror/follow/Follower.hpp"
 #include "mirror/leave/Leave.hpp"
+#include "mirror/versions/Versions.hpp"
 #include "mirror/resync/Resync.hpp"
 #include "mirror/start/Start.hpp"
 #include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Local.hpp"
 #include "mirror/switching/Switch.hpp"
 #include "mirror/takeover/Takeover.hpp"
+#include "ops/MirrorLeave.hpp"
 #include "ops/PeerPolicy.hpp"
 #include "ops/Peers.hpp"
 #include "rbac/permission/admin/Mirror.hpp"
@@ -257,6 +259,43 @@ Mirrored get(const Actor& actor, const uint32_t vaultId) {
     return m;
 }
 
+Status statusOf(const Mirrored& m) {
+    using namespace ops_mirrors_detail;
+    Status s;
+    if (m.row) {
+        const auto& r = *m.row;
+        Status::FirstCopy fc;
+        if (r.role == "core") {
+            // What the mirror has not acknowledged: in this term only; everything before any acknowledgement or once
+            // the term moved on.
+            s.pending_changes = !r.acked || r.acked->term != r.term ? r.last_seq
+                                : r.last_seq > r.acked->seq       ? r.last_seq - r.acked->seq
+                                                                  : 0;
+            // The core keeps its baseline until the mirror acknowledged the first copy.
+            fc.finished = !r.baseline && r.acked.has_value();
+        } else {
+            s.pending_changes = db::query::mirror::Pending::list(m.vault_id).size();
+            fc.finished = r.copy_finished;
+            fc.entries_copied = r.copy_cursor;
+        }
+        if (r.baseline) fc.entries_total = r.baseline_rows;
+        s.first_copy = fc;
+        s.confirmed_at = r.acked_at;
+    }
+    if (m.peer) {
+        if (!m.peer->revoked()) {
+            const auto t = vh::mirror::start::transport();
+            s.link_up = t.upSince && t.upSince(m.peer->id).has_value();
+        }
+        Status::Settings st{.accept_all = Q::acceptVaults(m.peer->id).enabled,
+                            .keep_removed = Q::keepVaults(m.peer->id).enabled,
+                            .mirror_all = Q::mirrorVaults(m.peer->id).enabled};
+        if (m.row && m.row->role != "core") st.versions = vh::mirror::versions::get(m.vault_id);
+        s.settings = st;
+    }
+    return s;
+}
+
 std::vector<Offer> offers(const Actor& actor) {
     using namespace ops_mirrors_detail;
     requireSuperAdmin(actor, "list mirror offers");
@@ -462,7 +501,26 @@ nlohmann::json toJson(const Mirrored& m) {
     // is due and what it does to the copy, or null.
     j["deleting"] = m.row ? vh::mirror::leave::deletionOf(m.vault_id) : nlohmann::json(nullptr);
     j["stop_reason"] = m.row && m.row->stop_reason ? nlohmann::json(*m.row->stop_reason) : nlohmann::json(nullptr);
+    // What the console shows beside the row: pending changes, the first copy, the link, the last acknowledgement, the
+    // settings.
+    const auto status = toJson(statusOf(m));
+    for (const auto& [key, value] : status.items()) j[key] = value;
     return j;
+}
+
+nlohmann::json toJson(const Status& s) {
+    using namespace ops_mirrors_detail;
+    nlohmann::json firstCopy = nullptr;
+    if (s.first_copy)
+        firstCopy = {{"finished", s.first_copy->finished}, {"entries_copied", opt(s.first_copy->entries_copied)},
+                     {"entries_total", opt(s.first_copy->entries_total)}};
+    nlohmann::json settings = nullptr;
+    if (s.settings)
+        settings = {{"versions", s.settings->versions ? toJson(*s.settings->versions) : nlohmann::json(nullptr)},
+                    {"accept_all", s.settings->accept_all}, {"keep_removed", s.settings->keep_removed},
+                    {"mirror_all", s.settings->mirror_all}};
+    return {{"pending_changes", s.pending_changes}, {"first_copy", std::move(firstCopy)}, {"link_up", s.link_up},
+            {"confirmed_at", optTime(s.confirmed_at)}, {"settings", std::move(settings)}};
 }
 
 nlohmann::json toJson(const Cancelled& c) {

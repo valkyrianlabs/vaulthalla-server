@@ -4,12 +4,14 @@
 #include "db/query/mirror/MirrorVault.hpp"
 #include "db/query/mirror/Pending.hpp"
 #include "db/query/mirror/Start.hpp"
+#include "mirror/versions/Versions.hpp"
 #include "ops/Actor.hpp"
 #include "peer/Peer.hpp"
 
 #include <nlohmann/json_fwd.hpp>
 
 #include <cstdint>
+#include <ctime>
 #include <optional>
 #include <string>
 #include <vector>
@@ -80,6 +82,30 @@ struct Mirrored {
     std::optional<db::query::mirror::DetachRecord> detached{};
 };
 [[nodiscard]] std::vector<Mirrored> list(const Actor& actor);
+
+// What the console shows of a mirrored vault beside its row (mirror.list and mirror.get rows carry it).
+struct Status {
+    // mirror: changes made here the core has not confirmed yet; core: changes numbered here its mirror has not
+    // acknowledged (in this term; all of them before any acknowledgement or after a term change). 0 without a row.
+    uint64_t pending_changes{};
+    struct FirstCopy {
+        bool finished{false};
+        std::optional<uint64_t> entries_copied{};   // mirror: the entries applied so far; core: null (it can't tell)
+        std::optional<uint64_t> entries_total{};    // the baseline's entries while it is kept; null once dropped
+    };
+    std::optional<FirstCopy> first_copy{};          // null without a mirror row
+    bool link_up{false};                            // the link to the row's linked server is up now
+    std::optional<std::time_t> confirmed_at{};      // when the last position was acknowledged (either side's record)
+    struct Settings {
+        std::optional<vh::mirror::versions::Setting> versions{};   // a mirror: what it keeps of what its core replaces
+        bool accept_all{false}, keep_removed{false}, mirror_all{false};   // the row's linked server's settings here
+    };
+    std::optional<Settings> settings{};             // null without a linked server
+};
+// Read for a row of list() or get() (the database and the link's health).
+[[nodiscard]] Status statusOf(const Mirrored& m);
+// {pending_changes, first_copy, link_up, confirmed_at, settings}: DB-free.
+[[nodiscard]] nlohmann::json toJson(const Status& s);
 [[nodiscard]] Mirrored get(const Actor& actor, uint32_t vaultId);
 // Every offer on this server (both sides, newest first), finished ones included.
 [[nodiscard]] std::vector<Offer> offers(const Actor& actor);
