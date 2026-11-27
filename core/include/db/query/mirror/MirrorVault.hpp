@@ -67,6 +67,14 @@ struct MirrorVault {
     std::optional<std::time_t> stopped_at{};
 
     [[nodiscard]] Position position() const { return {term, last_seq}; }
+
+    // Migration 168 (design/peers/mirror.md "As built: moving the core and resync"). Mirror: when a person here last
+    // started the copy over from the core's tree, who, how many times; core: when its mirror last asked. Both: the
+    // last scrub.
+    std::optional<std::time_t> resync_at{};
+    std::optional<uint32_t> resync_by{};
+    uint32_t resync_count{};
+    std::optional<std::time_t> scrubbed_at{};
 };
 
 // What the core answers an acknowledgement (peer.mirror.ack).

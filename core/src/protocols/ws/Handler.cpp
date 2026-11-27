@@ -156,6 +156,7 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("mirror.held.list", &handler::Mirrors::heldList);
     r->registerPayload("mirror.held.discard", &handler::Mirrors::heldDiscard);
     r->registerPayload("mirror.held.retry", &handler::Mirrors::heldRetry);
+    r->registerPayload("mirror.resync", &handler::Mirrors::resync);
     r->registerPayload("peer.mirror.offer", &handler::Mirrors::offer);
     r->registerPayload("peer.mirror.answer", &handler::Mirrors::answer);
     r->registerPayload("peer.mirror.keys", &handler::Mirrors::keys);
@@ -176,6 +177,7 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("mirror.versions.set", &handler::MirrorLeave::versionsSet);
     r->registerPayload("mirror.held.get", &handler::MirrorLeave::heldGet);
     r->registerPayload("peer.mirror.detached", &handler::MirrorLeave::detached);
+    r->registerPayload("peer.mirror.resync", &handler::MirrorFollow::resync);
 }
 
 void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {

@@ -19,6 +19,8 @@ struct MirrorFollow {
     static json notify(const json& payload, const std::shared_ptr<Session>& session);
     // peer.mirror.submit: a change made on the mirror (wave 4 piece B; mirror::submit).
     static json submit(const json& payload, const std::shared_ptr<Session>& session);
+    // peer.mirror.resync: the mirror starts its copy over; the core takes its baseline again (wave 5 piece B).
+    static json resync(const json& payload, const std::shared_ptr<Session>& session);
 };
 
 }

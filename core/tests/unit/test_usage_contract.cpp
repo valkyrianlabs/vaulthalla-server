@@ -459,7 +459,8 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         // Starting a mirror (ops::mirrors, mirror::start): each refusal on the commands that send it.
         static const std::map<std::string, std::set<std::string>> kMirrorCodes{
             {"peer_revoked", {"peer.mirror.offer", "peer.mirror.answer", "peer.mirror.keys", "peer.mirror.begin",
-                              "peer.mirror.grant", "peer.mirror.cancel", "peer.mirror.submit", "peer.mirror.detached"}},
+                              "peer.mirror.grant", "peer.mirror.cancel", "peer.mirror.submit", "peer.mirror.detached",
+                              "peer.mirror.resync"}},
             {"mirror_already", {"mirror.add"}}, {"mirror_start_running", {"mirror.add"}},
             {"vault_replicated", {"mirror.add"}}, {"vault_attach_running", {"mirror.add"}},
             {"vault_detach_running", {"mirror.add"}}, {"layout_migration_running", {"mirror.add"}},
@@ -486,6 +487,11 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"mirror_not_held", {"mirror.detach", "mirror.detach.preview", "mirror.versions.set"}},
             {"too_large", {"mirror.held.get"}},
             {"mirror_detached_copy", {"mirror.add", "mirror.accept", "peer.mirror.keys"}},
+            // Resync (wave 5 piece B, mirror::resync).
+            {"mirror_not_stopped", {"mirror.resync"}}, {"mirror_core_unreachable", {"mirror.resync"}},
+            {"mirror_core_gone", {"mirror.resync"}}, {"mirror_resync_refused", {"mirror.resync"}},
+            {"mirror_paused", {"mirror.resync", "peer.mirror.resync"}},
+            {"mirror_resync_failed", {"mirror.resync", "peer.mirror.resync"}},
         };
         if (const auto m = kMirrorCodes.find(code); m != kMirrorCodes.end() && m->second.contains(command)) return true;
         if ((code == "no_pairing_window" || code == "rate_limited" || code == "device_unknown") &&

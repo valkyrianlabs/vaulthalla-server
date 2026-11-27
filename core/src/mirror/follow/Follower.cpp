@@ -5,6 +5,7 @@
 #include "log/Registry.hpp"
 #include "mirror/Contents.hpp"
 #include "mirror/follow/Protocol.hpp"
+#include "mirror/resync/Resync.hpp"
 #include "mirror/start/Start.hpp"
 #include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Submit.hpp"
@@ -349,6 +350,12 @@ std::size_t Follower::housekeep(const SteadyClock::time_point now) {
     if (!startup && now - *housekept_ < kHousekeeping) return 0;
     housekept_ = now;
     try {
+        // The scrub of every mirrored vault due one (kScrubEvery; migration 168): nothing on a server that mirrors none.
+        try {
+            (void)vh::mirror::resync::scrubDue();
+        } catch (const std::exception& e) {
+            log::Registry::sync()->warn("[MirrorFollower] The scrub failed: {}", e.what());
+        }
         return vh::mirror::submit::contents::housekeeping(startup);
     } catch (const std::exception& e) {
         log::Registry::sync()->warn("[MirrorFollower] Housekeeping of sealed bytes failed: {}", e.what());
@@ -367,6 +374,7 @@ void Follower::runLoop() {
         auto wait = std::chrono::milliseconds(250);
         try {
             (void)housekeep(SteadyClock::now());   // first pass and hourly, the switch on or off
+            if (vh::mirror::resync::scrubNowForTesting()) (void)vh::mirror::resync::scrubDue(std::chrono::hours(0));
             if (!followExperimental()) {
                 lazySleep(std::chrono::seconds(1));
                 continue;

@@ -29,7 +29,9 @@ constexpr const char* kMirrorVaultColumns = R"SQL(
     EXTRACT(EPOCH FROM granted_at)::BIGINT AS granted_at,
     baseline_term, baseline_seq, encode(baseline_digest, 'hex') AS baseline_digest, baseline_entries, baseline_rows,
     copy_cursor, copy_finished, stop_reason, stop_detail::text AS stop_detail,
-    EXTRACT(EPOCH FROM stopped_at)::BIGINT AS stopped_at
+    EXTRACT(EPOCH FROM stopped_at)::BIGINT AS stopped_at,
+    EXTRACT(EPOCH FROM resync_at)::BIGINT AS resync_at, resync_by, resync_count,
+    EXTRACT(EPOCH FROM scrubbed_at)::BIGINT AS scrubbed_at
 )SQL";
 
 std::string selectMirrorVaults(const std::string& where) {
@@ -75,6 +77,11 @@ MirrorVault mirrorVaultFrom(const pqxx::row_ref row) {
     m.stop_detail = row["stop_detail"].is_null() ? nlohmann::json::object()
                                                  : nlohmann::json::parse(row["stop_detail"].as<std::string>());
     if (!row["stopped_at"].is_null()) m.stopped_at = static_cast<std::time_t>(row["stopped_at"].as<int64_t>());
+    // Migration 168.
+    if (!row["resync_at"].is_null()) m.resync_at = static_cast<std::time_t>(row["resync_at"].as<int64_t>());
+    if (!row["resync_by"].is_null()) m.resync_by = row["resync_by"].as<uint32_t>();
+    m.resync_count = row["resync_count"].as<uint32_t>();
+    if (!row["scrubbed_at"].is_null()) m.scrubbed_at = static_cast<std::time_t>(row["scrubbed_at"].as<int64_t>());
     return m;
 }
 

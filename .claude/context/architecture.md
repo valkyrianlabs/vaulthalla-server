@@ -723,6 +723,14 @@ through on a Live mirror.
   file renames as metadata (`handleRename`). An HTTP upload's staging file is never content: 166 leaves
   `.upload-http-*.part` out of the log and tree (`vh_mirror_upload_staging` = `vh::fs::isUploadStagingName`), and on a
   mirror it is scratch (`submit::Scratch`: past the backstop, no pending row).
+- **Resync and the scrub (`mirror/resync`, `db::query::mirror::Resync`, migration 168; wave 5 piece B):**
+  `mirror.resync` on a diverged/expired/stopped copy asks the core (`peer.mirror.resync`: row `starting`, log/hashes/
+  baseline/submissions dropped, `startCore(term + 1)`), then `submit::holdAllPending(mirror_resync)` and
+  `Resync::resetMirror` (first copy again). A copy page adopts an unrecorded entry of the same uid in place (bytes of
+  the same generation reused), sets an unrecorded occupant aside, keeps a replaced file's own version as held
+  (`mirror_resync_replaced`) and, at the copy's end, every entry the core's tree lacks (`Resync::leftovers`,
+  `mirror_resync_extra`). The scrub (`resync::scrubDue`, from `Follower::housekeep` hourly, each vault every 24 h by
+  `scrubbed_at`) diffs `vh_mirror_tree` with `mirror_entry_hash` in one statement and stops a mismatch as diverged.
 - **Submit (`mirror::submit::submitPending`, from `Follower::step` before the log):** `peer.mirror.submit` (peer wire
   set), one change at a time per vault in order. Core: `serveSubmit` answers at once from `mirror_submission` (queued,
   running, executed with groups, refused with code: never executed twice) and `drain`s on the sync pool, one vault's in

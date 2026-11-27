@@ -1044,6 +1044,8 @@ export interface WebSocketCommandMap {
   'mirror.held.list': WsContract['mirror.held.list']
   'mirror.held.discard': WsContract['mirror.held.discard']
   'mirror.held.retry': WsContract['mirror.held.retry']
+  // A copy that stopped starts over from its core's tree (super admins).
+  'mirror.resync': WsContract['mirror.resync']
   'peer.mirror.offer': WsContract['peer.mirror.offer']
   'peer.mirror.answer': WsContract['peer.mirror.answer']
   'peer.mirror.keys': WsContract['peer.mirror.keys']
@@ -1064,6 +1066,7 @@ export interface WebSocketCommandMap {
   'mirror.versions.set': WsContract['mirror.versions.set']
   'mirror.held.get': WsContract['mirror.held.get']
   'peer.mirror.detached': WsContract['peer.mirror.detached']
+  'peer.mirror.resync': WsContract['peer.mirror.resync']
   // Any signed-in user pairs devices to their own account: open a 10-minute window, then approve a request by picking
   // the one of its three code_choices the device shows (a wrong pick denies the request).
   'device.pairing.open': WsContract['device.pairing.open']

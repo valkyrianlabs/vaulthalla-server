@@ -117,6 +117,26 @@ std::vector<WsCommandUsage> mirrorFollowCommands() {
     });
 
     out.push_back({
+        .command = "peer.mirror.resync",
+        .description = "The mirror starts its copy over (mirror.resync on the mirror): the core takes its baseline "
+                       "again in the next term (its log, entry hashes, submissions and baseline for the vault start "
+                       "again) and answers the new term and baseline. The caller must be the vault's mirror; a paused "
+                       "vault is refused.",
+        .auth = "peer",
+        .payload = {mfVaultUid()},
+        .response = {uinteger("term"), object("baseline", "", {mfTerm(), mfSeq()}).desc("The new baseline's position."),
+                     integer("entries")},
+        .refusal_codes = [] {
+            auto r = mfRefusals();
+            r.push_back("mirror_paused");
+            r.push_back("mirror_resync_failed");
+            r.push_back("peer_revoked");
+            return r;
+        }(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
         .command = "peer.mirror.submit",
         .description = "A change made on the mirror, submitted to the core, which executes it as that person (the "
                        "linked server's vault role is the ceiling) and logs it with the request id in `origin`. "

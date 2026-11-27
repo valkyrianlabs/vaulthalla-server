@@ -507,6 +507,7 @@ def _whole_mirror(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, re
         or None, timeout=60) is not None)
 
     _changes_on_the_mirror(a, va, b, vb, faults_b, node_a, node_b, report)
+    _scrub_and_resync(a, va, b, vb, faults_b, report)
 
     a.vh("peer", "policy", "set", node_b, "reader")
     _wait("B's grant (reader) again", lambda: (_mirror_info(b, vb).get("grant") or {}).get("role_name") == "reader"
@@ -655,9 +656,18 @@ def _changes_on_the_mirror(a: Node, va: int, b: Node, vb: int, faults_b: Path, n
     report.check("7j: an HTTP upload on A stores the file", errors == {"/docs/uploaded_on_a.bin": None}, json.dumps(errors))
     ok = settled("the uploads on both sides")
     on_b = b.inst.mount / "whole" / "docs" / "uploaded_on_a.bin"
+
+    def arrived_on_b():
+        # Settled means equal digests; the bytes come on the sealed lane after (an open meanwhile may answer ENODATA).
+        try:
+            return on_b.read_bytes() == body_a or None
+        except OSError:
+            return None
+
+    arrived = _wait("A's upload's bytes on B", arrived_on_b, timeout=60)
     report.check("7j: both arrive and come back confirmed",
                  bool(ok) and _plain(a, "whole/from_b/uploaded_on_b.txt") == _plain(b, "whole/from_b/uploaded_on_b.txt")
-                 and on_b.is_file() and on_b.read_bytes() == body_a, json.dumps(ok)[:300])
+                 and bool(arrived), json.dumps(ok)[:300])
     report.check("7j: B's upload was exactly one change submitted to A (its write), no staging file among them",
                  _sql(a, f"SELECT count(*) FROM mirror_submission WHERE vault_id = {va} "
                          "AND payload -> 'args' ->> 'name' = 'uploaded_on_b.txt'") == "1"
@@ -751,6 +761,33 @@ def _changes_on_the_mirror(a: Node, va: int, b: Node, vb: int, faults_b: Path, n
     report.check("7n: A executed them in the order B made them",
                  _sql(a, f"SELECT string_agg(payload ->> 'op', ',' ORDER BY seq) FROM mirror_submission WHERE vault_id = {va} "
                          "AND payload -> 'args' ->> 'name' IN ('order', 'second', 'third.txt')").startswith("mkdir,mkdir,write"))
+
+
+def _scrub_and_resync(a: Node, va: int, b: Node, vb: int, faults_b: Path, report: Report) -> None:
+    """7o (wave 5 piece B): a difference planted in B's tables behind the triggers' backs is caught by the scrub (held
+    to every pass with the test-only mirror-scrub-now file) and stops B's copy as diverged; `vh mirror resync` starts it
+    over from A's tree, reusing every file whose bytes B holds, and the digests agree again."""
+    ok = _wait_synced(a, va, b, vb, "settled before the planted difference", timeout=120)
+    report.check("7o: settled before the planted difference", bool(ok), json.dumps(ok)[:300])
+    _sql(b, "BEGIN; SELECT set_config('vh.mirror_apply', 'on', true); "
+            f"UPDATE fs_entry SET mode = (COALESCE(mode, 420) # 1) WHERE vault_id = {vb} AND path = '/top.txt'; COMMIT;")
+    scrub_now = faults_b / "mirror-scrub-now"
+    scrub_now.write_text("drill")
+    stopped = _wait("the scrub on B", lambda: _sql(b, f"SELECT stop_reason FROM mirror_vault WHERE vault_id = {vb}")
+                    == "mirror_scrub_mismatch" or None, timeout=60)
+    scrub_now.unlink(missing_ok=True)
+    report.check("7o: the scrub catches the planted difference and stops B's copy as diverged",
+                 bool(stopped) and _mv(b, vb).get("state") == "diverged", json.dumps(_mv(b, vb))[:300])
+    cp = b.vh("mirror", "resync", str(vb), check=False)
+    report.check("7o: `vh mirror resync` starts B's copy over", cp.returncode == 0, (cp.stdout + cp.stderr)[-300:])
+    copied = _wait("B's copy done again", lambda: _sql(b, f"SELECT copy_finished FROM mirror_vault WHERE vault_id = {vb}")
+                   == "t" or None, timeout=120)
+    report.check("7o: B fetched nothing for the files it holds (the same generations)",
+                 bool(copied) and _sql(b, f"SELECT count(*) FROM mirror_content_pending WHERE vault_id = {vb}") == "0")
+    ok = _wait_synced(a, va, b, vb, "B resynced", timeout=180)
+    report.check("7o: after the resync both digests agree, B is live again, its resync recorded",
+                 bool(ok) and _sql(b, f"SELECT resync_count FROM mirror_vault WHERE vault_id = {vb}") == "1",
+                 json.dumps(ok)[:300])
 
 
 def _down_and_back(a: Node, b: Node, node_a: str, node_b: str, change) -> None:
