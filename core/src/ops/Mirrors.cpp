@@ -23,6 +23,7 @@
 #include "mirror/takeover/Takeover.hpp"
 #include "ops/PeerPolicy.hpp"
 #include "ops/Peers.hpp"
+#include "rbac/permission/admin/Mirror.hpp"
 #include "rbac/permission/admin/Vaults.hpp"
 #include "rbac/permission/vault/Roles.hpp"
 #include "rbac/resolver/admin/all.hpp"
@@ -474,8 +475,9 @@ nlohmann::json switchRole(const Actor& actor, const uint32_t vaultId, const bool
 
 void requireTakeover(const Actor& actor, const std::string& what) {
     ops_mirrors_detail::requireMirrorPerson(actor, what);
-    // Piece A's admin::MirrorPermissions bit 1 (admin.mirror.takeover) joins super admins here once it lands.
-    if (!actor->isSuperAdmin()) throw Denied("only super admins of this server (Take over as core) may " + what);
+    if (actor->isSuperAdmin() || actor->mirrorPerms().canTakeover()) return;
+    throw Denied("only super admins of this server, or people its admin roles let take over as core "
+                 "(admin.mirror.takeover), may " + what);
 }
 
 nlohmann::json takeover(const Actor& actor, const uint32_t vaultId, const std::string& confirmName) {

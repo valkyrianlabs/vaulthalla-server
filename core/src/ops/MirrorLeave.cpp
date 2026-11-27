@@ -77,7 +77,14 @@ vh::mirror::leave::Detached detach(const Actor& actor, const DetachRequest& requ
     if (!vault) throw NotFound("no vault with ID " + std::to_string(request.vault_id));
     if (request.confirm_name && *request.confirm_name != vault->name)
         throw Invalid("type the vault's name exactly to detach it");
-    const auto owner = ownerOf(actor, request.owner);
+    // A core row (a take over left it; the vault was this server's) keeps its owner when none is named and the owner is
+    // an active person here; a copy's owner is the core's person, so the person detaching it is the default.
+    auto owner = ownerOf(actor, request.owner);
+    if (!request.owner || request.owner->empty())
+        if (const auto row = vh::db::query::mirror::MirrorVaults::get(request.vault_id); row && row->role == "core")
+            if (const auto current = vh::identities::manager().user(vault->owner_id);
+                current && !current->remote() && current->isActive())
+                owner = current;
     return vh::mirror::leave::detach(request.vault_id, owner->id, actor->id, actor->name());
 }
 

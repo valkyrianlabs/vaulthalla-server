@@ -345,6 +345,10 @@ bool MirrorVaults::remove(pqxx::work& txn, const uint32_t vaultId) {
         txn.exec("UPDATE mirror_takeover SET settled_at = CURRENT_TIMESTAMP, settled_how = 'ended' "
                  "WHERE vault_id = $1 AND settled_at IS NULL",
                  pqxx::params{vaultId});
+        // And the old core's side: a rejoin still open (draining, rejoining, forked) ends with it.
+        txn.exec("UPDATE mirror_rejoin SET phase = 'ended', decided_at = COALESCE(decided_at, CURRENT_TIMESTAMP) "
+                 "WHERE vault_id = $1 AND phase IN ('draining', 'rejoining', 'forked')",
+                 pqxx::params{vaultId});
         return gone > 0;
     }
 }

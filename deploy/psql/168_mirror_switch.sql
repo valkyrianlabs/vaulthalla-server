@@ -23,6 +23,8 @@
 --   mirror_takeover, mirror_fork_base   a mirror that took over as core (mirror.takeover): the record (the fork
 --                      point, what became of its changes) and the fork base (its tree as the old core last confirmed it),
 --                      kept until the old core rejoins.
+--   admin.mirror.takeover   bit 1 of admin_role.mirror_permissions (167's column): "Take over as core", held by
+--                      super_admin alone among the built-in roles (the fresh seed's grants).
 --
 -- The backstop of the freeze: vh_mirror_core_term (every entry trigger of a core vault asks it for the term) and the
 -- vault-settings trigger refuse a change of a core vault whose row is switching, so nothing commits on the core after
@@ -237,7 +239,8 @@ CREATE TABLE IF NOT EXISTS mirror_fork_base
 -- running are waited for and numbered), then following (it committed nothing after the fork point: the vault's
 -- mirror in the new term), rejoining (it did: read-only with its changes past the fork point, `changes` of them, until
 -- the merge or a resync), forked (this server had taken over the vault too: both read-only until an operator picks
--- one), or resynced (a person started its copy over from the new core).
+-- one), resynced (a person started its copy over from the new core), or ended (the mirror ended first: a detach on
+-- either server, an unlink).
 CREATE TABLE IF NOT EXISTS mirror_rejoin
 (
     id               BIGSERIAL PRIMARY KEY,
@@ -250,7 +253,8 @@ CREATE TABLE IF NOT EXISTS mirror_rejoin
     fork_entries     BIGINT      NOT NULL,
     baseline_digest  BYTEA       CHECK (baseline_digest IS NULL OR octet_length(baseline_digest) = 32),
     baseline_entries BIGINT,
-    phase            TEXT        NOT NULL CHECK (phase IN ('draining', 'following', 'rejoining', 'forked', 'resynced')),
+    phase            TEXT        NOT NULL CHECK (phase IN ('draining', 'following', 'rejoining', 'forked', 'resynced',
+                                                           'ended')),
     changes          INTEGER     NOT NULL DEFAULT 0,
     writers          TEXT[],
     detail           JSONB,
@@ -260,3 +264,14 @@ CREATE TABLE IF NOT EXISTS mirror_rejoin
 
 CREATE UNIQUE INDEX IF NOT EXISTS mirror_rejoin_open_key ON mirror_rejoin (vault_id)
     WHERE phase IN ('draining', 'rejoining', 'forked');
+
+-- ---------------------------------------------------------------------------------------------------- the permission
+-- "Take over as core" (admin::MirrorPermissions bit 1, beside 167's admin.mirror.detach at bit 0). super_admin holds
+-- every mirror bit; setting the bit again is a no-op.
+INSERT INTO permission (name, description, category, bit_position)
+VALUES ('admin.mirror.takeover', 'Allows taking over as core: this server becomes the core of a vault it mirrors when '
+                                 'that vault''s core is gone.', 'admin', 1)
+ON CONFLICT DO NOTHING;
+
+UPDATE admin_role SET mirror_permissions = mirror_permissions | B'00000010'
+WHERE name = 'super_admin' AND (mirror_permissions & B'00000010') = B'00000000';

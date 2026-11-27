@@ -11,14 +11,16 @@ namespace vh::rbac::permission {
         // Leaving a mirror (design/peers/mirror.md "Who may do it"; design/peers/identity.md "The permission to leave"):
         // admin permissions on the server that holds another server's copy of a vault, outside the shared access list,
         // so nothing the core governs can take them away. Detach turns a held copy (live, stopped, diverged, expired or
-        // orphaned) into an ordinary local vault here. Super admins hold every bit; no other built-in role holds any.
+        // orphaned) into an ordinary local vault here. Takeover makes this server the core of a vault it mirrors whose
+        // core is gone (mirror.takeover, migration 168). Super admins hold every bit; no other built-in role holds any.
         // Never an agent, a scoped device or a relayed session, whatever its role (ops::peer_policy::requirePerson).
-        // Bit positions are persisted in admin_role.mirror_permissions (migration 167): append new bits (take over as
-        // core is the next), never renumber.
+        // Bit positions are persisted in admin_role.mirror_permissions (migration 167): append new bits, never
+        // renumber.
         enum class MirrorPermissions : uint8_t {
             None = 0,
             Detach = 1 << 0,
-            All = Detach
+            Takeover = 1 << 1,
+            All = Detach | Takeover
         };
     }
 
@@ -30,6 +32,9 @@ namespace vh::rbac::permission {
             Entry{admin::MirrorPermissions::Detach, "detach",
                   "Allows detaching mirrored vaults: a copy of another server's vault held here becomes a standalone "
                   "vault on this server."},
+            Entry{admin::MirrorPermissions::Takeover, "takeover",
+                  "Allows taking over as core: this server becomes the core of a vault it mirrors when that vault's "
+                  "core is gone."},
         };
     };
 
@@ -58,6 +63,7 @@ namespace vh::rbac::permission {
             [[nodiscard]] std::string toString(uint8_t indent) const override;
 
             [[nodiscard]] bool canDetach() const noexcept { return has(MirrorPermissions::Detach); }
+            [[nodiscard]] bool canTakeover() const noexcept { return has(MirrorPermissions::Takeover); }
 
             static Mirror None() {
                 Mirror s;

@@ -10,7 +10,9 @@
 // lifted, the log from (term + 1, 1)); files whose contents never arrived counted; refused while the core answers, for
 // a name not typed exactly, an orphaned copy, an unfinished first copy, a diverged copy; the way out of a planned switch
 // whose core never came back (from prepared), and the old core's later decision: switched (the two agree: settled, the
-// old core follows) or abandoned; an unlink ending a switch's telling on both sides; who may, and the console's step-up.
+// old core follows) or abandoned; an unlink ending a switch's telling on both sides; a detach on either side of a take
+// over (it settles, nothing is told again); a take over while the core deletes the vault; who may (super admins and holders of
+// admin.mirror.takeover, people only), and the console's step-up.
 
 #include "../helpers/mirror_pair.hpp"
 
@@ -22,12 +24,19 @@
 #include "db/query/rbac/role/Admin.hpp"
 #include "device/Peer.hpp"
 #include "db/query/mirror/Rejoin.hpp"
+#include "db/query/mirror/Detach.hpp"
+#include "db/query/peer/Peer.hpp"
+#include "db/query/vault/Vault.hpp"
+#include "mirror/leave/Leave.hpp"
+#include "audit/Trail.hpp"
 #include "mirror/resync/Resync.hpp"
 #include "mirror/switching/Switch.hpp"
 #include "mirror/takeover/Takeover.hpp"
 #include "ops/PeerPolicy.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
+#include "rbac/permission/admin/Mirror.hpp"
+#include "rbac/role/Admin.hpp"
 
 #include <filesystem>
 
@@ -428,13 +437,33 @@ TEST_F(MirrorTakeoverDbTest, AnUnlinkEndsASwitchsTellingOnBothSides) {
 
 // ---- who may -----------------------------------------------------------------------------------------------------------
 
-TEST_F(MirrorTakeoverDbTest, OnlyASuperAdminPersonMayTakeOverNeverAnAgentOrARelayedDevice) {
+TEST_F(MirrorTakeoverDbTest, OnlyASuperAdminOrAHolderOfTheTakeoverPermissionMayNeverAnAgentOrARelayedDevice) {
     auto s = settledPair();
     vh::mirror::access::linkChanged(corePeer, false);
     const auto name = "mto_user_" + msTag();
     const auto plain = test::identities::createUser(name, db::query::rbac::role::Admin::get("unprivileged"),
                                                     name + "@vaulthalla.test");
     EXPECT_THROW((void)ops::mirrors::takeover(plain, s.mirrorId, vaultName(s)), ops::Denied);
+    // admin.mirror.takeover (bit 1) lets a person take over; admin.mirror.detach (bit 0) alone does not.
+    const auto holderOf = [&](const rbac::permission::admin::MirrorPermissions bit, const std::string& tag) {
+        auto role = std::make_shared<rbac::role::Admin>(rbac::role::Admin::None());
+        role->name = "mto_" + tag + "_" + msTag();
+        role->description = "mirror permission " + tag;
+        role->mirror.grant(bit);
+        (void)db::query::rbac::role::Admin::insert(role);
+        return test::identities::createUser(role->name, db::query::rbac::role::Admin::get(role->name),
+                                            role->name + "@vaulthalla.test");
+    };
+    const auto taker = holderOf(rbac::permission::admin::MirrorPermissions::Takeover, "taker");
+    const auto detacher = holderOf(rbac::permission::admin::MirrorPermissions::Detach, "detacher");
+    ASSERT_TRUE(taker->mirrorPerms().canTakeover());
+    EXPECT_FALSE(detacher->mirrorPerms().canTakeover());
+    EXPECT_NO_THROW(ops::mirrors::requireTakeover(taker, "take over"));
+    EXPECT_THROW(ops::mirrors::requireTakeover(detacher, "take over"), ops::Denied);
+    {
+        const auth::stepup::Scope agent(auth::stepup::Channel::Agent);
+        EXPECT_EQ(refusalOf([&] { ops::mirrors::requireTakeover(taker, "take over"); }), "peer_forbidden");
+    }
     {
         const auth::stepup::Scope agent(auth::stepup::Channel::Agent);
         EXPECT_EQ(refusalOf([&] { (void)ops::mirrors::takeover(superUser, s.mirrorId, vaultName(s)); }),
@@ -661,6 +690,117 @@ TEST_F(MirrorTakeoverDbTest, ANewCoreTellsNothingAfterAnUnlinkAndAServerNotBehin
     });
     EXPECT_EQ(stale.code, "mirror_term_stale");
     EXPECT_EQ(mirrorRow(s).state, "live");
+}
+
+// ---- detach and the core's deletion --------------------------------------------------------------------------------------
+
+// A detach completes on either side of a take over: the old core that stopped rejoining, then the new core with its
+// take over still open. Each settles what it holds (the rejoin and the take over `ended`, the fork base gone, the gate
+// lifted), and the other server, told as a mirror's detach, ends its side: nothing tells anyone again.
+TEST_F(MirrorTakeoverDbTest, ADetachOnEitherSideOfATakeOverSettlesItAndNothingIsToldAgain) {
+    namespace leave = vh::mirror::leave;
+    const auto corePeerRecord = *db::query::peer::Peers::byId(corePeer);
+    const auto mirrorPeerRecord = *db::query::peer::Peers::byId(mirrorPeer);
+    Down down;
+    {
+        // The old core, rejoining (it committed after the fork point), detaches.
+        auto s = settledPair();
+        Wire follow(s);
+        SwitchWire wire(s, follow);
+        vh::mirror::access::linkChanged(corePeer, false);
+        (void)tk::take(s.mirrorId, vaultName(s), superUser->id, "admin", down);
+        vh::mirror::access::linkChanged(corePeer, true);
+        onCore(s, [&] {
+            write(s.core, "/docs/old-core-only.txt", "never sent");
+            (void)mq::Log::sequence(s.coreId);
+            return 0;
+        });
+        (void)tk::tick(wire);
+        ASSERT_EQ(coreRow(s).state, "rejoining");
+        const auto rejoin = onCore(s, [&] { return mq::Rejoins::openOf(s.coreId); });
+        ASSERT_TRUE(rejoin);
+
+        const auto gone = onCore(s, [&] { return leave::detach(s.coreId, superUser->id, superUser->id, "admin"); });
+        EXPECT_EQ(gone.before.role, "core");
+        EXPECT_EQ(gone.before.state, "rejoining");
+        EXPECT_TRUE(gone.core_told_later) << "the new core is told as a mirror's detach";
+        onCore(s, [&] {
+            EXPECT_FALSE(mq::MirrorVaults::get(s.coreId));
+            EXPECT_FALSE(mq::Rejoins::openOf(s.coreId));
+            EXPECT_EQ(mq::Rejoins::get(rejoin->id)->phase, "ended");
+            EXPECT_EQ(vh::db::query::vault::Vault::getVault(s.coreId)->owner_id, s.core->vault->owner_id)
+                << "a core row keeps its owner";
+            EXPECT_NO_THROW(ops::fs::mkdir(superUser, s.coreId, "/docs/its-own-again"));
+            return 0;
+        });
+        // The new core is told: its side ends, the take over settles, the fork base goes, nothing is told again.
+        const auto t = mq::Takeovers::openOf(s.mirrorId);
+        ASSERT_TRUE(t);
+        EXPECT_TRUE(leave::detachedReceived(corePeerRecord, {{"vault_uid", s.vaultUid},
+                                                             {"at", {{"term", 1}, {"seq", 0}}}, {"missing", 0}})
+                        .at("recorded").get<bool>());
+        EXPECT_FALSE(mq::MirrorVaults::get(s.mirrorId));
+        EXPECT_EQ(mq::Takeovers::latestOf(s.mirrorId)->settled_how.value_or(""), "ended");
+        EXPECT_TRUE(mq::Takeovers::forkBase(t->id, 0, 10).empty());
+        const auto told = wire.promoted.size();
+        EXPECT_EQ(tk::tick(wire), 0u);
+        EXPECT_EQ(onCore(s, [&] { return tk::tick(wire); }), 0u);
+        EXPECT_EQ(wire.promoted.size(), told) << "nothing is told any more";
+    }
+    {
+        // The new core detaches while its take over is open (its old core never came back).
+        auto s = settledPair();
+        Wire follow(s);
+        SwitchWire wire(s, follow);
+        vh::mirror::access::linkChanged(corePeer, false);
+        (void)tk::take(s.mirrorId, vaultName(s), superUser->id, "admin", down);
+        const auto t = mq::Takeovers::openOf(s.mirrorId);
+        ASSERT_TRUE(t);
+        ASSERT_FALSE(mq::Takeovers::forkBase(t->id, 0, 10).empty());
+
+        const auto gone = leave::detach(s.mirrorId, superUser->id, superUser->id, "admin");
+        EXPECT_EQ(gone.before.role, "core");
+        EXPECT_FALSE(mq::MirrorVaults::get(s.mirrorId));
+        EXPECT_FALSE(mq::Takeovers::openOf(s.mirrorId));
+        EXPECT_EQ(mq::Takeovers::latestOf(s.mirrorId)->settled_how.value_or(""), "ended");
+        EXPECT_TRUE(mq::Takeovers::forkBase(t->id, 0, 10).empty());
+        EXPECT_TRUE(mq::MirrorDetach::forVault(s.mirrorId)) << "recorded as a detach";
+        vh::mirror::access::linkChanged(corePeer, true);
+        EXPECT_EQ(tk::tick(wire), 0u);
+        EXPECT_TRUE(wire.promoted.empty()) << "the old core is not told it was taken over";
+        // The old core, still the core, learns of the detach instead: its mirror ends, its vault stays.
+        EXPECT_TRUE(onCore(s, [&] {
+                        return leave::detachedReceived(mirrorPeerRecord, {{"vault_uid", s.vaultUid},
+                                                                          {"at", {{"term", 2}, {"seq", 0}}},
+                                                                          {"missing", 0}});
+                    }).at("recorded").get<bool>());
+        EXPECT_FALSE(onCore(s, [&] { return mq::MirrorVaults::get(s.coreId); }));
+    }
+}
+
+// The core scheduled the vault's deletion, so the copy is paused (mirror_core_deleting); the core then went away. A take
+// over is allowed: the vault is this server's from then on, live, and the record says the old core was deleting it.
+TEST_F(MirrorTakeoverDbTest, ATakeOverWhileTheCoreDeletesTheVaultIsAllowedAndAuditedAsSuch) {
+    auto s = settledPair();
+    ASSERT_TRUE(mq::MirrorDetach::pauseForCore(s.mirrorId, std::string(vh::mirror::leave::kCoreDeletingReason),
+                                               {{"purge_after", std::time(nullptr) + 86400}, {"copy", "leave"}}));
+    ASSERT_EQ(mirrorRow(s).state, "paused");
+    Down down;
+    vh::mirror::access::linkChanged(corePeer, false);
+    const auto answer = tk::take(s.mirrorId, vaultName(s), superUser->id, "admin", down);
+    vh::mirror::access::linkChanged(corePeer, true);
+    EXPECT_NE(answer.value("warning", "").find("deleting the vault"), std::string::npos) << answer.dump();
+    const auto row = mirrorRow(s);
+    EXPECT_EQ(row.role, "core");
+    EXPECT_EQ(row.state, "live");
+    EXPECT_FALSE(row.stop_reason);
+    EXPECT_TRUE(vh::mirror::leave::deletionOf(s.mirrorId).is_null()) << "nothing deletes it here";
+    EXPECT_NO_THROW(ops::fs::mkdir(superUser, s.mirrorId, "/docs/kept"));
+    EXPECT_TRUE(audit::Trail::instance()->flushNow());
+    EXPECT_EQ(one<int>("SELECT count(*) FROM audit_event WHERE action = 'mirror.takeover' AND vault_id = " +
+                       std::to_string(s.mirrorId) + " AND details::jsonb->>'core_deleting' = 'true' "
+                       "AND details::jsonb->'core_deletion'->>'copy' = 'leave'"),
+              1);
 }
 
 }

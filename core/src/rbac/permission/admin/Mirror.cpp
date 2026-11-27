@@ -10,6 +10,7 @@ namespace vh::rbac::permission::admin {
         oss << std::string(indent, ' ') << "Mirror:\n";
         const auto in = std::string(indent + 2, ' ');
         oss << in << "Detach: " << bool_to_string(canDetach()) << "\n";
+        oss << in << "Takeover: " << bool_to_string(canTakeover()) << "\n";
         return oss.str();
     }
 
@@ -21,11 +22,12 @@ namespace vh::rbac::permission::admin {
     void Mirror::fromMask(const Mask mask) { unpackWithOwn(mask); }
 
     void to_json(nlohmann::json &j, const Mirror &s) {
-        j = {{"detach", s.canDetach()}};
+        j = {{"detach", s.canDetach()}, {"takeover", s.canTakeover()}};
     }
 
     void from_json(const nlohmann::json &j, Mirror &s) {
         s.clear();
         if (j.value("detach", false)) s.grant(MirrorPermissions::Detach);
+        if (j.value("takeover", false)) s.grant(MirrorPermissions::Takeover);
     }
 }

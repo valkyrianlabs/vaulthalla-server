@@ -2582,6 +2582,9 @@ TEST_F(SqlDeployerHistoryDb, MirrorSwitchMigration168IsAdditiveAndIdempotent) {
         txn.exec("ALTER TABLE mirror_vault DROP CONSTRAINT IF EXISTS mirror_vault_state_check");
         txn.exec("ALTER TABLE mirror_vault ADD CONSTRAINT mirror_vault_state_check "
                  "CHECK (state IN ('starting', 'live', 'paused', 'diverged', 'expired', 'stopped'))");
+        // 167's mirror permissions alone (admin.mirror.detach, bit 0).
+        txn.exec("DELETE FROM permission WHERE name = 'admin.mirror.takeover' AND category = 'admin'");
+        txn.exec("UPDATE admin_role SET mirror_permissions = mirror_permissions & B'00000001'");
         txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
 
         // ---- an upgraded install: a vault mirrored with a linked server
@@ -2623,6 +2626,16 @@ TEST_F(SqlDeployerHistoryDb, MirrorSwitchMigration168IsAdditiveAndIdempotent) {
         EXPECT_NE(txn.exec("SELECT prosrc FROM pg_proc WHERE proname = 'vh_mirror_core_term'")
                       .one_field_ref().as<std::string>().find("'switching'"),
                   std::string::npos);
+        // "Take over as core": its permission row, and the same grants as the fresh seed.
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM permission WHERE name = 'admin.mirror.takeover' AND bit_position = 1")
+                      .one_field_ref().as<int>(), 1);
+        for (const auto& role : builtInAdminRoles()) {
+            SCOPED_TRACE(role.name);
+            const auto r = txn.exec("SELECT mirror_permissions::text FROM admin_role WHERE name = $1",
+                                    pqxx::params{role.name});
+            if (r.empty()) continue;   // a built-in role this database was never seeded with
+            EXPECT_EQ(r[0][0].as<std::string>(), role.mirror.toBitString()) << "migration and fresh seed disagree";
+        }
 
         // A second run of the file, and of the deployer, changes nothing.
         migseed::SqlDeployReport again;
@@ -2714,7 +2727,9 @@ TEST_F(SqlDeployerHistoryDb, MirrorLeaveMigration167MatchesFreshSeedAndIsAdditiv
             const auto r = txn.exec("SELECT mirror_permissions::text FROM admin_role WHERE name = $1",
                                     pqxx::params{role.name});
             if (r.empty()) continue;   // a built-in role this database was never seeded with
-            EXPECT_EQ(r[0][0].as<std::string>(), role.mirror.toBitString()) << "migration and fresh seed disagree";
+            auto detachOnly = role.mirror;   // 168 adds admin.mirror.takeover (bit 1)
+            detachOnly.revoke(vh::rbac::permission::admin::MirrorPermissions::Takeover);
+            EXPECT_EQ(r[0][0].as<std::string>(), detachOnly.toBitString()) << "migration and fresh seed disagree";
         }
         EXPECT_EQ(txn.exec("SELECT mirror_permissions::text FROM admin_role WHERE name = 'super_admin'")
                       .one_row_ref()[0].as<std::string>(),

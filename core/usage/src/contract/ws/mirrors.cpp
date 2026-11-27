@@ -367,8 +367,8 @@ std::vector<WsCommandUsage> mirrorCommands() {
                        "old core's return); changes made here and still pending become ordinary changes, held ones stay "
                        "listed. Refused while the core answers (mirror_core_reachable: use mirror.switch). Also the way "
                        "out of a planned switch whose core never came back. `confirm` is the vault's name, typed. "
-                       "Super admins (Take over as core); the data.destroy step-up in the console; audited "
-                       "mirror.takeover.",
+                       "Super admins, or holders of admin.mirror.takeover (Take over as core); the data.destroy "
+                       "step-up in the console; audited mirror.takeover.",
         .payload = {mcVaultIdField(),
                     str("confirm").gen(gen::ref("vault", {"name"})).desc("The vault's name, typed exactly.")},
         .response = {uinteger("id"), uinteger("vault_id"), uinteger("peer_id").desc("The old core."),

@@ -210,6 +210,33 @@ TEST_F(RoleParityTest, MirrorDetachIsHeldBySuperAdminsAloneAndGrantedTheSameWayO
     EXPECT_TRUE(grantedAdmin(cliName).empty());
 }
 
+// Wave 5 piece B: "Take over as core" (admin.mirror.takeover, bit 1 beside detach) is held the same way: super admins
+// alone among the built-in roles, granted like any admin permission on both surfaces, never beyond the granter's own.
+TEST_F(RoleParityTest, MirrorTakeoverIsHeldBySuperAdminsAloneAndGrantedTheSameWayOnBothSurfaces) {
+    EXPECT_TRUE(grantedAdmin("super_admin").contains("admin.mirror.takeover"));
+    for (const auto* builtin : {"admin", "auditor", "support", "identity_admin", "security_admin", "platform_operator",
+                                "vault_admin", "key_custodian"})
+        if (db::query::rbac::role::Admin::get(builtin)) {
+            EXPECT_FALSE(grantedAdmin(builtin).contains("admin.mirror.takeover")) << builtin;
+        }
+
+    const std::set<std::string> want{"admin.mirror.takeover"};
+    const auto cliName = "rp_mirror_tk_cli_" + tag(), wsName = "rp_mirror_tk_ws_" + tag();
+    EXPECT_NE(cli("role admin create " + cliName + " --allow-mirror-takeover", orgAdmin).first, 0);
+
+    const auto [code, out] = cli("role admin create " + cliName + " --allow-mirror-takeover", superUser);
+    ASSERT_EQ(code, 0) << out;
+    (void)protocols::ws::handler::rbac::roles::Admin::add(json{{"name", wsName}, {"permissions", adminSnapshot(want)}},
+                                                         ws(superUser));
+    EXPECT_EQ(grantedAdmin(cliName), want);
+    EXPECT_EQ(grantedAdmin(wsName), want);
+    EXPECT_EQ(db::query::rbac::role::Admin::get(cliName)->mirror.toBitString(), "00000010");
+    EXPECT_EQ(db::query::rbac::role::Admin::get(wsName)->mirror.toBitString(), "00000010");
+
+    ASSERT_EQ(cli("role admin update " + cliName + " --deny-mirror-takeover", superUser).first, 0);
+    EXPECT_TRUE(grantedAdmin(cliName).empty());
+}
+
 TEST_F(RoleParityTest, CliCreateFromInheritsAndDenyRevokes) {
     const auto name = "rp_from_" + tag();
     const auto [code, out] = cli("role admin create " + name + " --from auditor --deny-audit-view", superUser);

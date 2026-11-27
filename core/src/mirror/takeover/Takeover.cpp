@@ -10,9 +10,11 @@
 #include "db/query/vault/Vault.hpp"
 #include "log/Registry.hpp"
 #include "mirror/follow/Follower.hpp"
+#include "mirror/leave/Leave.hpp"
 #include "mirror/start/Start.hpp"
 #include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Local.hpp"
+#include "mirror/versions/Versions.hpp"
 #include "ops/Error.hpp"
 #include "vault/model/Vault.hpp"
 
@@ -50,6 +52,10 @@ json take(const uint32_t vaultId, const std::string& confirmName, const uint32_t
                                        "over is for a core that is gone or cannot be reached");
         }
 
+    // Paused because the core scheduled the vault's deletion (mirror_core_deleting): allowed. The vault is this
+    // server's from here on and its purge there no longer reaches it; audited as such.
+    const bool coreDeleting = mv->state == "paused" && mv->stop_reason &&
+                              *mv->stop_reason == vh::mirror::leave::kCoreDeletingReason;
     const auto missing = mq::Switches::obstacles(vaultId).contents;
     mq::Takeovers::Taken taken;
     {
@@ -60,17 +66,23 @@ json take(const uint32_t vaultId, const std::string& confirmName, const uint32_t
     // The pending changes' sealed bytes: the files hold them now (ordinary local changes).
     for (const auto id : taken.pending_ids)
         vh::mirror::submit::contents::dropBlob(vh::mirror::submit::contents::pendingBlob(vaultId, id));
+    vh::mirror::versions::invalidate();   // the versions setting follows the role: this server's own policy now
     const auto& t = taken.takeover;
-    const std::string warning =
+    std::string warning =
         "linked server " + std::to_string(t.peer_id) + ", the old core, may hold changes this server never received "
         "(after the fork point); they are merged when it returns";
+    if (coreDeleting)
+        warning += "; the old core was deleting the vault: it stays this server's vault, and that deletion no longer "
+                   "reaches it";
     audit::record({.action = "mirror.takeover", .outcome = audit::Outcome::Info, .actor_id = actorId, .actor = actorName,
                    .vault_id = vaultId,
                    .details = {{"peer", t.peer_id}, {"from_term", t.from_term}, {"term", t.term},
                                {"fork_seq", t.fork_seq}, {"fork_digest", t.fork_digest.hex()},
                                {"pending_made_local", t.pending_made_local}, {"held", t.held},
                                {"contents_missing", t.contents_missing}, {"fork_base_matches", taken.fork_base_matches},
-                               {"was", mv->state}}},
+                               {"was", mv->state}, {"core_deleting", coreDeleting},
+                               {"core_deletion", coreDeleting && mv->stop_detail.is_object() ? mv->stop_detail
+                                                                                              : json(nullptr)}}},
                   fmt::format("[mirror] {} took over as the core of vault {} in term {} (its core was linked server {}; "
                               "fork point ({}, {})): {}",
                               actorName.empty() ? std::string("someone") : actorName, vaultId, t.term, t.peer_id,

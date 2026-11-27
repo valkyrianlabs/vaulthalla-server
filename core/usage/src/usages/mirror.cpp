@@ -275,7 +275,7 @@ std::shared_ptr<CommandUsage> takeover(const std::weak_ptr<CommandUsage>& parent
                        "ordinary changes, held ones stay listed. The old core may hold changes this server never "
                        "received; they are merged when it returns. Refused while the core answers (use vh mirror "
                        "switch). Also the way out of a planned switch whose core never came back. Type the vault's name "
-                       "with --confirm. Super admins (Take over as core) only; audited.";
+                       "with --confirm. Super admins, or holders of admin.mirror.takeover (Take over as core); audited.";
     cmd->positionals = {vaultPos};
     cmd->required = {Option::Single("confirm", "The vault's name, typed exactly", "confirm", "name")};
     cmd->optional_flags = {jsonFlag};

@@ -24,7 +24,7 @@ struct Rejoin {
     Position fork{};
     vh::mirror::Digest fork_digest{};
     std::optional<vh::mirror::Digest> baseline_digest{};   // the new core's digest at (new_term, 0)
-    std::string phase{};   // draining | following | rejoining | forked | resynced
+    std::string phase{};   // draining | following | rejoining | forked | resynced | ended (the mirror ended first)
     uint32_t changes{};    // rejoining: this server's numbered changes past the fork point
     std::vector<std::string> writers{};
     nlohmann::json detail{};
