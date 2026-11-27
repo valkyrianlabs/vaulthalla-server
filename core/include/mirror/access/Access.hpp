@@ -18,7 +18,8 @@
 // what a surface missed (migration 165, the backstop). Reads are untouched: what a reader may see is the core's grant
 // (rbac::mirrored).
 //
-//   NotMirrored  not held here (no row, or this server is the vault's core): writes are the vault's own business
+//   NotMirrored  not held here (no row, or this server is the vault's core): writes are the vault's own business,
+//                except a core whose planned switch runs (migration 168: state `switching`): ReadOnly, kSwitching
 //   Live         role mirror, first copy finished, state live, peers.experimental on, the link to the core up
 //   ReadOnly     anything else, with a reason code (below)
 //
@@ -50,6 +51,7 @@ inline constexpr std::string_view kPeersOff = "mirror_peers_off";         // pee
 inline constexpr std::string_view kLinkDown = "mirror_link_down";         // the link to the core is down
 inline constexpr std::string_view kWritesNotBuilt = "mirror_writes_not_built";  // Live, but piece B is not built
 inline constexpr std::string_view kCoreOwned = "mirror_core_owned";      // settings, remote: the core's, always
+inline constexpr std::string_view kSwitching = "mirror_switching";       // a planned switch of the core role runs
 
 // What the gate knows of a held vault (tests, status). nullopt: not held here.
 struct Facts {
@@ -65,7 +67,8 @@ struct Facts {
 
 // The vault's state now. NotMirrored for a vault not held here.
 [[nodiscard]] State state(uint32_t vaultId) noexcept;
-// Whether the vault is held here as another server's copy (state() != NotMirrored).
+// Whether the vault is held here as another server's copy (role mirror or orphaned; a switching core is gated but not
+// held).
 [[nodiscard]] bool held(uint32_t vaultId) noexcept;
 // The reason code requireWritable() would refuse a write with, "" when it would let it through: one of the codes above
 // for ReadOnly; kWritesNotBuilt for Live while acceptsLocalChanges() is false; "" for NotMirrored.

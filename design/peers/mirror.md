@@ -5,9 +5,10 @@ migrations 158/159), the core side of the replication log (phase 2 piece 1, migr
 replication log" below) and the sealed contents lane with the mirror's receive path (phase 2 wave 2, migration 161;
 "As built: sealed contents" below) and following the core (phase 2 wave 3 piece B, migration 164; "As built: following
 the core" below), the write gate (phase 2 wave 4 piece A, migration 165; "As built: the gate" below) and changes made
-on the mirror without contents (wave 4 piece B, migration 166; "As built: a change made on the mirror" below), and leaving
-a mirror: detach, deleting a mirrored vault in one step, versions on the mirror (wave 5 piece A, migration 167; "As
-built: leaving a mirror" below). The rest is not implemented. It covers how a vault
+on the mirror without contents (wave 4 piece B, migration 166; "As built: a change made on the mirror" below), resync,
+the scrub and the planned switch (wave 5 piece B, migration 168; "As built: resync and the scrub", "As built: the
+planned switch" below), and leaving a mirror: detach, deleting a mirrored vault in one step, versions on the mirror
+(wave 5 piece A, migration 167; "As built: leaving a mirror" below). The rest is not implemented. It covers how a vault
 is kept identical on two linked servers: the core role, the replication log, applying it, changes made on the
 mirror, behaviour while the link is down, moving the core, leaving a mirror, and vaults that also have a remote. The
 link is in [`link.md`](link.md); accounts, ownership and audits are in [`identity.md`](identity.md). Section "What
@@ -1160,6 +1161,79 @@ applied or acknowledged, and the state.
 There is no divergence, by construction. If step 2 does not complete within a timeout the switch is abandoned and
 nothing changes.
 
+### As built: the planned switch (phase 2 wave 5, piece B, migration 168)
+
+Decided while building (owner's instruction to build without waiting for review); each is listed for confirmation in
+the hand-off:
+
+- **The core coordinates, whichever server was asked** (`mirror.switch`, `vh mirror switch <vault>`, super admins of
+  the server it is asked on; never an agent, a scoped or a relayed device; no step-up: nothing is destroyed and no key
+  moves). Asked on the mirror, it checks its own obstacles first (pending changes, contents not yet here) and asks its
+  core with **`peer.mirror.switch.request`** (a wire command the list below did not have), which begins the switch and
+  answers its id at once. The mirror only ever prepares and is told: a prepared mirror never decides, so the core (the
+  one that accepted changes) is never held by its mirror; the mirror's way out of a switch whose core vanished is the
+  take-over (step 3) or a detach. Both sides keep a `mirror_switch` row (the protocol's state, then its record:
+  phase, the term it leaves, the core's last position and digest, who asked and where, why it was abandoned).
+- **The freeze** (core): one transaction under the core row's lock (FOR UPDATE; enqueuing and claiming a submission
+  now take a key share of it, so none is queued or starts after it) sets the row `switching` (a new state) unless a
+  submission of the mirror is queued or running (`mirror_submissions_queued`) or a switch is open
+  (`mirror_switch_running`). From then on every write surface refuses with **`mirror_switching`** (`mirror::access`
+  gates a switching core; `held()` stays false for it, so no background job treats it as a copy; vault settings refuse
+  through `refuseIfHeld`) and the database refuses what a surface missed: `vh_mirror_core_term` (every entry trigger)
+  and `vh_mirror_track_vault` (the settings) raise for a switching core. The writers of the vault tables running when
+  it committed (pg_locks, as `startCore` does, now including the settings tables) are recorded and waited for, then
+  the sequencer numbers what they logged and the switch takes the row's `(term, last_seq)` and digest: final.
+- **Prepare** (`peer.mirror.switch.prepare`, asked again from the core's pass until ready or the deadline): the mirror
+  freezes too (its row `switching`, its switch `preparing`) under the vault's local-change lock, taken without waiting
+  (a busy vault answers "busy"); `submit::Local` judges the gate again once it holds that lock, so no change made
+  here starts after the count. While preparing, the follower goes on applying the core's log (the core still serves
+  it) up to the position. Ready when it is there with the core's digest, nothing pending or dirty and no file whose
+  contents have not arrived (`mirror_pending_changes`, `mirror_contents_missing` refuse, which abandons the switch:
+  switch again once they confirm or arrive). Ready is durable (`prepared`) before it is answered.
+- **The decision** is the core's, durable before anything is told. `switched` (`Switches::commitCore`, one transaction
+  that checks the row is still this switch's switching core at the drained position, nothing unnumbered, nothing
+  queued): the core's row becomes the vault's `mirror` in term + 1 at `(term + 1, 0)`, its entry hashes and digest
+  kept, first copy complete, still `switching` (read-only, the follower asks nothing) until the new core confirms; its
+  log, baseline and submissions go. `abandoned`: the deadline (**30 s** from the freeze, `mirror_switch_timeout`, with
+  what the mirror last answered), a refusal by the mirror (its code), the vault's row changing meanwhile
+  (`mirror_switch_interrupted`; a stop as diverged stands), or a vault that moved since it was drained: the row goes
+  live again in the same term.
+- **Telling** (`peer.mirror.switch.commit {outcome}`, every 5 s until answered): `switched`, the prepared mirror becomes
+  the core in term + 1 (`becomeCore`: live, its log from `(term + 1, 1)`, its baseline position `(term + 1, 0)` at the
+  digest both hold so the new mirror's first acknowledgement compares, the grant cleared); told again it answers the
+  same. Then the old core goes live as a mirror and follows. `abandoned`: a mirror that froze goes live again; one
+  that never heard of the switch has nothing to undo.
+- **Invariant 12, by construction:** the old core stops accepting at the freeze; it accepts again only by its own
+  `abandoned` (taken only before it decided), and the new core accepts only after the core's `switched` was durable.
+  A stop, a timeout or a dropped link at any point ends in nothing changed or switched on both, after the core's next
+  pass and the telling (`MirrorSwitchDbTest`, every interruption point). Every step runs from the follower's pass
+  (`switching::tick`, on both servers, nothing when no switch is active); the wire handlers only change rows.
+- **What moves with the role:** the log and the sequencer (by the row's role and term); the access list, remote
+  accounts, owner and attribution need no rewriting (all `(home node, id)`: the new core's log names the old core's
+  people by its node id, which the old core maps to its own accounts); the keep and accept settings are per link and
+  stay; the start's offer changes side on both servers (so a later cancel is told from the new core). **The old core's
+  role on the new core** is whatever the new core's own policy gives that linked server (its per-vault assignment or
+  the link's default, `PeerVault::role`): nothing is carried across, since roles are never matched between servers.
+  The mirror's prepare answers it (`peer_role`, the document `grantFor` builds; null for none or "no access"), the
+  core keeps it with the switch, and the new core's start service sends it to the old core as its grant. **A switch
+  never silently takes the old core's access away** (lead's review): with no role the core abandons the switch before
+  it decides (`mirror_switch_no_role`, with what to do: set the linked server's role on the other server first, `vh
+  peer policy set`, or switch with `--accept-no-access`); asked on the mirror, the mirror refuses it itself before
+  asking. `accept_no_access` (ws, `--accept-no-access`, carried in `peer.mirror.switch.request` and kept on the switch)
+  lets it go ahead, and the answer and the audit say the old core holds no role. The answer of every switch names the
+  role and what it allows in a word (`peer_role`, `peer_access`: read-only, read-write or none) and `vh mirror switch`
+  prints it.
+  Pending contents: none can exist on the new core (refused). Piece A's versioning setting: not on this branch.
+- **Held changes** stay with the server that holds them: still listed (and discardable) on a server that became the
+  core; a retry there is refused (it is retried from a mirror).
+- **Local vaults only:** a vault whose type is not local (an S3 vault can be mirrored today when every file is on
+  disk) is refused (`mirror_has_remote`): its remote sync would have to move with the role (phase 3).
+
+Known limits: a mirror whose core decided `switched` but which can no longer take the role (it detached meanwhile)
+leaves the old core read-only as the mirror of nobody, told again every 5 s; ending the mirror there (later pieces) is
+the way out. A long-running writer of any vault holds the freeze until the deadline (it cannot tell which vault an open
+transaction changed), which abandons the switch.
+
 ### Forced promotion ("take over")
 
 The core is gone or cannot be reached, and someone holding **Take over as core** on the mirror promotes it.
@@ -1423,7 +1497,8 @@ For a person: `mirror.add` · `mirror.accept` · `mirror.remove` · `mirror.list
 
 On a peer session: `peer.mirror.offer` · `peer.mirror.accept` · `peer.mirror.key.deliver` · `peer.mirror.key.ack` ·
 `peer.mirror.tree` · `peer.mirror.notify` · `peer.mirror.log` · `peer.mirror.ack` · `peer.mirror.submit` ·
-`peer.mirror.switch.prepare` · `peer.mirror.switch.commit` · `peer.mirror.promoted` · `peer.mirror.detached` ·
+`peer.mirror.switch.request` (as built: the mirror asks its core to begin) · `peer.mirror.switch.prepare` ·
+`peer.mirror.switch.commit` · `peer.mirror.promoted` · `peer.mirror.detached` ·
 `peer.mirror.removed` · `peer.mirror.fork_base`
 
 CLI: `vh mirror add <vault> --to <peer>`, `vh mirror status [<vault>]`, `vh mirror pause|resume`, `vh mirror switch`,

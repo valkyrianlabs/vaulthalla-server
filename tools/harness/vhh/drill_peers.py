@@ -509,6 +509,7 @@ def _whole_mirror(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, re
 
     _changes_on_the_mirror(a, va, b, vb, faults_b, node_a, node_b, report)
     _scrub_and_resync(a, va, b, vb, faults_b, report)
+    _planned_switch(a, va, b, vb, node_a, node_b, report)
 
     a.vh("peer", "policy", "set", node_b, "reader")
     _wait("B's grant (reader) again", lambda: (_mirror_info(b, vb).get("grant") or {}).get("role_name") == "reader"
@@ -789,6 +790,80 @@ def _scrub_and_resync(a: Node, va: int, b: Node, vb: int, faults_b: Path, report
     report.check("7o: after the resync both digests agree, B is live again, its resync recorded",
                  bool(ok) and _sql(b, f"SELECT resync_count FROM mirror_vault WHERE vault_id = {vb}") == "1",
                  json.dumps(ok)[:300])
+
+
+def _planned_switch(a: Node, va: int, b: Node, vb: int, node_a: str, node_b: str, report: Report) -> None:
+    """7p (wave 5 piece B): a planned switch A to B asked on A, with writes on both sides before and after (B's as the
+    new core, A's as its mirror, submitted and confirmed), then the roles swapped back, asked on A as the mirror."""
+    def contents_here(node: Node, vid: int) -> bool:
+        """Every file's contents on the mirror `node` (a switch needs them): what is still expected is opened through the
+        mount, which fetches it ahead of the background queue (that may be backed off after the link-down steps)."""
+        q = ("FROM mirror_content_pending p JOIN files f ON f.object_uid = p.object_uid "
+             f"JOIN fs_entry e ON e.id = f.fs_entry_id AND e.vault_id = p.vault_id WHERE p.vault_id = {vid}")
+        for path in filter(None, _sql(node, f"SELECT string_agg(e.path, '|') {q}").split("|")):
+            node.sh(f"cat 'MNT/whole{path}' > /dev/null", timeout=120)
+        return bool(_wait(f"every file's contents on the mirror (vault {vid})",
+                          lambda: _sql(node, f"SELECT count(*) {q}") == "0" or None, timeout=60))
+
+    # B's policy for A: the role A holds on the vault once B is its core (the old core's ceiling there).
+    b.vh("peer", "policy", "set", node_a, "power_user")
+    a.sh("printf 'written on A before the switch\\n' > MNT/whole/docs/before_switch_a.txt")
+    b.sh("printf 'written on B before the switch\\n' > MNT/whole/docs/before_switch_b.txt")
+    ok = _wait_synced(a, va, b, vb, "both writes settled before the switch", timeout=180)
+    ok = ok and _wait("nothing pending on B", lambda: _pending_rows(b, vb) == 0 or None, timeout=60)
+    ok = ok and _wait_synced(a, va, b, vb, "settled before the switch", timeout=120)
+    report.check("7p: settled before the switch (a write on each side), every file's contents on B",
+                 bool(ok) and contents_here(b, vb), json.dumps(ok)[:300])
+    term = _mv(a, va)["term"]
+
+    cp = a.vh("mirror", "switch", str(va), check=False)
+    printed = cp.stdout + cp.stderr
+    report.check("7p: `vh mirror switch` on A switches: A is the mirror, B the core, both in the next term",
+                 cp.returncode == 0 and "switched" in printed and _mv(a, va).get("role") == "mirror"
+                 and _mv(b, vb).get("role") == "core" and _mv(a, va).get("term") == term + 1
+                 and _mv(b, vb).get("term") == term + 1,
+                 json.dumps({"out": printed[-400:], "a": _mv(a, va), "b": _mv(b, vb)})[:600])
+    report.check("7p: it prints the role A keeps on its new core (B's policy for A: power_user, read-write)",
+                 "role 'power_user'" in printed and "(read-write)" in printed, printed[-400:])
+    report.check("7p: both servers recorded it (mirror_switch switched) and audited it",
+                 _sql(a, f"SELECT phase FROM mirror_switch WHERE vault_id = {va} ORDER BY id DESC LIMIT 1") == "switched"
+                 and _sql(b, f"SELECT phase FROM mirror_switch WHERE vault_id = {vb} ORDER BY id DESC LIMIT 1")
+                 == "switched"
+                 and int(_sql(a, f"SELECT count(*) FROM audit_event WHERE action = 'mirror.switch' AND vault_id = {va}"))
+                 >= 2)
+    granted = _wait("A's grant from its new core", lambda: (
+        (_mirror_info(a, va).get("grant") or {}).get("role_name") == "power_user" and _mv(a, va).get("state") == "live")
+        or None, timeout=60)
+    report.check("7p: A is a live mirror holding B's grant for it (B's policy: power_user)", bool(granted),
+                 json.dumps({"a": _mv(a, va), "info": _mirror_info(a, va)})[:500])
+    report.check("7p: A's super admin still reads the vault on A, within that role",
+                 _plain(a, "whole/docs/before_switch_b.txt") == _plain(b, "whole/docs/before_switch_b.txt") != "")
+
+    b.sh("printf 'written on B, the core now\\n' > MNT/whole/docs/after_switch_b.txt")
+    a.sh("printf 'written on A, the mirror now\\n' > MNT/whole/docs/after_switch_a.txt")
+    ok = _wait_synced(b, vb, a, va, "writes after the switch settled (B the core)", timeout=180)
+    ok = ok and _wait("nothing pending on A", lambda: _pending_rows(a, va) == 0 or None, timeout=60)
+    ok = ok and _wait_synced(b, vb, a, va, "settled after the switch", timeout=120)
+    report.check("7p: after the switch B logs from (term + 1, 1) and A follows it; A's own write went to B and came "
+                 "back confirmed; equal digests",
+                 bool(ok) and _sql(b, f"SELECT min(seq) FROM vault_replication_log WHERE vault_id = {vb} "
+                                      f"AND term = {term + 1}") in ("1", "")
+                 and (b.inst.mount / "whole" / "docs" / "after_switch_a.txt").exists(),
+                 json.dumps(ok)[:300])
+    report.check("7p: the files written before and after the switch read the same on both servers",
+                 all(_plain(a, f"whole/docs/{n}") == _plain(b, f"whole/docs/{n}") for n in (
+                     "before_switch_a.txt", "before_switch_b.txt", "after_switch_a.txt", "after_switch_b.txt")))
+
+    report.check("7p: every file's contents on A, the mirror, before the switch back", contents_here(a, va))
+    code, out = a.vh_json("mirror", "switch", str(va), check=False)
+    report.check("7p: the switch back, asked on A as the mirror: A is the core again, two terms on",
+                 code == 0 and out.get("outcome") == "switched" and _mv(a, va).get("role") == "core"
+                 and _mv(b, vb).get("role") == "mirror" and _mv(a, va).get("term") == term + 2,
+                 json.dumps({"out": out, "a": _mv(a, va), "b": _mv(b, vb)})[:600])
+    a.sh("printf 'written on A, the core again\\n' > MNT/whole/docs/after_switch_back.txt")
+    ok = _wait_synced(a, va, b, vb, "settled after the switch back", timeout=180)
+    report.check("7p: after the switch back B follows A again, equal digests", bool(ok), json.dumps(ok)[:300])
+    b.vh("peer", "policy", "set", node_a, "none")
 
 
 def _down_and_back(a: Node, b: Node, node_a: str, node_b: str, change) -> None:

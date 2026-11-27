@@ -119,4 +119,4 @@ current    281f53b61f608ce8cec21e2b25cb929aede7675136857f028111bc8ff6ba32e9  164
 current    2ce09fb11bed80785ca84417f3d5b23c51c6ffdd8b7b9264b63caee88a156e68  165_mirror_gate.sql  unreleased
 current    0dda0139d99164ad4a6a97dc3c4fdc161b296514609d10fee9fe00aa994928b4  166_mirror_pending.sql  unreleased
 current    dca276657894f02fd424e7ca13868d3b9b93f1d55848f0269b8c2c853291b400  167_mirror_leave.sql  unreleased
-current    c44c217a36038db143c1bcd9b01360a32b2ba0638fbc680ee017d86cbe0d7b34  168_mirror_switch.sql  unreleased
+current    07b7df30c4b29df9b6baccbbc1800e72a9d7a0795aad76e5df22c9754729a7f3  168_mirror_switch.sql  unreleased

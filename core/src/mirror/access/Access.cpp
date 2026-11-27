@@ -42,7 +42,9 @@ std::atomic<bool> anyHeld{false};
 std::map<uint32_t, HeldVault> heldFrom(const std::vector<vh::db::query::mirror::MirrorVault>& rows) {
     std::map<uint32_t, HeldVault> out;
     for (const auto& m : rows) {
-        if (m.role != "mirror" && m.role != "orphaned") continue;
+        // A core whose planned switch holds it read-only (migration 168) is gated too; it is not held here.
+        const bool switchingCore = m.role == "core" && m.state == "switching";
+        if (m.role != "mirror" && m.role != "orphaned" && !switchingCore) continue;
         out.emplace(m.vault_id, HeldVault{.peer_id = m.peer_id, .role = m.role, .state = m.state,
                                           .copy_finished = m.copy_finished, .stop_reason = m.stop_reason});
     }
@@ -77,6 +79,7 @@ bool peersOn() { return vh::config::Registry::get().peers.experimental; }
 // The reason a held vault is read-only, "" when it is live. Caller holds the gate's lock (shared).
 std::string readOnlyReason(const HeldVault& v, const bool linkUp) {
     if (v.role == "orphaned") return std::string(kOrphaned);
+    if (v.state == "switching") return std::string(kSwitching);
     if (v.state == "diverged") return std::string(kDiverged);
     if (v.state == "expired") return std::string(kExpired);
     if (v.state == "paused" && v.stop_reason && *v.stop_reason == kCoreDeleting) return std::string(kCoreDeleting);
@@ -141,7 +144,18 @@ State state(const uint32_t vaultId) noexcept {
     }
 }
 
-bool held(const uint32_t vaultId) noexcept { return state(vaultId) != State::NotMirrored; }
+bool held(const uint32_t vaultId) noexcept {
+    try {
+        if (!mirror_access_detail::anyHeld.load(std::memory_order_acquire)) return false;
+        auto& g = mirror_access_detail::gate();
+        std::shared_lock lock(g.mutex);
+        const auto it = g.vaults.find(vaultId);
+        // A switching core is gated, never held: its content is its own.
+        return it != g.vaults.end() && it->second.role != "core";
+    } catch (...) {
+        return true;   // never writable by accident
+    }
+}
 
 std::string reason(const uint32_t vaultId) {
     auto j = mirror_access_detail::judge(vaultId);
@@ -180,6 +194,9 @@ std::string sentence(const std::string_view code) {
     if (code == kCoreOwned)
         return "This vault is a copy of another server's vault; its settings, keys and remote are its core server's, "
                "and are changed there";
+    if (code == kSwitching)
+        return "This vault's core role is moving between its two linked servers (a planned switch); it is read-only "
+               "until the switch ends, which takes moments: try again shortly";
     if (code == kWritesNotBuilt)
         return "This vault is a mirror of another server's vault; changes are made on its core server (this server "
                "does not take changes to a mirror yet)";
@@ -197,6 +214,8 @@ void requireWritable(const uint32_t vaultId, const std::string_view operation) {
 
 void refuseIfHeld(const uint32_t vaultId, const std::string_view operation) {
     if (held(vaultId)) throw MirrorReadOnly(vaultId, std::string(kCoreOwned), operation);
+    // A core in a planned switch: its settings wait for the switch too.
+    if (auto why = refusalReason(vaultId)) throw MirrorReadOnly(vaultId, std::move(*why), operation);
 }
 
 void reload() {
@@ -253,7 +272,8 @@ std::vector<uint32_t> heldVaults() {
     std::shared_lock lock(g.mutex);
     std::vector<uint32_t> out;
     out.reserve(g.vaults.size());
-    for (const auto& [id, _] : g.vaults) out.push_back(id);
+    for (const auto& [id, v] : g.vaults)
+        if (v.role != "core") out.push_back(id);
     return out;
 }
 

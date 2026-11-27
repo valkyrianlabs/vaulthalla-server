@@ -243,6 +243,28 @@ std::shared_ptr<CommandUsage> resync(const std::weak_ptr<CommandUsage>& parent) 
     return cmd;
 }
 
+std::shared_ptr<CommandUsage> switchCore(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
+    cmd->aliases = {"switch"};
+    cmd->description = "Move a mirrored vault's core role to the other server by agreement, asked on either server: "
+                       "the core stops taking changes (the vault is read-only on both servers for moments), the mirror "
+                       "applies its last change with the same digest and nothing pending, then the roles swap in the "
+                       "next term. The old core keeps the vault only through the new core's role for it (its link "
+                       "policy or a per-vault role there): with none, the switch is refused unless --accept-no-access. "
+                       "A switch that does not complete in time, or is refused, changes nothing and says why. Local "
+                       "vaults only. Super admins only; audited.";
+    cmd->positionals = {vaultPos};
+    cmd->optional_flags = {Flag::WithAliases("accept_no_access", "Go ahead even though the old core would hold no role "
+                                                                 "on the vault on its new core (its people could not "
+                                                                 "read it there until one is set)",
+                                             {"accept-no-access"}),
+                           jsonFlag};
+    cmd->examples = {{"vh mirror switch 4", "Swap vault 4's core and mirror; prints the role the old core keeps."},
+                     {"vh mirror switch 4 --accept-no-access", "Swap them even though the old core keeps no role."}};
+    return cmd;
+}
+
 std::shared_ptr<CommandUsage> acceptAll(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->effect = CommandEffect::Write;
@@ -270,7 +292,8 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
                          info(root->weak_from_this()),    acceptAll(root->weak_from_this()),
                          keep(root->weak_from_this()),    held(root->weak_from_this()),    discard(root->weak_from_this()),
                          retry(root->weak_from_this()), save(root->weak_from_this()), detach(root->weak_from_this()),
-                         versions(root->weak_from_this()), resync(root->weak_from_this())};
+                         versions(root->weak_from_this()), resync(root->weak_from_this()),
+                         switchCore(root->weak_from_this())};
     root->examples = {
         {"vh mirror add <vault> --to <server>", "On the core: offer a vault."},
         {"vh mirror pending", "On the other server: offers waiting."},

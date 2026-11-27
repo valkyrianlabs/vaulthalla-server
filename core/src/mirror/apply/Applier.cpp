@@ -799,7 +799,9 @@ Committed applyInTransaction(pqxx::work& txn, Run& run) {
 
     const auto mv = mq::ApplyRows::lock(txn, vaultId);
     if (!mv || mv->role != "mirror") throw Halt{Status::Gone, "", "mirror_gone", json::object()};
-    if (mv->state != "live") throw Halt{Status::Stopped, "", "mirror_not_live", {{"state", mv->state}}};
+    // `switching`: a planned switch preparing here, which the follower catches up (mirror::switching::following).
+    if (mv->state != "live" && mv->state != "switching")
+        throw Halt{Status::Stopped, "", "mirror_not_live", {{"state", mv->state}}};
     result.copy_cursor = mv->copy_cursor;
     result.copy_finished = mv->copy_finished;
     result.at = mv->position();
@@ -832,7 +834,7 @@ Committed applyInTransaction(pqxx::work& txn, Run& run) {
         if (g.term != mv->term)
             throw Halt{Status::Stopped, "stopped", "mirror_term_changed",
                        {{"term", mv->term}, {"group_term", g.term},
-                        {"why", "the core's term moved; moving the core is not built"}}};
+                        {"why", "the core's log is in another term than this copy follows"}}};
         if (g.last_seq <= mv->last_seq) throw Halt{Status::AlreadyApplied, "", "mirror_group_applied", json::object()};
         if (g.first_seq != mv->last_seq + 1)
             throw Halt{Status::NotNext, "", "mirror_group_gap", {{"last_seq", mv->last_seq}, {"first_seq", g.first_seq}}};

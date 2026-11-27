@@ -21,6 +21,11 @@ struct MirrorFollow {
     static json submit(const json& payload, const std::shared_ptr<Session>& session);
     // peer.mirror.resync: the mirror starts its copy over; the core takes its baseline again (wave 5 piece B).
     static json resync(const json& payload, const std::shared_ptr<Session>& session);
+    // The planned switch (wave 5 piece B; mirror::switching): the mirror asks its core to begin one, the core prepares
+    // its mirror and tells it the decision.
+    static json switchRequest(const json& payload, const std::shared_ptr<Session>& session);
+    static json switchPrepare(const json& payload, const std::shared_ptr<Session>& session);
+    static json switchCommit(const json& payload, const std::shared_ptr<Session>& session);
 };
 
 }

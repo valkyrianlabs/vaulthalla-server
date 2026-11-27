@@ -731,6 +731,20 @@ through on a Live mirror.
   (`mirror_resync_replaced`) and, at the copy's end, every entry the core's tree lacks (`Resync::leftovers`,
   `mirror_resync_extra`). The scrub (`resync::scrubDue`, from `Follower::housekeep` hourly, each vault every 24 h by
   `scrubbed_at`) diffs `vh_mirror_tree` with `mirror_entry_hash` in one statement and stops a mismatch as diverged.
+- **The planned switch (`mirror/switching`, `db::query::mirror::Switches`, migration 168 `mirror_switch`; wave 5
+  piece B):** the core coordinates whichever server was asked (the mirror asks with `peer.mirror.switch.request`).
+  `Switches::freeze` (row FOR UPDATE; submissions' enqueue and claim take a key share of it) sets the core row
+  `switching` (`mirror::access` gates a switching core with `mirror_switching`, `held()` stays false for it;
+  `vh_mirror_core_term`/`vh_mirror_track_vault` raise), the writers then running are recorded and waited for, the
+  sequencer numbers what they logged (`drained`: seq and digest). `peer.mirror.switch.prepare` freezes the mirror under
+  `submit::vaultMutex` (try-lock; `Local` re-judges the gate under it), the follower catches up while the mirror's
+  switch is `preparing`, and it answers ready (`prepared`) at the position with the digest and no pending, dirty or
+  missing contents, answering the role the old core will hold there (`peer_role`: none abandons with
+  `mirror_switch_no_role` unless `accept_no_access`). `commitCore` (conditional, one transaction) makes the core the mirror in term + 1 at (term + 1, 0)
+  still `switching`, drops its log, baseline and submissions and flips the start offer's side; `peer.mirror.switch.commit`
+  is told until answered (`becomeCore`: core in term + 1, baseline (term + 1, 0) at the digest, grant cleared), then
+  the old core goes live. A deadline (30 s), a refusal or a vault that stopped abandons it (`abandonCore`, told too).
+  All steps run from `Follower::runLoop` (`switching::tick`); the wire handlers only change rows.
 - **Submit (`mirror::submit::submitPending`, from `Follower::step` before the log):** `peer.mirror.submit` (peer wire
   set), one change at a time per vault in order. Core: `serveSubmit` answers at once from `mirror_submission` (queued,
   running, executed with groups, refused with code: never executed twice) and `drain`s on the sync pool, one vault's in
