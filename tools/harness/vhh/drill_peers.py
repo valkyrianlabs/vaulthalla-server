@@ -38,7 +38,7 @@ Then 7, a whole mirror (design/peers/mirror.md, waves 1 to 3), with no row writt
      digests and the same tree, acknowledged on A; what A deleted is gone on B, a trashed file has nothing pending;
   f. access on B: its super admin reads within the grant, is refused a write, and is refused after A's `vh peer policy
      set none`;
-  h. strict mode on B (wave 4): with a grant that writes (editor), every write through B's mount (create, overwrite,
+  h. strict mode on B (wave 4): with a grant that allows everything (full), every write through B's mount (create, overwrite,
      mkdir, rename, delete, chmod, touch) is refused with EROFS and `vh fs put` with exit code 69 and the reason, B's
      vault is unchanged, A's writes still arrive, and B's super admin still reads within the grant;
   g. B killed while A changes the vault: it comes back, catches up from its position (equal digests, live), and its
@@ -451,9 +451,10 @@ def _whole_mirror(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, re
     a.vh("peer", "policy", "set", node_b, "reader")
 
     # ---- 7h. Strict mode on B (wave 4 piece A): a copy of A's vault is read-only on B whatever A grants it. With a
-    # grant that writes (editor), RBAC would let B's super admin write; the gate refuses every write with its reason.
-    a.vh("peer", "policy", "set", node_b, "editor")
-    _wait("B's grant (editor)", lambda: (_mirror_info(b, vb).get("grant") or {}).get("role_name") == "editor" or None,
+    # grant that allows everything (full), RBAC would let B's super admin write; the gate refuses every write with its
+    # reason.
+    a.vh("peer", "policy", "set", node_b, "full")
+    _wait("B's grant (full)", lambda: (_mirror_info(b, vb).get("grant") or {}).get("role_name") == "full" or None,
           timeout=30)
     entries_b = _sql(b, f"SELECT count(*) FROM fs_entry WHERE vault_id = {vb}")
     top_b = _plain(b, "whole/top.txt")
