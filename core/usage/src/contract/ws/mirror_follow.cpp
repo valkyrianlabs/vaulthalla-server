@@ -133,21 +133,33 @@ std::vector<WsCommandUsage> mirrorFollowCommands() {
                         .gen(gen::ref("mirror.person", {"node", "id"})),
                     mfPosition("at").gen(gen::ref("mirror.position", {"term", "seq"}))
                         .desc("The position the mirror had applied when it submitted."),
-                    str("op").oneOf({"mkdir", "move", "rename", "remove", "copy"}),
+                    str("op").oneOf({"mkdir", "move", "rename", "remove", "copy", "write", "setattr"}),
                     str("entry_uid").gen(gen::ref("mirror.entry", {"uid"}))
                         .desc("The entry the change is on (UUID text); a created folder's uid, chosen by the mirror."),
                     object("args", "", {str("uid").opt().desc("The entry's uid, as entry_uid."),
                                         str("parent_uid").opt().desc("The destination folder's uid (the vault's uid "
                                                                      "for its root)."),
-                                        str("name").opt().desc("The entry's name there.")})
-                        .opt().desc("mkdir, move, rename and copy: where the entry goes."),
+                                        str("name").opt().desc("The entry's name there."),
+                                        boolean("replace").opt().desc("move, rename: an entry at the destination goes "
+                                                                      "first (rename(2) over it)."),
+                                        str("base").opt().desc("write: the generation a replacement was based on "
+                                                               "(absent: a create)."),
+                                        str("generation").opt().desc("write: the new generation (its sealed bytes "
+                                                                     "were PUT on the sealed lane first)."),
+                                        uinteger("key_version").opt(), uinteger("size").opt().desc("write: plaintext."),
+                                        str("content_hash").opt().desc("write: BLAKE2b of the sealed bytes."),
+                                        str("mime").opt(),
+                                        uinteger("mode").opt().desc("setattr: the permission bits."),
+                                        integer("mtime_us").opt().desc("setattr: the modification time.")})
+                        .opt().desc("Where the entry goes (mkdir, move, rename, copy), a write's contents, "
+                                    "setattr's values."),
                     str("base_generation").opt().desc("The generation the change was based on (contents).")},
         .response = {str("status").oneOf({"queued", "running", "executed", "refused"}),
                      uinteger("groups").opt().desc("executed: the groups the core logged for it."),
                      str("code").opt().desc("refused (or executed in part): the refusal's code."),
                      str("error").opt(), mfCoreState()},
         .refusal_codes = {"denied", "invalid", "not_found", "unauthorized", "peers_experimental", "peer_revoked",
-                          "mirror_not_live"},
+                          "mirror_not_live", "contents_missing"},
         .client_timeout = kDefaultTimeout,
     });
 

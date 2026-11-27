@@ -1,4 +1,5 @@
 #include "protocols/http/Session.hpp"
+#include "platform/Durable.hpp"
 #include "protocols/device/Scope.hpp"
 #include "device/ScopeAudit.hpp"
 
@@ -811,7 +812,7 @@ bool Session::handle_peer_object_put(HeaderParser& parser) {
             if (ec) throw boost::system::system_error(ec);
         }
         if (stopping()) ok = false;
-        if (::fsync(fd) != 0) ok = false;
+        if (vh::platform::durable::sync(fd) != 0) ok = false;
     } catch (const std::exception& e) {
         log::Registry::http()->debug("[Session] Sealed lane PUT body failed: {}", e.what());
         ok = false;

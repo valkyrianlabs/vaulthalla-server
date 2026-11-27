@@ -67,7 +67,7 @@ void keep(const std::filesystem::path& from, const std::filesystem::path& to) {
     std::filesystem::remove(to, ec);
     std::filesystem::create_hard_link(from, to, ec);
     if (!ec) return;
-    std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing);
+    std::filesystem::copy_file(from, to, std::filesystem::copy_options::none);   // created here, never over a file
 }
 
 void moveBlob(const std::filesystem::path& from, const std::filesystem::path& to) {

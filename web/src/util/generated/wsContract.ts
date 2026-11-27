@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'feaf0e3f694f824c86326190bc31840aabe122c137b65a70ceea4ab901fd46e9'
+export const WS_CONTRACT_HASH = 'f72196a90fbfb3e34dadc86bd5dceff0cf0f329fb469433edbc2b4981784221e'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
@@ -6272,9 +6272,22 @@ export interface WsContract {
       request_id: string
       person: { node: string; id: number }
       at: { term: number; seq: number }
-      op: 'mkdir' | 'move' | 'rename' | 'remove' | 'copy'
+      op: 'mkdir' | 'move' | 'rename' | 'remove' | 'copy' | 'write' | 'setattr'
       entry_uid: string
-      args?: { uid?: string; parent_uid?: string; name?: string }
+      args?: {
+        uid?: string
+        parent_uid?: string
+        name?: string
+        replace?: boolean
+        base?: string
+        generation?: string
+        key_version?: number
+        size?: number
+        content_hash?: string
+        mime?: string
+        mode?: number
+        mtime_us?: number
+      }
       base_generation?: string
     }
     response: {

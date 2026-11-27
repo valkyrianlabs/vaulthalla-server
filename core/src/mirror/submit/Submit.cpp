@@ -13,6 +13,7 @@
 #include "db/query/peer/Peer.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/model/File.hpp"
+#include "fs/ops/file.hpp"
 #include "fs/tree_apply/TreeApply.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
@@ -32,7 +33,6 @@
 
 #include <atomic>
 #include <cstdlib>
-#include <fstream>
 #include <mutex>
 #include <regex>
 #include <set>
@@ -155,7 +155,7 @@ void submitExecuteWrite(const vh::ops::Actor& actor, const uint32_t vaultId, con
         if (bytes) {
             contents::keep(*bytes, dst);
         } else {
-            std::ofstream(dst, std::ios::binary | std::ios::trunc).close();
+            vh::fs::ops::writeFileExclusive(dst, {}, 0600);
         }
         return vh::fs::SealedContent{.encryption_iv = size > 0 ? generation : std::string{},
                                      .key_version = size > 0 ? keyVersion : 0u,
@@ -463,7 +463,7 @@ bool submitContentConflictCopy(const mq::PendingChange& p, const std::string& co
                                    .user = person, .overwrite = true, .expected_source_id = std::string{}};
         ctx.sealed = [&](const std::filesystem::path& dst) {
             if (size > 0) contents::keep(blob, dst);
-            else std::ofstream(dst, std::ios::binary | std::ios::trunc).close();
+            else vh::fs::ops::writeFileExclusive(dst, {}, 0600);
             return vh::fs::SealedContent{
                 .encryption_iv = p.args.value("generation", std::string{}),
                 .key_version = p.args.value("key_version", 0u), .plaintext_size = size,

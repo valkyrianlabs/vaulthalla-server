@@ -480,6 +480,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"vault_mirrored", {"storage.vault.remove"}}, {"vault_orphaned_copy", {"storage.vault.remove"}},
             // A change made on the mirror (wave 4 piece B, mirror::submit).
             {"mirror_not_live", {"peer.mirror.submit"}}, {"mirror_read_only", {"mirror.held.retry"}},
+            {"contents_missing", {"peer.mirror.submit"}},
         };
         if (const auto m = kMirrorCodes.find(code); m != kMirrorCodes.end() && m->second.contains(command)) return true;
         if ((code == "no_pairing_window" || code == "rate_limited" || code == "device_unknown") &&

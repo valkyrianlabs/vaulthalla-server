@@ -45424,7 +45424,9 @@
             "move",
             "rename",
             "remove",
-            "copy"
+            "copy",
+            "write",
+            "setattr"
           ],
           "name": "op",
           "required": true,
@@ -45449,7 +45451,7 @@
           ]
         },
         {
-          "description": "mkdir, move, rename and copy: where the entry goes.",
+          "description": "Where the entry goes (mkdir, move, rename, copy), a write's contents, setattr's values.",
           "fields": [
             {
               "description": "The entry's uid, as entry_uid.",
@@ -45473,6 +45475,79 @@
               "required": false,
               "types": [
                 "string"
+              ]
+            },
+            {
+              "description": "move, rename: an entry at the destination goes first (rename(2) over it).",
+              "name": "replace",
+              "required": false,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "write: the generation a replacement was based on (absent: a create).",
+              "name": "base",
+              "required": false,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "write: the new generation (its sealed bytes were PUT on the sealed lane first).",
+              "name": "generation",
+              "required": false,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "key_version",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "write: plaintext.",
+              "minimum": 0,
+              "name": "size",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "write: BLAKE2b of the sealed bytes.",
+              "name": "content_hash",
+              "required": false,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "mime",
+              "required": false,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "setattr: the permission bits.",
+              "minimum": 0,
+              "name": "mode",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "setattr: the modification time.",
+              "name": "mtime_us",
+              "required": false,
+              "types": [
+                "integer"
               ]
             }
           ],
@@ -45498,7 +45573,8 @@
         "unauthorized",
         "peers_experimental",
         "peer_revoked",
-        "mirror_not_live"
+        "mirror_not_live",
+        "contents_missing"
       ],
       "refusal_kinds": [
         "denied",
@@ -45507,7 +45583,8 @@
         "unauthorized",
         "peers_experimental",
         "peer_revoked",
-        "mirror_not_live"
+        "mirror_not_live",
+        "contents_missing"
       ],
       "response": [
         {
@@ -67893,5 +67970,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "feaf0e3f694f824c86326190bc31840aabe122c137b65a70ceea4ab901fd46e9"
+  "ws_hash": "f72196a90fbfb3e34dadc86bd5dceff0cf0f329fb469433edbc2b4981784221e"
 }

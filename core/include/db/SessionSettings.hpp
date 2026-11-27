@@ -8,9 +8,10 @@
 
 // Transaction-local settings for every transaction this thread begins while a scope is alive (db::Transactions::exec
 // applies them right after BEGIN, as set_config(name, value, true)). For an operation that runs through code that opens
-// its own transactions and must carry a setting into each of them: a change made on a mirror (vh.mirror_local, the
-// pending change's request id), a change a mirror submitted, executed on the core (vh.mirror_origin, vh.actor). Scopes
-// nest; the innermost value of a name wins. Never crosses threads: work handed to another thread carries no setting.
+// its own transactions and must carry a setting into each of them: a change made on a mirror (the backstop's switch
+// and the pending change's request id), a change a mirror submitted, executed on the core (vh.mirror_origin,
+// vh.actor). Scopes nest; the innermost value of a name wins. Never crosses threads: work handed to another thread
+// carries no setting.
 namespace vh::db {
 
 class SessionSettings {

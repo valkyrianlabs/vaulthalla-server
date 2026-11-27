@@ -26,7 +26,7 @@
 //     as the tables hold it now (mirror_dirty: what the core last confirmed, unless the entry is already dirty), a
 //     created entry under a uid chosen now (db::query::fs::AssignedUid, so the core creates it under the same one);
 //     then it runs the mutation with the backstop's switch and the request id set in every transaction it begins
-//     (db::SessionSettings: vh.mirror_local, vh.mirror_request), and marks the change ready to submit and wakes the
+//     (db::SessionSettings, from db::query::mirror::Pending::localSettings), and marks the change ready to submit and wakes the
 //     follower, which submits it (mirror::submit::submitPending). A mutation that fails having changed nothing leaves
 //     nothing; one that changed something is submitted all the same (the core decides, and the confirmation or the
 //     refusal settles every entry it touched).
