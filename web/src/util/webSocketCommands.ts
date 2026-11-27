@@ -1066,6 +1066,7 @@ export interface WebSocketCommandMap {
   'mirror.versions.set': WsContract['mirror.versions.set']
   'mirror.held.get': WsContract['mirror.held.get']
   'peer.mirror.detached': WsContract['peer.mirror.detached']
+  'peer.mirror.deleting': WsContract['peer.mirror.deleting']
   'peer.mirror.resync': WsContract['peer.mirror.resync']
   // Any signed-in user pairs devices to their own account: open a 10-minute window, then approve a request by picking
   // the one of its three code_choices the device shows (a wrong pick denies the request).

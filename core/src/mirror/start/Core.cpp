@@ -203,8 +203,6 @@ void refuseIfMirrored(const uint32_t vaultId, const std::string& what) {
                                                      vaultId, what, vaultId));
 }
 
-namespace start_core_detail {
-
 // A copy held here is never deleted as a vault: detached first (it becomes this server's), or removed through vh mirror
 // cancel when it is orphaned.
 void refuseDeletingAHeldCopy(const uint32_t vaultId) {
@@ -220,10 +218,8 @@ void refuseDeletingAHeldCopy(const uint32_t vaultId) {
                                                          "its core ends the mirror", vaultId, vaultId));
 }
 
-}
-
 void refuseDeletionIfMirrored(const uint32_t vaultId) {
-    start_core_detail::refuseDeletingAHeldCopy(vaultId);
+    refuseDeletingAHeldCopy(vaultId);
     if (mirroredOrStarting(vaultId))
         throw ops::Refused("vault_mirrored", fmt::format("vault {} is mirrored with a linked server (or a mirror of it is "
                                                          "starting): delete it saying what happens to the mirror's copy "
@@ -240,7 +236,7 @@ std::optional<MirrorCopy> mirrorCopyFrom(const std::optional<std::string>& text)
 }
 
 bool deletionEndsMirror(const uint32_t vaultId, const std::optional<MirrorCopy>& choice) {
-    start_core_detail::refuseDeletingAHeldCopy(vaultId);
+    refuseDeletingAHeldCopy(vaultId);
     if (!mirroredOrStarting(vaultId)) return false;
     if (!choice)
         throw ops::Refused("mirror_copy_choice_required",
@@ -250,10 +246,6 @@ bool deletionEndsMirror(const uint32_t vaultId, const std::optional<MirrorCopy>&
     return true;
 }
 
-void endMirrorForDeletion(const uint32_t vaultId, const MirrorCopy choice, const std::optional<uint32_t> actorId,
-                          const std::string& actorName) {
-    (void)cancelOnCore(vaultId, "vault_deleted", true, choice == MirrorCopy::Remove, actorId, actorName);
-}
 
 void checkLink(const vh::peer::Record& peer) {
     if (peer.revoked()) throw ops::Refused("peer_not_linked", "server '" + peer.name + "' is unlinked: link it again first");

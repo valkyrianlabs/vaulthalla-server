@@ -187,4 +187,44 @@ std::vector<DetachRecord> MirrorDetach::list() {
     });
 }
 
+bool MirrorDetach::setDeletingCopy(const uint32_t vaultId, const std::optional<std::string>& copy) {
+    return Transactions::exec("mirror::MirrorDetach::setDeletingCopy", [&](pqxx::work& txn) {
+        return txn.exec("UPDATE mirror_vault SET deleting_copy = $2, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE vault_id = $1 AND role = 'core'",
+                        pqxx::params{vaultId, copy})
+                   .affected_rows() > 0;
+    });
+}
+
+std::optional<std::string> MirrorDetach::deletingCopy(const uint32_t vaultId) {
+    return Transactions::exec("mirror::MirrorDetach::deletingCopy", [&](pqxx::work& txn) -> std::optional<std::string> {
+        const auto r = txn.exec("SELECT deleting_copy FROM mirror_vault WHERE vault_id = $1 AND role = 'core'",
+                                pqxx::params{vaultId});
+        if (r.empty() || r[0][0].is_null()) return std::nullopt;
+        return r[0][0].as<std::string>();
+    });
+}
+
+bool MirrorDetach::pauseForCore(const uint32_t vaultId, const std::string& reason, const nlohmann::json& detail) {
+    return Transactions::exec("mirror::MirrorDetach::pauseForCore", [&](pqxx::work& txn) {
+        return txn.exec("UPDATE mirror_vault SET state = 'paused', stop_reason = $2, stop_detail = $3::jsonb, "
+                        "  stopped_at = COALESCE(CASE WHEN state = 'paused' THEN stopped_at END, CURRENT_TIMESTAMP), "
+                        "  updated_at = CURRENT_TIMESTAMP "
+                        "WHERE vault_id = $1 AND role = 'mirror' "
+                        "  AND (state = 'live' OR (state = 'paused' AND stop_reason = $2 AND stop_detail <> $3::jsonb))",
+                        pqxx::params{vaultId, reason, detail.dump()})
+                   .affected_rows() > 0;
+    });
+}
+
+bool MirrorDetach::resumeFromCore(const uint32_t vaultId, const std::string& reason) {
+    return Transactions::exec("mirror::MirrorDetach::resumeFromCore", [&](pqxx::work& txn) {
+        return txn.exec("UPDATE mirror_vault SET state = 'live', stop_reason = NULL, stop_detail = NULL, stopped_at = NULL, "
+                        "  updated_at = CURRENT_TIMESTAMP "
+                        "WHERE vault_id = $1 AND role = 'mirror' AND state = 'paused' AND stop_reason = $2",
+                        pqxx::params{vaultId, reason})
+                   .affected_rows() > 0;
+    });
+}
+
 }

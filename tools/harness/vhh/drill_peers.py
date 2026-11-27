@@ -1034,16 +1034,38 @@ def _leaving(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, report:
                  cp.returncode != 0 and "--mirror-copy remove" in (cp.stdout + cp.stderr)
                  and _sql(a, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {v2}") == "1",
                  (cp.stdout + cp.stderr)[-300:])
+    # Scheduled (restorable): the mirror is not ended, B is read-only with the reason; a restore and B follows again.
     cp = a.vh("vault", "delete", str(v2), "--mirror-copy", "remove", "--yes", check=False)
+    paused = _wait("B told A is deleting the vault", lambda: (lambda m: m if m.get("stop_reason") == "mirror_core_deleting"
+                                                             else None)(_mirror_info(b, bv2)), timeout=90)
+    refused = b.sh("printf 'x\\n' > MNT/dropped/while_deleting.txt 2>&1 && echo WROTE || echo REFUSED").stdout.strip()
+    report.check("9d: A deletes it with --mirror-copy remove (restorable): B's copy stays, read-only with the reason, "
+                 "the date and the choice; its mirror row and A's are kept",
+                 cp.returncode == 0 and (paused.get("deleting") or {}).get("copy") == "remove"
+                 and (paused.get("deleting") or {}).get("purge_after") and refused == "REFUSED"
+                 and _sql(b, f"SELECT count(*) FROM vault WHERE uid = '{uid2}'") == "1"
+                 and _sql(a, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {v2}") == "1",
+                 json.dumps(paused)[:400] + " " + refused)
+    a.vh("vault", "restore", str(v2))
+    _wait("B live again", lambda: _mirror_info(b, bv2).get("state") == "live" or None, timeout=90)
+    _wait("A's mount showing dropped again", lambda: (a.inst.mount / "dropped").is_dir(), timeout=60)
+    a.sh("printf 'after the restore\\n' > MNT/dropped/after_restore.txt")
+    ok = _wait_synced(a, v2, b, bv2, "B following the restored vault", timeout=120)
+    _contents_here(b, bv2, "the restored vault's new file on B")
+    report.check("9d: A restores it: B follows again where it was, no new copy (equal digests, the same offer)",
+                 bool(ok) and _plain(b, "dropped/after_restore.txt") == hashlib.sha256(b"after the restore\n").hexdigest()
+                 and (_mirror_info(a, v2).get("start") or {}).get("state") == "started", json.dumps(ok)[:300])
+    # Deleted now: the purge ends the mirror with the choice.
+    cp = a.vh("vault", "delete", str(v2), "--mirror-copy", "remove", "--now", "--yes", check=False)
     _wait("B's copy removed", lambda: _sql(b, f"SELECT count(*) FROM vault WHERE uid = '{uid2}'") == "0" or None,
-          timeout=90)
-    report.check("9d: A deletes it with --mirror-copy remove: deleted on A (restorable), gone on B",
-                 cp.returncode == 0 and _sql(a, f"SELECT count(*) FROM vault WHERE id = {v2} AND deleted_at IS NOT NULL")
-                 == "1", (cp.stdout + cp.stderr)[-300:])
+          timeout=120)
+    report.check("9d: A deletes it --now with --mirror-copy remove: purged on A, gone on B",
+                 cp.returncode == 0 and _sql(a, f"SELECT count(*) FROM vault WHERE id = {v2}") == "0",
+                 (cp.stdout + cp.stderr)[-300:])
     v3, bv3, uid3 = _new_mirror(a, b, node_b, "leftover")
-    cp = a.vh("vault", "delete", str(v3), "--mirror-copy", "leave", "--yes", check=False)
-    _wait("B's copy orphaned", lambda: _mirror_info(b, bv3).get("role") == "orphaned" or None, timeout=90)
-    report.check("9d: --mirror-copy leave: deleted on A, B keeps an orphaned copy", cp.returncode == 0,
+    cp = a.vh("vault", "delete", str(v3), "--mirror-copy", "leave", "--now", "--yes", check=False)
+    _wait("B's copy orphaned", lambda: _mirror_info(b, bv3).get("role") == "orphaned" or None, timeout=120)
+    report.check("9d: --now with --mirror-copy leave: purged on A, B keeps an orphaned copy", cp.returncode == 0,
                  (cp.stdout + cp.stderr)[-300:])
     code, det, text = _json(b, "mirror", "detach", str(bv3))
     report.check("9d: B detaches the orphaned copy: a local vault, readable and writable",

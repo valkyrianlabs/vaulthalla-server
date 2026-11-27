@@ -844,15 +844,19 @@ Phase 2 wave 5, piece A. Full text: mirror.md "As built: leaving a mirror". Expe
   and `mirrorRefusal` until `rekeyed_at`.
 - **Delete in one step** (`ops::vaults::remove`, `Remove::mirror_copy`; `mirror/start/Guard.hpp` `mirrorCopyFrom`,
   `deletionEndsMirror`, `endMirrorForDeletion`): a core's mirrored vault needs remove|leave
-  (`mirror_copy_choice_required`), a person, the data.destroy target `...:mirror-copy` for remove; `cancelOnCore` then
-  `vault::retention::schedule`. A held copy: `vault_mirrored` / `vault_orphaned_copy` naming detach.
+  (`mirror_copy_choice_required`), a person, the data.destroy target `...:mirror-copy` for remove; the choice is recorded
+  (`mirror_vault.deleting_copy`) and `vault::retention::schedule` runs; the mirror is told (`peer.mirror.deleting`,
+  `leave::syncDeletionNotices` from the start service) and pauses its copy (`mirror_core_deleting`); a restore
+  (`retention::restore` → `leave::restored`) lets it follow again; the purge (`retention::purgeOne` →
+  `leave::endForPurge`) ends it with the choice via `cancelOnCore`. A held copy: `vault_mirrored` / `vault_orphaned_copy`.
+  Listings flag a detached vault's missing files (`contents_missing`, `vh fs ls` type `missing`).
 - **Versions on the mirror** (`mirror::versions`, `mirror_vault.keep_versions`; `ops::mirrors::setVersions`, ws
   `mirror.versions.set`, `vh mirror versions`): `policyFor` (one atomic load while none is on) read by the applier per
   group; `apply::keepVersions` stages `recovery::local::versions::retain(..., {.held_copy_policy})` before the
   group's transaction, attaches in it, finishes after the commit; `versions::maintain` applies the mirror's policy to
   held vaults.
 - **Held bytes:** `ops::mirrors::heldContent` (a reader over `heldBlob` with the vault's key), ws `mirror.held.get`
-  (inline ≤ 8 MiB), `vh mirror held get <id> <dest>` (transfer frames; `transfer::planLocal` knows it).
+  (inline ≤ 8 MiB), `vh mirror save <id> <dest>` (transfer frames; `transfer::planLocal` knows it).
 - Tests: `MirrorLeaveDbTest.*` (`test_mirror_leave_db.cpp`), `MirrorSubmitDbTest.VersionsOnTheMirror*`,
   `RoleParityTest.MirrorDetach*`, `SqlDeployerHistoryDb.MirrorLeaveMigration167*`; Tier B `vhh drill peers` step 9.
 

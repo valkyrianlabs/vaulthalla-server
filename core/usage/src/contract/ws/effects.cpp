@@ -170,6 +170,7 @@ std::vector<WsEffect> effectTable() {
         {"peer.mirror.answer", "write"},
         {"peer.mirror.begin", "write"},
         {"peer.mirror.cancel", "destructive"},
+        {"peer.mirror.deleting", "write"},
         {"peer.mirror.detached", "write"},
         {"peer.mirror.grant", "write"},
         {"peer.mirror.keys", "write"},

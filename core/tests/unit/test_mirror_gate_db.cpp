@@ -66,6 +66,11 @@
 #include <cerrno>
 #include <chrono>
 #include <fcntl.h>
+#include "crypto/id/ObjectUid.hpp"
+#include "mirror/leave/Leave.hpp"
+
+#include <vl/keykit/uid.hpp>
+
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -641,6 +646,55 @@ TEST_F(MirrorGateDbTest, MissingIsToldApartFromNoPermissionWithoutAnExistenceOra
     EXPECT_EQ(ops::fs::check(stranger, own->id, "/gone.txt", FsAction::Delete), ops::fs::Access::Denied);
     EXPECT_EQ(ops::fs::check(stranger, own->id, "/here.txt", FsAction::Delete), ops::fs::Access::Denied);
     EXPECT_THROW(ops::fs::remove(stranger, own->id, "/gone.txt"), vh::ops::Denied);
+}
+
+// Wave 5 (lead's review): while the vault's core deletes it (its retention window), the copy is read-only on every
+// surface with the reason mirror_core_deleting (its sentence names what happens, when, and detach), reads go on, and
+// once the core restores the vault the copy is the core's again.
+TEST_F(MirrorGateDbTest, WhileTheCoreDeletesTheVaultEverySurfaceRefusesWithThatReason) {
+    const auto engine = localVault("mg_deleting_");
+    const auto v = makeMirror(engine);   // live, the link up
+    ASSERT_EQ(access::state(v), access::State::Live);
+    const auto core = *db::query::peer::Peers::byId(peerId);
+    const auto uid = vl::keykit::toBase32(*engine->vault->uid);
+    (void)vh::mirror::leave::deletingReceived(core, {{"vault_uid", uid}, {"deleting", true},
+                                                     {"purge_after", static_cast<int64_t>(std::time(nullptr) + 3600)},
+                                                     {"copy", "leave"}});
+    const auto reason = access::kCoreDeleting;
+    EXPECT_EQ(access::state(v), access::State::ReadOnly);
+    EXPECT_EQ(access::reason(v), reason);
+    // The operation layer (the ws commands) and its reply.
+    expectReadOnly([&] { ops::fs::mkdir(superUser, v, "/new"); }, reason, "fs.dir.create");
+    expectReadOnly([&] { ops::fs::remove(superUser, v, "/doc.txt"); }, reason, "fs.entry.delete");
+    expectReadOnly([&] { (void)ops::fs::authorizeUpload(superUser, v, "/up.txt"); }, reason, "fs.upload.start");
+    // The filesystem layer under every surface (the mount, uploads, vh fs put, shares).
+    EXPECT_THROW(write(engine, "/doc.txt", "replaced"), access::MirrorReadOnly);
+    EXPECT_EQ(fs::Filesystem::mkdir({.path = engine->vaultPathToFusePath("/x/y"), .engine = engine, .user = superUser}),
+              -EROFS);
+    // The HTTP lanes, with the reason.
+    try {
+        protocols::http::access::requireUser(superUser, engine, "/up.txt", FsAction::Write);
+        ADD_FAILURE() << "an HTTP write was let through";
+    } catch (const vh::ops::ReadOnly& e) {
+        EXPECT_EQ(e.reason, reason);
+    }
+    EXPECT_NO_THROW(protocols::http::access::requireUser(superUser, engine, "/doc.txt", FsAction::Read)) << "reads go on";
+    // The S3 gateway.
+    const protocols::s3::ResolvedBucket bucket{.bucket_name = "mg-deleting", .vault_id = v, .mode = "local",
+                                               .api_exclusive = false, .engine = engine, .actor = superUser,
+                                               .gateway_access = std::nullopt};
+    try {
+        protocols::s3::ObjectStore{}.requireS3Permission(bucket, protocols::s3::AuthContext{},
+                                                         rbac::s3::policy::S3Action::PutObject, "doc.txt");
+        ADD_FAILURE() << "an S3 write was let through";
+    } catch (const protocols::s3::S3Error& e) {
+        EXPECT_EQ(e.code, "ServiceUnavailable");
+    }
+    EXPECT_TRUE(entryId(v, "/doc.txt") && !entryId(v, "/new") && !entryId(v, "/x")) << "nothing changed";
+    EXPECT_NE(access::sentence(reason).find("vh mirror detach"), std::string::npos);
+
+    (void)vh::mirror::leave::deletingReceived(core, {{"vault_uid", uid}, {"deleting", false}});
+    EXPECT_EQ(access::state(v), access::State::Live) << "restored on the core: the copy follows again";
 }
 
 }

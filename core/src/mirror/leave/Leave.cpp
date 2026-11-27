@@ -6,7 +6,10 @@
 #include "db/query/mirror/Pending.hpp"
 #include "db/query/mirror/Start.hpp"
 #include "db/query/peer/Peer.hpp"
+#include "db/query/vault/Deletion.hpp"
 #include "db/query/vault/Vault.hpp"
+#include "mirror/follow/Follower.hpp"
+#include "vault/model/Deletion.hpp"
 #include "fs/tree_apply/TreeApply.hpp"
 #include "log/Registry.hpp"
 #include "mirror/access/Access.hpp"
@@ -26,8 +29,13 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <chrono>
+#include <ctime>
 #include <filesystem>
+#include <map>
 #include <mutex>
+#include <set>
+#include <utility>
 
 namespace vh::mirror::leave {
 
@@ -244,6 +252,145 @@ std::optional<std::pair<std::string, std::string>> offerRefusal(const std::strin
                           "vault's uid and keys, so they can't mirror it with each other until the re-key pass runs"
                         : "that server detached its copy of this vault: the two share the vault's uid and keys, so they "
                           "can't mirror it with each other until it runs the re-key pass"));
+}
+
+// ---- deleting a mirrored vault ------------------------------------------------------------------------------------------
+
+namespace mirror_deleting_detail {
+
+std::mutex& noticeMutex() {
+    static std::mutex m;
+    return m;
+}
+std::map<uint32_t, std::pair<std::string, std::time_t>>& noticesSent() {   // vault -> (notice, link up since)
+    static std::map<uint32_t, std::pair<std::string, std::time_t>> m;
+    return m;
+}
+
+}
+
+bool coreMirrored(const uint32_t vaultId) {
+    namespace mq = vh::db::query::mirror;
+    if (const auto row = mq::MirrorVaults::get(vaultId)) return row->role == "core";
+    const auto facts = mq::MirrorStart::facts(vaultId);
+    return facts && mq::MirrorStart::activeOffer(facts->vault_uid, "core").has_value();
+}
+
+json deletionOf(const uint32_t vaultId) {
+    namespace mq = vh::db::query::mirror;
+    const auto row = mq::MirrorVaults::get(vaultId);
+    if (!row) return nullptr;
+    if (row->role == "core") {
+        const auto d = vh::db::query::vault::Deletion::get(vaultId);
+        if (!d || d->state == vh::vault::model::DeletionState::Purged) return nullptr;
+        return {{"deleting", true}, {"purge_after", static_cast<int64_t>(d->purge_after)},
+                {"copy", mq::MirrorDetach::deletingCopy(vaultId).value_or("leave")}};
+    }
+    if (row->state == "paused" && row->stop_reason && *row->stop_reason == kCoreDeletingReason) {
+        json out = row->stop_detail.is_object() ? row->stop_detail : json::object();
+        out["deleting"] = true;
+        return out;
+    }
+    return nullptr;
+}
+
+void syncDeletionNotices() {
+    namespace mq = vh::db::query::mirror;
+    using namespace mirror_deleting_detail;
+    const auto t = vh::mirror::start::transport();
+    if (!t.request || !t.upSince) return;
+    std::set<uint32_t> cores;
+    for (const auto& row : mq::MirrorVaults::list()) {
+        if (row.role != "core") continue;
+        cores.insert(row.vault_id);
+        const auto up = t.upSince(row.peer_id);
+        if (!up) continue;
+        const auto facts = mq::MirrorStart::facts(row.vault_id);
+        if (!facts) continue;
+        auto notice = deletionOf(row.vault_id);
+        json payload{{"vault_uid", vl::keykit::toBase32(facts->vault_uid)}, {"deleting", !notice.is_null()}};
+        if (!notice.is_null()) {
+            payload["purge_after"] = notice.at("purge_after");
+            payload["copy"] = notice.at("copy");
+        }
+        const auto fingerprint = payload.dump();
+        {
+            std::scoped_lock lock(noticeMutex());
+            const auto it = noticesSent().find(row.vault_id);
+            if (it != noticesSent().end() && it->second.first == fingerprint && it->second.second == *up) continue;
+        }
+        // A refusal (the mirror holds no such vault) is not repeated until the notice or the link changes; no answer is.
+        if (t.request(row.peer_id, "peer.mirror.deleting", payload, std::chrono::seconds(15))) {
+            std::scoped_lock lock(noticeMutex());
+            noticesSent()[row.vault_id] = {fingerprint, *up};
+        }
+    }
+    std::scoped_lock lock(noticeMutex());
+    std::erase_if(noticesSent(), [&](const auto& kv) { return !cores.contains(kv.first); });
+}
+
+json deletingReceived(const vh::peer::Record& from, const json& payload) {
+    using namespace mirror_leave_detail;
+    const auto vaultUuid = vaultUuidOf(payload);
+    const auto& flag = field(payload, "deleting");
+    if (!flag.is_boolean()) throw ops::Invalid("deleting must be a boolean");
+    const auto vaultId = mq::MirrorStart::vaultWithUid(vh::crypto::id::fromUuid(vaultUuid));
+    const auto row = vaultId ? mq::MirrorVaults::get(*vaultId) : std::nullopt;
+    // Only the vault's own core says it is deleting it.
+    if (!row || row->role != "mirror" || row->peer_id != from.id) throw ops::NotFound("this server holds no such vault for that server");
+    bool changed = false;
+    if (flag.get<bool>()) {
+        const auto purgeAfter = number(field(payload, "purge_after"), "purge_after");
+        const auto& copy = field(payload, "copy");
+        if (!copy.is_string() || (copy.get<std::string>() != "remove" && copy.get<std::string>() != "leave"))
+            throw ops::Invalid("copy is remove or leave");
+        const bool keep = mq::MirrorStart::keepVaults(from.id).enabled;
+        const auto outcome = copy.get<std::string>() == "remove" && !keep ? "removed" : "kept as an orphaned copy";
+        changed = mq::MirrorDetach::pauseForCore(*vaultId, std::string(kCoreDeletingReason),
+                                                 {{"purge_after", purgeAfter}, {"copy", copy.get<std::string>()},
+                                                  {"here", outcome}});
+        if (changed)
+            audit::record({.action = "mirror.core_deleting", .outcome = audit::Outcome::Info, .vault_id = *vaultId,
+                           .details = {{"peer", from.id}, {"purge_after", purgeAfter}, {"copy", copy.get<std::string>()}}},
+                          fmt::format("[mirror] linked server {} is deleting its vault that vault {} mirrors: read-only "
+                                      "here until its restore window ends, then {} (unless it restores the vault)",
+                                      from.node_id, *vaultId, outcome),
+                          spdlog::level::warn);
+    } else {
+        changed = mq::MirrorDetach::resumeFromCore(*vaultId, std::string(kCoreDeletingReason));
+        if (changed) {
+            audit::record({.action = "mirror.core_restored", .outcome = audit::Outcome::Info, .vault_id = *vaultId,
+                           .details = {{"peer", from.id}}},
+                          fmt::format("[mirror] linked server {} restored its vault: vault {} follows it again",
+                                      from.node_id, *vaultId));
+            vh::mirror::follow::Follower::instance()->wake(*vaultId);
+        }
+    }
+    if (changed) vh::mirror::access::reload();
+    return {{"recorded", true}, {"state", mq::MirrorVaults::get(*vaultId)->state}};
+}
+
+void endForPurge(const uint32_t vaultId) {
+    namespace mq = vh::db::query::mirror;
+    if (!coreMirrored(vaultId)) return;
+    const auto copy = mq::MirrorDetach::deletingCopy(vaultId).value_or("leave");
+    (void)vh::mirror::start::cancelOnCore(vaultId, "vault_deleted", true, copy == "remove", std::nullopt,
+                                          "the vault's purge");
+}
+
+void recordDeletionChoice(const uint32_t vaultId, const std::string& copy) {
+    (void)vh::db::query::mirror::MirrorDetach::setDeletingCopy(vaultId, copy);
+    vh::mirror::start::Service::instance()->wake();
+}
+
+void restored(const uint32_t vaultId) {
+    (void)vh::db::query::mirror::MirrorDetach::setDeletingCopy(vaultId, std::nullopt);
+    vh::mirror::start::Service::instance()->wake();
+}
+
+void resetDeletionNoticesForTesting() {
+    std::scoped_lock lock(mirror_deleting_detail::noticeMutex());
+    mirror_deleting_detail::noticesSent().clear();
 }
 
 json toJson(const Preview& p) {

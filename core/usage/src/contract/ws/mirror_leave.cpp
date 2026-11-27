@@ -140,6 +140,24 @@ std::vector<WsCommandUsage> mirrorLeaveCommands() {
     });
 
     out.push_back({
+        .command = "peer.mirror.deleting",
+        .description = "The core says whether it is deleting a mirrored vault (its retention window): deleting with the "
+                       "date the purge is due and what it does to the copy (remove | leave, the mirror's keep setting "
+                       "deciding on its side), or not (restored). The mirror pauses its copy (read-only, reason "
+                       "mirror_core_deleting) or follows again where it was. Sent again on every link-up and whenever it "
+                       "changes. Only from the vault's core (not_found otherwise).",
+        .auth = "peer",
+        .payload = {str("vault_uid").gen(gen::ref("peer.mirror.deleting", {"vault_uid"})),
+                    boolean("deleting").gen(gen::boolean()),
+                    integer("purge_after").opt().gen(gen::ref("peer.mirror.deleting", {"purge_after"})),
+                    str("copy").opt().oneOf({"remove", "leave"})},
+        .response = {boolean("recorded"), str("state")},
+        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "peers_experimental",
+                          "peer_revoked"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
         .command = "peer.mirror.detached",
         .description = "The mirror detached its copy of a vault (told, not asked): the core ends the mirror on its "
                        "side as a cancel does (its core row, log, submissions and staged bytes go), records it (its "

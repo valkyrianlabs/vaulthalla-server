@@ -177,6 +177,7 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("mirror.versions.set", &handler::MirrorLeave::versionsSet);
     r->registerPayload("mirror.held.get", &handler::MirrorLeave::heldGet);
     r->registerPayload("peer.mirror.detached", &handler::MirrorLeave::detached);
+    r->registerPayload("peer.mirror.deleting", &handler::MirrorLeave::deleting);
     r->registerPayload("peer.mirror.resync", &handler::MirrorFollow::resync);
 }
 

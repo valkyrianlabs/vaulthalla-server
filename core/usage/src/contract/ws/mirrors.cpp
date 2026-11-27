@@ -90,7 +90,14 @@ std::vector<WsField> mcMirroredFields() {
                 .desc("Wave 5: the vault's detach not followed by a re-key (side mirror: detached here; side core: "
                       "its mirror left with a copy)."),
             boolean("rekey_recommended").desc("The vault was detached here and shares its uid and keys with the "
-                                              "original: the re-key pass is recommended.")};
+                                              "original: the re-key pass is recommended."),
+            object("deleting", "", {boolean("deleting"), integer("purge_after"), str("copy").oneOf({"remove", "leave"}),
+                                    str("here").opt()})
+                .nullable()
+                .desc("The vault's core is deleting it (its retention window): when the purge is due and what it does "
+                      "to the copy (mirror: `here`, what this server will do by its keep setting). null: not deleting."),
+            str("stop_reason").nullable().desc("Why the copy is not live (mirror_core_deleting while its core deletes "
+                                               "the vault).")};
 }
 
 WsField mcVaultIdField() { return vaultId(); }

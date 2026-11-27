@@ -415,7 +415,7 @@ std::vector<std::string> peerWireSet() {
             // a change made on the mirror (wave 4 piece B)
             "peer.mirror.submit",
             // leaving a mirror (wave 5 piece A)
-            "peer.mirror.detached",
+            "peer.mirror.detached", "peer.mirror.deleting",
             // resync (wave 5 piece B)
             "peer.mirror.resync"};
 }

@@ -1277,9 +1277,10 @@ try to remove the mirror's copy, the mirror may keep what its core removes, and 
   with the data-destroy step-up; audited `mirror.remove`). A live mirror is not removed from the mirror's side (detach,
   wave 5).
 - **Deleting a mirrored vault** (wave 5): on the core it is one step that takes the choice for the mirror's copy
-  (`vh vault delete <id> --mirror-copy remove|leave`, `mirror_copy` on `storage.vault.remove`; no default), ends the mirror
-  with that choice exactly as `mirror.cancel [--remove-copy]` and then deletes the vault the usual way (its retention
-  window included). On the mirror a held copy is never deleted as a vault: detach it, or remove an orphaned one through
+  (`vh vault delete <id> --mirror-copy remove|leave`, `mirror_copy` on `storage.vault.remove`; no default) and follows the
+  vault's retention window (decisions log 601-602; Cooper: the mirror matches the core until the core actually deletes the
+  vault): the choice is recorded with the deletion and the mirror is read-only for the window; a restore keeps it; the
+  purge ends it with that choice exactly as `mirror.cancel [--remove-copy]` does. On the mirror a held copy is never deleted as a vault: detach it, or remove an orphaned one through
   `vh mirror cancel`. (Until wave 5 the core's delete was refused until the mirror was ended.)
 - **The mirror unreachable:** the core ends its side at once and the request waits (`notify`) until the link is back.
 - **Unlinking the servers** invalidates the trust: a request still queued is dropped, never delivered; the mirror's
@@ -1341,10 +1342,24 @@ instruction to build without waiting for review); each is listed for confirmatio
 - **Deleting a mirrored vault in one step**, on the core (`ops::vaults::remove`, `Remove::mirror_copy`, `vh vault delete
   --mirror-copy remove|leave`, `storage.vault.remove {mirror_copy}`): a vault with a `core` row or a start running needs the
   choice (`mirror_copy_choice_required`, no default); then every check of the delete runs (the key-loss and "now"
-  confirmations, the data-destroy step-up, its target bound to `:mirror-copy` for remove), a person is required (ending a
-  mirror is never an agent's), the mirror is ended (`cancelOnCore`, reason `vault_deleted`, told when reachable, the
-  mirror's keep setting deciding there) and the vault is scheduled for deletion through the existing path, its retention
-  window included. On the mirror a held copy is refused with a sentence naming detach (`vault_mirrored`), an orphaned one
+  confirmations, the data-destroy step-up at the request, its target bound to `:mirror-copy` for remove), a person is
+  required (deciding a mirror's end is never an agent's), and the vault is scheduled through the existing retention path.
+  **The mirror follows the retention window** (lead's review of c42e1d09): the schedule only records the choice
+  (`mirror_vault.deleting_copy`, migration 167) and the core's row, log and offer stay. The start service tells the mirror
+  (`peer.mirror.deleting {vault_uid, deleting, purge_after, copy}`, `leave::syncDeletionNotices`: once per connection and
+  whenever it changes, so a mirror down at the schedule learns it on reconnect; the core keeps the grant it sent). The
+  mirror pauses a live copy with reason `mirror_core_deleting` (`MirrorDetach::pauseForCore`; `mirror::access` judges it
+  before `mirror_paused`): read-only on every surface with a sentence saying what happens and when, and naming detach;
+  `vh mirror info` shows the date, the core's choice and what this server's keep setting makes of it. The follower asks
+  nothing of a paused copy, so nothing is submitted and changes pending stay pending (submitted if the vault is restored,
+  held when the mirror ends). Detach works throughout. **A restore** (`vault::retention::restore` → `leave::restored`)
+  clears the choice and the mirror is told: it is live again where it was, nothing copied again. **The purge** (the
+  window's end, or `--now`/expedite; `vault::retention::purgeOne` → `leave::endForPurge`, before anything is removed) ends
+  the mirror with the recorded choice (`leave` when none was recorded: erring towards keeping) through `cancelOnCore`, so
+  the keep setting, the queue while the mirror is down and the drop on unlink are the cancel's. Changing the choice during
+  the window: `vh vault delete <id> --mirror-copy remove|leave` (or `storage.vault.remove {mirror_copy}`) on the deleted
+  vault, by whoever may delete it, with the same step-up rule; it is told again. This rides on the existing retention
+  scheduler and restore (no second scheduler): the retention service's pass is the only thing that ends the mirror. On the mirror a held copy is refused with a sentence naming detach (`vault_mirrored`), an orphaned one
   naming `vh mirror cancel` and detach (`vault_orphaned_copy`); the S3 gateway's DeleteBucket keeps refusing a mirrored
   vault (409: no field for the choice there).
 - **Versions on the mirror** (`mirror.versions.set`, `vh mirror versions <vault> on|off [--keep-last N] [--max-age-days

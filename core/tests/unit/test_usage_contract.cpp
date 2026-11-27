@@ -459,7 +459,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         // Starting a mirror (ops::mirrors, mirror::start): each refusal on the commands that send it.
         static const std::map<std::string, std::set<std::string>> kMirrorCodes{
             {"peer_revoked", {"peer.mirror.offer", "peer.mirror.answer", "peer.mirror.keys", "peer.mirror.begin",
-                              "peer.mirror.grant", "peer.mirror.cancel", "peer.mirror.submit", "peer.mirror.detached",
+                              "peer.mirror.grant", "peer.mirror.cancel", "peer.mirror.submit", "peer.mirror.detached", "peer.mirror.deleting",
                               "peer.mirror.resync"}},
             {"mirror_already", {"mirror.add"}}, {"mirror_start_running", {"mirror.add"}},
             {"vault_replicated", {"mirror.add"}}, {"vault_attach_running", {"mirror.add"}},

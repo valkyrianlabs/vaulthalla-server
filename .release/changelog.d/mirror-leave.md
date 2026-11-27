@@ -7,8 +7,11 @@
   - vh mirror detach [--owner] [--dry-run], ws mirror.detach.preview and mirror.detach (no step-up; confirm_name),
     peer.mirror.detached on the link; mirror_detached_copy refuses mirroring a detached uid between the two servers.
   - vh vault delete --mirror-copy remove|leave and storage.vault.remove {mirror_copy} on a mirrored vault's core
-    (mirror_copy_choice_required without it); the data-destroy step-up target gains :mirror-copy for remove.
+    (mirror_copy_choice_required without it); the data-destroy step-up target gains :mirror-copy for remove. The choice
+    is recorded (mirror_vault.deleting_copy) and applied at the purge; peer.mirror.deleting pauses the mirror's copy
+    (mirror_core_deleting) for the retention window and a restore resumes it.
+  - fs.dir.list entries of missing files carry contents_missing; vh fs ls shows them as missing.
   - vh mirror versions, ws mirror.versions.set: the applier keeps the prior generation of what the core replaces,
     trashes or deletes (recovery::local::versions, RetainOptions::held_copy_policy), bounded by the setting.
-  - vh mirror held get <id> <dest> (streamed), ws mirror.held.get (inline up to 8 MiB).
+  - vh mirror save <id> <dest> (streamed), ws mirror.held.get (inline up to 8 MiB).
   - A detached vault's file whose contents never arrived fails to open with mirror_contents_missing (ENODATA; HTTP 410).

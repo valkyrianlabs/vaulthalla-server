@@ -6,6 +6,7 @@
 #include "db/query/mirror/Detach.hpp"
 #include "db/query/mirror/Pending.hpp"
 #include "db/query/peer/Peer.hpp"
+#include "db/query/vault/Deletion.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "identities/User.hpp"
 #include "mirror/access/Access.hpp"
@@ -191,7 +192,9 @@ std::vector<Mirrored> list(const Actor& actor) {
     std::map<uint32_t, std::size_t> byVault;
     for (const auto& row : MirrorVaults::list()) {
         Mirrored m{.vault_id = row.vault_id, .role = row.role, .row = row};
-        if (const auto v = db::query::vault::Vault::getVault(row.vault_id)) {
+        auto v = db::query::vault::Vault::getVault(row.vault_id);
+        if (!v) v = db::query::vault::Deletion::getDeletedVault(row.vault_id);   // being deleted: its mirror stays
+        if (v) {
             m.vault_name = v->name;
             if (v->uid) m.start = Q::latestOffer(*v->uid, row.role == "core" ? "core" : "mirror");
         }
@@ -222,7 +225,9 @@ std::vector<Mirrored> list(const Actor& actor) {
 Mirrored get(const Actor& actor, const uint32_t vaultId) {
     using namespace ops_mirrors_detail;
     requireMirrorPerson(actor, "see a vault's mirror");
-    const auto vault = liveVault(vaultId);
+    // A vault this server is deleting (its retention window) keeps its mirror until the purge: still shown.
+    auto vault = vaultId ? db::query::vault::Deletion::getDeletedVault(vaultId) : nullptr;
+    if (!vault) vault = liveVault(vaultId);
     const auto row = MirrorVaults::get(vaultId);
     const auto side = row && row->role != "core" ? "mirror" : "core";
     if (!actor->isSuperAdmin()) {
@@ -372,6 +377,10 @@ nlohmann::json toJson(const Mirrored& m) {
     j["start"] = m.start ? toJson(*m.start) : nlohmann::json(nullptr);
     j["detached"] = m.detached ? vh::mirror::leave::toJson(*m.detached) : nlohmann::json(nullptr);
     j["rekey_recommended"] = m.detached && m.detached->side == "mirror" && !m.detached->rekeyed_at;
+    // Wave 5: the vault's pending deletion (core: from its deletion; mirror: what the core said): the date its purge
+    // is due and what it does to the copy, or null.
+    j["deleting"] = m.row ? vh::mirror::leave::deletionOf(m.vault_id) : nlohmann::json(nullptr);
+    j["stop_reason"] = m.row && m.row->stop_reason ? nlohmann::json(*m.row->stop_reason) : nlohmann::json(nullptr);
     return j;
 }
 

@@ -3,6 +3,8 @@
 #include "mirror/access/Access.hpp"
 #include "ops/CloudStorage.hpp"
 #include "ops/PeerPolicy.hpp"
+#include "db/query/mirror/Detach.hpp"
+#include "mirror/leave/Leave.hpp"
 #include "sync/vault_manifest/Replicas.hpp"
 #include "db/query/sync/ManifestApply.hpp"
 #include "ops/VaultRemote.hpp"
@@ -590,7 +592,27 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
         if (!pending || pending->state == vault::model::DeletionState::Purged)
             throw NotFound("vault not found: " + std::to_string(req.id));
         if (!canRemoveDeleted(actor, *pending)) throw Denied("you do not have permission to remove this vault");
-        vh::mirror::start::refuseDeletionIfMirrored(req.id);
+        vh::mirror::start::refuseDeletingAHeldCopy(req.id);
+        // A vault this server mirrors: its mirror ends at the purge with the recorded choice, which whoever may delete the
+        // vault can change during the window (the same step-up rule as the delete).
+        const auto newChoice = vh::mirror::start::mirrorCopyFrom(req.mirror_copy);
+        const bool mirrored = vh::mirror::leave::coreMirrored(req.id);
+        if (mirrored && newChoice) {
+            peer_policy::requirePerson(actor, "decide what happens to a mirror's copy");
+            const auto text = *newChoice == vh::mirror::start::MirrorCopy::Remove ? std::string("remove")
+                                                                                   : std::string("leave");
+            if (!req.now) {
+                auth::stepup::require(auth::stepup::Family::DataDestroy,
+                                      vaultRemoveStepUpTarget(req.id, false, false, text == "remove"));
+                vh::mirror::leave::recordDeletionChoice(req.id, text);
+                log::Registry::audit()->info("[ops::vaults] {} changed what deleted vault {} ('{}')'s purge does to its "
+                                             "mirror's copy: {}", actor->name(), req.id, pending->vault_name, text);
+                return db::query::vault::Deletion::get(req.id);
+            }
+        }
+        const bool removeMirrorCopy =
+            mirrored && (newChoice ? *newChoice == vh::mirror::start::MirrorCopy::Remove
+                                   : vh::db::query::mirror::MirrorDetach::deletingCopy(req.id).value_or("") == "remove");
         if (!req.now)
             throw Conflict("vault '" + pending->vault_name + "' is already deleted (purge after " + when(pending->purge_after) +
                            "): restore it with `vh vault restore " + std::to_string(req.id) + "`, or purge it now with --now");
@@ -608,7 +630,9 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
                                std::chrono::seconds(pending->key_retain_until - pending->deleted_at));
         requireNowConfirmed(req.confirm_now, pending->vault_name);
         auth::stepup::require(auth::stepup::Family::DataDestroy,
-                              vaultRemoveStepUpTarget(req.id, true, deleteUpstream));
+                              vaultRemoveStepUpTarget(req.id, true, deleteUpstream, removeMirrorCopy));
+        if (mirrored && newChoice)
+            vh::mirror::leave::recordDeletionChoice(req.id, removeMirrorCopy ? "remove" : "leave");
         if (!vault::retention::expedite(req.id, pending->isS3() ? std::optional<bool>(deleteUpstream) : std::nullopt))
             throw Conflict("vault '" + pending->vault_name + "' was purged meanwhile");
         log::Registry::audit()->info("[ops::vaults] {} expedited the purge of deleted vault {} ('{}')", actor->name(), req.id,
@@ -644,7 +668,9 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
     if (req.now) requireNowConfirmed(req.confirm_now, live->name);
     auth::stepup::require(auth::stepup::Family::DataDestroy,
                           vaultRemoveStepUpTarget(req.id, req.now, deleteUpstream, removeMirrorCopy));
-    if (endsMirror) vh::mirror::start::endMirrorForDeletion(req.id, *copyChoice, actor->id, actor->name());
+    // Recorded with the deletion, never acted on now: the mirror is told it is being deleted (read-only there, with the
+    // date and the choice) and ends with this choice at the purge, so a restore within the window keeps it.
+    if (endsMirror) vh::mirror::leave::recordDeletionChoice(req.id, removeMirrorCopy ? "remove" : "leave");
 
     try {
         auto record = vault::retention::schedule(req.id, actor->id, req.now, deleteUpstream);

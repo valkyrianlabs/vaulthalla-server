@@ -87,6 +87,39 @@ struct Detached {
 [[nodiscard]] std::optional<std::pair<std::string, std::string>> offerRefusal(const std::string& vaultUuid,
                                                                              uint32_t peerId);
 
+// ---- deleting a mirrored vault: the core's retention window (Cooper: the mirror matches the core until the core
+// actually deletes the vault; decisions log 601-602)
+//
+//   schedule (ops::vaults::remove, no --now): the choice (remove | leave) is recorded on the core's row
+//     (MirrorDetach::setDeletingCopy); the mirror is NOT ended. The core tells the mirror (peer.mirror.deleting
+//     {vault_uid, deleting, purge_after, copy}, sent by the start service, again on every link-up and whenever it
+//     changes), which pauses its copy with reason mirror_core_deleting (read-only with a sentence naming what happens
+//     and when; vh mirror info shows the date and the choice). Nothing is submitted, pending changes stay pending;
+//     detach works throughout.
+//   restore (vault::retention::restore): the choice is cleared and the mirror told; it is live again where it was.
+//   purge (the window's end, or --now; vault::retention::purgeOne): endForPurge ends the mirror with the recorded
+//     choice exactly as mirror.cancel [--remove-copy] does, then the vault is purged.
+inline constexpr std::string_view kCoreDeletingReason = "mirror_core_deleting";
+// A vault with a `core` row here (or a start running) is mirrored, and its deletion must carry a choice.
+[[nodiscard]] bool coreMirrored(uint32_t vaultId);
+// The vault's pending deletion as the mirror sees it: {deleting, purge_after, copy} (core: from the deletion record and
+// the recorded choice; mirror: what the core said), null when it is not being deleted.
+[[nodiscard]] json deletionOf(uint32_t vaultId);
+// Every pass of the start service (core side): tells each mirror whether its vault is being deleted, once per
+// connection and whenever that changes.
+void syncDeletionNotices();
+// The mirror side of peer.mirror.deleting.
+[[nodiscard]] json deletingReceived(const vh::peer::Record& from, const json& payload);
+// The purge is about to remove the vault: its mirror ends with the recorded choice (leave when none was recorded:
+// erring towards keeping). Nothing for a vault that is not mirrored.
+void endForPurge(uint32_t vaultId);
+// The deletion's choice (remove | leave), recorded at the schedule or changed during the window; the mirror is told.
+void recordDeletionChoice(uint32_t vaultId, const std::string& copy);
+// A pending deletion was restored: the choice is cleared and the mirror will be told.
+void restored(uint32_t vaultId);
+// Tests: forget which notices were sent.
+void resetDeletionNoticesForTesting();
+
 [[nodiscard]] json toJson(const Preview& p);
 [[nodiscard]] json toJson(const Detached& d);
 [[nodiscard]] json toJson(const vh::db::query::mirror::DetachRecord& r);

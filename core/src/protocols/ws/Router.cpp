@@ -288,6 +288,7 @@ bool Router::isPeerWireCommand(const std::string_view command) {
         std::string_view{"peer.mirror.submit"},
         // Leaving a mirror (wave 5 piece A; handler/MirrorLeave.hpp).
         std::string_view{"peer.mirror.detached"},
+        std::string_view{"peer.mirror.deleting"},
         // Resync (wave 5 piece B; handler/MirrorFollow.hpp).
         std::string_view{"peer.mirror.resync"}
     };

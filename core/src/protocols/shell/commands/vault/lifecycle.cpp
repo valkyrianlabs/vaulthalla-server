@@ -206,6 +206,17 @@ CommandResult handle_vault_delete(const CommandCall& call) {
         } catch (const std::exception&) {
             return invalid(vLkp.error);
         }
+        // A mirrored vault's choice for its mirror's copy changes during the window (--mirror-copy alone).
+        if (!req.now && req.mirror_copy && pending->state == ::vh::vault::model::DeletionState::Pending) {
+            req.id = pending->vault_id;
+            try {
+                (void)ops::vaults::remove(call.user, req);
+                return ok("Deleted vault " + std::to_string(pending->vault_id) + ": when it is purged, its mirror's copy is " +
+                          (*req.mirror_copy == "remove" ? std::string("removed") : std::string("left, orphaned")) + ".\n");
+            } catch (const ops::Error& e) {
+                return invalid(std::string(kDeleteErr) + ": " + e.what());
+            }
+        }
         if (!req.now || pending->state == ::vh::vault::model::DeletionState::Purged)
             return invalid(std::string(kDeleteErr) + ": vault '" + pending->vault_name + "' (ID " + std::to_string(pending->vault_id) +
                            ") is already deleted" +

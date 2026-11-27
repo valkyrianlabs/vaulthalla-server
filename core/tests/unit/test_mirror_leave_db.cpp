@@ -51,8 +51,12 @@
 #include "ops/Users.hpp"
 #include "ops/Recovery.hpp"
 #include "ops/Vaults.hpp"
+#include "ops/Fs.hpp"
+#include "vault/Retention.hpp"
+#include "vault/model/Deletion.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
+#include "protocols/ws/handler/fs/Storage.hpp"
 #include "rbac/Mirrored.hpp"
 #include "rbac/permission/admin/Mirror.hpp"
 #include "rbac/role/Admin.hpp"
@@ -141,6 +145,7 @@ protected:
                  return linkUp;
              }});
         start::Service::instance()->resetForTesting();
+        leave::resetDeletionNoticesForTesting();
     }
 
     void TearDown() override {
@@ -222,6 +227,12 @@ protected:
     static std::string fileUid(const uint32_t vaultId, const std::string& path) {
         return scalar("SELECT f.object_uid::text FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id WHERE e.vault_id = " +
                       std::to_string(vaultId) + " AND e.path = '" + path + "'");
+    }
+
+    static mq::MirrorVault mirrorRowOf(const uint32_t vaultId) {
+        const auto row = mq::MirrorVaults::get(vaultId);
+        EXPECT_TRUE(row);
+        return row.value_or(mq::MirrorVault{});
     }
 
     static int64_t entries(const uint32_t vaultId) {
@@ -668,7 +679,10 @@ TEST_F(MirrorLeaveDbTest, OnlyASuperAdminOrAHolderOfTheDetachPermissionDetachesN
 
 // ================================================================================== deleting a mirrored vault in one step
 
-TEST_F(MirrorLeaveDbTest, DeletingAMirroredVaultOnItsCoreTakesTheChoiceForTheCopyAndEndsTheMirrorFirst) {
+// The core's side of a mirrored vault's deletion (lead's review of c42e1d09; decisions log 601-602): the choice is
+// required and recorded with the deletion; the mirror is NOT ended while the deletion can be taken back, only told it
+// is being deleted (again on every link-up); a restore keeps the mirror; the purge ends it with the recorded choice.
+TEST_F(MirrorLeaveDbTest, DeletingAMirroredVaultRecordsTheChoiceAndKeepsTheMirrorThroughTheRetentionWindow) {
     const auto mirror = newPeer("mirror");
     {
         const auto c = coreMirrored(mirror);
@@ -681,7 +695,7 @@ TEST_F(MirrorLeaveDbTest, DeletingAMirroredVaultOnItsCoreTakesTheChoiceForTheCop
             const auth::stepup::Scope agent(auth::stepup::Channel::Agent);
             EXPECT_EQ(refusalCode([&] { (void)ops::vaults::remove(superUser, {.id = c.vaultId, .mirror_copy = "leave"}); }),
                       "peer_forbidden")
-                << "an agent never ends a mirror";
+                << "an agent never decides a mirror's end";
         }
         EXPECT_TRUE(mq::MirrorVaults::get(c.vaultId)) << "a refusal ends nothing";
         EXPECT_TRUE(runtime::Deps::get().storageManager->getVault(c.vaultId)) << "and deletes nothing";
@@ -692,21 +706,168 @@ TEST_F(MirrorLeaveDbTest, DeletingAMirroredVaultOnItsCoreTakesTheChoiceForTheCop
         const auto deletion = ops::vaults::remove(superUser, {.id = c.vaultId, .mirror_copy = choice});
         ASSERT_TRUE(deletion);
         EXPECT_FALSE(runtime::Deps::get().storageManager->getVault(c.vaultId)) << "deleted the usual way";
-        EXPECT_TRUE(db::query::vault::Deletion::get(c.vaultId)) << "with its retention window";
-        EXPECT_FALSE(mq::MirrorVaults::get(c.vaultId)) << "the mirror ended first";
-        const auto offer = mq::MirrorStart::offer(c.offerId);
-        ASSERT_TRUE(offer);
-        EXPECT_EQ(offer->state, "cancelled");
-        EXPECT_EQ(offer->reason.value_or(""), "vault_deleted");
-        EXPECT_EQ(offer->remove_copy, choice == "remove");
-        EXPECT_TRUE(offer->notify) << "the mirror is told when it is reachable";
+        ASSERT_TRUE(db::query::vault::Deletion::get(c.vaultId)) << "with its retention window";
+        // The mirror is not ended: its core row, its log and its offer stay; the choice waits with the deletion.
+        ASSERT_TRUE(mq::MirrorVaults::get(c.vaultId)) << "the mirror matches the core until the core deletes the vault";
+        EXPECT_EQ(mq::MirrorStart::offer(c.offerId)->state, "started");
+        EXPECT_EQ(mq::MirrorDetach::deletingCopy(c.vaultId).value_or(""), choice);
+        const auto shown = leave::deletionOf(c.vaultId);
+        EXPECT_EQ(shown.value("copy", ""), choice);
+        EXPECT_EQ(shown.value("purge_after", int64_t{0}), static_cast<int64_t>(db::query::vault::Deletion::get(c.vaultId)->purge_after));
+        EXPECT_TRUE(ops::mirrors::toJson(ops::mirrors::get(superUser, c.vaultId)).at("deleting").is_object())
+            << "vh mirror info on the core shows the pending deletion";
+        // The mirror is told it is being deleted, never asked to remove anything yet.
         start::Service::instance()->tick();
+        std::optional<json> told;
+        for (const auto& [cmd, p] : sentWith("peer.mirror.deleting"))
+            if (p.value("vault_uid", "") == vl::keykit::toBase32(crypto::id::fromUuid(c.vaultUuid))) told = p;
+        ASSERT_TRUE(told);
+        EXPECT_TRUE(told->value("deleting", false));
+        EXPECT_EQ(told->value("copy", ""), choice);
+        for (const auto& [cmd, p] : sentWith("peer.mirror.cancel")) EXPECT_NE(p.value("offer_uid", ""), c.offerUid);
+        // Told again on a link-up (a new connection), not on every pass.
+        const auto told2 = sentWith("peer.mirror.deleting").size();
+        start::Service::instance()->tick();
+        EXPECT_EQ(sentWith("peer.mirror.deleting").size(), told2);
+        {
+            std::scoped_lock lock(sentMutex);
+            linkUp = 5000;
+        }
+        start::Service::instance()->tick();
+        EXPECT_GT(sentWith("peer.mirror.deleting").size(), told2) << "learned again on reconnect";
+        {
+            std::scoped_lock lock(sentMutex);
+            linkUp = 1000;
+        }
+
+        // Restored within the window: the mirror resumes where it was (nothing about it changed), told not deleting.
+        ASSERT_TRUE(ops::vaults::restore(superUser, c.vaultId));
+        EXPECT_TRUE(mq::MirrorVaults::get(c.vaultId));
+        EXPECT_FALSE(mq::MirrorDetach::deletingCopy(c.vaultId)) << "the choice went with the deletion";
+        EXPECT_TRUE(leave::deletionOf(c.vaultId).is_null());
+        start::Service::instance()->tick();
+        std::optional<json> resumed;
+        for (const auto& [cmd, p] : sentWith("peer.mirror.deleting"))
+            if (p.value("vault_uid", "") == vl::keykit::toBase32(crypto::id::fromUuid(c.vaultUuid))) resumed = p;
+        ASSERT_TRUE(resumed);
+        EXPECT_FALSE(resumed->value("deleting", true));
+        EXPECT_EQ(mq::MirrorStart::offer(c.offerId)->state, "started") << "the same mirror, no new start";
+    }
+}
+
+TEST_F(MirrorLeaveDbTest, ThePurgeEndsTheMirrorWithTheRecordedChoiceWhichCanChangeInTheWindow) {
+    const auto mirror = newPeer("mirror");
+    const auto purge = [](const uint32_t vaultId) {
+        const auto d = db::query::vault::Deletion::get(vaultId);
+        (void)vh::vault::retention::runPass(std::chrono::system_clock::from_time_t(d->purge_after) + std::chrono::seconds(1));
+    };
+    const auto cancelFor = [&](const Core& c) {
         std::optional<json> told;
         for (const auto& [cmd, p] : sentWith("peer.mirror.cancel"))
             if (p.value("offer_uid", "") == c.offerUid) told = p;
-        ASSERT_TRUE(told);
-        EXPECT_EQ(told->value("remove_copy", false), choice == "remove");
+        return told;
+    };
+    // Scheduled with leave, changed to remove in the window (the same step-up rule as the delete), then purged.
+    {
+        const auto c = coreMirrored(mirror);
+        (void)ops::vaults::remove(superUser, {.id = c.vaultId, .mirror_copy = "leave"});
+        (void)ops::vaults::remove(superUser, {.id = c.vaultId, .mirror_copy = "remove"});
+        EXPECT_EQ(mq::MirrorDetach::deletingCopy(c.vaultId).value_or(""), "remove");
+        EXPECT_EQ(db::query::vault::Deletion::get(c.vaultId)->state, vh::vault::model::DeletionState::Pending)
+            << "changing the choice purges nothing";
+        start::Service::instance()->tick();
+        EXPECT_FALSE(cancelFor(c)) << "nothing ended before the purge";
+        purge(c.vaultId);
+        EXPECT_EQ(db::query::vault::Deletion::get(c.vaultId)->state, vh::vault::model::DeletionState::Purged);
+        EXPECT_FALSE(mq::MirrorVaults::get(c.vaultId)) << "the purge ended the mirror";
+        EXPECT_EQ(mq::MirrorStart::offer(c.offerId)->state, "cancelled");
+        EXPECT_TRUE(mq::MirrorStart::offer(c.offerId)->remove_copy);
+        start::Service::instance()->tick();
+        ASSERT_TRUE(cancelFor(c));
+        EXPECT_TRUE(cancelFor(c)->value("remove_copy", false));
     }
+    // --now with leave: both at once (the next pass).
+    {
+        const auto c = coreMirrored(mirror);
+        (void)ops::vaults::remove(superUser, {.id = c.vaultId, .now = true, .confirm_now = true, .mirror_copy = "leave"});
+        (void)vh::vault::retention::runPass(std::chrono::system_clock::now() + std::chrono::seconds(1));
+        EXPECT_FALSE(mq::MirrorVaults::get(c.vaultId));
+        EXPECT_FALSE(mq::MirrorStart::offer(c.offerId)->remove_copy);
+        start::Service::instance()->tick();
+        ASSERT_TRUE(cancelFor(c));
+        EXPECT_FALSE(cancelFor(c)->value("remove_copy", true));
+    }
+    // The mirror down at the purge: the core ends its side; the request waits until the link is back.
+    {
+        const auto c = coreMirrored(mirror);
+        (void)ops::vaults::remove(superUser, {.id = c.vaultId, .mirror_copy = "remove"});
+        {
+            std::scoped_lock lock(sentMutex);
+            linkUp.reset();
+        }
+        purge(c.vaultId);
+        EXPECT_FALSE(mq::MirrorVaults::get(c.vaultId));
+        start::Service::instance()->tick();
+        EXPECT_FALSE(cancelFor(c));
+        EXPECT_TRUE(mq::MirrorStart::offer(c.offerId)->notify) << "queued";
+        {
+            std::scoped_lock lock(sentMutex);
+            linkUp = 7000;
+        }
+        start::Service::instance()->tick();
+        ASSERT_TRUE(cancelFor(c));
+        EXPECT_TRUE(cancelFor(c)->value("remove_copy", false));
+    }
+}
+
+// The mirror's side of the window: read-only with the reason, nothing submitted, pending changes kept, detach works,
+// and a restore lets it follow again where it was.
+TEST_F(MirrorLeaveDbTest, WhileItsCoreDeletesTheVaultTheCopyIsReadOnlyWithTheReasonAndCanStillLeave) {
+    const auto h = heldCopy("live");
+    const auto vaultUid = vl::keykit::toBase32(crypto::id::fromUuid(h.vaultUuid));
+    const auto before = mirrorRowOf(h.vaultId);
+    const auto pendingBefore = mq::Pending::list(h.vaultId).size();
+    const auto purgeAfter = static_cast<int64_t>(std::time(nullptr) + 7 * 86400);
+    EXPECT_EQ(refusalCode([&] {
+                  (void)leave::deletingReceived(newPeer("core"), {{"vault_uid", vaultUid}, {"deleting", true},
+                                                                  {"purge_after", purgeAfter}, {"copy", "remove"}});
+              }),
+              "not_found")
+        << "only the vault's own core says so";
+    mq::MirrorStart::setKeepVaults(h.core.id, true, superUser->id);
+    (void)leave::deletingReceived(h.core, {{"vault_uid", vaultUid}, {"deleting", true}, {"purge_after", purgeAfter},
+                                           {"copy", "remove"}});
+    EXPECT_EQ(mirrorRowOf(h.vaultId).state, "paused");
+    EXPECT_EQ(vh::mirror::access::reason(h.vaultId), vh::mirror::access::kCoreDeleting);
+    EXPECT_NE(vh::mirror::access::sentence(vh::mirror::access::kCoreDeleting).find("vh mirror detach"), std::string::npos);
+    try {
+        ops::fs::mkdir(superUser, h.vaultId, "/while_deleting");
+        ADD_FAILURE() << "a write went through while the core deletes the vault";
+    } catch (const ops::ReadOnly& e) {
+        EXPECT_EQ(e.reason, vh::mirror::access::kCoreDeleting);
+    }
+    EXPECT_EQ(mq::Pending::list(h.vaultId).size(), pendingBefore) << "pending changes stay pending";
+    const auto shown = ops::mirrors::toJson(ops::mirrors::get(superUser, h.vaultId)).at("deleting");
+    EXPECT_EQ(shown.value("purge_after", int64_t{0}), purgeAfter) << "vh mirror info shows the date";
+    EXPECT_EQ(shown.value("copy", ""), "remove");
+    EXPECT_EQ(shown.value("here", ""), "kept as an orphaned copy") << "and what this server's keep setting makes of it";
+    EXPECT_EQ(mirrorRowOf(h.vaultId).last_seq, before.last_seq) << "it stays where it was";
+
+    // Restored on the core: live again where it was, nothing to copy again.
+    (void)leave::deletingReceived(h.core, {{"vault_uid", vaultUid}, {"deleting", false}});
+    EXPECT_EQ(mirrorRowOf(h.vaultId).state, "live");
+    EXPECT_EQ(mirrorRowOf(h.vaultId).position(), before.position());
+    EXPECT_TRUE(mirrorRowOf(h.vaultId).copy_finished);
+    EXPECT_EQ(vh::mirror::access::state(h.vaultId), vh::mirror::access::State::Live);
+    EXPECT_EQ(mq::Pending::list(h.vaultId).size(), pendingBefore);
+
+    // Deleting again; during the window the copy leaves with its files (invariant 10), whatever the core chose.
+    (void)leave::deletingReceived(h.core, {{"vault_uid", vaultUid}, {"deleting", true}, {"purge_after", purgeAfter},
+                                           {"copy", "remove"}});
+    const auto d = ops::mirrors::detach(superUser, {.vault_id = h.vaultId});
+    EXPECT_EQ(d.record.was_state.value_or(""), "paused");
+    EXPECT_FALSE(mq::MirrorVaults::get(h.vaultId));
+    EXPECT_EQ(read(h.vaultId, "/a.txt"), "alpha from the core");
 }
 
 // Invariant 11: when a mirror ends (here: its core deleted the vault), the copy is removed only by the rule: removal

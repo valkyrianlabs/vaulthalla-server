@@ -95,13 +95,18 @@ json MirrorLeave::heldGet(const json& payload, const std::shared_ptr<Session>& s
     if (!payload.is_object() || !payload.contains("id") || !payload.at("id").is_number_unsigned())
         throw ops::Invalid("id is required (the held change's number)");
     const auto content = ::vh::ops::mirrors::heldContent(leaveActorOf(session), payload.at("id").get<uint64_t>());
-    // Inline, bounded: a larger version is fetched with `vh mirror held get` (streamed).
+    // Inline, bounded: a larger version is fetched with `vh mirror save` (streamed).
     if (content.size > kHeldInlineMax)
         throw ops::Refused("too_large", "this version is " + std::to_string(content.size) +
-                                            " bytes: fetch it with vh mirror held get " + std::to_string(content.held.id));
+                                            " bytes: fetch it with vh mirror save " + std::to_string(content.held.id));
     const auto bytes = storage::readAll(*content.reader, kHeldInlineMax);
     return {{"held", ::vh::ops::mirrors::toJson(content.held)}, {"name", content.name}, {"size", content.size},
             {"content_b64", protocols::shell::transfer::encode(bytes)}};
+}
+
+json MirrorLeave::deleting(const json& payload, const std::shared_ptr<Session>& session) {
+    using namespace ws_mirror_leave_detail;
+    return vh::mirror::leave::deletingReceived(leavePeerOf(session), payload);
 }
 
 json MirrorLeave::detached(const json& payload, const std::shared_ptr<Session>& session) {

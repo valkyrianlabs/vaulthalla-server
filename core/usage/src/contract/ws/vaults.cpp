@@ -122,8 +122,9 @@ std::vector<WsCommandUsage> vaultCommands() {
                        "`now`. Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or "
                        "'vault_delete_now' (resend with confirm_now). A vault this server mirrors to a linked server "
                        "takes mirror_copy (remove | leave: what happens to the mirror's copy, as mirror.cancel "
-                       "[remove_copy]; mirror_copy_choice_required without it), ends the mirror and is then deleted as "
-                       "any vault; a copy held here is refused (vault_mirrored: detach it; vault_orphaned_copy: remove "
+                       "[remove_copy]; mirror_copy_choice_required without it), recorded with the deletion: the mirror "
+                       "is read-only for the retention window and ends with that choice at the purge (a restore keeps "
+                       "it; on a deleted vault, mirror_copy alone changes the choice); a copy held here is refused (vault_mirrored: detach it; vault_orphaned_copy: remove "
                        "it with mirror.cancel).",
         .payload = {vaultIdPayload(),
                     boolean("now").opt(),

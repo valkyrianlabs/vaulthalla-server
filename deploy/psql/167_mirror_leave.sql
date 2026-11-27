@@ -20,6 +20,10 @@
 --                         a file of a detached vault whose contents never arrived from the core: the entry stays, an open
 --                         fails with mirror_contents_missing (never empty, never another generation's bytes), and it is
 --                         listed exactly. A new version written here supersedes it.
+--   mirror_vault.deleting_copy
+--                         on the core, while the vault's deletion is pending (its retention window): what its purge does
+--                         to the mirror's copy, remove or leave, as mirror.cancel [--remove-copy]. The mirror is ended at
+--                         the purge, never at the schedule; a restore clears it.
 --   mirror_vault.keep_versions (+ _set_by, _set_at)
 --                         on the mirror, per held vault: keep versions of what the core replaces or deletes (the local
 --                         versioning policy's shape: {enabled, keep_last, max_age_days, quota_bytes}; NULL = off). The
@@ -134,3 +138,8 @@ ALTER TABLE mirror_vault ADD COLUMN IF NOT EXISTS keep_versions JSONB
     CHECK (keep_versions IS NULL OR jsonb_typeof(keep_versions) = 'object');
 ALTER TABLE mirror_vault ADD COLUMN IF NOT EXISTS keep_versions_set_by INTEGER REFERENCES users (id) ON DELETE SET NULL;
 ALTER TABLE mirror_vault ADD COLUMN IF NOT EXISTS keep_versions_set_at TIMESTAMPTZ;
+
+-- ---------------------------------------------------------------------------------------------------- deleting on the core
+
+ALTER TABLE mirror_vault ADD COLUMN IF NOT EXISTS deleting_copy TEXT
+    CHECK (deleting_copy IS NULL OR deleting_copy IN ('remove', 'leave'));

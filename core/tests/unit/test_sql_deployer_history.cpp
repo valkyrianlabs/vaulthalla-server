@@ -2625,7 +2625,7 @@ TEST_F(SqlDeployerHistoryDb, MirrorLeaveMigration167MatchesFreshSeedAndIsAdditiv
         txn.exec("DROP TABLE IF EXISTS mirror_detached");
         txn.exec("ALTER TABLE admin_role DROP COLUMN IF EXISTS mirror_permissions");
         txn.exec("DELETE FROM permission WHERE name = 'admin.mirror.detach' AND category = 'admin'");
-        for (const auto* c : {"keep_versions", "keep_versions_set_by", "keep_versions_set_at"})
+        for (const auto* c : {"keep_versions", "keep_versions_set_by", "keep_versions_set_at", "deleting_copy"})
             txn.exec(std::string("ALTER TABLE mirror_vault DROP COLUMN IF EXISTS ") + c);
         for (const auto* c : {"mirror_offer_state_check", "mirror_offer_copy_outcome_check", "mirror_offer_side_state_check",
                               "mirror_offer_finished_check"})
@@ -2703,7 +2703,7 @@ TEST_F(SqlDeployerHistoryDb, MirrorLeaveMigration167MatchesFreshSeedAndIsAdditiv
         EXPECT_TRUE(columnExists(txn, "mirror_detached", "vault_uid"));
         EXPECT_TRUE(columnExists(txn, "mirror_vault", "keep_versions"));
         EXPECT_EQ(count("SELECT count(*) FROM mirror_detached"), 0);
-        EXPECT_EQ(count("SELECT count(*) FROM mirror_vault WHERE keep_versions IS NOT NULL"), 0);
+        EXPECT_EQ(count("SELECT count(*) FROM mirror_vault WHERE keep_versions IS NOT NULL OR deleting_copy IS NOT NULL"), 0);
 
         // A second run of the file, and of the deployer, changes nothing.
         const auto schema = [&] {
@@ -2747,6 +2747,9 @@ TEST_F(SqlDeployerHistoryDb, MirrorLeaveMigration167MatchesFreshSeedAndIsAdditiv
         EXPECT_FALSE(refused("UPDATE mirror_content_pending SET state = 'missing' WHERE vault_id = $1", pqxx::params{vault}));
         EXPECT_TRUE(refused("UPDATE mirror_content_pending SET state = 'lost' WHERE vault_id = $1", pqxx::params{vault}));
         EXPECT_TRUE(refused("UPDATE mirror_vault SET keep_versions = '[1]'::jsonb WHERE vault_id = $1", pqxx::params{vault}));
+        EXPECT_FALSE(refused("UPDATE mirror_vault SET deleting_copy = 'remove' WHERE vault_id = $1", pqxx::params{vault}));
+        EXPECT_TRUE(refused("UPDATE mirror_vault SET deleting_copy = 'keep' WHERE vault_id = $1", pqxx::params{vault}))
+            << "the purge's choice is remove or leave";
         // A vault that goes takes its detach records with it.
         txn.exec("INSERT INTO mirror_detached (side, vault_id, vault_uid, peer_id) SELECT 'mirror', id, uid, $2 FROM vault "
                  "WHERE id = $1", pqxx::params{vault, peer});

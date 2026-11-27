@@ -19,6 +19,7 @@ struct MirrorLeave {
 
     // A linked server's session.
     static json detached(const json& payload, const std::shared_ptr<Session>& session);
+    static json deleting(const json& payload, const std::shared_ptr<Session>& session);
 };
 
 }

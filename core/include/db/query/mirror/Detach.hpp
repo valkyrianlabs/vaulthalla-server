@@ -91,6 +91,18 @@ public:
     // hold vaults with the same uid and keys, so they may not mirror it with each other.
     [[nodiscard]] static std::optional<DetachRecord> between(const std::string& vaultUuid, uint32_t peerId);
     [[nodiscard]] static std::vector<DetachRecord> list();
+
+    // ---- deleting a mirrored vault (its retention window; mirror/leave/Leave.hpp "Deleting")
+
+    // The core: what the vault's purge does to the mirror's copy (remove | leave), recorded when its deletion is
+    // scheduled or changed, cleared by a restore. False when the vault has no `core` row.
+    static bool setDeletingCopy(uint32_t vaultId, const std::optional<std::string>& copy);
+    [[nodiscard]] static std::optional<std::string> deletingCopy(uint32_t vaultId);
+    // The mirror: its core is deleting the vault. A live copy (or one already paused for this) is paused with reason
+    // `reason` and `detail`; any other state is left as it is. False when nothing changed.
+    static bool pauseForCore(uint32_t vaultId, const std::string& reason, const nlohmann::json& detail);
+    // The core restored it: a copy paused for `reason` is live again where it was. False when nothing changed.
+    static bool resumeFromCore(uint32_t vaultId, const std::string& reason);
 };
 
 }

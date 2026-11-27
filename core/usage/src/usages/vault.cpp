@@ -280,7 +280,9 @@ static const auto acceptKeyLossFlag = Flag::Alias(
 static const auto mirrorCopyOpt = Optional::ManyToOne(
     "mirror_copy",
     "A vault this server mirrors to a linked server: what happens to its copy there. remove: the mirror removes it "
-    "(unless it keeps the vaults this server removes); leave: it keeps it, orphaned. Required for a mirrored vault.",
+    "(unless it keeps the vaults this server removes); leave: it keeps it, orphaned. Required for a mirrored vault; "
+    "applied when the vault is purged (the mirror is read-only until then, and follows again if the vault is "
+    "restored). On a deleted vault it changes the choice.",
     {"mirror-copy"}, "remove|leave").withGen("remove|leave", contract::gen::constant("leave"));
 
 static std::shared_ptr<CommandUsage> remove(const std::weak_ptr<CommandUsage>& parent) {

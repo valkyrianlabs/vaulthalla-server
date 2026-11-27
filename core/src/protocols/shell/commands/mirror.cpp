@@ -73,6 +73,22 @@ std::string mirroredText(const mirrors::Mirrored& m) {
         out += fmt::format("  ended here{}; the linked server's copy: {}\n",
                            m.start->remove_copy ? " (its removal asked)" : "",
                            m.start->copy_outcome.value_or(m.start->notify ? "not told yet" : "unknown"));
+    if (const auto deleting = j.value("deleting", nlohmann::json(nullptr)); deleting.is_object()) {
+        const auto at = static_cast<std::time_t>(deleting.value("purge_after", int64_t{0}));
+        char when[32] = {};
+        std::tm tm{};
+        if (gmtime_r(&at, &tm)) (void)std::strftime(when, sizeof when, "%Y-%m-%d %H:%M UTC", &tm);
+        const auto copy = deleting.value("copy", std::string("leave"));
+        out += m.row && m.row->role == "core"
+                   ? fmt::format("  being deleted: purged {}; then the linked server's copy is {} (vh vault restore {} "
+                                 "keeps the mirror)\n",
+                                 when, copy == "remove" ? "removed (unless it keeps removed vaults)" : "left, orphaned",
+                                 m.vault_id)
+                   : fmt::format("  its core is deleting it: read-only here until {}, then {} (unless the core restores "
+                                 "it; vh mirror detach keeps it as this server's)\n",
+                                 when, deleting.value("here", copy == "remove" ? std::string("removed")
+                                                                               : std::string("kept as an orphaned copy")));
+    }
     if (m.row && m.row->role == "orphaned")
         out += fmt::format("  an orphaned copy: its core ended the mirror and this server kept the copy, read-only. Two "
                            "things can be done with it: keep it as this server's own vault (vh mirror detach {}), or "

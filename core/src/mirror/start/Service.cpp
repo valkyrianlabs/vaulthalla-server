@@ -168,6 +168,8 @@ void Service::tick() {
         }
     }
     syncGrants();
+    // A vault this server is deleting (its retention window): its mirror is told, and told again after a link-up.
+    vh::mirror::leave::syncDeletionNotices();
 }
 
 void Service::step(const Offer& o) {
@@ -308,7 +310,8 @@ void Service::syncGrants() {
         const auto up = t.upSince(row.peer_id);
         if (!up) continue;
         const auto facts = Q::facts(row.vault_id);
-        if (!facts) continue;
+        // A vault being deleted keeps the grant the mirror holds (its copy stays readable for the window).
+        if (!facts || facts->deleted) continue;
         const auto grant = grantFor(row.peer_id, row.vault_id);
         const auto fingerprint = grant.dump();
         {
