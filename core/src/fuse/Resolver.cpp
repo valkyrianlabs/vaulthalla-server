@@ -12,6 +12,7 @@
 #include "fs/model/Entry.hpp"
 #include "storage/Manager.hpp"
 #include "vault/model/Vault.hpp"
+#include "rbac/Mirrored.hpp"
 #include "rbac/fs/Visibility.hpp"
 #include "rbac/permission/admin/Vaults.hpp"
 #include "rbac/role/Vault.hpp"
@@ -19,6 +20,7 @@
 #include "rbac/resolver/admin/all.hpp"
 #include "rbac/resolver/vault/all.hpp"
 #include "fs/model/Path.hpp"
+#include "mirror/access/Access.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -128,6 +130,10 @@ namespace vh::fuse {
             const rbac::permission::vault::FilesystemAction action
         ) {
             if (!user || !isVaultRootEntry(entry)) return false;
+            // A vault held as another server's copy resolves from what its core granted this server and from nothing
+            // else (rbac::mirrored): no super admin, owner or admin-view shortcut shows its root.
+            if (vh::rbac::mirrored::find(static_cast<std::uint32_t>(*entry->vault_id)))
+                return hasVaultPermission(user, action, entry);
             if (user->isSuperAdmin()) return true;
             if (isVaultOwner(user, entry)) return true;
             if (hasAdminVaultView(user, entry)) return true;
@@ -187,6 +193,7 @@ namespace vh::fuse {
         if (!resolveEntryForPath(req, res)) return res;
         if (!resolveEngine(req, res)) return res;
         if (!enforcePermissions(req, res)) return res;
+        if (!enforceMirrorGate(req, res)) return res;
         if (!resolveList(req, res)) return res;
 
         if (!res.ino && (res.entry || res.path)) {
@@ -429,6 +436,44 @@ namespace vh::fuse {
         return true;
     }
 
+    namespace {
+        [[nodiscard]]
+        bool isMirrorGatedAction(const rbac::permission::vault::FilesystemAction action) {
+            using Action = rbac::permission::vault::FilesystemAction;
+            switch (action) {
+            case Action::Write:
+            case Action::Touch:
+            case Action::Overwrite:
+            case Action::Rename:
+            case Action::Delete:
+            case Action::Move:
+            case Action::Copy:
+            case Action::Link:
+                return true;
+            default:
+                return false;
+            }
+        }
+    }
+
+    bool Resolver::enforceMirrorGate(const Request& req, Resolved& out) {
+        bool mutating = req.action && isMirrorGatedAction(*req.action);
+        for (const auto& action : req.actions) mutating = mutating || isMirrorGatedAction(action);
+        if (!mutating) return true;
+
+        std::optional<std::uint32_t> vaultId;
+        if (out.engine && out.engine->vault) vaultId = out.engine->vault->id;
+        else if (out.entry && out.entry->vault_id) vaultId = static_cast<std::uint32_t>(*out.entry->vault_id);
+        if (!vaultId) return true;
+
+        if (const auto why = vh::mirror::access::refusalReason(*vaultId)) {
+            log::Registry::fuse()->debug("[{}] Refused in vault {}: read-only ({})", req.caller, *vaultId, *why);
+            out.setStatus(Status::ReadOnly, EROFS);
+            return false;
+        }
+        return true;
+    }
+
     bool Resolver::resolveEngine(const Request& req, Resolved& out) {
         if (isMountRootEntry(out.entry)) return true;
 
@@ -476,7 +521,18 @@ namespace vh::fuse {
         });
 
         if (isMountRootEntry(out.entry)) {
+            // A super admin sees every vault root, except a copy of another server's vault the core's grant does not
+            // let them see (rbac::mirrored, through canExposeVaultRoot).
+            if (out.user && out.user->isSuperAdmin() && !vh::rbac::mirrored::any()) {
+                out.dir = std::move(entries);
+                return true;
+            }
             if (out.user && out.user->isSuperAdmin()) {
+                std::erase_if(entries, [&](const std::shared_ptr<fs::model::Entry>& entry) {
+                    return isVaultRootEntry(entry) &&
+                           vh::rbac::mirrored::find(static_cast<std::uint32_t>(*entry->vault_id)) &&
+                           !canExposeVaultRoot(out.user, entry, rbac::permission::vault::FilesystemAction::List);
+                });
                 out.dir = std::move(entries);
                 return true;
             }

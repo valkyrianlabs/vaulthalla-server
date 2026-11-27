@@ -23,6 +23,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <poll.h>
+#include <cstdio>
 #include <unistd.h>
 #include <netinet/in.h>
 #include <nlohmann/json.hpp>
@@ -106,44 +107,54 @@ std::size_t Server::activeClients() const {
 }
 
 int Server::bindListener() {
-    ::unlink(socketPath_.c_str());
+    // The socket is bound and listening under a private name first and then renamed onto the path: the path never
+    // names a socket that refuses connections (bound, not yet listening), and this server knows the inode it owns
+    // before anyone can see it. Before, the path appeared at bind(): a client (or a stop) arriving between bind() and
+    // the inode being recorded saw a refused connection, or a stop that could not tell the path was its own and left
+    // it behind (ShellServerTest, flaky on CI: StopUnlinksOnlyItsOwnSocket on macOS, IdleClientDoesNotBlockOtherClients
+    // on Linux).
+    const auto staged = socketPath_ + "." + std::to_string(::getpid());
 
     sockaddr_un addr{};
     // sun_path is 108 bytes on Linux but 104 on macOS (whose $TMPDIR paths are long): refuse instead of truncating.
-    if (socketPath_.size() >= sizeof(addr.sun_path))
+    if (staged.size() >= sizeof(addr.sun_path))
         throw std::runtime_error("CLI socket path too long for a unix socket: " + socketPath_);
+    ::unlink(staged.c_str());
 
     const int fd = vh::platform::fd::socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) throw std::runtime_error(std::string("socket(): ") + std::strerror(errno));
 
     addr.sun_family = AF_UNIX;
-    std::memcpy(addr.sun_path, socketPath_.c_str(), socketPath_.size() + 1);
+    std::memcpy(addr.sun_path, staged.c_str(), staged.size() + 1);
     // offsetof, not sizeof(sa_family_t): BSD's sockaddr_un starts with sun_len (on Linux the two are equal).
-    const auto addrLen = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + socketPath_.size() + 1);
-    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), addrLen) != 0) {
+    const auto addrLen = static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + staged.size() + 1);
+    const auto fail = [&](const std::string& what) {
         const auto err = errno;
         ::close(fd);
-        throw std::runtime_error("bind(" + socketPath_ + "): " + std::strerror(err));
-    }
-    ::chmod(socketPath_.c_str(), 0660);
-
-    if (::listen(fd, 64) != 0) {
-        const auto err = errno;
-        ::close(fd);
-        throw std::runtime_error(std::string("listen(): ") + std::strerror(err));
-    }
+        ::unlink(staged.c_str());
+        throw std::runtime_error(what + ": " + std::strerror(err));
+    };
+    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), addrLen) != 0) fail("bind(" + staged + ")");
+    ::chmod(staged.c_str(), 0660);
+    if (::listen(fd, 64) != 0) fail("listen()");
 
     struct stat st{};
-    if (::stat(socketPath_.c_str(), &st) != 0) {
-        const auto err = errno;
-        ::close(fd);
-        throw std::runtime_error("stat(" + socketPath_ + "): " + std::strerror(err));
-    }
+    if (::stat(staged.c_str(), &st) != 0) fail("stat(" + staged + ")");
 
     std::scoped_lock lock(fdMutex_);
     listenFd_ = fd;
     listenDev_ = st.st_dev;
     listenIno_ = st.st_ino;
+    // Atomically replaces whatever the path named (a stale listener, a removed path's leftover).
+    if (std::rename(staged.c_str(), socketPath_.c_str()) != 0) {
+        const auto err = errno;
+        ::close(fd);
+        ::unlink(staged.c_str());
+        listenFd_ = -1;
+        listenDev_ = 0;
+        listenIno_ = 0;
+        throw std::runtime_error("rename(" + staged + ", " + socketPath_ + "): " + std::strerror(err));
+    }
     return fd;
 }
 
@@ -426,4 +437,7 @@ void Server::runLoop() {
     // Stop path: unblock and join every client so none outlives this service (or touches a reused fd).
     shutdownClients();
     reapFinishedClients(true);
+    // And the listener with its path, whenever the loop ends: a stop that arrived while the listener was being bound
+    // found nothing to close yet (onStop ran first), so the path is removed here, before stop() returns.
+    closeListener(true);
 }

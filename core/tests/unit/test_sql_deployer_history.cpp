@@ -2294,7 +2294,9 @@ TEST_F(SqlDeployerHistoryDb, ReplicationLogMigration160IsAdditiveAndWritesNothin
         // ---- back to the 159 schema
         for (const auto* t : {"fs_entry", "files", "directories", "symlinks", "files_trashed", "vault", "sync", "fsync",
                               "rsync", "vault_recovery_policy", "vault_keys"})
-            for (const auto* trigger : {"vh_mirror_track", "vh_mirror_track_update", "vh_mirror_track_delete"})
+            // 165's write gate hangs off a vh_mirror_ function too (its triggers go first, or the function can't).
+            for (const auto* trigger : {"vh_mirror_track", "vh_mirror_track_update", "vh_mirror_track_delete",
+                                        "vh_mirror_gate", "vh_mirror_gate_update"})
                 txn.exec(std::string("DROP TRIGGER IF EXISTS ") + trigger + " ON " + t);
         txn.exec("DROP TABLE IF EXISTS vault_replication_log, mirror_entry_hash, mirror_vault");
         txn.exec("DO $$ DECLARE f RECORD; BEGIN "

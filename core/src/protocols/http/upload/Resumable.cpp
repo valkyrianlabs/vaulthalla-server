@@ -15,6 +15,8 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "mirror/access/Access.hpp"
+#include "ops/Error.hpp"
 #include "log/Redact.hpp"
 #include "ops/Error.hpp"
 #include "platform/Durable.hpp"
@@ -133,6 +135,10 @@ struct HttpError final : std::runtime_error {
     if (dynamic_cast<const access::NotFound*>(&e)) return errorJson(req, status::not_found, "not_found", "Not found");
     if (dynamic_cast<const access::BadRequest*>(&e)) return errorJson(req, status::bad_request, "bad_request", e.what());
     if (dynamic_cast<const json::exception*>(&e)) return errorJson(req, status::bad_request, "bad_request", e.what());
+    // A vault held as another server's copy (the server mirror's gate): read-only here, retry later.
+    if (const auto* ro = dynamic_cast<const vh::ops::ReadOnly*>(&e))
+        return errorJson(req, status::service_unavailable, "read_only", e.what(), json{{"reason", ro->reason}},
+                         std::nullopt, std::string("30"));
     log::Registry::http()->error("[ResumableUpload] {} {} failed: {}", std::string(req.method_string()),
                                  std::string(req.target()), e.what());
     return errorJson(req, status::internal_server_error, "internal", "Internal error");
@@ -1284,6 +1290,14 @@ void commitFile(const SessionPtr& s, const uint32_t ordinal) {
     } catch (const access::BadRequest& e) {
         failFile(s, ordinal, "forbidden", e.what());
         return;
+    } catch (const vh::ops::ReadOnly& e) {
+        failFile(s, ordinal, "read_only", e.what());
+        return;
+    }
+    // The share lane's commit too (the human one was refused by requireUser above).
+    if (const auto why = vh::mirror::access::refusalReason(s->vaultId)) {
+        failFile(s, ordinal, "read_only", vh::mirror::access::sentence(*why));
+        return;
     }
 
     if (!s->share) {
@@ -1343,6 +1357,9 @@ void commitFile(const SessionPtr& s, const uint32_t ordinal) {
         created = vh::fs::Filesystem::createFile(ctx);
     } catch (const vh::fs::ContentConflict&) {
         refuseExisting(cache ? cache->getEntry(fusePath) : nullptr);
+        return;
+    } catch (const vh::ops::ReadOnly& e) {
+        failFile(s, ordinal, "read_only", e.what());
         return;
     } catch (const std::filesystem::filesystem_error& e) {
         if (e.code() == std::errc::file_exists) {
@@ -1663,6 +1680,9 @@ struct NewFile {
         total += row.size_bytes;
         files.push_back(std::move(nf));
     }
+    // Every file authorized: a vault held as another server's copy takes none of them (the mirror gate), share lane
+    // included. Nothing is staged.
+    vh::mirror::access::requireWritable(vaultId, "an upload");
 
     const auto reserved = reservedBytes(vaultId);
     const auto available = engine->freeSpace();

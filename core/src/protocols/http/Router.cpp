@@ -7,6 +7,8 @@
 #include "protocols/http/Access.hpp"
 #include "protocols/http/AccessHooks.hpp"
 #include "protocols/http/handler/Handlers.hpp"
+#include "protocols/http/handler/Common.hpp"
+#include "ops/Error.hpp"
 #include "protocols/http/upload/Content.hpp"
 #include "protocols/http/upload/Coordinator.hpp"
 #include "protocols/http/upload/Resumable.hpp"
@@ -266,6 +268,8 @@ Response Router::handleUpload(request&& req) {
         }
 
         return makeErrorResponse(req, "Not found", status::not_found);
+    } catch (const vh::ops::ReadOnly& e) {
+        return handler::errorFor(req, e);   // 503 read_only with the reason and Retry-After (the mirror gate)
     } catch (const std::exception& e) {
         return makeErrorResponse(req, e.what(), downloadErrorStatus(e));
     }

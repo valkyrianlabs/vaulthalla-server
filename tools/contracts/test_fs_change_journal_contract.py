@@ -81,6 +81,9 @@ WRITERS: dict[str, dict[tuple[str, str], int]] = {
     "core/src/db/query/mirror/Start.cpp": {
         ("INSERT INTO", "fs_entry"): 1, ("INSERT INTO", "directories"): 1,
     },
+    # A setattr through the mount (chmod, chown, utimens: ops::fs::setAttributes, wave 4): mode (update), owner, group
+    # and modification time (nothing: not journaled), in one transaction. Covered in FsChangeJournalDbTest.
+    "core/src/db/query/fs/Entry.cpp": {("UPDATE", "fs_entry"): 1},
     # Vault deletion/revival re-parents the vault root and clears inodes: the root is never journaled, inodes aren't
     # changes, and a purge's cascade skips a deleted vault.
     "core/src/db/query/vault/Deletion.cpp": {("UPDATE", "fs_entry"): 3},

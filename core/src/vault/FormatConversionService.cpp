@@ -1,4 +1,5 @@
 #include "vault/FormatConversionService.hpp"
+#include "mirror/access/Access.hpp"
 
 #include "config/Registry.hpp"
 #include "crypto/SecretKey.hpp"
@@ -116,6 +117,13 @@ std::optional<Progress> progressOf(const uint32_t vaultId) {
 PassResult convertVault(const std::shared_ptr<storage::Engine>& engine, const Limits& limits,
                         const std::function<bool()>& stop, const std::function<void(std::chrono::nanoseconds)>& pause) {
     const auto vaultId = engine->vault->id;
+    // A vault held here as another server's copy changes through its core's log alone (design/peers/mirror.md
+    // "Background work on the mirror"): nothing is converted (a mirror holds only VHF1 anyway).
+    if (vh::mirror::access::held(vaultId)) {
+        PassResult held;
+        held.blocked = "this vault is a copy of another server's vault; its core converts it";
+        return held;
+    }
     {
         std::scoped_lock lock(progressMutex);
         auto& p = progressTable()[vaultId];
@@ -171,6 +179,7 @@ void FormatConversionService::runLoop() {
                 for (const auto& engine : manager ? manager->getEngines() : std::vector<std::shared_ptr<storage::Engine>>{}) {
                     if (shouldStop()) break;
                     if (!engine || !engine->vault || !engine->encryptionManager) continue;
+                    if (vh::mirror::access::held(engine->vault->id)) continue;   // its core's work (mirror)
                     // Cheap check first: a converted vault costs two indexed counts per interval.
                     const auto left = db::query::vault::FormatConversion::remaining(
                         engine->vault->id, engine->encryptionManager->get_key_version());

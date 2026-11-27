@@ -7,6 +7,7 @@
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "log/Redact.hpp"
+#include "mirror/access/Access.hpp"
 #include "protocols/cookie.hpp"
 #include "protocols/http/AccessHooks.hpp"
 #include "protocols/ws/Session.hpp"
@@ -231,6 +232,10 @@ void requireUserAction(const std::shared_ptr<identities::User>& user, const std:
             .path = engine->vaultPathToFusePath(vaultPath)
         }))
         throw Forbidden("Permission denied");
+    // Every HTTP lane that writes asks for Write or Overwrite here, before it stages a byte: a vault held as another
+    // server's copy refuses (the server mirror's gate; errorFor answers 503 read_only with the reason).
+    if (action == FsAction::Write || action == FsAction::Overwrite)
+        vh::mirror::access::requireWritable(engine->vault->id, "an upload");
 }
 
 void requireUserNeed(const std::shared_ptr<identities::User>& user, const std::shared_ptr<storage::Engine>& engine,

@@ -13,6 +13,9 @@
 #include "db/query/fs/Directory.hpp"
 #include "log/Registry.hpp"
 #include "log/Redact.hpp"
+#include "mirror/access/Access.hpp"
+#include "ops/Error.hpp"
+#include "ops/Fs.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fuse/Resolver.hpp"
 #include "fuse/WorkingCopies.hpp"
@@ -21,11 +24,13 @@
 #include "rbac/fs/Visibility.hpp"
 #include "fs/model/Symlink.hpp"
 #include "fs/model/File.hpp"
+#include "vault/model/Vault.hpp"
 #include "db/Transactions.hpp"
 #include "recovery/local/Versions.hpp"
 
 #include <cerrno>
 #include <chrono>
+#include <ctime>
 #include <cstring>
 #include <mutex>
 #include <string_view>
@@ -101,6 +106,8 @@ void recordCloseHandle() noexcept {
 WorkingCopies::Handle workingHandle(const FileHandle& fh) { return {fh.copy, fh.flags}; }
 
 int errnoFrom(const std::exception& e) {
+    // A seal refused by the mirror gate (a copy of another server's vault): read-only, not an I/O error.
+    if (dynamic_cast<const vh::mirror::access::MirrorReadOnly*>(&e)) return EROFS;
     if (const auto* sys = dynamic_cast<const std::system_error*>(&e); sys && sys->code().value() > 0)
         return sys->code().value();
     return EIO;
@@ -114,22 +121,6 @@ std::optional<int32_t> userIdOf(const std::shared_ptr<identities::User>& user) {
 bool isHttpUploadTempPartName(const std::string_view name) noexcept {
     return name.starts_with(".upload-http-") && name.ends_with(".part") &&
            name.find('/') == std::string_view::npos;
-}
-
-void warnSetattrMetadataNoOpOncePerMinute() {
-    static std::mutex mutex;
-    static std::chrono::steady_clock::time_point lastWarning{};
-
-    const auto now = std::chrono::steady_clock::now();
-    std::scoped_lock lock(mutex);
-
-    if (lastWarning != std::chrono::steady_clock::time_point{} &&
-        now - lastWarning < std::chrono::minutes(1))
-        return;
-
-    lastWarning = now;
-    log::Registry::fuse()->warn(
-        "chmod/chown is forbidden beyond the gates. If this is a cp operation you may disregard this warning.");
 }
 
 // A folder's size is its subtree total, which counts entries the caller may not be allowed to see (#269). A caller who
@@ -217,9 +208,6 @@ void setattr(const fuse_req_t req, const fuse_ino_t ino,
         return;
     }
 
-    if (to_set & (FUSE_SET_ATTR_MODE | FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID))
-        warnSetattrMetadataNoOpOncePerMinute();
-
     // truncate(2)/ftruncate(2): change the plaintext, then seal it like any other write.
     if (to_set & FUSE_SET_ATTR_SIZE) {
         if (resolved.entry->isDirectory()) {
@@ -252,6 +240,46 @@ void setattr(const fuse_req_t req, const fuse_ino_t ino,
     else times[0].tv_nsec = UTIME_OMIT;
     if (to_set & FUSE_SET_ATTR_MTIME) times[1] = platform::mtime(*attr);
     else times[1].tv_nsec = UTIME_OMIT;
+#ifdef FUSE_SET_ATTR_ATIME_NOW
+    if (to_set & FUSE_SET_ATTR_ATIME_NOW) times[0].tv_nsec = UTIME_NOW;
+#endif
+#ifdef FUSE_SET_ATTR_MTIME_NOW
+    if (to_set & FUSE_SET_ATTR_MTIME_NOW) times[1].tv_nsec = UTIME_NOW;
+#endif
+
+    // chmod, chown and a new modification time reach the row through the operation layer, in one transaction, so the
+    // change journal and the replication log record them (design/peers/mirror.md, the known limit of migration 160).
+    // The access time is the backing file's only.
+    vh::ops::fs::Attributes attrs;
+    if (to_set & FUSE_SET_ATTR_MODE) attrs.mode = static_cast<uint32_t>(attr->st_mode & 07777);
+    if (to_set & FUSE_SET_ATTR_UID) attrs.owner_uid = static_cast<int32_t>(attr->st_uid);
+    if (to_set & FUSE_SET_ATTR_GID) attrs.group_gid = static_cast<int32_t>(attr->st_gid);
+    if (times[1].tv_nsec != UTIME_OMIT) {
+        timespec mtime = times[1];
+        if (mtime.tv_nsec == UTIME_NOW) ::clock_gettime(CLOCK_REALTIME, &mtime);
+        attrs.mtime_us = static_cast<int64_t>(mtime.tv_sec) * 1000000 + mtime.tv_nsec / 1000;
+    }
+    if (attrs.mode || attrs.owner_uid || attrs.group_gid || attrs.mtime_us) {
+        try {
+            const auto vaultId = resolved.engine && resolved.engine->vault ? resolved.engine->vault->id : 0u;
+            vh::ops::fs::setAttributes(resolved.user, vaultId,
+                                       resolved.engine->fusePathToVaultPath(resolved.entry->fuse_path), attrs);
+        } catch (const vh::ops::ReadOnly&) {
+            replyError(req, timer, EROFS);
+            return;
+        } catch (const vh::ops::Denied&) {
+            replyError(req, timer, EPERM);
+            return;
+        } catch (const vh::ops::NotFound&) {
+            replyError(req, timer, ENOENT);
+            return;
+        } catch (const std::exception& e) {
+            log::Registry::fuse()->error("[setattr] Could not record the attributes of {}: {}",
+                                         log::file(resolved.entry->id, resolved.entry->fuse_path), e.what());
+            replyError(req, timer, EIO);
+            return;
+        }
+    }
 
     if (::utimensat(AT_FDCWD, resolved.entry->backing_path.c_str(), times, 0) < 0) {
         replyError(req, timer, errno);
@@ -265,7 +293,8 @@ void setattr(const fuse_req_t req, const fuse_ino_t ino,
         return;
     }
 
-    auto sanitized = statFromEntry(resolved.entry, ino);  // plaintext size, not the ciphertext's
+    const auto current = runtime::Deps::get().fsCache->getEntry(ino);
+    auto sanitized = statFromEntry(current ? current : resolved.entry, ino);  // plaintext size, not the ciphertext's
     applyVisibleFolderSize(sanitized, resolved.user, resolved.entry, FolderSize::Recount);
     platform::atime(sanitized) = platform::atime(st);
     platform::mtime(sanitized) = platform::mtime(st);

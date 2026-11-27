@@ -15,6 +15,7 @@
 #include "fs/tree_apply/TreeApply.hpp"
 #include "fuse/WorkingCopies.hpp"
 #include "log/Registry.hpp"
+#include "mirror/access/Access.hpp"
 #include "ops/Error.hpp"
 #include "paths.h"
 #include "runtime/Deps.hpp"
@@ -789,6 +790,8 @@ Result run(const uint32_t vaultId, const TreePage* page, const LogGroup* group, 
         return out;
     }
     afterCommit(r, done.effects);
+    // The first copy is complete: the write gate's reason changes (mirror_first_copy no more) before this returns.
+    if (page && done.result.copy_finished) vh::mirror::access::reload();
     return done.result;
 }
 

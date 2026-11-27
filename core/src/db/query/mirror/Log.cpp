@@ -399,6 +399,10 @@ void Log::markMirrorApply(pqxx::work& txn) {
     txn.exec("SELECT set_config('vh.mirror_apply', 'on', true)");
 }
 
+void Log::markMirrorLocal(pqxx::work& txn) {
+    txn.exec("SELECT set_config('vh.mirror_local', 'on', true)");
+}
+
 vh::mirror::Digest Digests::recompute(const uint32_t vaultId) {
     return Transactions::exec("mirror::Digests::recompute", [&](pqxx::work& txn) {
         const auto row = txn.exec("SELECT encode(vh_mirror_digest(entry_hash), 'hex') AS digest, count(*) AS entries "

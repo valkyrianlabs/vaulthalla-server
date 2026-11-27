@@ -112,7 +112,12 @@ public:
 
     // Marks `txn` as applying a core's changes (SET LOCAL vh.mirror_apply = 'on', the mirror's applier): its changes
     // write no log rows and move no entry hash.
+    // (Migration 165) it also passes the backstop of a vault held here as another server's copy.
     static void markMirrorApply(pqxx::work& txn);
+    // Marks `txn` as a change made on the mirror and accepted as pending (SET LOCAL vh.mirror_local = 'on'; wave 4
+    // piece B's submit path): it passes migration 165's backstop of a held vault. Nothing calls it on piece A's branch
+    // but tests.
+    static void markMirrorLocal(pqxx::work& txn);
 };
 
 class Digests {

@@ -13,6 +13,7 @@
 #include "rbac/resolver/vault/all.hpp"
 #include "fs/ops/file.hpp"
 #include "log/Registry.hpp"
+#include "mirror/access/Access.hpp"
 #include "mirror/Contents.hpp"
 #include "platform/Durable.hpp"
 #include "runtime/Deps.hpp"
@@ -364,6 +365,15 @@ void WorkingCopies::seal(WorkingCopy& copy) const {
         return;
     }
     copy.lastSeen = entry;
+
+    // What strict mode cannot refuse (design/peers/mirror.md): a copy changed before its vault became read-only here
+    // (a copy of another server's vault, mirror::access). Nothing is sealed over the core's content: the seal is
+    // refused, and the copy is kept unsaved like any failed seal (the person's bytes stay in this process, reopening
+    // the file shows them, the background retry holds them while the vault is read-only, the shutdown logs them as
+    // lost). No byte of the vault changes. Piece B takes over here: such a copy is sealed and kept as pending, then
+    // submitted to the core.
+    if (entry->vault_id)
+        vh::mirror::access::requireWritable(static_cast<uint32_t>(*entry->vault_id), "a seal through the mount");
 
     // Blobs the version capture frees (keep_last) are unlinked after the content lock is released.
     const recovery::local::versions::DeferBlobFrees deferFrees;
