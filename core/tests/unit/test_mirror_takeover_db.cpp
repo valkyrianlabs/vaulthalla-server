@@ -29,6 +29,7 @@
 #include "db/query/vault/Vault.hpp"
 #include "mirror/leave/Leave.hpp"
 #include "audit/Trail.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "mirror/resync/Resync.hpp"
 #include "mirror/switching/Switch.hpp"
 #include "mirror/takeover/Takeover.hpp"
@@ -37,6 +38,8 @@
 #include "protocols/ws/Session.hpp"
 #include "rbac/permission/admin/Mirror.hpp"
 #include "rbac/role/Admin.hpp"
+
+#include <vl/keykit/uid.hpp>
 
 #include <filesystem>
 
@@ -701,6 +704,8 @@ TEST_F(MirrorTakeoverDbTest, ADetachOnEitherSideOfATakeOverSettlesItAndNothingIs
     namespace leave = vh::mirror::leave;
     const auto corePeerRecord = *db::query::peer::Peers::byId(corePeer);
     const auto mirrorPeerRecord = *db::query::peer::Peers::byId(mirrorPeer);
+    // peer.mirror.detached names the vault in the wire's form (26 base32 symbols).
+    const auto wireUid = [](const Scenario& sc) { return vl::keykit::toBase32(crypto::id::fromUuid(sc.vaultUid)); };
     Down down;
     {
         // The old core, rejoining (it committed after the fork point), detaches.
@@ -736,7 +741,7 @@ TEST_F(MirrorTakeoverDbTest, ADetachOnEitherSideOfATakeOverSettlesItAndNothingIs
         // The new core is told: its side ends, the take over settles, the fork base goes, nothing is told again.
         const auto t = mq::Takeovers::openOf(s.mirrorId);
         ASSERT_TRUE(t);
-        EXPECT_TRUE(leave::detachedReceived(corePeerRecord, {{"vault_uid", s.vaultUid},
+        EXPECT_TRUE(leave::detachedReceived(corePeerRecord, {{"vault_uid", wireUid(s)},
                                                              {"at", {{"term", 1}, {"seq", 0}}}, {"missing", 0}})
                         .at("recorded").get<bool>());
         EXPECT_FALSE(mq::MirrorVaults::get(s.mirrorId));
@@ -770,7 +775,7 @@ TEST_F(MirrorTakeoverDbTest, ADetachOnEitherSideOfATakeOverSettlesItAndNothingIs
         EXPECT_TRUE(wire.promoted.empty()) << "the old core is not told it was taken over";
         // The old core, still the core, learns of the detach instead: its mirror ends, its vault stays.
         EXPECT_TRUE(onCore(s, [&] {
-                        return leave::detachedReceived(mirrorPeerRecord, {{"vault_uid", s.vaultUid},
+                        return leave::detachedReceived(mirrorPeerRecord, {{"vault_uid", wireUid(s)},
                                                                           {"at", {{"term", 2}, {"seq", 0}}},
                                                                           {"missing", 0}});
                     }).at("recorded").get<bool>());
