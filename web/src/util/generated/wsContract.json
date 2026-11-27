@@ -44873,6 +44873,7 @@
         "not_found",
         "unauthorized",
         "peers_experimental",
+        "peer_revoked",
         "mirror_not_live"
       ],
       "refusal_kinds": [
@@ -44881,6 +44882,7 @@
         "not_found",
         "unauthorized",
         "peers_experimental",
+        "peer_revoked",
         "mirror_not_live"
       ],
       "response": [
@@ -67267,5 +67269,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "81c871cc5fcd4ac98ff4b8d5aeaf7c7e3525829f28732e77e411dacf33bc8ce1"
+  "ws_hash": "7b9eabc96b44fb5daa1af3d119020a0a81bad26554a42cc43aa8b1a1e318546f"
 }

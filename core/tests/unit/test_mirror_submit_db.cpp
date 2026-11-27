@@ -656,6 +656,64 @@ TEST_F(MirrorSubmitDbTest, TheCoresEntryTakingAPendingFoldersNameSetsItAsideAndI
     EXPECT_EQ(held[0].copy_name.value_or(""), copy);
 }
 
+TEST_F(MirrorSubmitDbTest, TheCoreRemovingAFolderAPendingFolderWasMadeInTakesItBackAndTheChangeIsHeld) {
+    auto s = begin([](const EnginePtr& e) { e->mkdir("/gone", superUser); });
+    Wire wire(s);
+    followAll(wire, s);
+
+    ops::fs::mkdir(superUser, s.mirrorId, "/gone/mine");                       // pending here
+    coreChange(s, [](const EnginePtr& e) { e->remove("/gone", superUser->id); });   // the core removes the folder
+    // The core's removal arrives first: the pending folder in it goes back to what the core has (nothing), the folder
+    // goes, and nothing diverges.
+    const json logAt{{"vault_uid", s.vaultUid}, {"term", mirrorRow(s).term}, {"seq", mirrorRow(s).last_seq}};
+    for (const auto& g : s.answers.at(key("peer.mirror.log", logAt)).at("groups")) {
+        const auto r = ap::applyGroup(s.mirrorId, mf::groupFromJson(g));
+        ASSERT_EQ(r.status, ap::Status::Applied) << r.reason << " " << r.detail.dump();
+        EXPECT_EQ(r.digest, s.digests.at(r.at));
+    }
+    EXPECT_FALSE(pathsOf(s.mirrorId).contains("/gone"));
+    EXPECT_FALSE(pathsOf(s.mirrorId).contains("/gone/mine"));
+    ASSERT_EQ(mq::Pending::list(s.mirrorId).size(), 1u) << "the person's change is still to be told to the core";
+
+    // The core refuses it (its folder is gone): kept as a held change, never dropped.
+    followAll(wire, s);
+    expectSettled(s);
+    ASSERT_EQ(wire.answersGiven.size(), 1u);
+    EXPECT_EQ(wire.answersGiven[0].value("code", ""), "not_found");
+    const auto held = mq::Pending::heldChanges(s.mirrorId);
+    ASSERT_EQ(held.size(), 1u);
+    EXPECT_EQ(held[0].kind, "held");
+    EXPECT_EQ(held[0].op, "mkdir");
+    EXPECT_EQ(held[0].args.value("name", ""), "mine");
+    EXPECT_EQ(pathsOf(s.mirrorId), corePaths(s));
+}
+
+TEST_F(MirrorSubmitDbTest, TheCoresEntryInAFolderRemovedHereBringsTheFolderBackUntilTheRemovalIsConfirmed) {
+    auto s = begin([](const EnginePtr& e) { e->mkdir("/box", superUser); });
+    Wire wire(s);
+    followAll(wire, s);
+    const auto box = uidOf(s.mirrorId, "/box");
+
+    ops::fs::remove(superUser, s.mirrorId, "/box");                             // pending here
+    EXPECT_FALSE(pathsOf(s.mirrorId).contains("/box"));
+    coreChange(s, [](const EnginePtr& e) { e->mkdir("/box/theirs", superUser); });   // meanwhile in it, on the core
+    const json logAt{{"vault_uid", s.vaultUid}, {"term", mirrorRow(s).term}, {"seq", mirrorRow(s).last_seq}};
+    for (const auto& g : s.answers.at(key("peer.mirror.log", logAt)).at("groups")) {
+        const auto r = ap::applyGroup(s.mirrorId, mf::groupFromJson(g));
+        ASSERT_EQ(r.status, ap::Status::Applied) << r.reason << " " << r.detail.dump();
+        EXPECT_EQ(r.digest, s.digests.at(r.at));
+    }
+    EXPECT_EQ(uidOf(s.mirrorId, "/box"), box) << "the folder came back as the core has it, under its uid";
+    EXPECT_TRUE(pathsOf(s.mirrorId).contains("/box/theirs"));
+
+    // The person's removal then reaches the core, which removes the folder with what the core put in it.
+    followAll(wire, s);
+    expectSettled(s);
+    EXPECT_EQ(wire.answersGiven.back().value("status", ""), "executed");
+    EXPECT_FALSE(pathsOf(s.mirrorId).contains("/box"));
+    EXPECT_EQ(pathsOf(s.mirrorId), corePaths(s));
+}
+
 // ---- refusals ------------------------------------------------------------------------------------------------------------
 
 TEST_F(MirrorSubmitDbTest, ARefusalByTheCeilingIsHeldAndTheEntryComesBackToTheCoresState) {

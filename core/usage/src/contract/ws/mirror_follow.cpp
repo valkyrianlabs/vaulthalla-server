@@ -146,7 +146,8 @@ std::vector<WsCommandUsage> mirrorFollowCommands() {
                      uinteger("groups").opt().desc("executed: the groups the core logged for it."),
                      str("code").opt().desc("refused (or executed in part): the refusal's code."),
                      str("error").opt(), mfCoreState()},
-        .refusal_codes = {"denied", "invalid", "not_found", "unauthorized", "peers_experimental", "mirror_not_live"},
+        .refusal_codes = {"denied", "invalid", "not_found", "unauthorized", "peers_experimental", "peer_revoked",
+                          "mirror_not_live"},
         .client_timeout = kDefaultTimeout,
     });
 
