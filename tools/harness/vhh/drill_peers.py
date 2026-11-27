@@ -1001,7 +1001,8 @@ def _leaving(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, report:
                  wrote == "WROTE" and _plain(b, "whole/docs/after_detach.txt") == hashlib.sha256(b"mine now\n").hexdigest()
                  and _pending_rows(b, vb) == 0, wrote)
     code, held, text = _json(b, "mirror", "held", "--vault", str(vb))
-    writes = [h for h in held.get("held") or [] if h.get("op") == "write" and h.get("name") == "refused.txt"]
+    # 7k's refused write is the drill's only held write (its entry went back to A's state, so it may name no path).
+    writes = [h for h in held.get("held") or [] if h.get("op") == "write" and h.get("state") == "open"]
     saved = ""
     if writes:
         b.vh("mirror", "save", str(writes[0]["id"]), "saved_refused.txt")
