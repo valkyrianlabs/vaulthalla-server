@@ -201,6 +201,15 @@ void Pending::ready(const uint64_t id) {
     });
 }
 
+void Pending::ready(const uint64_t id, const nlohmann::json& args, const std::optional<std::string>& baseGeneration,
+                    const std::optional<std::string>& newGeneration) {
+    Transactions::exec("Pending::ready", [&](pqxx::work& txn) {
+        txn.exec("UPDATE mirror_pending SET state = 'pending', args = $2::jsonb, base_generation = $3, new_generation = $4, "
+                 "  updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND state = 'local'",
+                 pqxx::params{id, args.dump(), baseGeneration, newGeneration});
+    });
+}
+
 void Pending::abandon(const uint64_t id) {
     Transactions::exec("Pending::abandon", [&](pqxx::work& txn) {
         const auto r = txn.exec(std::string(kPendingSelect) + " WHERE id = $1 FOR UPDATE", pqxx::params{id});
@@ -301,6 +310,20 @@ void Pending::resubmit(pqxx::work& txn, const uint64_t id, const std::string& re
              "  groups_applied = 0, submitted_at = NULL, executed_at = NULL, last_error = NULL, "
              "  updated_at = CURRENT_TIMESTAMP WHERE id = $1",
              pqxx::params{id, requestId, args.dump()});
+}
+
+void Pending::resubmitAs(pqxx::work& txn, const uint64_t id, const std::string& requestId, const std::string& entryUid,
+                         const nlohmann::json& args) {
+    const auto vault = txn.exec("SELECT vault_id FROM mirror_pending WHERE id = $1", pqxx::params{id});
+    if (vault.empty()) return;
+    const auto vaultId = vault[0][0].as<uint32_t>();
+    txn.exec("UPDATE mirror_pending SET request_id = $2, entry_uid = $3::uuid, args = $4::jsonb, base_generation = NULL, "
+             "  uids = ARRAY[$3::uuid], state = 'pending', groups_expected = NULL, groups_applied = 0, submitted_at = NULL, "
+             "  executed_at = NULL, last_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+             pqxx::params{id, requestId, entryUid, args.dump()});
+    txn.exec("INSERT INTO mirror_dirty (vault_id, entry_uid, confirmed, confirmed_kind) VALUES ($1, $2::uuid, NULL, 'none') "
+             "ON CONFLICT (vault_id, entry_uid) DO NOTHING",
+             pqxx::params{vaultId, entryUid});
 }
 
 std::optional<PendingChange> Pending::countApplied(pqxx::work& txn, const uint32_t vaultId,

@@ -7,7 +7,11 @@
 #include "mirror/follow/Protocol.hpp"
 #include "mirror/start/Start.hpp"
 #include "mirror/submit/Submit.hpp"
+#include "crypto/id/ObjectUid.hpp"
+#include "db/query/peer/Peer.hpp"
 #include "peer/Links.hpp"
+#include "peer/ObjectClient.hpp"
+#include "peer/Peer.hpp"
 
 #include <paths.h>
 
@@ -79,6 +83,29 @@ StepResult followCoreDiverged(const uint32_t vaultId) {
     return {.step = Step::Stopped, .detail = "mirror_core_diverged"};
 }
 
+}
+
+Transport::Sent Transport::sendContent(const uint32_t peerId, const Content& content) {
+    const auto links = vh::peer::linkService();
+    const auto peer = vh::db::query::peer::Peers::byId(peerId);
+    if (!links || !peer) return {.ok = false, .retry = true, .error = "no link"};
+    vh::peer::object::PutOptions options;
+    options.tls = links->clientTls();
+    options.deadline = SteadyClock::now() + std::chrono::minutes(30);
+    const vh::peer::object::Address address{.vault = vh::crypto::id::fromUuid(content.vault_uid),
+                                            .object = vh::crypto::id::fromUuid(content.object_uid),
+                                            .generation = content.generation};
+    const auto r = vh::peer::object::put(*peer, address,
+                                         {.plaintext_size = content.size, .content_hash = content.content_hash,
+                                          .key_version = content.key_version},
+                                         options, content.path);
+    if (r.status == vh::peer::object::FetchStatus::Complete) return {.ok = true};
+    // Refused for the bytes themselves: never worth sending again (the change is kept as held). Anything else: later.
+    if (r.status == vh::peer::object::FetchStatus::Refused &&
+        (r.code == "invalid_contents" || r.code == "format_not_portable" || r.code == "key_version_missing" ||
+         r.code == "invalid"))
+        return {.ok = false, .retry = false, .code = r.code, .error = r.error};
+    return {.ok = false, .retry = true, .code = r.code, .error = r.error};
 }
 
 std::shared_ptr<Transport> linkTransport() {

@@ -48,8 +48,6 @@ inline constexpr std::string_view kPaused = "mirror_paused";              // fol
 inline constexpr std::string_view kPeersOff = "mirror_peers_off";         // peers.experimental is off here
 inline constexpr std::string_view kLinkDown = "mirror_link_down";         // the link to the core is down
 inline constexpr std::string_view kWritesNotBuilt = "mirror_writes_not_built";  // Live, but piece B is not built
-// Live, but this kind of change is not taken as pending yet (mirror::submit::requireSupported).
-inline constexpr std::string_view kContentsNotBuilt = "mirror_contents_not_built";
 inline constexpr std::string_view kCoreOwned = "mirror_core_owned";      // settings, remote: the core's, always
 
 // What the gate knows of a held vault (tests, status). nullopt: not held here.

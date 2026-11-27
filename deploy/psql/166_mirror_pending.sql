@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS mirror_pending
     vault_id        INTEGER     NOT NULL REFERENCES vault (id) ON DELETE CASCADE,
     request_id      TEXT        NOT NULL CHECK (request_id ~ '^[a-z0-9-]{8,64}$'),
     entry_uid       UUID        NOT NULL,
-    op              TEXT        NOT NULL CHECK (op IN ('mkdir', 'move', 'rename', 'remove', 'copy', 'write')),
+    op              TEXT        NOT NULL CHECK (op IN ('mkdir', 'move', 'rename', 'remove', 'copy', 'write', 'setattr')),
     args            JSONB       NOT NULL DEFAULT '{}'::jsonb,
     base_generation TEXT,
     new_generation  TEXT,

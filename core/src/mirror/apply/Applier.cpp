@@ -17,6 +17,7 @@
 #include "fuse/WorkingCopies.hpp"
 #include "log/Registry.hpp"
 #include "mirror/access/Access.hpp"
+#include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Local.hpp"
 #include "ops/Error.hpp"
 #include "paths.h"
@@ -136,6 +137,7 @@ struct Effects {
     std::vector<uint32_t> createdDirs;
     std::vector<uint32_t> contentChanged;
     std::vector<uint32_t> live;
+    std::vector<uint64_t> confirmed;   // pending changes confirmed: their sealed bytes leave the pending store
     bool vaultChanged{false};
 };
 
@@ -780,6 +782,7 @@ Committed applyInTransaction(pqxx::work& txn, Run& run) {
     if (run.group && batch.origin)
         if (const auto mine = mq::Pending::countApplied(txn, vaultId, *batch.origin); mine && mine->confirmed()) {
             mq::Pending::remove(txn, mine->id);
+            fx.confirmed.push_back(mine->id);
             settleAll(p, mine->uids, mine->id, digest);
         }
     // ---- settling a change (refused, or executed with nothing to apply here)
@@ -909,6 +912,8 @@ void afterCommit(const Run& run, const Effects& fx) {
         if (const auto e = db::query::fs::Entry::getFSEntryById(id)) ta::ensureBackingDirectory(e->backing_path);
     for (const auto id : fx.contentChanged) t.engine->purgeDerivedArtifacts(id);
     for (const auto id : fx.live) ta::cacheFresh(t, id);
+    for (const auto id : fx.confirmed)
+        vh::mirror::submit::contents::dropBlob(vh::mirror::submit::contents::pendingBlob(run.vaultId, id));
     if (fx.vaultChanged)
         if (const auto& deps = runtime::Deps::get(); deps.storageManager)
             if (const auto v = db::query::vault::Vault::getVault(run.vaultId)) {

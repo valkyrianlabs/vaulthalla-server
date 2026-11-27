@@ -55,6 +55,25 @@ public:
     [[nodiscard]] virtual std::optional<Answer> request(uint32_t peerId, const std::string& command,
                                                         const nlohmann::json& payload) = 0;
     virtual bool notify(uint32_t peerId, const std::string& command, const nlohmann::json& payload) = 0;
+
+    // The sealed bytes of a change made here, to the vault's core ahead of the change (mirror::submit): PUT on the
+    // sealed lane (peer::object::put) by default.
+    struct Sent {
+        bool ok{false};          // the core holds them, verified
+        bool retry{false};       // not reached, or broken off: send again later
+        std::string code{};      // the core's refusal
+        std::string error{};
+    };
+    struct Content {
+        std::string vault_uid{};   // uuid text
+        std::string object_uid{};  // uuid text
+        std::string generation{};
+        uint32_t key_version{};
+        uint64_t size{};
+        std::string content_hash{};
+        std::string path{};        // the sealed bytes here
+    };
+    virtual Sent sendContent(uint32_t peerId, const Content& content);
 };
 
 // The link service's (peer::LinkService::request / notify).

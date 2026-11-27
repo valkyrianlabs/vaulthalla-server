@@ -111,8 +111,10 @@ public:
     // entry already dirty keeps the state recorded for it), `created` as entries that did not exist. Returns the row.
     static PendingChange open(const NewPending& change, const std::vector<DirtyEntry>& captured,
                               const std::vector<std::string>& created);
-    // The change was applied here: it is to be submitted.
+    // The change was applied here: it is to be submitted (with its arguments as they ended: a write's contents).
     static void ready(uint64_t id);
+    static void ready(uint64_t id, const nlohmann::json& args, const std::optional<std::string>& baseGeneration,
+                      const std::optional<std::string>& newGeneration);
     // The change was not applied (nothing of it happened here): the row and the dirty entries only it held go.
     static void abandon(uint64_t id);
     // Whether every captured entry still hashes as captured and no created entry exists (the change did nothing).
@@ -134,6 +136,10 @@ public:
     static void noteError(uint64_t id, const std::string& error);
     // The same change, submitted again under a new request id with new arguments (a conflict copy's name): pending.
     static void resubmit(pqxx::work& txn, uint64_t id, const std::string& requestId, const nlohmann::json& args);
+    // The same person's version, submitted again as another entry (a conflict copy of a write): a new request id, the
+    // new entry (created, dirty, nothing confirmed for it), no base.
+    static void resubmitAs(pqxx::work& txn, uint64_t id, const std::string& requestId, const std::string& entryUid,
+                           const nlohmann::json& args);
 
     // In the applier's transaction: a group whose origin is `requestId` was applied. Returns the row as it now is
     // (nullopt: not one of this server's).

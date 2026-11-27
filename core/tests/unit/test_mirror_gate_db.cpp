@@ -228,9 +228,9 @@ TEST_F(MirrorGateDbTest, EachFactGivesItsStateAndReason) {
     sql("UPDATE mirror_vault SET copy_finished = TRUE WHERE vault_id = " + std::to_string(v));
     access::reload();
     EXPECT_EQ(access::state(v), access::State::Live) << "role mirror, first copy finished, live, link up";
-    EXPECT_FALSE(access::acceptsLocalChanges()) << "piece A: a mirror takes no local change yet";
-    EXPECT_EQ(access::reason(v), access::kWritesNotBuilt);
-    expectReadOnly([&] { access::requireWritable(v, "a test write"); }, access::kWritesNotBuilt, "live");
+    EXPECT_TRUE(access::acceptsLocalChanges()) << "piece B: a Live mirror takes a person's change as pending";
+    EXPECT_EQ(access::reason(v), "");
+    EXPECT_NO_THROW(access::requireWritable(v, "a test write")) << "live: let through to the pending path";
 
     access::linkChanged(peerId, false);
     EXPECT_EQ(access::state(v), access::State::ReadOnly);
@@ -290,8 +290,9 @@ TEST_F(MirrorGateDbTest, AChangeMadeBehindTheDaemonsBackIsReconciled) {
 
 TEST_F(MirrorGateDbTest, TheOperationLayerRefusesEveryWriteAndTheWsReplySaysWhy) {
     const auto engine = localVault();
-    const auto v = makeMirror(engine);
-    const auto reason = access::kWritesNotBuilt;
+    // Read-only: the link is down (a Live mirror takes these as pending changes: MirrorSubmitDbTest).
+    const auto v = makeMirror(engine, /*finished=*/true, /*linkUp=*/false);
+    const auto reason = access::kLinkDown;
     expectReadOnly([&] { ops::fs::mkdir(superUser, v, "/new"); }, reason, "fs.dir.create");
     expectReadOnly([&] { ops::fs::rename(superUser, v, "/doc.txt", "/renamed.txt"); }, reason, "fs.entry.rename");
     expectReadOnly([&] { ops::fs::move(superUser, v, "/doc.txt", "/dir/doc.txt"); }, reason, "fs.entry.move");
@@ -312,9 +313,10 @@ TEST_F(MirrorGateDbTest, TheOperationLayerRefusesEveryWriteAndTheWsReplySaysWhy)
         EXPECT_EQ(reply.data.value("reason", ""), reason);
     }
 
-    // With the link down the same refusal says so.
-    access::linkChanged(peerId, false);
-    expectReadOnly([&] { ops::fs::mkdir(superUser, v, "/new"); }, access::kLinkDown, "link down");
+    // Paused: the same refusal says so.
+    ASSERT_TRUE(mq::MirrorVaults::setState(v, "paused"));
+    expectReadOnly([&] { ops::fs::mkdir(superUser, v, "/new"); }, access::kPaused, "paused");
+    ASSERT_TRUE(mq::MirrorVaults::setState(v, "live"));
     access::linkChanged(peerId, true);
 
     // The same operations on an ordinary vault and on a core's mirrored vault work.
@@ -339,7 +341,7 @@ TEST_F(MirrorGateDbTest, TheOperationLayerRefusesEveryWriteAndTheWsReplySaysWhy)
 
 TEST_F(MirrorGateDbTest, TheFilesystemLayerUnderEverySurfaceRefusesToo) {
     const auto engine = localVault();
-    const auto v = makeMirror(engine);
+    const auto v = makeMirror(engine, /*finished=*/true, /*linkUp=*/false);   // read-only: the link is down
     EXPECT_THROW(write(engine, "/doc.txt", "replaced"), access::MirrorReadOnly) << "a file write (every upload lane)";
     EXPECT_THROW(write(engine, "/fresh.txt", "new", false), access::MirrorReadOnly);
     EXPECT_EQ(fs::Filesystem::mkdir({.path = engine->vaultPathToFusePath("/x/y"), .engine = engine, .user = superUser}),
@@ -360,7 +362,7 @@ TEST_F(MirrorGateDbTest, TheFilesystemLayerUnderEverySurfaceRefusesToo) {
 
 TEST_F(MirrorGateDbTest, HttpLanesAnswer503WithRetryAfterAndTheReason) {
     const auto engine = localVault();
-    const auto v = makeMirror(engine);
+    const auto v = makeMirror(engine, /*finished=*/true, /*linkUp=*/false);   // read-only: the link is down
     // Every HTTP lane that writes (upload content, text save, the upload sessions, `vh fs put`) authorizes Write or
     // Overwrite through http::access before it stages a byte.
     EXPECT_THROW(protocols::http::access::requireUser(superUser, engine, "/up.txt", FsAction::Write), vh::ops::ReadOnly);
@@ -387,7 +389,7 @@ TEST_F(MirrorGateDbTest, HttpLanesAnswer503WithRetryAfterAndTheReason) {
 
 TEST_F(MirrorGateDbTest, TheS3GatewayAnswersServiceUnavailableEvenToASuperAdmin) {
     const auto engine = localVault();
-    const auto v = makeMirror(engine);
+    const auto v = makeMirror(engine, /*finished=*/true, /*linkUp=*/false);   // read-only: the link is down
     const protocols::s3::ResolvedBucket bucket{.bucket_name = "mg-bucket", .vault_id = v, .mode = "local",
                                                .api_exclusive = false, .engine = engine, .actor = superUser,
                                                .gateway_access = std::nullopt};
@@ -549,6 +551,8 @@ TEST_F(MirrorGateDbTest, AWriteThroughAnOpenHandleIsNeverSealedOverTheCoresConte
     auto handle = copies.open(*file->inode, file, O_RDWR);
     const std::string text = "the person's change";
     ASSERT_EQ(copies.write(handle, text.data(), text.size(), 0, std::nullopt), static_cast<ssize_t>(text.size()));
+    // Paused (any read-only state but the link down, where the seal is kept as pending: MirrorSubmitDbTest).
+    ASSERT_TRUE(mq::MirrorVaults::setState(v, "paused"));
     EXPECT_THROW(copies.persist(handle), access::MirrorReadOnly) << "flush and fsync: EROFS";
     EXPECT_THROW(copies.release(handle), access::MirrorReadOnly);
     EXPECT_EQ(seals, 0u) << "nothing sealed";

@@ -15,6 +15,8 @@
 #include "log/Registry.hpp"
 #include "mirror/access/Access.hpp"
 #include "mirror/Contents.hpp"
+#include "mirror/submit/Local.hpp"
+#include "storage/PlaintextReader.hpp"
 #include "platform/Durable.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
@@ -366,63 +368,84 @@ void WorkingCopies::seal(WorkingCopy& copy) const {
     }
     copy.lastSeen = entry;
 
-    // What strict mode cannot refuse (design/peers/mirror.md): a copy changed before its vault became read-only here
-    // (a copy of another server's vault, mirror::access). Nothing is sealed over the core's content: the seal is
-    // refused, and the copy is kept unsaved like any failed seal (the person's bytes stay in this process, reopening
-    // the file shows them, the background retry holds them while the vault is read-only, the shutdown logs them as
-    // lost). No byte of the vault changes. Piece B takes over here: such a copy is sealed and kept as pending, then
-    // submitted to the core.
-    if (entry->vault_id)
-        vh::mirror::access::requireWritable(static_cast<uint32_t>(*entry->vault_id), "a seal through the mount");
-
-    // Blobs the version capture frees (keep_last) are unlinked after the content lock is released.
-    const recovery::local::versions::DeferBlobFrees deferFrees;
-    std::unique_lock<std::mutex> contentLock;
-    if (hooks_.lock) contentLock = hooks_.lock(entry->id);
-
-    const auto plainSize = copy.file->size();
-    const auto plaintext = fs::sourceOf(*copy.file);
-    const auto staged = std::make_shared<fs::model::File>(*entry);
-    // The shared content sidecar: overwrites and key rotation use the same name and the same order (sealed bytes,
-    // then the row, then the rename), so startup recovery settles any of them the same way.
-    const auto sealed = fs::ops::contentSidecarPath(entry->backing_path);
-
-    std::filesystem::create_directories(entry->backing_path.parent_path());
-    std::error_code ec;
-    std::filesystem::remove(sealed, ec);
-    try {
-        if (plainSize == 0) {
-            createPrivateFile(sealed);
-            staged->encryption_iv.clear();
-            staged->encrypted_with_key_version = 0;
-        } else {
-            hooks_.seal(plaintext, sealed, staged);
+    // A vault held here as another server's copy (design/peers/mirror.md "A change made on the mirror", "What strict
+    // mode cannot refuse"): while it is Live the seal is a pending change (applied here, its sealed bytes kept, submitted
+    // to the core); a copy that was open for writing when the link dropped is sealed and kept as pending all the same,
+    // and submitted when the link returns. In any other read-only state nothing is sealed over the core's content: the
+    // seal is refused and the copy is kept unsaved like any failed seal (the background retry holds it while the vault
+    // is read-only).
+    std::optional<vh::mirror::submit::Local> pending;
+    if (entry->vault_id) {
+        const auto vaultId = static_cast<uint32_t>(*entry->vault_id);
+        if (vh::mirror::access::held(vaultId)) {
+            std::shared_ptr<identities::User> writer;
+            const auto writerId = copy.lastWriter       ? copy.lastWriter
+                                  : entry->last_modified_by ? entry->last_modified_by
+                                                            : entry->created_by;
+            if (writerId && *writerId > 0)
+                if (const auto& ids = runtime::Deps::get().identityManager) writer = ids->user(static_cast<uint32_t>(*writerId));
+            pending.emplace(writer, vaultId, "write", vh::mirror::submit::Local::Mode::Seal);
+            if (pending->active()) {
+                pending->on(entry->path, false);
+                pending->base(storage::generationOf(*entry).sourceId());
+            }
         }
-        fsyncPath(sealed);
-
-        staged->size_bytes = plainSize;
-        staged->content_hash = crypto::hash::blake2b(sealed);
-        if (plainSize > 0) staged->mime_type = fs::mimeTypeOf(plaintext, entry->path);
-        if (copy.lastWriter) staged->last_modified_by = copy.lastWriter;
-        staged->updated_at = std::time(nullptr);
-        // Row first: a crash after this leaves a promotable sidecar.
-        if (hooks_.commit) hooks_.commit({.prior = *entry, .staged = staged, .truncated = copy.truncated});
-    } catch (...) {
-        std::filesystem::remove(sealed, ec);
-        throw;
+        if (!pending || !pending->active()) vh::mirror::access::requireWritable(vaultId, "a seal through the mount");
     }
-    std::filesystem::rename(sealed, entry->backing_path);
-    fs::ops::fsyncDirectory(entry->backing_path.parent_path());
 
-    entry->encryption_iv = staged->encryption_iv;
-    entry->encrypted_with_key_version = staged->encrypted_with_key_version;
-    entry->size_bytes = staged->size_bytes;
-    entry->content_hash = staged->content_hash;
-    entry->mime_type = staged->mime_type;
-    entry->last_modified_by = staged->last_modified_by;
-    entry->updated_at = staged->updated_at;
-    hooks_.saved(entry);
-    markSaved(copy);
+    const auto sealIt = [&] {
+        // Blobs the version capture frees (keep_last) are unlinked after the content lock is released.
+        const recovery::local::versions::DeferBlobFrees deferFrees;
+        std::unique_lock<std::mutex> contentLock;
+        if (hooks_.lock) contentLock = hooks_.lock(entry->id);
+
+        const auto plainSize = copy.file->size();
+        const auto plaintext = fs::sourceOf(*copy.file);
+        const auto staged = std::make_shared<fs::model::File>(*entry);
+        // The shared content sidecar: overwrites and key rotation use the same name and the same order (sealed bytes,
+        // then the row, then the rename), so startup recovery settles any of them the same way.
+        const auto sealed = fs::ops::contentSidecarPath(entry->backing_path);
+
+        std::filesystem::create_directories(entry->backing_path.parent_path());
+        std::error_code ec;
+        std::filesystem::remove(sealed, ec);
+        try {
+            if (plainSize == 0) {
+                createPrivateFile(sealed);
+                staged->encryption_iv.clear();
+                staged->encrypted_with_key_version = 0;
+            } else {
+                hooks_.seal(plaintext, sealed, staged);
+            }
+            fsyncPath(sealed);
+
+            staged->size_bytes = plainSize;
+            staged->content_hash = crypto::hash::blake2b(sealed);
+            if (plainSize > 0) staged->mime_type = fs::mimeTypeOf(plaintext, entry->path);
+            if (copy.lastWriter) staged->last_modified_by = copy.lastWriter;
+            staged->updated_at = std::time(nullptr);
+            // Row first: a crash after this leaves a promotable sidecar.
+            if (hooks_.commit) hooks_.commit({.prior = *entry, .staged = staged, .truncated = copy.truncated});
+        } catch (...) {
+            std::filesystem::remove(sealed, ec);
+            throw;
+        }
+        std::filesystem::rename(sealed, entry->backing_path);
+        fs::ops::fsyncDirectory(entry->backing_path.parent_path());
+
+        entry->encryption_iv = staged->encryption_iv;
+        entry->encrypted_with_key_version = staged->encrypted_with_key_version;
+        entry->size_bytes = staged->size_bytes;
+        entry->content_hash = staged->content_hash;
+        entry->mime_type = staged->mime_type;
+        entry->last_modified_by = staged->last_modified_by;
+        entry->updated_at = staged->updated_at;
+        hooks_.saved(entry);
+        markSaved(copy);
+        if (pending) pending->content(*entry);
+    };
+    if (pending) pending->run(sealIt);
+    else sealIt();
 }
 
 void WorkingCopies::markSaved(WorkingCopy& copy) const {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "db/query/mirror/Pending.hpp"
+#include "fs/Fwd.hpp"
 #include "ops/Actor.hpp"
 
 #include <nlohmann/json.hpp>
@@ -45,17 +46,20 @@ namespace vh::mirror::submit {
 // "name (conflict <8 hex of the uid>).ext" (the extension of a file kept last; none for a folder or a dot-file).
 [[nodiscard]] std::string conflictName(const std::string& name, const std::string& uid, bool directory);
 
-// Whether a change of this kind made on a Live mirror can be taken as pending here: mkdir, move, rename, remove (ops::fs
-// names fs.mkdir, fs.move, fs.rename, fs.delete) and copy (fs.copy, submitted only). Contents (uploads, commits, FUSE
-// writes and seals) cannot yet: requireSupported refuses them on a vault held here as a mirror or orphaned copy with
-// MirrorReadOnly("mirror_contents_not_built"), so a write the gate lets through never reaches the database backstop.
-[[nodiscard]] bool supportsLocally(std::string_view operation);
-void requireSupported(uint32_t vaultId, std::string_view operation);
 
 class Local {
 public:
-    // `op`: mkdir | move | rename | remove | copy (the mirror_pending ops).
-    Local(const vh::ops::Actor& actor, uint32_t vaultId, std::string op);
+    enum class Mode {
+        Change,   // a person's change: taken only while the vault is Live
+        // A seal of a file that was open for writing (design/peers/mirror.md "What strict mode cannot refuse"): taken
+        // while Live and also while the link is down (sealed and kept as pending, submitted when the link returns).
+        Seal,
+    };
+
+    // `op`: mkdir | move | rename | remove | copy | write | setattr (the mirror_pending ops). Inert as well when a Local
+    // of the same vault is already running on this thread (the outer one describes the change: ops::fs over
+    // vh::fs::Filesystem), or under a Suppress.
+    Local(const vh::ops::Actor& actor, uint32_t vaultId, std::string op, Mode mode = Mode::Change);
     ~Local();
     Local(const Local&) = delete;
     Local& operator=(const Local&) = delete;
@@ -74,6 +78,27 @@ public:
 
     // Submitted without being applied here (copy: its new entries come back from the core with the core's uids).
     void submitOnly();
+
+    // A replacement of contents: the generation it was based on (the core commits it only over that one).
+    void base(const std::string& generation);
+    // The contents the change wrote (after the mutation, inside run): their facts go to the core with it, and the sealed
+    // bytes are kept in the pending store (mirror::submit::contents) until the core has confirmed or refused it.
+    void content(const vh::fs::model::File& file);
+    // Any other argument the core needs (setattr's mode and time).
+    void arg(const std::string& key, nlohmann::json value);
+
+    // While alive, no Local of `vaultId` starts on this thread: this server's own bringing-into-line of a change it
+    // already describes (a conflict copy made from the pending store).
+    class Suppress {
+    public:
+        explicit Suppress(uint32_t vaultId);
+        ~Suppress();
+        Suppress(const Suppress&) = delete;
+        Suppress& operator=(const Suppress&) = delete;
+
+    private:
+        uint32_t vault_;
+    };
 
     // Runs `apply` (the mutation) as a pending change; when inert, just runs it.
     template <class F>
@@ -109,7 +134,11 @@ private:
     uint32_t vaultId_{};
     std::string op_;
     bool active_{false};
+    bool pushed_{false};
     bool submitOnly_{false};
+    std::optional<std::string> base_;
+    std::optional<std::string> newGeneration_;
+    std::optional<std::filesystem::path> contentBacking_;
     std::unique_lock<std::recursive_mutex> lock_;
     std::string requestId_;
     std::string entryUid_;

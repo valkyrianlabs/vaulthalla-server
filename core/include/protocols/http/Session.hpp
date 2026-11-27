@@ -143,6 +143,7 @@ private:
     bool handle_transfer(HeaderParser& parser);
     // A linked server's sealed lane (protocols/device/PeerObject.hpp).
     bool handle_peer_object(HeaderParser& parser);
+    bool handle_peer_object_put(HeaderParser& parser);
     bool handle_resumable_part(boost::beast::http::request_parser<boost::beast::http::buffer_body>& parser);
     bool write_response(model::preview::Response&& response, bool headRequest = false);
     bool write_stream(model::preview::StreamResponse&& response);

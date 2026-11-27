@@ -1,16 +1,21 @@
 #include "protocols/device/PeerObject.hpp"
 
 #include "config/Registry.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/mirror/Contents.hpp"
+#include "db/query/mirror/MirrorVault.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "fs/model/File.hpp"
 #include "log/Registry.hpp"
+#include "mirror/submit/Contents.hpp"
 #include "peer/ObjectClient.hpp"
 #include "peer/Peer.hpp"
 #include "protocols/http/handler/Common.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "vault/Content.hpp"
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -125,8 +130,8 @@ http::model::preview::Response serve(const http::request& req, const vh::peer::P
     // Off: the lane does not exist.
     if (!vh::config::Registry::get().peers.experimental) return notFound(req);
     if (req.method() != verb::get && req.method() != verb::head) {
-        auto res = jsonError(req, status::method_not_allowed, "method_not_allowed", "GET or HEAD only");
-        std::get<http::string_response>(res).set(field::allow, "GET, HEAD");
+        auto res = jsonError(req, status::method_not_allowed, "method_not_allowed", "GET, HEAD or PUT only");
+        std::get<http::string_response>(res).set(field::allow, "GET, HEAD, PUT");
         return res;
     }
     // The link as it is now, not as it was at the handshake: unlinked since, or its key replaced.
@@ -200,6 +205,79 @@ http::model::preview::Response serve(const http::request& req, const vh::peer::P
     log::Registry::http()->debug("[PeerObject] Serving file {} of vault {} to linked server {} ({} sealed bytes)",
                                  found->file_id, found->vault_id, caller.node_id, sealed);
     return http::handler::serve(req, std::move(spec));
+}
+
+PutStart beginPut(const http::request& req, const vh::peer::Principal& caller, const std::optional<uint64_t> contentLength) {
+    PutStart out;
+    if (!vh::config::Registry::get().peers.experimental) {
+        out.refusal = notFound(req);
+        return out;
+    }
+    const auto row = db::query::peer::Peers::byId(caller.peer_id);
+    if (!row || row->revoked() || row->spki_sha256 != caller.spki_hex) {
+        out.refusal = jsonError(req, status::forbidden, "peer_revoked", "This server is no longer linked");
+        return out;
+    }
+    const std::string_view target(req.target().data(), req.target().size());
+    const auto address = vh::peer::object::parseTarget(target);
+    if (!address) {
+        out.refusal = jsonError(req, status::bad_request, "invalid", "Not a sealed object address");
+        return out;
+    }
+    // Only the core of a vault takes bytes, and only from that vault's mirror.
+    const auto mv = db::query::mirror::MirrorVaults::byVaultUid(vh::crypto::id::toUuid(address->vault));
+    if (!mv || mv->role != "core" || mv->peer_id != caller.peer_id || mv->state != "live") {
+        out.refusal = notFound(req);
+        return out;
+    }
+    const auto header = [&](const std::string_view name) {
+        const auto it = req.find(boost::beast::string_view(name.data(), name.size()));
+        return it == req.end() ? std::string() : std::string(it->value());
+    };
+    const auto number = [](const std::string& text) -> std::optional<uint64_t> {
+        if (text.empty() || text.size() > 19 || !std::ranges::all_of(text, [](const char c) { return c >= '0' && c <= '9'; }))
+            return std::nullopt;
+        return std::stoull(text);
+    };
+    const auto size = number(header(vh::peer::object::kSizeHeader));
+    const auto version = number(header(vh::peer::object::kKeyVersionHeader));
+    const auto hash = header(vh::peer::object::kContentHashHeader);
+    if (!size || !version || *version > 0xffffffffULL || hash.empty() || hash.size() > 128 || !vh::vault::content::isVhf1(address->generation)) {
+        out.refusal = jsonError(req, status::bad_request, "invalid", "The sealed bytes' facts are missing or malformed");
+        return out;
+    }
+    const auto sealed = vh::vault::content::sealedSizeOf(*size, address->generation);
+    if (!contentLength || *contentLength != sealed) {
+        out.refusal = jsonError(req, status::bad_request, "invalid", "The body is not that generation's sealed length");
+        return out;
+    }
+    out.target = PutTarget{.vault_id = mv->vault_id,
+                           .object_uuid = vh::crypto::id::toUuid(address->object),
+                           .generation = address->generation,
+                           .key_version = static_cast<uint32_t>(*version),
+                           .plaintext_size = *size,
+                           .content_hash = hash,
+                           .sealed_size = sealed,
+                           .receiving = vh::mirror::submit::contents::receivingPath(mv->vault_id).string()};
+    return out;
+}
+
+http::model::preview::Response finishPut(const http::request& req, const PutTarget& target) {
+    const auto staged = vh::mirror::submit::contents::stage(
+        target.vault_id, target.object_uuid,
+        {.generation = target.generation, .key_version = target.key_version, .size = target.plaintext_size,
+         .content_hash = target.content_hash},
+        target.receiving);
+    if (!staged.ok)
+        return jsonError(req, static_cast<status>(staged.http_status), staged.code, staged.error);
+    log::Registry::http()->debug("[PeerObject] Staged {} sealed bytes for vault {} from its mirror", target.sealed_size,
+                                 target.vault_id);
+    http::string_response res{status::created, req.version()};
+    res.set(field::content_type, "application/json");
+    res.set(field::cache_control, "no-store");
+    res.body() = nlohmann::json{{"staged", true}}.dump();
+    res.prepare_payload();
+    return res;
 }
 
 Registration track(const uint32_t peerId, std::function<void()> close) {

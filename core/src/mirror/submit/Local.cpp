@@ -12,6 +12,8 @@
 #include "log/Registry.hpp"
 #include "mirror/access/Access.hpp"
 #include "mirror/follow/Follower.hpp"
+#include "mirror/submit/Contents.hpp"
+#include "fs/model/File.hpp"
 #include "ops/Error.hpp"
 #include "rbac/Mirrored.hpp"
 #include "runtime/Deps.hpp"
@@ -21,6 +23,7 @@
 
 #include <sodium.h>
 
+#include <algorithm>
 #include <array>
 #include <map>
 #include <utility>
@@ -96,28 +99,71 @@ std::string conflictName(const std::string& name, const std::string& uid, const 
     return name.substr(0, dot) + tag + name.substr(dot);
 }
 
-bool supportsLocally(const std::string_view operation) {
-    return operation == "fs.mkdir" || operation == "fs.move" || operation == "fs.rename" || operation == "fs.delete" ||
-           operation == "fs.copy";
+namespace {
+
+// The vaults a Local runs for (or is suppressed for) on this thread, innermost last.
+std::vector<uint32_t>& submitLocalRunning() {
+    thread_local std::vector<uint32_t> running;
+    return running;
 }
 
-void requireSupported(const uint32_t vaultId, const std::string_view operation) {
-    if (!vh::mirror::access::held(vaultId) || supportsLocally(operation)) return;
-    throw vh::mirror::access::MirrorReadOnly(vaultId, std::string(vh::mirror::access::kContentsNotBuilt), operation);
+bool submitLocalRunningFor(const uint32_t vaultId) {
+    const auto& r = submitLocalRunning();
+    return std::ranges::find(r, vaultId) != r.end();
 }
 
-Local::Local(const vh::ops::Actor& actor, const uint32_t vaultId, std::string op)
+void submitLocalPop(const uint32_t vaultId) {
+    auto& r = submitLocalRunning();
+    if (const auto it = std::ranges::find(r.rbegin(), r.rend(), vaultId); it != r.rend()) r.erase(std::next(it).base());
+}
+
+}
+
+Local::Suppress::Suppress(const uint32_t vaultId) : vault_(vaultId) { submitLocalRunning().push_back(vaultId); }
+
+Local::Suppress::~Suppress() { submitLocalPop(vault_); }
+
+Local::Local(const vh::ops::Actor& actor, const uint32_t vaultId, std::string op, const Mode mode)
     : actor_(actor), vaultId_(vaultId), op_(std::move(op)) {
-    if (!actor_ || !vh::rbac::mirrored::find(vaultId)) return;
-    if (vh::mirror::access::state(vaultId) != vh::mirror::access::State::Live ||
-        !vh::mirror::access::acceptsLocalChanges())
+    if (!actor_ || !vh::mirror::access::held(vaultId) || submitLocalRunningFor(vaultId)) return;
+    if (!vh::mirror::access::acceptsLocalChanges()) return;
+    const auto state = vh::mirror::access::state(vaultId);
+    const bool sealWhileDown = mode == Mode::Seal && state == vh::mirror::access::State::ReadOnly &&
+                               vh::mirror::access::reason(vaultId) == vh::mirror::access::kLinkDown;
+    if (state != vh::mirror::access::State::Live && !sealWhileDown)
         return;   // the gate's line before this one refused already; nothing here changes that
     lock_ = std::unique_lock(vaultMutex(vaultId));
     active_ = true;
+    submitLocalRunning().push_back(vaultId);
+    pushed_ = true;
     requestId_ = newRequestId();
 }
 
-Local::~Local() = default;
+Local::~Local() {
+    if (pushed_) submitLocalPop(vaultId_);
+}
+
+void Local::base(const std::string& generation) {
+    if (!active_) return;
+    base_ = generation;
+    args_["base"] = generation;
+}
+
+void Local::content(const vh::fs::model::File& file) {
+    if (!active_) return;
+    args_["generation"] = file.encryption_iv;
+    args_["key_version"] = file.encrypted_with_key_version;
+    args_["size"] = file.size_bytes;
+    args_["content_hash"] = file.content_hash.value_or(std::string{});
+    if (file.mime_type) args_["mime"] = *file.mime_type;
+    newGeneration_ = file.encryption_iv;
+    if (file.size_bytes > 0) contentBacking_ = file.backing_path;
+}
+
+void Local::arg(const std::string& key, nlohmann::json value) {
+    if (!active_) return;
+    args_[key] = std::move(value);
+}
 
 void Local::on(const std::filesystem::path& vaultPath, const bool subtree) {
     if (!active_) return;
@@ -200,7 +246,10 @@ void Local::failed() {
 }
 
 void Local::succeeded() {
-    mq::Pending::ready(*row_);
+    // The sealed bytes go to the pending store first: nothing later done to the file here can take them before the
+    // core has them.
+    if (contentBacking_) vh::mirror::submit::contents::keep(*contentBacking_, contents::pendingBlob(vaultId_, *row_));
+    mq::Pending::ready(*row_, args_, base_, newGeneration_);
     vh::mirror::follow::Follower::instance()->wake(vaultId_);
 }
 

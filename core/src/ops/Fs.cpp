@@ -372,7 +372,6 @@ void remove(const Actor& actor, const uint32_t vaultId, const std::filesystem::p
 
 EnginePtr authorizeUpload(const Actor& actor, const uint32_t vaultId, const std::filesystem::path& path) {
     requireActor(actor);
-    vh::mirror::submit::requireSupported(vaultId, "fs.upload");   // contents on a mirror: not built yet
     auto engine = engineFor(vaultId, "Unknown storage engine");
     require(actor, engine, path, FsAction::Write,
             "Permission denied: User does not have upload permission for this path in the vault");
@@ -410,6 +409,7 @@ void setAttributes(const Actor& actor, const uint32_t vaultId, const std::filesy
     require(actor, engine, path, FsAction::Write,
             "Permission denied: User does not have write permission for this path in the vault");
     vh::mirror::access::requireWritable(engine->vault->id, "a setattr");  // mirror gate
+    vh::mirror::submit::Local pending(actor, vaultId, "setattr");
 
     const auto& cache = vh::runtime::Deps::get().fsCache;
     const auto entry = cache->getEntry(engine->vaultPathToFusePath(path));
@@ -419,11 +419,20 @@ void setAttributes(const Actor& actor, const uint32_t vaultId, const std::filesy
                               (attrs.group_gid && attrs.group_gid != entry->group_gid);
     if (ownerChanges && !actor->isSuperAdmin())
         throw Denied("Permission denied: only a super admin may change an entry's owner or group");
+    // An owner is a Linux account of the host that holds the copy: on a mirror it is the core's, never changed here.
+    if (ownerChanges && pending.active())
+        throw Denied("Permission denied: an entry's owner on a mirrored vault is its core server's");
 
     const vh::db::query::fs::Entry::Attributes rowAttrs{.mode = attrs.mode, .owner_uid = attrs.owner_uid,
                                                        .group_gid = attrs.group_gid, .mtime_us = attrs.mtime_us};
-    if (!vh::db::query::fs::Entry::setAttributes(entry->id, rowAttrs, actor->id))
-        throw NotFound("no such entry: " + path.string());
+    if (pending.active()) {
+        pending.on(path, false);
+        if (attrs.mode) pending.arg("mode", *attrs.mode);
+        if (attrs.mtime_us) pending.arg("mtime_us", *attrs.mtime_us);
+    }
+    bool changed = true;
+    pending.run([&] { changed = vh::db::query::fs::Entry::setAttributes(entry->id, rowAttrs, actor->id); });
+    if (!changed) throw NotFound("no such entry: " + path.string());
 
     // The cache answers getattr: the row as it is now, replacing the cached entry (a reader holding the old one keeps
     // it whole).
@@ -437,7 +446,6 @@ void setAttributes(const Actor& actor, const uint32_t vaultId, const std::filesy
 
 std::shared_ptr<vh::fs::model::File> commitSealed(const Actor& actor, const SealedCommit& commit) {
     requireActor(actor);
-    vh::mirror::submit::requireSupported(commit.vault_id, "fs.commit");   // contents on a mirror: not built yet
     if (!commit.sealed) throw Invalid("a sealed commit needs its sealed content");
     const auto& path = commit.path;
     if (path.empty() || !path.has_filename() || path.lexically_normal() == "/")

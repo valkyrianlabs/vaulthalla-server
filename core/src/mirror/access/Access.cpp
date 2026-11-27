@@ -175,9 +175,6 @@ std::string sentence(const std::string_view code) {
     if (code == kCoreOwned)
         return "This vault is a copy of another server's vault; its settings, keys and remote are its core server's, "
                "and are changed there";
-    if (code == kContentsNotBuilt)
-        return "This vault is a mirror of another server's vault; this kind of change is not taken here yet, make it "
-               "on its core server";
     if (code == kWritesNotBuilt)
         return "This vault is a mirror of another server's vault; changes are made on its core server (this server "
                "does not take changes to a mirror yet)";

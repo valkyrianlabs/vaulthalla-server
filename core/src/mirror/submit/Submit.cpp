@@ -12,11 +12,13 @@
 #include "db/query/mirror/Pending.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "fs/Filesystem.hpp"
+#include "fs/model/File.hpp"
 #include "fs/tree_apply/TreeApply.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "mirror/apply/Applier.hpp"
+#include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Local.hpp"
 #include "ops/Error.hpp"
 #include "ops/Fs.hpp"
@@ -27,6 +29,7 @@
 #include <pqxx/pqxx>
 
 #include <atomic>
+#include <fstream>
 #include <mutex>
 #include <regex>
 #include <set>
@@ -71,7 +74,7 @@ bool submitValidUuid(const std::string& s) {
 }
 
 const std::set<std::string>& submitOps() {
-    static const std::set<std::string> ops{"mkdir", "move", "rename", "remove", "copy"};
+    static const std::set<std::string> ops{"mkdir", "move", "rename", "remove", "copy", "write", "setattr"};
     return ops;
 }
 
@@ -110,6 +113,55 @@ std::string submitFolderOf(const uint32_t vaultId, const std::string& vaultUid, 
     if (!at || at->trashed || at->kind != ta::Located::Kind::Directory)
         throw vh::ops::NotFound("destination folder does not exist");
     return at->path;
+}
+
+// A write: the file committed from the sealed bytes the mirror sent first (mirror::submit::contents::staged), never
+// re-encrypted, so both servers hold the same bytes under the same generation. A create takes the mirror's uid and
+// never replaces what is there (a conflict); a replacement is a compare-and-swap on the generation it was based on
+// (content_conflict when the file moved on, or is gone).
+void submitExecuteWrite(const vh::ops::Actor& actor, const uint32_t vaultId, const std::string& vaultUid,
+                        const std::string& uid, const json& args) {
+    const auto generation = args.value("generation", std::string{});
+    const auto size = args.value("size", uint64_t{0});
+    const auto keyVersion = args.value("key_version", 0u);
+    const auto contentHash = args.value("content_hash", std::string{});
+    const std::optional<std::string> mime =
+        args.contains("mime") && args["mime"].is_string() ? std::optional<std::string>(args["mime"].get<std::string>())
+                                                          : std::nullopt;
+    std::optional<std::filesystem::path> bytes;
+    if (size > 0) {
+        bytes = contents::staged(vaultId, uid, generation);
+        if (!bytes) throw vh::ops::Refused("contents_missing", "the change's sealed bytes are not here");
+    }
+    const std::optional<std::string> base =
+        args.contains("base") && args["base"].is_string() ? std::optional<std::string>(args["base"].get<std::string>())
+                                                          : std::nullopt;
+    std::string path;
+    std::optional<vh::db::query::fs::AssignedUid> assigned;
+    if (base) {
+        const auto at = ta::locate(vaultId, uid);
+        if (!at || at->trashed) throw vh::ops::fs::ContentConflict("the file is not in this vault (any more)");
+        path = at->path;
+    } else {
+        if (ta::locate(vaultId, uid)) throw vh::ops::Invalid("an entry with that uid exists already");
+        path = submitJoin(submitFolderOf(vaultId, vaultUid, submitText(args, "parent_uid")), submitEntryName(args));
+        assigned.emplace(vaultId, path, vh::crypto::id::fromUuid(uid));
+    }
+    vh::ops::fs::SealedCommit commit{.vault_id = vaultId, .path = path, .base = base};
+    commit.sealed = [&](const std::filesystem::path& dst) {
+        if (bytes) {
+            contents::keep(*bytes, dst);
+        } else {
+            std::ofstream(dst, std::ios::binary | std::ios::trunc).close();
+        }
+        return vh::fs::SealedContent{.encryption_iv = size > 0 ? generation : std::string{},
+                                     .key_version = size > 0 ? keyVersion : 0u,
+                                     .plaintext_size = size,
+                                     .mime_type = mime,
+                                     .content_hash = size > 0 ? std::optional<std::string>(contentHash) : std::nullopt};
+    };
+    (void)vh::ops::fs::commitSealed(actor, commit);
+    if (bytes) contents::dropBlob(*bytes);
 }
 
 void submitExecute(const mq::Submission& sub) {
@@ -159,11 +211,25 @@ void submitExecute(const mq::Submission& sub) {
             const auto from = submitPathOf(vaultId, uid);
             const auto to = submitJoin(submitFolderOf(vaultId, *vaultUid, submitText(args, "parent_uid")),
                                        submitEntryName(args));
+            // rename(2) over an entry on the mirror: what is at the destination goes first (as the person's delete).
+            if (op != "copy" && args.value("replace", false))
+                if (const auto& manager = vh::runtime::Deps::get().storageManager)
+                    if (const auto engine = manager->getEngine(vaultId);
+                        engine && vh::fs::Filesystem::exists(engine->vaultPathToFusePath(to)))
+                        vh::ops::fs::remove(actor, vaultId, to);
             if (op == "move") vh::ops::fs::move(actor, vaultId, from, to);
             else if (op == "rename") vh::ops::fs::rename(actor, vaultId, from, to);
             else vh::ops::fs::copy(actor, vaultId, from, to);
         } else if (op == "remove") {
             vh::ops::fs::remove(actor, vaultId, submitPathOf(vaultId, uid));
+        } else if (op == "write") {
+            submitExecuteWrite(actor, vaultId, *vaultUid, uid, args);
+        } else if (op == "setattr") {
+            vh::ops::fs::Attributes attrs;
+            if (args.contains("mode") && args["mode"].is_number_unsigned()) attrs.mode = args["mode"].get<uint32_t>();
+            if (args.contains("mtime_us") && args["mtime_us"].is_number_integer())
+                attrs.mtime_us = args["mtime_us"].get<int64_t>();
+            vh::ops::fs::setAttributes(actor, vaultId, submitPathOf(vaultId, uid), attrs);
         } else {
             throw vh::ops::Invalid("this server cannot execute " + op);
         }
@@ -257,6 +323,7 @@ void submitSettleConfirmed(const mq::PendingChange& p) {
     if (r.status != vh::mirror::apply::Status::Applied)
         vh::log::Registry::sync()->warn("[MirrorSubmit] Vault {}: request {} confirmed, its entries not settled: {}",
                                         p.vault_id, p.request_id, r.reason);
+    contents::dropBlob(contents::pendingBlob(p.vault_id, p.id));
 }
 
 mq::HeldChange submitHeldOf(const mq::PendingChange& p, const std::string& kind, const std::string& code,
@@ -279,11 +346,17 @@ mq::HeldChange submitHeldOf(const mq::PendingChange& p, const std::string& kind,
 // version is kept as a held change.
 void submitHold(const mq::PendingChange& p, const std::string& code, const std::string& error) {
     const auto held = submitHeldOf(p, "held", code, error);
+    uint64_t heldId = 0;
     const std::function<void(pqxx::work&)> also = [&](pqxx::work& txn) {
         mq::Pending::remove(txn, p.id);
-        (void)mq::Pending::hold(txn, held);
+        heldId = mq::Pending::hold(txn, held);
+    };
+    // The person's sealed bytes stay with the held change (never dropped without their action).
+    const auto keepBytes = [&] {
+        if (heldId) contents::moveBlob(contents::pendingBlob(p.vault_id, p.id), contents::heldBlob(p.vault_id, heldId));
     };
     const auto r = vh::mirror::apply::settle(p.vault_id, p.uids, also);
+    keepBytes();
     if (r.status == vh::mirror::apply::Status::Applied) {
         vh::log::Registry::sync()->info("[MirrorSubmit] Vault {}: request {} ({}) refused by the core ({}): held",
                                         p.vault_id, p.request_id, p.op, code);
@@ -291,6 +364,7 @@ void submitHold(const mq::PendingChange& p, const std::string& code, const std::
     }
     // The vault is not live here: the change is kept all the same (its entries stay as they are until it is).
     vh::db::Transactions::exec("mirror::submit hold", [&](pqxx::work& txn) { also(txn); });
+    keepBytes();
     vh::log::Registry::sync()->warn("[MirrorSubmit] Vault {}: request {} held; its entries not settled: {}", p.vault_id,
                                     p.request_id, r.reason);
 }
@@ -298,7 +372,8 @@ void submitHold(const mq::PendingChange& p, const std::string& code, const std::
 // The name was taken on the core meanwhile: the entry takes its conflict name here and the change goes again under it.
 // False when that is not possible (the entry is gone here, or this already was the conflict name).
 bool submitConflictCopy(const mq::PendingChange& p, const std::string& code, const std::string& error) {
-    if (p.op != "mkdir" && p.op != "move" && p.op != "rename") return false;
+    const bool createdFile = p.op == "write" && !p.args.contains("base");
+    if (p.op != "mkdir" && p.op != "move" && p.op != "rename" && !createdFile) return false;
     std::scoped_lock local(vaultMutex(p.vault_id));
     const auto at = ta::locate(p.vault_id, p.entry_uid);
     if (!at || at->trashed) return false;
@@ -315,6 +390,7 @@ bool submitConflictCopy(const mq::PendingChange& p, const std::string& code, con
         if (vh::fs::Filesystem::exists(engine->vaultPathToFusePath(target.string()))) return false;
         std::shared_ptr<vh::identities::User> person;
         if (const auto& ids = vh::runtime::Deps::get().identityManager) person = ids->user(p.actor.id);
+        const Local::Suppress suppress(p.vault_id);   // this server's own bringing-into-line: no new pending change
         const vh::db::SessionSettings::Scope settings(mq::Pending::localSettings(requestId));
         if (const auto err = vh::fs::Filesystem::rename(engine->vaultPathToFusePath(at->path),
                                                         engine->vaultPathToFusePath(target.string()), person, engine);
@@ -335,8 +411,82 @@ bool submitConflictCopy(const mq::PendingChange& p, const std::string& code, con
     return true;
 }
 
+// A replacement the core refused because the file moved on there (content_conflict): the file comes back to the
+// core's state and the person's version becomes a new file beside it, "name (conflict <its uid>)", made here from the
+// pending store and submitted as a create. False when that is not possible (held instead).
+bool submitContentConflictCopy(const mq::PendingChange& p, const std::string& code, const std::string& error) {
+    if (p.op != "write" || !p.args.contains("base")) return false;
+    const auto blob = contents::pendingBlob(p.vault_id, p.id);
+    const auto size = p.args.value("size", uint64_t{0});
+    std::error_code ec;
+    if (size > 0 && !std::filesystem::exists(blob, ec)) return false;
+    const auto& manager = vh::runtime::Deps::get().storageManager;
+    const auto engine = manager ? manager->getEngine(p.vault_id) : nullptr;
+    if (!engine) return false;
+    std::shared_ptr<vh::identities::User> person;
+    if (const auto& ids = vh::runtime::Deps::get().identityManager) person = ids->user(p.actor.id);
+    if (!person) return false;
+
+    std::scoped_lock local(vaultMutex(p.vault_id));
+    const auto newUid = vh::crypto::id::toUuid(vh::crypto::id::newObjectUid());
+    const auto requestId = newRequestId();
+    // Back to the core's state first; the row becomes the copy's create (dirty: nothing confirmed for it yet).
+    std::optional<std::string> name, parentUid;
+    if (const auto at = ta::locate(p.vault_id, p.entry_uid); at && !at->trashed) {
+        name = at->name;
+        parentUid = at->parent_uid;
+    }
+    if (!name || !parentUid) return false;
+    const auto copyName = conflictName(*name, newUid, false);
+    auto args = p.args;
+    args.erase("base");
+    args["uid"] = newUid;
+    args["parent_uid"] = *parentUid;
+    args["name"] = copyName;
+    const std::function<void(pqxx::work&)> also = [&](pqxx::work& txn) {
+        mq::Pending::resubmitAs(txn, p.id, requestId, newUid, args);
+    };
+    if (vh::mirror::apply::settle(p.vault_id, p.uids, also).status != vh::mirror::apply::Status::Applied) return false;
+
+    // The person's bytes, as they are (the same generation and key version), under the copy's name and uid.
+    const auto now = ta::locate(p.vault_id, p.entry_uid);
+    const auto folder = now ? std::filesystem::path(now->path).parent_path() : std::filesystem::path("/");
+    const auto path = (folder.empty() ? std::filesystem::path("/") : folder) / copyName;
+    try {
+        const Local::Suppress suppress(p.vault_id);
+        const vh::db::SessionSettings::Scope settings(mq::Pending::localSettings(requestId));
+        const vh::db::query::fs::AssignedUid assigned(p.vault_id, path, vh::crypto::id::fromUuid(newUid));
+        vh::fs::NewFileContext ctx{.path = path, .fuse_path = engine->vaultPathToFusePath(path), .engine = engine,
+                                   .user = person, .overwrite = true, .expected_source_id = std::string{}};
+        ctx.sealed = [&](const std::filesystem::path& dst) {
+            if (size > 0) contents::keep(blob, dst);
+            else std::ofstream(dst, std::ios::binary | std::ios::trunc).close();
+            return vh::fs::SealedContent{
+                .encryption_iv = p.args.value("generation", std::string{}),
+                .key_version = p.args.value("key_version", 0u), .plaintext_size = size,
+                .mime_type = p.args.contains("mime") ? std::optional<std::string>(p.args.value("mime", std::string{}))
+                                                     : std::nullopt,
+                .content_hash = size > 0 ? std::optional<std::string>(p.args.value("content_hash", std::string{}))
+                                         : std::nullopt};
+        };
+        (void)vh::fs::Filesystem::createFile(ctx);
+    } catch (const std::exception& e) {
+        vh::log::Registry::sync()->warn("[MirrorSubmit] Vault {}: the conflict copy of request {} could not be made here "
+                                        "({}); it is submitted all the same",
+                                        p.vault_id, p.request_id, e.what());
+    }
+    auto record = submitHeldOf(p, "conflict", code, error);
+    record.copy_name = copyName;
+    vh::db::Transactions::exec("mirror::submit conflict", [&](pqxx::work& txn) { (void)mq::Pending::hold(txn, record); });
+    vh::log::Registry::sync()->info("[MirrorSubmit] Vault {}: request {} (write): the file changed on the core; the "
+                                    "person's version is resubmitted as {}",
+                                    p.vault_id, p.request_id, copyName);
+    return true;
+}
+
 void submitRefused(const mq::PendingChange& p, const std::string& code, const std::string& error) {
     if (code == "conflict" && submitConflictCopy(p, code, error)) return;
+    if (code == "content_conflict" && submitContentConflictCopy(p, code, error)) return;
     submitHold(p, code, error);
 }
 
@@ -369,6 +519,12 @@ json serveSubmit(const uint32_t callerPeerId, const json& payload) {
     if (!submitValidUuid(submitText(payload, "entry_uid"))) throw vh::ops::Invalid("entry_uid is a uuid");
     if (payload.contains("args") && !payload["args"].is_object()) throw vh::ops::Invalid("args is an object");
     if (mv->state != "live") throw vh::ops::Refused("mirror_not_live", "the core holds this vault as " + mv->state);
+    // A write's sealed bytes come first (PUT on the sealed lane): without them nothing is queued, and the mirror sends
+    // them again (not an answer kept for the request).
+    if (op == "write" && payload.contains("args") && payload["args"].value("size", uint64_t{0}) > 0 &&
+        !contents::staged(mv->vault_id, payload.at("entry_uid").get<std::string>(),
+                          payload["args"].value("generation", std::string{})))
+        throw vh::ops::Refused("contents_missing", "the change's sealed bytes are not here: send them first");
 
     (void)mq::Pending::enqueue(mv->vault_id, callerPeerId, rid, payload);
     schedule(mv->vault_id);
@@ -443,6 +599,27 @@ SubmitStep submitPending(const uint32_t vaultId, vh::mirror::follow::Transport& 
             break;   // a change still being applied here: it and everything after it wait
         }
         if (!next) break;
+        // A write's sealed bytes go first (the core never commits a mirror's file without its verified contents).
+        if (next->op == "write" && next->state == "pending" && next->args.value("size", uint64_t{0}) > 0) {
+            const auto blob = contents::pendingBlob(vaultId, next->id);
+            const vh::mirror::follow::Transport::Content content{
+                .vault_uid = *vaultUid, .object_uid = next->entry_uid,
+                .generation = next->args.value("generation", std::string{}),
+                .key_version = next->args.value("key_version", 0u), .size = next->args.value("size", uint64_t{0}),
+                .content_hash = next->args.value("content_hash", std::string{}), .path = blob.string()};
+            const auto sent = transport.sendContent(mv->peer_id, content);
+            if (!sent.ok) {
+                if (sent.retry) {
+                    mq::Pending::noteError(next->id, "contents not sent: " + sent.error);
+                    out.waiting = true;
+                    out.detail = "contents_not_sent";
+                    return out;
+                }
+                submitRefused(*next, sent.code.empty() ? std::string("invalid_contents") : sent.code, sent.error);
+                ++out.submitted;
+                continue;
+            }
+        }
         const auto a = transport.request(mv->peer_id, "peer.mirror.submit", submitPayload(*vaultUid, *mv, *next));
         if (!a) {
             mq::Pending::noteError(next->id, "no answer from the core");
@@ -452,7 +629,7 @@ SubmitStep submitPending(const uint32_t vaultId, vh::mirror::follow::Transport& 
         }
         if (!a->ok) {
             if (a->code == "not_found" || a->code == "peers_experimental" || a->code == "mirror_not_live" ||
-                a->code == "peer_revoked") {
+                a->code == "peer_revoked" || a->code == "contents_missing") {
                 mq::Pending::noteError(next->id, a->code + ": " + a->error);
                 out.waiting = true;
                 out.detail = a->code;

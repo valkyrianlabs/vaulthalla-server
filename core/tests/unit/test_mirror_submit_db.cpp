@@ -31,12 +31,14 @@
 #include "db/query/mirror/Pending.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "fs/Filesystem.hpp"
+#include "fs/model/File.hpp"
 #include "identities/User.hpp"
 #include "mirror/Hash.hpp"
 #include "mirror/access/Access.hpp"
 #include "mirror/apply/Applier.hpp"
 #include "mirror/follow/Follower.hpp"
 #include "mirror/follow/Protocol.hpp"
+#include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Local.hpp"
 #include "mirror/submit/Submit.hpp"
 #include "ops/Error.hpp"
@@ -57,6 +59,7 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -409,6 +412,20 @@ protected:
         }
         bool notify(uint32_t, const std::string&, const json&) override { return true; }
 
+        // The sealed lane's PUT, short-circuited: the bytes land where the core's staging keeps verified ones. (In one
+        // database the two vaults have different keys, so the core's verification is proven on its own bytes:
+        // TheCoreStagesOnlyVerifiedBytes; two daemons with delivered keys prove the whole path: vhh drill peers.)
+        std::size_t contentsSent{0};
+        std::optional<std::string> contentRefusal;
+        Sent sendContent(uint32_t, const Content& c) override {
+            ++contentsSent;
+            if (contentRefusal) return {.ok = false, .retry = false, .code = *contentRefusal, .error = "refused in a test"};
+            const auto to = ms::contents::stagedPath(s_.coreId, c.object_uid, c.generation);
+            std::filesystem::create_directories(to.parent_path());
+            std::filesystem::copy_file(c.path, to, std::filesystem::copy_options::overwrite_existing);
+            return {.ok = true};
+        }
+
     private:
         Scenario& s_;
     };
@@ -715,6 +732,209 @@ TEST_F(MirrorSubmitDbTest, TheCoresEntryInAFolderRemovedHereBringsTheFolderBackU
     EXPECT_EQ(pathsOf(s.mirrorId), corePaths(s));
 }
 
+// ---- contents ------------------------------------------------------------------------------------------------------------
+
+TEST_F(MirrorSubmitDbTest, AFileWrittenHereGoesToTheCoreWithItsSealedBytesAndIsConfirmedWithoutAFetch) {
+    auto s = begin([](const EnginePtr& e) { e->mkdir("/docs", superUser); });
+    Wire wire(s);
+    followAll(wire, s);
+
+    // An upload lane's commit, a share upload, the S3 gateway, `vh fs put`: all write through Filesystem::createFile.
+    write(s.mirror, "/docs/new.txt", "the person's bytes");
+    const auto uid = uidOf(s.mirrorId, "/docs/new.txt");
+    ASSERT_FALSE(uid.empty()) << "seen here at once";
+    const auto pending = mq::Pending::list(s.mirrorId);
+    ASSERT_EQ(pending.size(), 1u);
+    EXPECT_EQ(pending[0].op, "write");
+    EXPECT_EQ(pending[0].entry_uid, uid);
+    EXPECT_FALSE(pending[0].args.contains("base")) << "a create";
+    const auto generation = pending[0].args.value("generation", std::string{});
+    EXPECT_FALSE(generation.empty());
+    EXPECT_EQ(pending[0].new_generation.value_or(""), generation);
+    const auto blob = ms::contents::pendingBlob(s.mirrorId, pending[0].id);
+    EXPECT_TRUE(std::filesystem::exists(blob)) << "the sealed bytes are kept apart until the core has them";
+
+    followAll(wire, s);
+    EXPECT_EQ(wire.contentsSent, 1u) << "the bytes go before the change";
+    ASSERT_FALSE(wire.answersGiven.empty());
+    EXPECT_EQ(wire.answersGiven.back().value("status", ""), "executed") << wire.answersGiven.back().dump();
+    expectSettled(s);
+    EXPECT_FALSE(std::filesystem::exists(blob)) << "confirmed: the pending store lets them go";
+    EXPECT_EQ(one<int>("SELECT count(*) FROM mirror_content_pending WHERE vault_id = " + std::to_string(s.mirrorId)), 0)
+        << "the same generation is here: nothing is fetched";
+    EXPECT_EQ(coreCount(s, "SELECT count(*) FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id WHERE e.vault_id = " +
+                               std::to_string(s.coreId) + " AND f.object_uid = '" + uid + "' AND f.encryption_iv = '" +
+                               generation + "'"),
+              1)
+        << "the core holds the same bytes under the same generation and uid";
+    EXPECT_EQ(pathsOf(s.mirrorId), corePaths(s));
+
+    // A replacement: based on the generation it replaced, committed as a compare-and-swap.
+    write(s.mirror, "/docs/new.txt", "the person's second version, longer");
+    const auto again = mq::Pending::list(s.mirrorId);
+    ASSERT_EQ(again.size(), 1u);
+    EXPECT_EQ(again[0].args.value("base", ""), generation);
+    followAll(wire, s);
+    EXPECT_EQ(wire.answersGiven.back().value("status", ""), "executed");
+    expectSettled(s);
+}
+
+TEST_F(MirrorSubmitDbTest, AReplacementTheCoreOutranBecomesAConflictCopyWithThePersonsBytes) {
+    auto s = begin([](const EnginePtr& e) {
+        e->mkdir("/docs", superUser);
+        write(e, "/docs/a.txt", "first");
+    });
+    Wire wire(s);
+    followAll(wire, s);
+    receiveAll(s);
+    const auto uid = uidOf(s.mirrorId, "/docs/a.txt");
+
+    write(s.mirror, "/docs/a.txt", "the person's version");
+    const auto mine = mq::Pending::list(s.mirrorId).at(0).args.value("generation", std::string{});
+    coreChange(s, [](const EnginePtr& e) { write(e, "/docs/a.txt", "the core's version, first"); });
+
+    followAll(wire, s);
+    expectSettled(s);
+    ASSERT_FALSE(wire.answersGiven.empty());
+    EXPECT_EQ(wire.answersGiven.front().value("code", ""), "content_conflict");
+    EXPECT_EQ(wire.answersGiven.back().value("status", ""), "executed");
+    EXPECT_EQ(uidOf(s.mirrorId, "/docs/a.txt"), uid);
+    const auto held = mq::Pending::heldChanges(s.mirrorId);
+    ASSERT_EQ(held.size(), 1u);
+    EXPECT_EQ(held[0].kind, "conflict");
+    const auto copyName = held[0].copy_name.value_or("");
+    ASSERT_FALSE(copyName.empty());
+    EXPECT_NE(copyName.find(" (conflict "), std::string::npos);
+    EXPECT_TRUE(copyName.ends_with(".txt")) << copyName;
+    const auto copy = "/docs/" + copyName;
+    EXPECT_FALSE(uidOf(s.mirrorId, copy).empty()) << "the person's version is beside it, never dropped";
+    EXPECT_EQ(one<std::string>("SELECT f.encryption_iv FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id WHERE "
+                               "e.vault_id = " + std::to_string(s.mirrorId) + " AND e.path = '" + copy + "'"),
+              mine)
+        << "with the person's bytes as they were sealed";
+    EXPECT_NE(one<std::string>("SELECT f.encryption_iv FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id WHERE "
+                               "e.vault_id = " + std::to_string(s.mirrorId) + " AND e.path = '/docs/a.txt'"),
+              mine)
+        << "the file itself is the core's version";
+    EXPECT_EQ(pathsOf(s.mirrorId), corePaths(s));
+}
+
+TEST_F(MirrorSubmitDbTest, BytesTheCoreRefusesAreHeldWithTheChangeAndNothingIsLost) {
+    auto s = begin([](const EnginePtr& e) { e->mkdir("/docs", superUser); });
+    Wire wire(s);
+    followAll(wire, s);
+    write(s.mirror, "/docs/kept.txt", "keep me");
+    wire.contentRefusal = "invalid_contents";
+    followAll(wire, s);
+    expectSettled(s);
+    EXPECT_FALSE(pathsOf(s.mirrorId).contains("/docs/kept.txt")) << "back to the core's state";
+    const auto held = mq::Pending::heldChanges(s.mirrorId);
+    ASSERT_EQ(held.size(), 1u);
+    EXPECT_EQ(held[0].kind, "held");
+    EXPECT_EQ(held[0].op, "write");
+    EXPECT_EQ(held[0].reason_code, "invalid_contents");
+    EXPECT_TRUE(std::filesystem::exists(ms::contents::heldBlob(s.mirrorId, held[0].id)))
+        << "the person's sealed bytes stay with the held change";
+}
+
+TEST_F(MirrorSubmitDbTest, AFileWhoseContentsHaveNotArrivedIsRenamedAndTrashedAsMetadata) {
+    auto s = begin([](const EnginePtr& e) {
+        e->mkdir("/docs", superUser);
+        write(e, "/docs/far.txt", "not here yet");
+        write(e, "/docs/gone.txt", "not here either");
+    });
+    Wire wire(s);
+    followAll(wire, s);
+    ASSERT_GE(one<int>("SELECT count(*) FROM mirror_content_pending WHERE vault_id = " + std::to_string(s.mirrorId)), 2);
+    ops::fs::rename(superUser, s.mirrorId, "/docs/far.txt", "/docs/near.txt");
+    ops::fs::move(superUser, s.mirrorId, "/docs/near.txt", "/near.txt");
+    ops::fs::remove(superUser, s.mirrorId, "/docs/gone.txt");
+    followAll(wire, s);
+    expectSettled(s);
+    EXPECT_TRUE(pathsOf(s.mirrorId).contains("/near.txt"));
+    EXPECT_EQ(pathsOf(s.mirrorId), corePaths(s));
+    EXPECT_EQ(one<int>("SELECT count(*) FROM mirror_content_pending WHERE vault_id = " + std::to_string(s.mirrorId)), 1)
+        << "the moved file's contents are still expected (fetched to where it is now); the trashed one's are not";
+}
+
+TEST_F(MirrorSubmitDbTest, AModeOrTimeChangeIsAPendingChangeAndAnOwnerChangeIsRefused) {
+    auto s = begin([](const EnginePtr& e) {
+        e->mkdir("/docs", superUser);
+        write(e, "/docs/a.txt", "first");
+    });
+    Wire wire(s);
+    followAll(wire, s);
+    ops::fs::setAttributes(superUser, s.mirrorId, "/docs/a.txt", {.mode = 0600, .mtime_us = int64_t{1'700'000'000'000'000}});
+    const auto pending = mq::Pending::list(s.mirrorId);
+    ASSERT_EQ(pending.size(), 1u);
+    EXPECT_EQ(pending[0].op, "setattr");
+    followAll(wire, s);
+    expectSettled(s);
+    EXPECT_EQ(coreCount(s, "SELECT mode FROM fs_entry WHERE vault_id = " + std::to_string(s.coreId) +
+                               " AND path = '/docs/a.txt'") & 0777,
+              0600);
+    EXPECT_THROW(ops::fs::setAttributes(superUser, s.mirrorId, "/docs/a.txt", {.owner_uid = 4242}), ops::Denied);
+    EXPECT_TRUE(mq::Pending::list(s.mirrorId).empty());
+}
+
+TEST_F(MirrorSubmitDbTest, ASealIsKeptAsPendingWhenTheLinkIsDownAndNothingElseIs) {
+    auto s = begin([](const EnginePtr& e) { e->mkdir("/docs", superUser); });
+    Wire wire(s);
+    followAll(wire, s);
+    vh::mirror::access::linkChanged(corePeer, false);
+    {
+        ms::Local seal(superUser, s.mirrorId, "write", ms::Local::Mode::Seal);
+        EXPECT_TRUE(seal.active()) << "a file open for writing when the link dropped is sealed and kept as pending";
+    }
+    {
+        ms::Local change(superUser, s.mirrorId, "write");
+        EXPECT_FALSE(change.active()) << "any new change is refused by the gate";
+    }
+    ASSERT_TRUE(mq::MirrorVaults::setState(s.mirrorId, "paused"));
+    {
+        ms::Local seal(superUser, s.mirrorId, "write", ms::Local::Mode::Seal);
+        EXPECT_FALSE(seal.active()) << "paused: the seal is refused and the copy kept unsaved (the gate's rule)";
+    }
+    ASSERT_TRUE(mq::MirrorVaults::setState(s.mirrorId, "live"));
+    vh::mirror::access::linkChanged(corePeer, true);
+}
+
+TEST_F(MirrorSubmitDbTest, TheCoreStagesOnlyVerifiedBytes) {
+    auto s = begin([](const EnginePtr& e) {
+        e->mkdir("/docs", superUser);
+        write(e, "/docs/real.txt", "sealed under the core's own key");
+    });
+    toCore(s);
+    const auto entry = db::query::fs::Entry::getFSEntryById(entryId(s.coreId, "/docs/real.txt"));
+    ASSERT_TRUE(entry);
+    const auto file = std::dynamic_pointer_cast<fs::model::File>(entry);
+    ASSERT_TRUE(file);
+    const auto uid = uidOf(s.coreId, "/docs/real.txt");
+    const ms::contents::Facts facts{.generation = file->encryption_iv, .key_version = file->encrypted_with_key_version,
+                                    .size = file->size_bytes, .content_hash = file->content_hash.value_or("")};
+    const auto copyIn = [&](const bool tamper) {
+        const auto received = ms::contents::receivingPath(s.coreId);
+        std::filesystem::copy_file(file->backing_path, received);
+        if (tamper) {
+            std::fstream f(received, std::ios::in | std::ios::out | std::ios::binary);
+            f.seekp(-1, std::ios::end);
+            f.put('\x5a');
+        }
+        return received;
+    };
+    auto bad = facts;
+    bad.content_hash = std::string(64, '0');
+    EXPECT_EQ(ms::contents::stage(s.coreId, uid, bad, copyIn(false)).code, "invalid_contents") << "another hash";
+    EXPECT_EQ(ms::contents::stage(s.coreId, uid, facts, copyIn(true)).code, "invalid_contents") << "a changed byte";
+    EXPECT_FALSE(ms::contents::staged(s.coreId, uid, facts.generation)) << "nothing refused is kept";
+    const auto ok = ms::contents::stage(s.coreId, uid, facts, copyIn(false));
+    EXPECT_TRUE(ok.ok) << ok.code << " " << ok.error;
+    EXPECT_TRUE(ms::contents::staged(s.coreId, uid, facts.generation));
+    EXPECT_GE(ms::contents::sweep(std::chrono::hours(0)), 1u) << "staged and never committed: swept";
+    EXPECT_FALSE(ms::contents::staged(s.coreId, uid, facts.generation));
+    toMirror(s);
+}
+
 // ---- refusals ------------------------------------------------------------------------------------------------------------
 
 TEST_F(MirrorSubmitDbTest, ARefusalByTheCeilingIsHeldAndTheEntryComesBackToTheCoresState) {
@@ -830,15 +1050,11 @@ TEST_F(MirrorSubmitDbTest, WithTheLinkDownNothingIsAcceptedAndNothingIsPending) 
     auto s = begin([](const EnginePtr& e) { e->mkdir("/docs", superUser); });
     Wire wire(s);
     followAll(wire, s);
-    // Contents are not taken as pending yet: an upload on a Live mirror is refused with a reason, never half done.
-    try {
-        (void)ops::fs::authorizeUpload(superUser, s.mirrorId, "/docs/u.txt");
-        ADD_FAILURE() << "an upload on a mirror is refused";
-    } catch (const vh::mirror::access::MirrorReadOnly& e) {
-        EXPECT_EQ(e.reason, "mirror_contents_not_built");
-    }
+    // An upload on a Live mirror is let through (its commit is a pending write); with the link down it is refused.
+    EXPECT_NO_THROW((void)ops::fs::authorizeUpload(superUser, s.mirrorId, "/docs/u.txt"));
     vh::mirror::access::linkChanged(corePeer, false);
     EXPECT_THROW(ops::fs::mkdir(superUser, s.mirrorId, "/docs/no"), vh::mirror::access::MirrorReadOnly);
+    EXPECT_THROW((void)ops::fs::authorizeUpload(superUser, s.mirrorId, "/docs/u.txt"), vh::mirror::access::MirrorReadOnly);
     EXPECT_FALSE(pathsOf(s.mirrorId).contains("/docs/no"));
     EXPECT_TRUE(mq::Pending::list(s.mirrorId).empty());
     vh::mirror::access::linkChanged(corePeer, true);
