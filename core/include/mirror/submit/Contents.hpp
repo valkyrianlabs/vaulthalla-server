@@ -53,11 +53,23 @@ struct Staging {
 // 422 invalid_contents (a size, hash or authentication that does not match), 404 not_found, 409 key_version_missing.
 [[nodiscard]] Staging stage(uint32_t vaultId, const std::string& objectUuid, const Facts& facts,
                             const std::filesystem::path& received);
+// stage()'s last step, for bytes already verified against `facts`: the facts kept beside them, the bytes moved into
+// place. (In one database two vaults never hold each other's keys, so the unit tests' sealed lane delivers with this.)
+[[nodiscard]] Staging keepVerified(uint32_t vaultId, const std::string& objectUuid, const Facts& facts,
+                                   const std::filesystem::path& received);
 // Where a PUT's body is written while it arrives (a private name in the vault's staging directory).
 [[nodiscard]] std::filesystem::path receivingPath(uint32_t vaultId);
-// The staged bytes for a change, when they are there.
-[[nodiscard]] std::optional<std::filesystem::path> staged(uint32_t vaultId, const std::string& objectUuid,
-                                                          const std::string& generation);
+// Staged bytes and the facts they were verified against (kept beside them, written before the bytes are in place: the
+// commit describes the file with these, never with what a submit claims).
+struct StagedBytes {
+    std::filesystem::path path{};
+    Facts facts{};
+};
+// The staged bytes for a change, when they are there with their verified facts.
+[[nodiscard]] std::optional<StagedBytes> staged(uint32_t vaultId, const std::string& objectUuid,
+                                                const std::string& generation);
+// Staged bytes and their facts go (committed, or no longer wanted).
+void dropStaged(const StagedBytes& staged) noexcept;
 // Staged bytes (and partial receptions) older than `age`, never committed, go. Returns how many.
 std::size_t sweep(std::chrono::hours age);
 

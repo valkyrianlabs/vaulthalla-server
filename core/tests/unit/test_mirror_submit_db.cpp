@@ -363,6 +363,7 @@ protected:
         std::vector<json> answersGiven;
         std::vector<std::string> misses;
         std::function<void()> beforeServing;   // runs on the core's turn, before the submit is served
+        std::function<void(json&)> rewrite;    // what the submit claims, changed on its way (a lying mirror)
 
         bool connected(uint32_t) override { return true; }
         std::optional<Answer> request(uint32_t, const std::string& command, const json& payload) override {
@@ -376,7 +377,9 @@ protected:
                     AsCore as;
                     if (beforeServing) beforeServing();
                     try {
-                        answer = ms::serveSubmit(mirrorPeer, payload);
+                        auto served = payload;
+                        if (rewrite) rewrite(served);
+                        answer = ms::serveSubmit(mirrorPeer, served);
                     } catch (const ops::Refused& e) {
                         ok = false;
                         code = e.code;
@@ -420,9 +423,14 @@ protected:
         Sent sendContent(uint32_t, const Content& c) override {
             ++contentsSent;
             if (contentRefusal) return {.ok = false, .retry = false, .code = *contentRefusal, .error = "refused in a test"};
-            const auto to = ms::contents::stagedPath(s_.coreId, c.object_uid, c.generation);
-            std::filesystem::create_directories(to.parent_path());
-            std::filesystem::copy_file(c.path, to, std::filesystem::copy_options::overwrite_existing);
+            // Kept as the core keeps bytes it verified, with the facts the PUT announced.
+            const auto received = ms::contents::receivingPath(s_.coreId);
+            std::filesystem::copy_file(c.path, received);
+            const auto kept = ms::contents::keepVerified(
+                s_.coreId, c.object_uid,
+                {.generation = c.generation, .key_version = c.key_version, .size = c.size, .content_hash = c.content_hash},
+                received);
+            if (!kept.ok) return {.ok = false, .retry = false, .code = kept.code, .error = kept.error};
             return {.ok = true};
         }
 
@@ -932,6 +940,77 @@ TEST_F(MirrorSubmitDbTest, TheCoreStagesOnlyVerifiedBytes) {
     EXPECT_TRUE(ms::contents::staged(s.coreId, uid, facts.generation));
     EXPECT_GE(ms::contents::sweep(std::chrono::hours(0)), 1u) << "staged and never committed: swept";
     EXPECT_FALSE(ms::contents::staged(s.coreId, uid, facts.generation));
+    toMirror(s);
+}
+
+TEST_F(MirrorSubmitDbTest, TheCoreCommitsAWriteWithTheFactsItVerifiedAndRefusesAChangeThatClaimsOthers) {
+    auto s = begin([](const EnginePtr& e) { e->mkdir("/docs", superUser); });
+    Wire wire(s);
+    followAll(wire, s);
+    const auto coreFile = [&](const std::string& uid, const std::string& column) {
+        toCore(s);
+        const auto r = db::Transactions::exec("ms core file", [&](pqxx::work& txn) {
+            const auto rows = txn.exec("SELECT f." + column + "::text FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id "
+                                       "WHERE e.vault_id = $1 AND f.object_uid = $2::uuid",
+                                       pqxx::params{s.coreId, uid});
+            return rows.empty() ? std::string("<none>") : rows[0][0].as<std::string>();
+        });
+        toMirror(s);
+        return r;
+    };
+
+    // Bytes sent and verified, then a submit that claims another key version for them (or another hash, size): the
+    // core never describes bytes with what a submit says of them. Refused for the bytes, held, never sent again.
+    write(s.mirror, "/docs/claimed.txt", "the bytes the core verified");
+    const auto uid = uidOf(s.mirrorId, "/docs/claimed.txt");
+    wire.rewrite = [](json& p) { p["args"]["key_version"] = p["args"].value("key_version", 0u) + 7; };
+    followAll(wire, s);
+    expectSettled(s);
+    ASSERT_EQ(wire.submits.size(), 1u) << "refused for its bytes: not retried";
+    EXPECT_EQ(wire.answersGiven.back().value("status", ""), "refused") << wire.answersGiven.back().dump();
+    EXPECT_EQ(wire.answersGiven.back().value("code", ""), "invalid_contents");
+    EXPECT_EQ(coreFile(uid, "encrypted_with_key_version"), "<none>") << "nothing committed on the core";
+    auto held = mq::Pending::heldChanges(s.mirrorId);
+    ASSERT_EQ(held.size(), 1u);
+    EXPECT_EQ(held[0].reason_code, "invalid_contents");
+    EXPECT_TRUE(std::filesystem::exists(ms::contents::heldBlob(s.mirrorId, held[0].id)));
+    wire.rewrite = [](json& p) { p["args"]["content_hash"] = std::string(64, 'e'); };
+    write(s.mirror, "/docs/hashed.txt", "bytes with another hash claimed");
+    followAll(wire, s);
+    EXPECT_EQ(wire.answersGiven.back().value("code", ""), "invalid_contents");
+    EXPECT_EQ(mq::Pending::heldChanges(s.mirrorId).size(), 2u);
+
+    // Told the truth: committed, and the core's row is the verified facts.
+    wire.rewrite = nullptr;
+    write(s.mirror, "/docs/true.txt", "and these are described as they are");
+    const auto args = mq::Pending::list(s.mirrorId).at(0).args;
+    const auto trueUid = uidOf(s.mirrorId, "/docs/true.txt");
+    followAll(wire, s);
+    expectSettled(s);
+    EXPECT_EQ(wire.answersGiven.back().value("status", ""), "executed");
+    EXPECT_EQ(coreFile(trueUid, "encrypted_with_key_version"), std::to_string(args.value("key_version", 0u)));
+    EXPECT_EQ(coreFile(trueUid, "content_hash"), args.value("content_hash", std::string{}));
+    EXPECT_EQ(coreFile(trueUid, "size_bytes"), std::to_string(args.value("size", uint64_t{0})));
+    EXPECT_EQ(coreFile(trueUid, "encryption_iv"), args.value("generation", std::string{}));
+
+    // A write's generation is a VHF1 salt, and an empty file has none: anything else is not a write.
+    toCore(s);
+    {
+        AsCore as;
+        const json base{{"vault_uid", s.vaultUid},
+                        {"request_id", ms::newRequestId()},
+                        {"person", {{"node", ownNode}, {"id", superUser->id}}},
+                        {"at", {{"term", 1}, {"seq", 0}}},
+                        {"op", "write"},
+                        {"entry_uid", "00000000-0000-4000-8000-0000000000a1"},
+                        {"args", {{"parent_uid", s.vaultUid}, {"name", "w.txt"}, {"size", 5}, {"key_version", 1},
+                                  {"content_hash", std::string(64, 'a')}, {"generation", "not-a-salt"}}}};
+        EXPECT_THROW((void)ms::serveSubmit(mirrorPeer, base), ops::Invalid) << "bytes under no VHF1 generation";
+        auto empty = base;
+        empty["args"]["size"] = 0;
+        empty["args"]["generation"] = args.value("generation", std::string{});
+        EXPECT_THROW((void)ms::serveSubmit(mirrorPeer, empty), ops::Invalid) << "an empty file names no generation";
+    }
     toMirror(s);
 }
 

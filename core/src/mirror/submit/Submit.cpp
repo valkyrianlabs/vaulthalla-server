@@ -26,6 +26,7 @@
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
+#include "vault/Content.hpp"
 
 #include <pqxx/pqxx>
 
@@ -131,10 +132,15 @@ void submitExecuteWrite(const vh::ops::Actor& actor, const uint32_t vaultId, con
     const std::optional<std::string> mime =
         args.contains("mime") && args["mime"].is_string() ? std::optional<std::string>(args["mime"].get<std::string>())
                                                           : std::nullopt;
-    std::optional<std::filesystem::path> bytes;
+    std::optional<contents::StagedBytes> bytes;
     if (size > 0) {
         bytes = contents::staged(vaultId, uid, generation);
         if (!bytes) throw vh::ops::Refused("contents_missing", "the change's sealed bytes are not here");
+        // Invariant 6: the row describes the bytes the core verified, never what the submit claims of them. A change
+        // whose facts are not those of the bytes it sent is refused (the mirror keeps it as held).
+        if (bytes->facts.key_version != keyVersion || bytes->facts.size != size ||
+            bytes->facts.content_hash != contentHash)
+            throw vh::ops::Refused("invalid_contents", "the change's facts are not those of the bytes it sent");
     }
     const std::optional<std::string> base =
         args.contains("base") && args["base"].is_string() ? std::optional<std::string>(args["base"].get<std::string>())
@@ -153,18 +159,19 @@ void submitExecuteWrite(const vh::ops::Actor& actor, const uint32_t vaultId, con
     vh::ops::fs::SealedCommit commit{.vault_id = vaultId, .path = path, .base = base};
     commit.sealed = [&](const std::filesystem::path& dst) {
         if (bytes) {
-            contents::keep(*bytes, dst);
+            contents::keep(bytes->path, dst);
         } else {
             vh::fs::ops::writeFileExclusive(dst, {}, 0600);
         }
-        return vh::fs::SealedContent{.encryption_iv = size > 0 ? generation : std::string{},
-                                     .key_version = size > 0 ? keyVersion : 0u,
-                                     .plaintext_size = size,
+        if (!bytes) return vh::fs::SealedContent{.plaintext_size = 0, .mime_type = mime};
+        return vh::fs::SealedContent{.encryption_iv = bytes->facts.generation,
+                                     .key_version = bytes->facts.key_version,
+                                     .plaintext_size = bytes->facts.size,
                                      .mime_type = mime,
-                                     .content_hash = size > 0 ? std::optional<std::string>(contentHash) : std::nullopt};
+                                     .content_hash = bytes->facts.content_hash};
     };
     (void)vh::ops::fs::commitSealed(actor, commit);
-    if (bytes) contents::dropBlob(*bytes);
+    if (bytes) contents::dropStaged(*bytes);
 }
 
 void submitExecute(const mq::Submission& sub) {
@@ -529,12 +536,20 @@ json serveSubmit(const uint32_t callerPeerId, const json& payload) {
     if (!submitValidUuid(submitText(payload, "entry_uid"))) throw vh::ops::Invalid("entry_uid is a uuid");
     if (payload.contains("args") && !payload["args"].is_object()) throw vh::ops::Invalid("args is an object");
     if (mv->state != "live") throw vh::ops::Refused("mirror_not_live", "the core holds this vault as " + mv->state);
-    // A write's sealed bytes come first (PUT on the sealed lane): without them nothing is queued, and the mirror sends
-    // them again (not an answer kept for the request).
-    if (op == "write" && payload.contains("args") && payload["args"].value("size", uint64_t{0}) > 0 &&
-        !contents::staged(mv->vault_id, payload.at("entry_uid").get<std::string>(),
-                          payload["args"].value("generation", std::string{})))
-        throw vh::ops::Refused("contents_missing", "the change's sealed bytes are not here: send them first");
+    if (op == "write") {
+        const auto& args = payload.contains("args") && payload["args"].is_object() ? payload["args"] : json::object();
+        const auto size = args.contains("size") && args["size"].is_number_unsigned() ? args["size"].get<uint64_t>() : 0;
+        const auto generation = args.contains("generation") && args["generation"].is_string()
+                                    ? args["generation"].get<std::string>()
+                                    : std::string{};
+        // Contents travel sealed (VHF1, a 32-byte salt), as the sealed lane takes them; an empty file has none.
+        if (size > 0 ? !vh::vault::content::isVhf1(generation) : !generation.empty())
+            throw vh::ops::Invalid("a write's generation is a VHF1 salt (none for an empty file)");
+        // The sealed bytes come first (PUT on the sealed lane): without them nothing is queued, and the mirror sends
+        // them again (not an answer kept for the request).
+        if (size > 0 && !contents::staged(mv->vault_id, payload.at("entry_uid").get<std::string>(), generation))
+            throw vh::ops::Refused("contents_missing", "the change's sealed bytes are not here: send them first");
+    }
 
     (void)mq::Pending::enqueue(mv->vault_id, callerPeerId, rid, payload);
     schedule(mv->vault_id);

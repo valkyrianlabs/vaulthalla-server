@@ -2,6 +2,12 @@
 
 #include "crypto/id/ObjectUid.hpp"
 #include "crypto/util/hash.hpp"
+#include "db/Transactions.hpp"
+#include "db/query/mirror/MirrorVault.hpp"
+#include "db/query/mirror/Pending.hpp"
+#include "mirror/submit/Local.hpp"
+#include "mirror/submit/Submit.hpp"
+#include "fs/ops/file.hpp"
 #include "log/Registry.hpp"
 #include "paths.h"
 #include "peer/ObjectClient.hpp"
@@ -13,10 +19,16 @@
 
 #include <fcntl.h>
 #include <sys/stat.h>
+
+#include <nlohmann/json.hpp>
+#include <pqxx/pqxx>
 #include <sodium.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <array>
+#include <fstream>
+#include <span>
 #include <system_error>
 
 namespace vh::mirror::submit::contents {
@@ -96,12 +108,37 @@ std::filesystem::path receivingPath(const uint32_t vaultId) {
     return dir / (".receiving-" + submitContentsRandom());
 }
 
-std::optional<std::filesystem::path> staged(const uint32_t vaultId, const std::string& objectUuid,
-                                            const std::string& generation) {
+namespace {
+
+std::filesystem::path submitContentsFactsPath(const std::filesystem::path& staged) {
+    return staged.parent_path() / (staged.filename().string() + ".facts");
+}
+
+}
+
+std::optional<StagedBytes> staged(const uint32_t vaultId, const std::string& objectUuid, const std::string& generation) {
     auto p = stagedPath(vaultId, objectUuid, generation);
     std::error_code ec;
-    if (std::filesystem::is_regular_file(p, ec)) return p;
-    return std::nullopt;
+    if (!std::filesystem::is_regular_file(p, ec)) return std::nullopt;
+    try {
+        std::ifstream in(submitContentsFactsPath(p));
+        if (!in) return std::nullopt;
+        const auto j = nlohmann::json::parse(in);
+        StagedBytes out{.path = p,
+                        .facts = {.generation = j.at("generation").get<std::string>(),
+                                  .key_version = j.at("key_version").get<uint32_t>(),
+                                  .size = j.at("size").get<uint64_t>(),
+                                  .content_hash = j.at("content_hash").get<std::string>()}};
+        if (out.facts.generation != generation) return std::nullopt;
+        return out;
+    } catch (const std::exception&) {
+        return std::nullopt;   // no verified facts: as good as not staged
+    }
+}
+
+void dropStaged(const StagedBytes& s) noexcept {
+    dropBlob(s.path);
+    dropBlob(submitContentsFactsPath(s.path));
 }
 
 Staging stage(const uint32_t vaultId, const std::string& objectUuid, const Facts& facts,
@@ -149,12 +186,38 @@ Staging stage(const uint32_t vaultId, const std::string& objectUuid, const Facts
                                                .objectUid = std::nullopt};
     if (!vh::vault::content::verifyFd(fd.fd, facts.size, binding, *key))
         return submitContentsRefuse(422, "invalid_contents", "the bytes do not open under the vault key as that generation");
+    cleanup.armed = false;
+    return keepVerified(vaultId, objectUuid, facts, received);
+}
 
+Staging keepVerified(const uint32_t vaultId, const std::string& objectUuid, const Facts& facts,
+                     const std::filesystem::path& received) {
+    struct Cleanup {
+        const std::filesystem::path& p;
+        bool armed{true};
+        ~Cleanup() {
+            if (armed) dropBlob(p);
+        }
+    } cleanup{received};
+    // The verified facts first (a private file), then the bytes into place: staged bytes always have them.
     const auto to = stagedPath(vaultId, objectUuid, facts.generation);
     std::error_code ec;
     std::filesystem::create_directories(to.parent_path(), ec);
+    const auto factsPath = submitContentsFactsPath(to);
+    try {
+        dropBlob(factsPath);
+        const auto text = nlohmann::json{{"generation", facts.generation}, {"key_version", facts.key_version},
+                                         {"size", facts.size}, {"content_hash", facts.content_hash}}.dump();
+        vh::fs::ops::writeFileExclusive(factsPath, std::span(reinterpret_cast<const uint8_t*>(text.data()), text.size()),
+                                        0600);
+    } catch (const std::exception&) {
+        return submitContentsRefuse(500, "internal", "Internal error");
+    }
     std::filesystem::rename(received, to, ec);
-    if (ec) return submitContentsRefuse(500, "internal", "Internal error");
+    if (ec) {
+        dropBlob(factsPath);
+        return submitContentsRefuse(500, "internal", "Internal error");
+    }
     cleanup.armed = false;
     return {.ok = true, .http_status = 201};
 }

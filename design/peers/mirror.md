@@ -781,13 +781,15 @@ review); each is listed for confirmation in the hand-off:
   vault's core and live, the caller its mirror, a `Content-Length` that is that generation's sealed length), streams
   the body to a private file, then verifies (invariant 6: the size, the BLAKE2b, the header and every chunk
   authenticated with the vault's key as that generation; the object is not bound, wave 2's rule) and keeps it
-  **staged** by generation (`.vh-mirror-staged/<vault>/<object uuid>.<generation>`): 201, else 422
-  `invalid_contents`, 409 `key_version_missing`, 404. A submit of a write whose bytes are not staged is refused
-  `contents_missing` before it is queued (not kept for the request), and the mirror sends them again. The core
-  commits the file from the staged bytes (`ops::fs::commitSealed`, a writer that links them) with the mirror's uid,
-  generation, key version, size, BLAKE2b and MIME type, so both servers hold the same bytes and the confirmation
-  fetches nothing; a create never replaces what is there (a conflict), a replacement is the compare-and-swap on the
-  generation it was based on (`content_conflict`). Staged bytes never committed are swept after a day (each drain).
+  **staged** by generation (`.vh-mirror-staged/<vault>/<object uuid>.<generation>`) with the facts it verified beside
+  it (`<staged>.facts`, written first): 201, else 422 `invalid_contents`, 409 `key_version_missing`, 404. A submit of a write whose bytes are not staged is refused `contents_missing` before it is queued (not kept
+  for the request), and the mirror sends them again; a write's `generation` must be a VHF1 salt (none for an empty
+  file), else `invalid`. The core commits the file from the staged bytes (`ops::fs::commitSealed`, a writer that links
+  them) with the mirror's uid and MIME type and **the facts it verified** (generation, key version, size, BLAKE2b),
+  never what the submit claims of them: a submit whose facts are not those of its bytes is refused `invalid_contents`
+  (held, never retried). So both servers hold the same bytes and the confirmation fetches nothing; a create never
+  replaces what is there (a conflict), a replacement is the compare-and-swap on the generation it was based on
+  (`content_conflict`). Staged bytes never committed are swept after a day (each drain).
   The pending store's link goes when the change is confirmed; a held change keeps it as `.vh-mirror-held/<vault>/<id>`.
   Bytes are sent without a transfer slot (known limit: the four slots per peer of wave 2 are for fetches).
 - **The person of a change** is a local account, always: the caller of the surface, or for a seal the one who wrote
