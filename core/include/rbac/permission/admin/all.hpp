@@ -4,6 +4,7 @@
 #include "Cloud.hpp"
 #include "Identities.hpp"
 #include "Keys.hpp"
+#include "Mirror.hpp"
 #include "Roles.hpp"
 #include "S3Gateway.hpp"
 #include "Settings.hpp"

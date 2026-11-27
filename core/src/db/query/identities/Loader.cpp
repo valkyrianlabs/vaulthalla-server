@@ -70,7 +70,8 @@ constexpr auto kAdminRoles = R"SQL(
         ar.s3_gateway_permissions::bigint AS s3_gateway_permissions,
         ar.stats_permissions::bigint      AS stats_permissions,
         ar.upstream_permissions::bigint   AS upstream_permissions,
-                ar.cloud_permissions::bigint      AS cloud_permissions
+        ar.cloud_permissions::bigint      AS cloud_permissions,
+        ar.mirror_permissions::bigint     AS mirror_permissions
     FROM admin_role_assignments ara
     INNER JOIN admin_role ar ON ar.id = ara.role_id
     WHERE ara.user_id = ANY($1::INTEGER[])
