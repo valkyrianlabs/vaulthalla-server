@@ -462,7 +462,8 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         static const std::map<std::string, std::set<std::string>> kMirrorCodes{
             {"peer_revoked", {"peer.mirror.offer", "peer.mirror.answer", "peer.mirror.keys", "peer.mirror.begin",
                               "peer.mirror.grant", "peer.mirror.cancel", "peer.mirror.submit", "peer.mirror.resync",
-                              "peer.mirror.switch.request", "peer.mirror.switch.prepare", "peer.mirror.switch.commit"}},
+                              "peer.mirror.switch.request", "peer.mirror.switch.prepare", "peer.mirror.switch.commit",
+                              "peer.mirror.promoted"}},
             {"mirror_already", {"mirror.add"}}, {"mirror_start_running", {"mirror.add"}},
             {"vault_replicated", {"mirror.add"}}, {"vault_attach_running", {"mirror.add"}},
             {"vault_detach_running", {"mirror.add"}}, {"layout_migration_running", {"mirror.add"}},
@@ -502,6 +503,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"mirror_switch_ended", {"peer.mirror.switch.prepare"}}, {"mirror_ahead", {"peer.mirror.switch.prepare"}},
             {"mirror_digest_mismatch", {"peer.mirror.switch.prepare"}},
             {"mirror_not_prepared", {"peer.mirror.switch.commit"}},
+            {"mirror_term_stale", {"peer.mirror.promoted"}},
             // Take over (wave 5 piece B, mirror::takeover).
             {"mirror_not_mirror", {"mirror.takeover"}}, {"mirror_diverged", {"mirror.takeover"}},
             {"mirror_core_reachable", {"mirror.takeover"}}, {"mirror_name_mismatch", {"mirror.takeover"}},

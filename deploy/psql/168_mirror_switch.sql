@@ -19,6 +19,7 @@
 --                      accepted that the old core may hold no role on the vault afterwards, who asked and where, why
 --                      it was abandoned, its deadline. At most one open switch per vault.
 --
+--   mirror_rejoin      the old core's side once it learns another server took over (peer.mirror.promoted).
 --   mirror_takeover, mirror_fork_base   a mirror that took over as core (mirror.takeover): the record (the fork
 --                      point, what became of its changes) and the fork base (its tree as the old core last confirmed it),
 --                      kept until the old core rejoins.
@@ -42,7 +43,7 @@ DECLARE
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint
                    WHERE conrelid = 'mirror_vault'::regclass AND contype = 'c' AND conname = 'mirror_vault_state_check'
-                     AND pg_get_constraintdef(oid) LIKE '%''switching''%') THEN
+                     AND pg_get_constraintdef(oid) LIKE '%''forked''%') THEN
         FOR c IN SELECT conname FROM pg_constraint
                  WHERE conrelid = 'mirror_vault'::regclass AND contype = 'c'
                    AND pg_get_constraintdef(oid) LIKE '%state%' AND pg_get_constraintdef(oid) LIKE '%''diverged''%'
@@ -50,7 +51,8 @@ BEGIN
             EXECUTE format('ALTER TABLE mirror_vault DROP CONSTRAINT %I', c.conname);
         END LOOP;
         ALTER TABLE mirror_vault ADD CONSTRAINT mirror_vault_state_check
-            CHECK (state IN ('starting', 'live', 'paused', 'diverged', 'expired', 'stopped', 'switching'));
+            CHECK (state IN ('starting', 'live', 'paused', 'diverged', 'expired', 'stopped', 'switching', 'rejoining',
+                             'forked'));
     END IF;
 END
 $$;
@@ -114,8 +116,8 @@ BEGIN
     IF st IS NULL THEN
         RETURN NULL;
     END IF;
-    IF st = 'switching' THEN
-        RAISE EXCEPTION 'mirror_read_only: vault % is handing its core role to its linked server; it takes no change now',
+    IF st IN ('switching', 'rejoining', 'forked') THEN
+        RAISE EXCEPTION 'mirror_read_only: vault % is handing its core role over, or another server holds a later term of it; it takes no change now',
             vault
             USING ERRCODE = 'P0001', HINT = 'design/peers/mirror.md "Planned switch": the write gate missed this path';
     END IF;
@@ -158,8 +160,8 @@ BEGIN
     END IF;
     IF TG_TABLE_NAME = 'vault' THEN
         SELECT m.term, m.state INTO t, st FROM mirror_vault m WHERE m.vault_id = vault AND m.role = 'core';
-        IF st = 'switching' THEN
-            RAISE EXCEPTION 'mirror_read_only: vault % is handing its core role to its linked server; its settings take '
+        IF st IN ('switching', 'rejoining', 'forked') THEN
+            RAISE EXCEPTION 'mirror_read_only: vault % is handing its core role over, or another server holds a later term of it; its settings take '
                             'no change now', vault
                 USING ERRCODE = 'P0001', HINT = 'design/peers/mirror.md "Planned switch": the write gate missed this path';
         END IF;
@@ -207,6 +209,11 @@ CREATE TABLE IF NOT EXISTS mirror_takeover
     CHECK ((settled_at IS NULL) = (settled_how IS NULL))
 );
 
+ALTER TABLE mirror_takeover ADD COLUMN IF NOT EXISTS told_at TIMESTAMPTZ;
+ALTER TABLE mirror_takeover ADD COLUMN IF NOT EXISTS old_core_outcome TEXT
+    CHECK (old_core_outcome IS NULL OR old_core_outcome IN ('following', 'rejoining', 'forced'));
+ALTER TABLE mirror_takeover ADD COLUMN IF NOT EXISTS old_core_changes INTEGER;
+
 CREATE UNIQUE INDEX IF NOT EXISTS mirror_takeover_open_key ON mirror_takeover (vault_id) WHERE settled_at IS NULL;
 
 -- The fork base: the tree the server that took over held as its old core last confirmed it, at the fork point (every
@@ -221,3 +228,35 @@ CREATE TABLE IF NOT EXISTS mirror_fork_base
     entry_hash  BYTEA  NOT NULL CHECK (octet_length(entry_hash) = 32),
     PRIMARY KEY (takeover_id, ord)
 );
+
+-- ---------------------------------------------------------------------------------------------------- the old core
+
+-- The old core of a vault another server took over (peer.mirror.promoted; design/peers/mirror.md "The old core
+-- returns", "As built: the old core learns"; db::query::mirror::Rejoins, mirror::rejoin). The vault's row is
+-- `rejoining` (read-only: the gate and the backstop) from the moment the telling arrived: draining (the writers then
+-- running are waited for and numbered), then following (it committed nothing after the fork point: the vault's
+-- mirror in the new term), rejoining (it did: read-only with its changes past the fork point, `changes` of them, until
+-- the merge or a resync), forked (this server had taken over the vault too: both read-only until an operator picks
+-- one), or resynced (a person started its copy over from the new core).
+CREATE TABLE IF NOT EXISTS mirror_rejoin
+(
+    id               BIGSERIAL PRIMARY KEY,
+    vault_id         INTEGER     NOT NULL REFERENCES vault (id) ON DELETE CASCADE,
+    peer_id          INTEGER     NOT NULL REFERENCES peer (id),
+    new_term         BIGINT      NOT NULL CHECK (new_term >= 2),
+    fork_term        BIGINT      NOT NULL,
+    fork_seq         BIGINT      NOT NULL,
+    fork_digest      BYTEA       NOT NULL CHECK (octet_length(fork_digest) = 32),
+    fork_entries     BIGINT      NOT NULL,
+    baseline_digest  BYTEA       CHECK (baseline_digest IS NULL OR octet_length(baseline_digest) = 32),
+    baseline_entries BIGINT,
+    phase            TEXT        NOT NULL CHECK (phase IN ('draining', 'following', 'rejoining', 'forked', 'resynced')),
+    changes          INTEGER     NOT NULL DEFAULT 0,
+    writers          TEXT[],
+    detail           JSONB,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    decided_at       TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS mirror_rejoin_open_key ON mirror_rejoin (vault_id)
+    WHERE phase IN ('draining', 'rejoining', 'forked');

@@ -41,4 +41,17 @@ namespace vh::mirror::takeover {
 
 [[nodiscard]] nlohmann::json toJson(const vh::db::query::mirror::Takeover& t);
 
+// ---- the old core learns (step 4a; design/peers/mirror.md "As built: the old core learns")
+
+// The follower's pass, both servers: the new core tells its old core peer.mirror.promoted on every pass while the link
+// is up and the old core has not answered (nothing after an unlink); the old core decides each rejoin whose writers
+// ended (following or rejoining). How many it moved on.
+std::size_t tick(vh::mirror::follow::Transport& transport);
+
+// peer.mirror.promoted {vault_uid, term, fork: {term, seq, digest, entries}, baseline: {digest, entries}} (new core ->
+// old core): this server, the caller's core of the vault in a lower term, stops at once (read-only, rejoining) and
+// answers {outcome: pending | following | rejoining | forced, changes?}. This server had taken over the vault too:
+// forced, both read-only until an operator picks one. A server not behind in term refuses (mirror_term_stale).
+[[nodiscard]] nlohmann::json servePromoted(uint32_t callerPeerId, const nlohmann::json& payload);
+
 }

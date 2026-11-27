@@ -71,7 +71,9 @@ std::vector<WsField> mcMirroredFields() {
             str("role").oneOf({"core", "mirror", "orphaned", "starting", "none"}),
             object("peer", "", {uinteger("id"), str("node_id"), str("name"), boolean("revoked")}).nullable(),
             integer("term").nullable(), integer("last_seq").nullable(),
-            str("state").oneOf({"starting", "live", "paused", "diverged", "expired", "stopped", "switching"}).nullable(),
+            str("state").oneOf({"starting", "live", "paused", "diverged", "expired", "stopped", "switching", "rejoining",
+                                "forked"})
+                .nullable(),
             object("grant", "", {str("role_name"), uinteger("files"), uinteger("directories"), uinteger("sync"),
                                  uinteger("roles"), str("granted_by_node"), uinteger("granted_at")})
                 .nullable()

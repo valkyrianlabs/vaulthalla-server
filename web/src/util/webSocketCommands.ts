@@ -1068,6 +1068,8 @@ export interface WebSocketCommandMap {
   'peer.mirror.switch.request': WsContract['peer.mirror.switch.request']
   'peer.mirror.switch.prepare': WsContract['peer.mirror.switch.prepare']
   'peer.mirror.switch.commit': WsContract['peer.mirror.switch.commit']
+  // The new core tells its old core it took over.
+  'peer.mirror.promoted': WsContract['peer.mirror.promoted']
   // Any signed-in user pairs devices to their own account: open a 10-minute window, then approve a request by picking
   // the one of its three code_choices the device shows (a wrong pick denies the request).
   'device.pairing.open': WsContract['device.pairing.open']

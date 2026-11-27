@@ -10,6 +10,7 @@
 #include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Submit.hpp"
 #include "mirror/switching/Switch.hpp"
+#include "mirror/takeover/Takeover.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "peer/Links.hpp"
@@ -388,6 +389,7 @@ void Follower::runLoop() {
             // Planned switches: the core's steps and its decisions to tell (mirror::switching; nothing when none).
             try {
                 (void)vh::mirror::switching::tick(*t);
+                (void)vh::mirror::takeover::tick(*t);   // the old core learns (telling, deciding)
             } catch (const std::exception& e) {
                 log::Registry::sync()->warn("[MirrorFollower] Switches: {}", e.what());
             }

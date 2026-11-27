@@ -35,6 +35,9 @@ struct Takeover {
     std::time_t created_at{};
     std::optional<std::time_t> settled_at{};
     std::optional<std::string> settled_how{};
+    // The old core's answer to peer.mirror.promoted: following | rejoining | forced (none yet: told on every pass).
+    std::optional<std::string> old_core_outcome{};
+    std::optional<uint32_t> old_core_changes{};
 
     [[nodiscard]] Position fork() const { return {from_term, fork_seq}; }
     [[nodiscard]] bool open() const { return !settled_at.has_value(); }
@@ -68,6 +71,13 @@ public:
     // The old core rejoined (`how`: switched, returned, merged) or the mirror ended (ended): settled, its fork base
     // dropped. False when it was settled already.
     static bool settle(uint64_t id, const std::string& how, const nlohmann::json& detail = nlohmann::json::object());
+
+    // Open take overs whose old core has not answered peer.mirror.promoted yet (the follower's pass tells them).
+    [[nodiscard]] static std::vector<Takeover> untold();
+    // The old core answered: `outcome` (following, rejoining, forced) and, rejoining, how many changes it holds past the
+    // fork point. Following settles the take over (returned) and drops the fork base; forked holds this server's row
+    // `forked` (read-only) too.
+    static void recordOutcome(uint64_t id, const std::string& outcome, std::optional<uint32_t> changes);
 };
 
 }

@@ -291,7 +291,9 @@ bool Router::isPeerWireCommand(const std::string_view command) {
         // The planned switch (wave 5 piece B; handler/MirrorFollow.hpp).
         std::string_view{"peer.mirror.switch.request"},
         std::string_view{"peer.mirror.switch.prepare"},
-        std::string_view{"peer.mirror.switch.commit"}
+        std::string_view{"peer.mirror.switch.commit"},
+        // Take over: the old core learns (wave 5 piece B; handler/MirrorFollow.hpp).
+        std::string_view{"peer.mirror.promoted"}
     };
     return containsCommand(commands, command);
 }

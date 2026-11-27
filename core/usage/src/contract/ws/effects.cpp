@@ -175,6 +175,7 @@ std::vector<WsEffect> effectTable() {
         {"peer.mirror.submit", "write"},
         {"peer.mirror.resync", "write"},
         {"peer.mirror.switch.commit", "write"},
+        {"peer.mirror.promoted", "write"},
         {"peer.mirror.switch.prepare", "write"},
         {"peer.mirror.switch.request", "write"},
         {"peer.mirror.offer", "write"},

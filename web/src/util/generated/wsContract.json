@@ -39851,7 +39851,9 @@
                 "diverged",
                 "expired",
                 "stopped",
-                "switching"
+                "switching",
+                "rejoining",
+                "forked"
               ],
               "name": "state",
               "required": true,
@@ -41320,7 +41322,9 @@
                 "diverged",
                 "expired",
                 "stopped",
-                "switching"
+                "switching",
+                "rejoining",
+                "forked"
               ],
               "name": "state",
               "required": true,
@@ -45915,7 +45919,9 @@
             "diverged",
             "expired",
             "stopped",
-            "switching"
+            "switching",
+            "rejoining",
+            "forked"
           ],
           "name": "core_state",
           "required": false,
@@ -46341,6 +46347,176 @@
           "required": true,
           "types": [
             "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.promoted",
+      "confirmations": [],
+      "description": "The new core tells its old core it took over (mirror.takeover), on every pass while the link is up until answered: the new term, the fork point and its digest, and the new core's digest at (term, 0). The old core stops taking changes for the vault at once (read-only) and answers pending until it decided: following (it committed nothing after the fork point: the vault's mirror in the new term), rejoining (it did: read-only with them until the merge; changes is their count) or forced (it had taken over too: both read-only until an operator picks one).",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
+          "generator": {
+            "attrs": [
+              "uid"
+            ],
+            "entity": "mirror.vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The new term.",
+          "generator": {
+            "attrs": [
+              "term"
+            ],
+            "entity": "mirror.position",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "term",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The last position the new core applied from the old one, and its digest there.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "seq",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "fork"
+            ],
+            "entity": "mirror.takeover",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "fork",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "The new core's digest at (term, 0).",
+          "fields": [
+            {
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "baseline"
+            ],
+            "entity": "mirror.takeover",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "baseline",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked",
+        "mirror_term_stale"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked",
+        "mirror_term_stale"
+      ],
+      "response": [
+        {
+          "enum": [
+            "pending",
+            "following",
+            "rejoining",
+            "forced"
+          ],
+          "name": "outcome",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "rejoining: the old core's changes past the fork point.",
+          "minimum": 0,
+          "name": "changes",
+          "required": false,
+          "types": [
+            "integer"
           ]
         }
       ],
@@ -46784,7 +46960,9 @@
             "diverged",
             "expired",
             "stopped",
-            "switching"
+            "switching",
+            "rejoining",
+            "forked"
           ],
           "name": "core_state",
           "required": false,
@@ -47567,7 +47745,9 @@
             "diverged",
             "expired",
             "stopped",
-            "switching"
+            "switching",
+            "rejoining",
+            "forked"
           ],
           "name": "core_state",
           "required": false,
@@ -69727,5 +69907,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "e4be1bb49bb9bf1a5d3ad1d242b9ff7da6ee17085e098fa47ccb97f866b1eeaa"
+  "ws_hash": "7ea1833209e9bb89a8dda10591932509e218bbbadfb18fc2c99e0d470d92ca62"
 }

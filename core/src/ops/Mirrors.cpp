@@ -3,6 +3,7 @@
 #include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "db/query/mirror/Pending.hpp"
+#include "db/query/mirror/Rejoin.hpp"
 #include "db/query/mirror/Switch.hpp"
 #include "db/query/mirror/Takeover.hpp"
 #include "db/query/peer/Peer.hpp"
@@ -375,6 +376,23 @@ nlohmann::json toJson(const Mirrored& m) {
         else if (r.role == "mirror" && r.state == "switching")
             j["advice"] = "This server handed the core role to the other server and waits for it to confirm; it is "
                           "read-only until then.";
+        else if (r.role == "core" && r.state == "rejoining") {
+            const auto rj = vh::db::query::mirror::Rejoins::openOf(m.vault_id);
+            j["advice"] = fmt::format(
+                "Linked server {} took over as this vault's core in term {} while this server was cut off, and this "
+                "server holds {} change(s) it never received; the vault is read-only here until they are merged (the "
+                "merge is the next step). Meanwhile: start this copy over from it (vh mirror resync {}: your changes kept "
+                "as held changes), or detach it (vh mirror detach {}).",
+                r.peer_id, rj ? rj->new_term : r.term + 1, rj ? rj->changes : 0u, m.vault_id, m.vault_id);
+        } else if (r.role == "core" && r.state == "forked")
+            j["advice"] = fmt::format(
+                "Both servers took over as this vault's core while they were cut off; it is read-only on both. Pick the "
+                "server whose vault stays, and on the other run vh mirror resync <its vault> (what it holds that the "
+                "kept one does not is kept as held changes) or detach it.");
+        else if (r.role == "core" && tk && tk->old_core_outcome == std::optional<std::string>("rejoining"))
+            j["advice"] = fmt::format("The old core, linked server {}, holds {} change(s) this server never received; it "
+                                      "waits read-only for the merge (the next step) or a resync there.",
+                                      tk->peer_id, tk->old_core_changes.value_or(0));
         else if (r.role == "core" && tk)
             j["advice"] = fmt::format("This server took over as the core in term {} (fork point ({}, {})); the old core, "
                                       "linked server {}, may hold changes this server never received: they are merged "

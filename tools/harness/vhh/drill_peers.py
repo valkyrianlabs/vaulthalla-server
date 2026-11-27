@@ -562,10 +562,70 @@ def _takeover(a: Node, va: int, b: Node, vb: int, node_a: str, node_b: str, repo
                  "took over" in (b.vh("mirror", "info", str(vb), check=False).stdout or ""))
     a.inst.restart(kill=True)
     _wait("the link back on B", lambda: _connected(b, node_a), timeout=180)
-    ma = _mv(a, va)
-    report.check("7q: A came back as the core of the old term: never two cores of one term (its return is step 4)",
-                 ma.get("role") == "core" and ma.get("term") == before["term"]
-                 and _mv(b, vb).get("term") == before["term"] + 1, json.dumps({"a": ma, "b": _mv(b, vb)})[:400])
+    # Step 4a: B tells A it took over; A committed nothing after the fork point, so it is B's mirror in the new term.
+    followed = _wait("A follows B", lambda: (lambda m: m if m.get("role") == "mirror" and m.get("state") == "live"
+                                             and m.get("term") == before["term"] + 1 else None)(_mv(a, va)), timeout=120)
+    report.check("7q: A came back, learned of the take over and is B's mirror in the new term (nothing past the fork "
+                 "point, no copy)", bool(followed), json.dumps({"a": _mv(a, va), "b": _mv(b, vb)})[:400])
+    ok = _wait_synced(b, vb, a, va, "A follows B after the take over", timeout=180)
+    report.check("7q: A applies B's writes made after the take over; equal digests; the take over settled",
+                 bool(ok) and (a.inst.mount / "whole" / "docs" / "after_takeover.txt").exists()
+                 and _sql(b, f"SELECT settled_how FROM mirror_takeover WHERE vault_id = {vb} ORDER BY id DESC LIMIT 1")
+                 == "returned", json.dumps(ok)[:300])
+
+    # ---- again, the other way round, with a change the old core made that the new one never received: B is the core
+    # now; A goes down, B writes, B goes down, A takes over, B comes back.
+    a.close()
+    a.inst.proc.kill()
+    a.inst.proc.wait(timeout=30)
+    _wait("B sees A down", lambda: not _connected(b, node_a) or None, timeout=120)
+    b.sh("printf 'written on B while A was down; A never received it\\n' > MNT/whole/docs/unseen_by_a.txt")
+    _wait("B numbered it", lambda: _sql(b, f"SELECT count(*) FROM vault_replication_log WHERE vault_id = {vb} "
+                                           "AND seq IS NULL") == "0" or None, timeout=30)
+    b_before = _mv(b, vb)
+    b.close()
+    b.inst.proc.kill()
+    b.inst.proc.wait(timeout=30)
+    a.inst.restart(kill=True)
+    a_before = _mv(a, va)
+    code, out = a.vh_json("mirror", "takeover", str(va), "--confirm", name, check=False)
+    report.check("7q: with B gone, A takes over in turn", code == 0 and _mv(a, va).get("role") == "core",
+                 json.dumps({"out": out, "a": _mv(a, va)})[:400])
+    a.sh("printf 'written on A, the core again by take over\\n' > MNT/whole/docs/after_second_takeover.txt")
+    b.inst.restart(kill=True)
+    _wait("the link back on A", lambda: _connected(a, node_b), timeout=180)
+    rejoining = _wait("B stops rejoining", lambda: (lambda m: m if m.get("state") == "rejoining" else None)(_mv(b, vb)),
+                      timeout=120)
+    changes = _sql(b, f"SELECT changes FROM mirror_rejoin WHERE vault_id = {vb} ORDER BY id DESC LIMIT 1")
+    report.check("7q: B, the old core, learned of A's take over and stopped read-only (rejoining) with the change A "
+                 "never received counted",
+                 bool(rejoining) and changes not in ("", "0") and b_before["seq"] > a_before["seq"],
+                 json.dumps({"b": _mv(b, vb), "changes": changes, "b_before": b_before, "a_before": a_before})[:500])
+    cp = b.vh("mirror", "info", str(vb), check=False)
+    report.check("7q: `vh mirror info` on B says it holds changes A never received, and what to do",
+                 "never received" in (cp.stdout or "") and "vh mirror resync" in (cp.stdout or ""), cp.stdout[-400:])
+    told = _wait("A learns B's count", lambda: _sql(a, f"SELECT old_core_outcome FROM mirror_takeover WHERE vault_id = "
+                                                       f"{va} ORDER BY id DESC LIMIT 1") == "rejoining" or None,
+                 timeout=60)
+    report.check("7q: A, the new core, is unaffected (live, taking writes) and knows B holds unseen changes",
+                 bool(told) and _mv(a, va).get("state") == "live"
+                 and "never received" in (a.vh("mirror", "info", str(va), check=False).stdout or ""))
+    try:
+        b.sh("touch MNT/whole/docs/refused_while_rejoining.txt", timeout=30)
+        refused = False
+    except DrillError:
+        refused = True
+    report.check("7q: B's mount refuses writes while it is rejoining", refused)
+    cp = b.vh("mirror", "resync", str(vb), check=False)
+    report.check("7q: `vh mirror resync` on B starts its copy over from A", cp.returncode == 0,
+                 (cp.stdout + cp.stderr)[-300:])
+    ok = _wait_synced(a, va, b, vb, "B resynced from A after its rejoin", timeout=240)
+    held = _sql(b, f"SELECT count(*) FROM mirror_held WHERE vault_id = {vb} AND state = 'open' "
+                   "AND path LIKE '%unseen_by_a.txt'")
+    report.check("7q: after the resync B follows A, equal digests, and the change A never received is kept on B as a "
+                 "held change", bool(ok) and held not in ("", "0")
+                 and (b.inst.mount / "whole" / "docs" / "after_second_takeover.txt").exists(),
+                 json.dumps({"ok": ok, "held": held})[:300])
 
 
 def _put(node: Node, args: tuple, text: str) -> subprocess.CompletedProcess:

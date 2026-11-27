@@ -176,6 +176,7 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("peer.mirror.switch.request", &handler::MirrorFollow::switchRequest);
     r->registerPayload("peer.mirror.switch.prepare", &handler::MirrorFollow::switchPrepare);
     r->registerPayload("peer.mirror.switch.commit", &handler::MirrorFollow::switchCommit);
+    r->registerPayload("peer.mirror.promoted", &handler::MirrorFollow::promoted);
 }
 
 void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {

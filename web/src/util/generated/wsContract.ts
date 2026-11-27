@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'e4be1bb49bb9bf1a5d3ad1d242b9ff7da6ee17085e098fa47ccb97f866b1eeaa'
+export const WS_CONTRACT_HASH = '7ea1833209e9bb89a8dda10591932509e218bbbadfb18fc2c99e0d470d92ca62'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
@@ -5680,7 +5680,7 @@ export interface WsContract {
         peer: { id: number; node_id: string; name: string; revoked: boolean } | null
         term: number | null
         last_seq: number | null
-        state: 'starting' | 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | null
+        state: 'starting' | 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked' | null
         grant: {
           role_name: string
           files: number
@@ -5847,7 +5847,7 @@ export interface WsContract {
         peer: { id: number; node_id: string; name: string; revoked: boolean } | null
         term: number | null
         last_seq: number | null
-        state: 'starting' | 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | null
+        state: 'starting' | 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked' | null
         grant: {
           role_name: string
           files: number
@@ -6331,7 +6331,7 @@ export interface WsContract {
         })[]
         complete: boolean
       }
-      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching'
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked'
     }
   }
   /**
@@ -6370,6 +6370,23 @@ export interface WsContract {
       offer_uid: string
       state: 'pending' | 'accepted' | 'declined' | 'installed' | 'started' | 'cancelled' | 'expired' | 'failed'
     }
+  }
+  /**
+   * The new core tells its old core it took over (mirror.takeover), on every pass while the link is up until
+   * answered: the new term, the fork point and its digest, and the new core's digest at (term, 0). The old
+   * core stops taking changes for the vault at once (read-only) and answers pending until it decided:
+   * following (it committed nothing after the fork point: the vault's mirror in the new term), rejoining (it
+   * did: read-only with them until the merge; changes is their count) or forced (it had taken over too: both
+   * read-only until an operator picks one).
+   */
+  'peer.mirror.promoted': {
+    payload: {
+      vault_uid: string
+      term: number
+      fork: { term: number; seq: number; digest: string; entries: number }
+      baseline?: { digest: string; entries: number }
+    }
+    response: { outcome: 'pending' | 'following' | 'rejoining' | 'forced'; changes?: number }
   }
   /**
    * The mirror starts its copy over (mirror.resync on the mirror): the core takes its baseline again in the
@@ -6416,7 +6433,7 @@ export interface WsContract {
       groups?: number
       code?: string
       error?: string
-      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching'
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked'
     }
   }
   /**
@@ -6483,7 +6500,7 @@ export interface WsContract {
       vault?: object
       items?: ({ ord: number; state: object })[]
       more?: boolean
-      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching'
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked'
     }
   }
   /**
@@ -9457,6 +9474,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.mirror.log',
   'peer.mirror.notify',
   'peer.mirror.offer',
+  'peer.mirror.promoted',
   'peer.mirror.resync',
   'peer.mirror.submit',
   'peer.mirror.switch.commit',
@@ -9954,6 +9972,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.mirror.log': 15000,
   'peer.mirror.notify': 15000,
   'peer.mirror.offer': 15000,
+  'peer.mirror.promoted': 15000,
   'peer.mirror.resync': 15000,
   'peer.mirror.submit': 15000,
   'peer.mirror.switch.commit': 15000,

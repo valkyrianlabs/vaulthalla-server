@@ -19,7 +19,8 @@
 // (rbac::mirrored).
 //
 //   NotMirrored  not held here (no row, or this server is the vault's core): writes are the vault's own business,
-//                except a core whose planned switch runs (migration 168: state `switching`): ReadOnly, kSwitching
+//                except a core whose planned switch runs (migration 168: state `switching`): ReadOnly, kSwitching; an
+//                old core that learned another server took over (`rejoining`: kRejoining) or both did (`forked`)
 //   Live         role mirror, first copy finished, state live, peers.experimental on, the link to the core up
 //   ReadOnly     anything else, with a reason code (below)
 //
@@ -51,6 +52,8 @@ inline constexpr std::string_view kLinkDown = "mirror_link_down";         // the
 inline constexpr std::string_view kWritesNotBuilt = "mirror_writes_not_built";  // Live, but piece B is not built
 inline constexpr std::string_view kCoreOwned = "mirror_core_owned";      // settings, remote: the core's, always
 inline constexpr std::string_view kSwitching = "mirror_switching";       // a planned switch of the core role runs
+inline constexpr std::string_view kRejoining = "mirror_rejoining";       // old core with changes the new one lacks
+inline constexpr std::string_view kForked = "mirror_both_forced";        // both servers took over
 
 // What the gate knows of a held vault (tests, status). nullopt: not held here.
 struct Facts {

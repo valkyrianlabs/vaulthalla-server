@@ -18,7 +18,7 @@ constexpr const char* kTakeoverColumns = R"SQL(
     id, vault_id, peer_id, from_term, term, fork_seq, encode(fork_digest, 'hex') AS fork_digest, fork_entries,
     fork_rows, pending_made_local, held, contents_missing, by_id, by_name, detail::text AS detail,
     EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at, EXTRACT(EPOCH FROM settled_at)::BIGINT AS settled_at,
-    settled_how
+    settled_how, old_core_outcome, old_core_changes
 )SQL";
 
 Takeover takeoverFrom(const pqxx::row_ref row) {
@@ -41,6 +41,8 @@ Takeover takeoverFrom(const pqxx::row_ref row) {
     t.created_at = static_cast<std::time_t>(row["created_at"].as<int64_t>());
     if (!row["settled_at"].is_null()) t.settled_at = static_cast<std::time_t>(row["settled_at"].as<int64_t>());
     if (!row["settled_how"].is_null()) t.settled_how = row["settled_how"].as<std::string>();
+    if (!row["old_core_outcome"].is_null()) t.old_core_outcome = row["old_core_outcome"].as<std::string>();
+    if (!row["old_core_changes"].is_null()) t.old_core_changes = row["old_core_changes"].as<uint32_t>();
     return t;
 }
 
@@ -114,6 +116,11 @@ Takeovers::Taken Takeovers::take(const uint32_t vaultId, const std::optional<uin
                  "  'fork_base_digest', $4::text, 'was', $5::text) WHERE id = $1",
                  pqxx::params{id, base[0]["n"].as<int64_t>(), taken.fork_base_matches, baseDigest.hex(), mv->state});
 
+        // When the person's pending changes are in the tree now, the old core's tree at the fork point is not this
+        // server's at (term + 1, 0): a baseline of it is kept, so an old core that committed nothing since copies it
+        // over its own entries (the resync copy) instead of following from there.
+        const bool baseline = counts[0]["pending"].as<int64_t>() > 0;
+
         // ---- the person's changes: ordinary local changes of the vault now (held ones stay listed)
         for (const auto row : txn.exec("SELECT id FROM mirror_pending WHERE vault_id = $1 ORDER BY id", v))
             taken.pending_ids.push_back(row[0].as<uint64_t>());
@@ -127,12 +134,17 @@ Takeovers::Taken Takeovers::take(const uint32_t vaultId, const std::optional<uin
                  v);
         for (const auto* table : {"vault_replication_log", "mirror_baseline", "mirror_submission"})
             txn.exec(std::string("DELETE FROM ") + table + " WHERE vault_id = $1", v);
+        if (baseline)
+            txn.exec("INSERT INTO mirror_baseline (vault_id, ord, entry_uid, state, entry_hash) "
+                     "SELECT $1, row_number() OVER (ORDER BY t.trashed, t.depth, t.entry_uid), t.entry_uid, t.state, "
+                     "       vh_mirror_state_hash(t.state) FROM vh_mirror_tree_states($1) t",
+                     v);
         txn.exec("UPDATE mirror_vault m SET role = 'core', term = m.term + 1, last_seq = 0, acked_term = NULL, "
                  "  acked_seq = NULL, acked_at = NULL, pruned_term = 0, pruned_seq = 0, numbered_at = NULL, "
                  "  digest = d.digest, digest_entries = d.entries, "
                  "  baseline_term = m.term + 1, baseline_seq = 0, baseline_digest = d.digest, baseline_entries = d.entries, "
-                 "  baseline_rows = NULL, baseline_vault = vh_mirror_vault_state($1), "
-                 "  granted_role_name = NULL, granted_files_permissions = NULL, granted_directories_permissions = NULL, "
+                 "  baseline_rows = (SELECT NULLIF(count(*), 0) FROM mirror_baseline WHERE vault_id = $1), "
+                 "  baseline_vault = vh_mirror_vault_state($1), granted_role_name = NULL, granted_files_permissions = NULL, granted_directories_permissions = NULL, "
                  "  granted_sync_permissions = NULL, granted_roles_permissions = NULL, granted_by_node = NULL, "
                  "  granted_at = NULL, state = 'live', stop_reason = NULL, stop_detail = NULL, stopped_at = NULL, "
                  "  scrubbed_at = NULL, updated_at = CURRENT_TIMESTAMP "
@@ -182,6 +194,44 @@ std::vector<nlohmann::json> Takeovers::forkBase(const uint64_t id, const uint64_
             out.push_back(nlohmann::json::parse(row[0].as<std::string>()));
         return out;
     });
+}
+
+std::vector<Takeover> Takeovers::untold() {
+    return Transactions::exec("mirror::Takeovers::untold", [&](pqxx::work& txn) {
+        std::vector<Takeover> out;
+        for (const auto row : txn.exec(std::string("SELECT ") + kTakeoverColumns +
+                                       " FROM mirror_takeover WHERE settled_at IS NULL AND old_core_outcome IS NULL "
+                                       "ORDER BY id"))
+            out.push_back(takeoverFrom(row));
+        return out;
+    });
+}
+
+void Takeovers::recordOutcome(const uint64_t id, const std::string& outcome, const std::optional<uint32_t> changes) {
+    if (outcome != "following" && outcome != "rejoining" && outcome != "forced")
+        throw vh::ops::Invalid("an old core answers following, rejoining or forced");
+    const bool republish = Transactions::exec("mirror::Takeovers::recordOutcome", [&](pqxx::work& txn) {
+        const auto t = takeoverOne(txn, "WHERE id = $1 FOR UPDATE", pqxx::params{static_cast<int64_t>(id)});
+        if (!t || !t->open()) return false;
+        txn.exec("UPDATE mirror_takeover SET old_core_outcome = $2, old_core_changes = $3, told_at = CURRENT_TIMESTAMP "
+                 "WHERE id = $1",
+                 pqxx::params{static_cast<int64_t>(id), outcome,
+                              changes ? std::optional<int64_t>(*changes) : std::nullopt});
+        if (outcome == "following") {
+            txn.exec("UPDATE mirror_takeover SET settled_at = CURRENT_TIMESTAMP, settled_how = 'returned' WHERE id = $1",
+                     pqxx::params{static_cast<int64_t>(id)});
+            txn.exec("DELETE FROM mirror_fork_base WHERE takeover_id = $1", pqxx::params{static_cast<int64_t>(id)});
+            return false;
+        }
+        if (outcome == "forced") {
+            txn.exec("UPDATE mirror_vault SET state = 'forked', updated_at = CURRENT_TIMESTAMP "
+                     "WHERE vault_id = $1 AND role = 'core'",
+                     pqxx::params{t->vault_id});
+            return true;
+        }
+        return false;
+    });
+    if (republish) vh::mirror::access::reload();
 }
 
 bool Takeovers::settle(const uint64_t id, const std::string& how, const nlohmann::json& detail) {

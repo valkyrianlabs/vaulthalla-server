@@ -1289,6 +1289,46 @@ the hand-off:
 - **The old core,** until step 4: it does not know; if it comes back it is still the core of the old term (two cores,
   never in one term: invariant 12). The take over waits for it (`vh mirror info` says so).
 
+### As built: the old core learns (phase 2 wave 5, piece B, step 4a, migration 168)
+
+The merge itself (step 4b) is not built; this is how the old core learns and stops. Decided while building:
+
+- **The telling:** `peer.mirror.promoted {vault_uid, term, fork: {term, seq, digest, entries}, baseline: {digest,
+  entries}}`, from the new core on every follower pass while the link is up and the old core has not answered
+  (`mirror_takeover.old_core_outcome` empty; nothing after an unlink). The old core answers `pending` until it decided,
+  then `following`, `rejoining` (with `changes`) or `forced`, the same answer when told again. **Decision:** the telling
+  is the new core's; the old core does not ask. Nothing of the vault is served by the old core to the new one meanwhile
+  (the new core asks its old core nothing: it is the core); what the old core accepted between reconnecting and the
+  first pass (about a second) is past the fork point like any other change it made while cut off.
+- **It stops at once:** the old core's row becomes `rejoining` (a new state: read-only through `mirror::access`, reason
+  `mirror_rejoining`, every surface, and the backstop: `vh_mirror_core_term` and `vh_mirror_track_vault` refuse a
+  `rejoining` or `forked` core's changes) and a `mirror_rejoin` row records the new term, the fork point and the new
+  core's digest at `(term, 0)`, in one transaction. The writers then running are waited for and numbered (as the switch's
+  freeze), then its pass decides, in one transaction under the row's lock (`Rejoins::decide`):
+  - **following:** nothing numbered past the fork point and its digest is the fork point's: the vault's mirror in the
+    new term at `(term, 0)`, live, its first copy complete (nothing copied, nothing fetched), the start offer changes
+    side; the new core then settles its take over (`returned`) and drops the fork base. When the new core made pending
+    changes ordinary at the take over, its tree at `(term, 0)` is not the fork point's: the take over then kept a
+    baseline of it, and the old core's first copy runs again over its own entries (the resync copy, reusing every byte
+    it holds).
+  - **rejoining:** it numbered changes past the fork point: its row stays `core`, `rejoining`, read-only, its tree and
+    log as they are (its log rows past the fork point are the list, `changes` their count, kept: retention never passes
+    what its mirror acknowledged). `vh mirror info` on both servers says the old core holds N changes the new one never
+    received and that the merge is the next step; the way out today is `vh mirror resync` on the old core (it becomes
+    the new core's mirror in its term, then starts over from its tree; what it holds that the new core does not is kept
+    as held changes by resync's rule, and the take over settles) or detach (piece A).
+- **Both forced:** a server told while a take over of its own is still open, by a term above the one it took over from
+  (the other server took over too, for example from a switch both had prepared or decided while cut off), is `forked`
+  (and tells the other so, which marks it `forked` too); a telling of a term not above its own refuses
+  (`mirror_term_stale`): read-only on both (`mirror_both_forced`), neither
+  follows the other, nothing is merged; `vh mirror info` says pick the server whose vault stays and run `vh mirror
+  resync` (or detach) on the other. Resync from a forked server works as from a rejoining one; the kept server's own
+  forked record closes.
+- **Invariant 12:** from the moment the old core was told, it accepts no change as core (the state is written before the
+  answer; a restart keeps it; the decision only ever turns it into a mirror or keeps it read-only).
+
+### The old core returns
+
 It learns of the higher term on reconnecting, stops accepting changes, and becomes the mirror.
 
 - **If it committed nothing after the fork point,** it simply follows the new core's log.

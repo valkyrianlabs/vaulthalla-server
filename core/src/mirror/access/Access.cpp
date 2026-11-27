@@ -43,7 +43,8 @@ std::map<uint32_t, HeldVault> heldFrom(const std::vector<vh::db::query::mirror::
     std::map<uint32_t, HeldVault> out;
     for (const auto& m : rows) {
         // A core whose planned switch holds it read-only (migration 168) is gated too; it is not held here.
-        const bool switchingCore = m.role == "core" && m.state == "switching";
+        const bool switchingCore =
+            m.role == "core" && (m.state == "switching" || m.state == "rejoining" || m.state == "forked");
         if (m.role != "mirror" && m.role != "orphaned" && !switchingCore) continue;
         out.emplace(m.vault_id, HeldVault{.peer_id = m.peer_id, .role = m.role, .state = m.state,
                                           .copy_finished = m.copy_finished, .stop_reason = m.stop_reason});
@@ -80,6 +81,8 @@ bool peersOn() { return vh::config::Registry::get().peers.experimental; }
 std::string readOnlyReason(const HeldVault& v, const bool linkUp) {
     if (v.role == "orphaned") return std::string(kOrphaned);
     if (v.state == "switching") return std::string(kSwitching);
+    if (v.state == "rejoining") return std::string(kRejoining);
+    if (v.state == "forked") return std::string(kForked);
     if (v.state == "diverged") return std::string(kDiverged);
     if (v.state == "expired") return std::string(kExpired);
     if (v.state == "paused") return std::string(kPaused);
@@ -189,6 +192,13 @@ std::string sentence(const std::string_view code) {
     if (code == kCoreOwned)
         return "This vault is a copy of another server's vault; its settings, keys and remote are its core server's, "
                "and are changed there";
+    if (code == kRejoining)
+        return "Another server took over as this vault's core while this server was cut off, and this server holds changes "
+               "it never received; the vault is read-only here until they are merged (vh mirror info: vh mirror resync "
+               "keeps them as held changes and follows the new core)";
+    if (code == kForked)
+        return "Both servers took over as this vault's core while they were cut off; it is read-only on both until an "
+               "operator picks the server whose vault stays and runs vh mirror resync (or detaches) on the other";
     if (code == kSwitching)
         return "This vault's core role is moving between its two linked servers (a planned switch); it is read-only "
                "until the switch ends, which takes moments: try again shortly";
