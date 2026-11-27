@@ -141,9 +141,6 @@ struct Effects {
     std::vector<uint32_t> contentChanged;
     std::vector<uint32_t> live;
     std::vector<uint64_t> confirmed;   // pending changes confirmed: their sealed bytes leave the pending store
-    // A resync's copy (migration 168): this server's own bytes kept with the held change that keeps its version (a
-    // second name, made before anything removes or replaces them).
-    std::vector<std::pair<std::filesystem::path, uint64_t>> keptAsHeld;
     bool vaultChanged{false};
 };
 
@@ -453,8 +450,12 @@ uint64_t resyncKeep(Pass& p, const std::string& uid, const std::string& op, json
     h.reason_code = code;
     h.reason = why;
     const auto id = mq::Pending::hold(p.txn, h);
+    // The bytes get their second name now, inside the transaction and before anything removes or replaces them: a stop
+    // between the commit and its effects must not leave a held change without its bytes. A transaction that rolls back
+    // leaves a name no row uses, which housekeeping sweeps; one that cannot keep the bytes does not commit.
     std::error_code ec;
-    if (!bytes.empty() && std::filesystem::is_regular_file(bytes, ec)) p.fx.keptAsHeld.emplace_back(bytes, id);
+    if (!bytes.empty() && std::filesystem::is_regular_file(bytes, ec))
+        vh::mirror::submit::contents::keep(bytes, vh::mirror::submit::contents::heldBlob(p.run.vaultId, id));
     return id;
 }
 
@@ -955,15 +956,6 @@ void removeBacking(const std::filesystem::path& p, const bool tree) {
 
 void afterCommit(const Run& run, const Effects& fx) {
     const auto& t = run.target;
-    // A resync's copy: this server's versions kept with their held changes, before anything removes or replaces them.
-    for (const auto& [bytes, heldId] : fx.keptAsHeld) {
-        try {
-            vh::mirror::submit::contents::keep(bytes, vh::mirror::submit::contents::heldBlob(run.vaultId, heldId));
-        } catch (const std::exception& e) {
-            log::Registry::sync()->warn("[MirrorApply] Vault {}: held change {} could not keep its bytes: {}",
-                                        run.vaultId, heldId, e.what());
-        }
-    }
     // Files and symlinks that left: their bytes, derived artifacts and cache entries.
     for (const auto& r : fx.removed) {
         if (r.kind == ta::Located::Kind::Directory) continue;
