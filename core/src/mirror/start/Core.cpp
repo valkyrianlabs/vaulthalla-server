@@ -1,4 +1,5 @@
 #include "mirror/start/Start.hpp"
+#include "mirror/submit/Contents.hpp"
 
 #include "audit/Trail.hpp"
 #include "crypto/id/ObjectUid.hpp"
@@ -345,7 +346,10 @@ bool cancelOnCore(const uint32_t vaultId, const std::string& reason, const bool 
     }
     if (!offer && !row) return false;
     const auto peerId = row ? row->peer_id : offer->peer_id;
-    if (row) (void)MirrorVaults::remove(vaultId);
+    if (row) {
+        (void)MirrorVaults::remove(vaultId);
+        vh::mirror::submit::contents::dropStagedOf(vaultId);   // what the mirror sent and never committed
+    }
     if (offer)
         (void)Q::transition(offer->id, {"offered", "accepted", "keys_acked", "started"},
                             {.to = "cancelled", .notify = tell, .reason = reason, .remove_copy = removeCopy});

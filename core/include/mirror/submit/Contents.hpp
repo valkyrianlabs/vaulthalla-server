@@ -73,4 +73,12 @@ void dropStaged(const StagedBytes& staged) noexcept;
 // Staged bytes (and partial receptions) older than `age`, never committed, go. Returns how many.
 std::size_t sweep(std::chrono::hours age);
 
+// ---- when a vault's mirror or copy ends here (design/peers/mirror.md "As built: a change made on the mirror")
+
+// The vault is gone here (storage::Manager::removeVault): its pending, held and staged bytes all go (its rows went with
+// the vault).
+void dropVault(uint32_t vaultId) noexcept;
+// The vault is no longer this server's core with a mirror: what its mirror sent and never committed goes.
+void dropStagedOf(uint32_t vaultId) noexcept;
+
 }

@@ -9,6 +9,7 @@
 #include "mirror/access/Access.hpp"
 #include "mirror/follow/Follower.hpp"
 #include "mirror/start/Start.hpp"
+#include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Local.hpp"
 #include "ops/PeerPolicy.hpp"
 #include "ops/Peers.hpp"
@@ -378,6 +379,8 @@ db::query::mirror::HeldChange discardHeld(const Actor& actor, const uint64_t id)
     if (!h) throw NotFound("no held change " + std::to_string(id));
     if (!db::query::mirror::Pending::resolveHeld(id, "discarded", actor->id))
         throw Conflict("held change " + std::to_string(id) + " is " + h->state + " already");
+    // The person's sealed bytes go with it (the person's own act).
+    vh::mirror::submit::contents::dropBlob(vh::mirror::submit::contents::heldBlob(h->vault_id, id));
     audit::record({.action = "mirror.held.discard", .actor_id = actor->id, .actor = actor->name(), .vault_id = h->vault_id,
                    .details = {{"held", id}, {"kind", h->kind}, {"op", h->op}, {"reason_code", h->reason_code}}},
                   fmt::format("[mirror] {} discarded held change {} ({}) of vault {}", actor->name(), id, h->op,
@@ -408,6 +411,9 @@ db::query::mirror::HeldChange retryHeld(const Actor& actor, const uint64_t id) {
         change.actor = h->actor;
         // Submitted only: nothing of it is applied here first, and it holds no entry dirty.
         const auto row = db::query::mirror::Pending::open(change, {}, {});
+        // A write's sealed bytes go with it to the new change (and back to a held change if it is refused again).
+        vh::mirror::submit::contents::moveBlob(vh::mirror::submit::contents::heldBlob(h->vault_id, id),
+                                               vh::mirror::submit::contents::pendingBlob(h->vault_id, row.id));
         db::query::mirror::Pending::ready(row.id);
     }
     vh::mirror::follow::Follower::instance()->wake(h->vault_id);

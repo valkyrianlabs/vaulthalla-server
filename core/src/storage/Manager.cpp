@@ -1,4 +1,5 @@
 #include "storage/Manager.hpp"
+#include "mirror/submit/Contents.hpp"
 #include "storage/Engine.hpp"
 #include "storage/CloudEngine.hpp"
 #include "storage/RemoteAccess.hpp"
@@ -322,6 +323,9 @@ void Manager::removeVault(const unsigned int vaultId) {
         unavailable_.erase(vaultId);
         evictCachedVault(vaultId, fuseRootOf(removed));
     }
+
+    // A mirrored vault's sealed bytes kept for its changes (pending, held, staged), which its rows went with.
+    vh::mirror::submit::contents::dropVault(vaultId);
 
     // Its backing and cache directories and its recovery store too (#162), through the same path guard as the
     // retention purge.

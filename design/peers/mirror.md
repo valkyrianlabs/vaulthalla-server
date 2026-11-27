@@ -795,6 +795,15 @@ review); each is listed for confirmation in the hand-off:
   (`content_conflict`). Staged bytes never committed are swept after a day (each drain).
   The pending store's link goes when the change is confirmed; a held change keeps it as `.vh-mirror-held/<vault>/<id>`.
   Bytes are sent without a transfer slot (known limit: the four slots per peer of wave 2 are for fetches).
+- **When a vault's copy or mirror ends**, deliberately: a held change discarded takes its bytes; a retried one moves
+  them to its new pending change (and back to a held change if it is refused again). A **removed copy** (the core
+  asked, its first copy never finished, or the vault deleted: `storage::Manager::removeVault`) takes its rows with the
+  vault and its three directories (`.vh-mirror-pending|held|staged/<vault>`) with them; nothing is left on disk for a
+  vault that is gone. An **orphaned copy** (the core ended the mirror and it is kept: `cancelReceived`,
+  `reconcileUnlinked`; housekeeping catches any it missed) keeps what was applied here as content, and each change
+  still pending becomes a held change with its bytes (`mirror_orphaned`), listed until a super admin discards it;
+  nothing is dirty any more. On the core, ending the mirror (`cancelOnCore`) forgets what the mirror submitted
+  (`mirror_submission`) and drops `.vh-mirror-staged/<vault>`.
 - **The person of a change** is a local account, always: the caller of the surface, or for a seal the one who wrote
   to the file or opened it for writing (`WorkingCopies::open` now records the opener; never the file's last modifier,
   which on a mirror is often the core's person, a remote account here). A `Local` refuses a remote account (inert, so
@@ -822,8 +831,8 @@ change's bytes, the held changes in the console and Desktop.
 Known limits: a folder change captures every entry under the folder into the pending row (a very large folder makes a
 large row); an
 unrelated core change to a pending entry shows the core's version of that entry until the person's change comes back;
-the person's change made on an orphaned copy (none can be made: read-only) or left pending when a vault stops (diverged,
-expired) stays pending until the vault is live again or detached (wave 5: pending changes become ordinary changes).
+a change left pending when a vault stops (diverged, expired) stays pending until the vault is live again or detached
+(wave 5: pending changes become ordinary changes); one left pending when the copy is orphaned is held (above).
 
 ### Key rotation
 

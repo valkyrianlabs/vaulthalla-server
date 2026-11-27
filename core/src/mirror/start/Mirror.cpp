@@ -1,4 +1,5 @@
 #include "mirror/start/Start.hpp"
+#include "mirror/submit/Submit.hpp"
 
 #include "audit/Trail.hpp"
 #include "crypto/SecretKey.hpp"
@@ -548,6 +549,7 @@ json cancelReceived(const vh::peer::Record& from, const json& payload) {
                 copy = "removed";
             } else {
                 (void)MirrorVaults::orphan(*held);
+                (void)vh::mirror::submit::orphaned(*held);   // its pending changes are kept as held ones
                 copy = "kept";
             }
         }
@@ -615,6 +617,7 @@ std::size_t reconcileUnlinked() {
             continue;
         }
         if (vh::db::query::mirror::MirrorVaults::orphan(row.vault_id)) {
+            (void)vh::mirror::submit::orphaned(row.vault_id);   // its pending changes are kept as held ones
             ++orphaned;
             revoked.insert(row.peer_id);
             audit::record({.action = "mirror.orphan", .outcome = audit::Outcome::Info, .vault_id = row.vault_id,

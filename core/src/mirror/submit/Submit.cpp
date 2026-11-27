@@ -593,6 +593,28 @@ void schedule(const uint32_t vaultId) {
     }
 }
 
+std::size_t orphaned(const uint32_t vaultId) {
+    std::scoped_lock local(vaultMutex(vaultId));
+    std::size_t n = 0;
+    for (const auto& p : mq::Pending::list(vaultId)) {
+        auto held = submitHeldOf(p, "held", "mirror_orphaned",
+                                 "the core ended this vault's mirror before it confirmed the change");
+        uint64_t heldId = 0;
+        vh::db::Transactions::exec("mirror::submit orphaned", [&](pqxx::work& txn) {
+            mq::Pending::remove(txn, p.id);
+            heldId = mq::Pending::hold(txn, held);
+        });
+        contents::moveBlob(contents::pendingBlob(vaultId, p.id), contents::heldBlob(vaultId, heldId));
+        ++n;
+    }
+    vh::db::Transactions::exec("mirror::submit orphaned clean", [&](pqxx::work& txn) {
+        txn.exec("DELETE FROM mirror_dirty WHERE vault_id = $1", pqxx::params{vaultId});
+    });
+    if (n) vh::log::Registry::sync()->info("[MirrorSubmit] Vault {}: orphaned with {} change(s) pending; kept as held",
+                                           vaultId, n);
+    return n;
+}
+
 void setInlineForTesting(const bool inlineDrain) { submitInline().store(inlineDrain); }
 
 void setPollPauseForTesting(const std::chrono::milliseconds pause) { submitPollPauseMs().store(pause.count()); }

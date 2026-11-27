@@ -240,4 +240,16 @@ std::size_t sweep(const std::chrono::hours age) {
     return n;
 }
 
+void dropVault(const uint32_t vaultId) noexcept {
+    for (const auto* area : {".vh-mirror-pending", ".vh-mirror-held", ".vh-mirror-staged"}) {
+        std::error_code ec;
+        std::filesystem::remove_all(submitContentsRoot(area) / std::to_string(vaultId), ec);
+    }
+}
+
+void dropStagedOf(const uint32_t vaultId) noexcept {
+    std::error_code ec;
+    std::filesystem::remove_all(submitContentsRoot(".vh-mirror-staged") / std::to_string(vaultId), ec);
+}
+
 }

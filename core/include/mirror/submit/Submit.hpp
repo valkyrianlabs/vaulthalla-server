@@ -58,6 +58,11 @@ struct SubmitStep {
 SubmitStep submitPending(uint32_t vaultId, vh::mirror::follow::Transport& transport,
                          std::chrono::steady_clock::time_point deadline);
 
+// The core ended the mirror and this server keeps its copy (orphaned): the person's changes applied here stay its
+// content, and every change still pending (never to be confirmed now) becomes a held change (reason mirror_orphaned)
+// with its sealed bytes, listed until someone discards it; nothing stays dirty. Returns how many it kept.
+std::size_t orphaned(uint32_t vaultId);
+
 // Tests: how long submitPending waits between asking again about a change the core has queued (0: no pause).
 void setPollPauseForTesting(std::chrono::milliseconds pause);
 

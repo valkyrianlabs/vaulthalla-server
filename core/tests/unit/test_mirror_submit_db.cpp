@@ -21,6 +21,7 @@
 #include "../helpers/db_suite.hpp"
 
 #include "audit/Trail.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "config/Registry.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/device/Device.hpp"
@@ -32,12 +33,14 @@
 #include "db/query/peer/Peer.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/model/File.hpp"
+#include "fs/ops/file.hpp"
 #include "identities/User.hpp"
 #include "mirror/Hash.hpp"
 #include "mirror/access/Access.hpp"
 #include "mirror/apply/Applier.hpp"
 #include "mirror/follow/Follower.hpp"
 #include "mirror/follow/Protocol.hpp"
+#include "mirror/start/Start.hpp"
 #include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Local.hpp"
 #include "mirror/submit/Submit.hpp"
@@ -843,6 +846,129 @@ TEST_F(MirrorSubmitDbTest, BytesTheCoreRefusesAreHeldWithTheChangeAndNothingIsLo
     EXPECT_EQ(held[0].reason_code, "invalid_contents");
     EXPECT_TRUE(std::filesystem::exists(ms::contents::heldBlob(s.mirrorId, held[0].id)))
         << "the person's sealed bytes stay with the held change";
+}
+
+TEST_F(MirrorSubmitDbTest, AHeldWriteRetriedGoesWithItsBytesAndADiscardedOneTakesThemAway) {
+    auto s = begin([](const EnginePtr& e) { e->mkdir("/docs", superUser); });
+    Wire wire(s);
+    followAll(wire, s);
+    write(s.mirror, "/docs/again.txt", "sent again once the core takes it");
+    write(s.mirror, "/docs/dropped.txt", "let go by a super admin");
+    const auto uid = uidOf(s.mirrorId, "/docs/again.txt");
+    wire.contentRefusal = "over_quota";
+    followAll(wire, s);
+    expectSettled(s);
+    auto held = ops::mirrors::held(superUser, s.mirrorId, false);
+    ASSERT_EQ(held.size(), 2u);
+    const auto& again = held[0].args.value("name", "") == "again.txt" ? held[0] : held[1];
+    const auto& dropped = held[0].args.value("name", "") == "again.txt" ? held[1] : held[0];
+    const auto againBlob = ms::contents::heldBlob(s.mirrorId, again.id);
+    const auto droppedBlob = ms::contents::heldBlob(s.mirrorId, dropped.id);
+    ASSERT_TRUE(std::filesystem::exists(againBlob));
+    ASSERT_TRUE(std::filesystem::exists(droppedBlob));
+
+    // Discarded: the person's bytes go with it.
+    EXPECT_EQ(ops::mirrors::discardHeld(superUser, dropped.id).state, "discarded");
+    EXPECT_FALSE(std::filesystem::exists(droppedBlob)) << "a discarded change keeps nothing on disk";
+
+    // Retried once the core has room: the bytes move to the new change, are sent, and the write is executed.
+    wire.contentRefusal.reset();
+    const auto sentBefore = wire.contentsSent;
+    EXPECT_EQ(ops::mirrors::retryHeld(superUser, again.id).state, "retried");
+    EXPECT_FALSE(std::filesystem::exists(againBlob)) << "moved, not copied";
+    const auto row = mq::Pending::list(s.mirrorId);
+    ASSERT_EQ(row.size(), 1u);
+    EXPECT_TRUE(std::filesystem::exists(ms::contents::pendingBlob(s.mirrorId, row[0].id)));
+    followAll(wire, s);
+    expectSettled(s);
+    EXPECT_EQ(wire.contentsSent, sentBefore + 1) << "the same bytes, sent again";
+    EXPECT_EQ(wire.answersGiven.back().value("status", ""), "executed") << wire.answersGiven.back().dump();
+    EXPECT_EQ(coreCount(s, "SELECT count(*) FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id WHERE e.vault_id = " +
+                               std::to_string(s.coreId) + " AND f.object_uid = '" + uid + "'"),
+              1)
+        << "the core holds the person's file";
+    EXPECT_FALSE(std::filesystem::exists(ms::contents::pendingBlob(s.mirrorId, row[0].id))) << "confirmed: let go";
+    EXPECT_TRUE(ops::mirrors::held(superUser, s.mirrorId, false).empty());
+    EXPECT_EQ(pathsOf(s.mirrorId), corePaths(s));
+}
+
+TEST_F(MirrorSubmitDbTest, WhenACopyEndsItsRowsAndSealedBytesAreHandledAndNothingIsLeftForAVaultThatIsGone) {
+    // ---- a copy whose core ended the mirror and kept it (orphaned): what was applied here stays as content; each
+    // pending change is kept as a held one with its bytes, listed until discarded; nothing is dirty any more.
+    {
+        auto s = begin([](const EnginePtr& e) { e->mkdir("/docs", superUser); });
+        Wire wire(s);
+        followAll(wire, s);
+        ops::fs::mkdir(superUser, s.mirrorId, "/docs/sent");   // the core keeps what it did with this one
+        followAll(wire, s);
+        expectSettled(s);
+        write(s.mirror, "/docs/unsent.txt", "made here, never submitted");
+        const auto pending = mq::Pending::list(s.mirrorId);
+        ASSERT_EQ(pending.size(), 1u);
+        const auto blob = ms::contents::pendingBlob(s.mirrorId, pending[0].id);
+        ASSERT_TRUE(std::filesystem::exists(blob));
+        ASSERT_FALSE(mq::Pending::dirtyUids(s.mirrorId).empty());
+        const auto core = db::query::peer::Peers::byId(corePeer);
+        ASSERT_TRUE(core);
+        const auto answer = vh::mirror::start::cancelReceived(*core, {{"vault_uid", vl::keykit::toBase32(vh::crypto::id::fromUuid(s.vaultUid))}, {"remove_copy", false},
+                                                                      {"reason", "cancelled"}});
+        EXPECT_EQ(answer.value("copy", ""), "kept") << answer.dump();
+        EXPECT_EQ(mirrorRow(s).role, "orphaned");
+        EXPECT_TRUE(mq::Pending::list(s.mirrorId).empty());
+        EXPECT_TRUE(mq::Pending::dirtyUids(s.mirrorId).empty());
+        EXPECT_TRUE(pathsOf(s.mirrorId).contains("/docs/unsent.txt")) << "the applied change stays as content";
+        const auto held = ops::mirrors::held(superUser, s.mirrorId, false);
+        ASSERT_EQ(held.size(), 1u) << "listed until discarded";
+        EXPECT_EQ(held[0].reason_code, "mirror_orphaned");
+        EXPECT_FALSE(std::filesystem::exists(blob));
+        const auto heldBlob = ms::contents::heldBlob(s.mirrorId, held[0].id);
+        EXPECT_TRUE(std::filesystem::exists(heldBlob)) << "with its bytes";
+        EXPECT_EQ(ops::mirrors::discardHeld(superUser, held[0].id).state, "discarded");
+        EXPECT_FALSE(std::filesystem::exists(heldBlob));
+
+        // ---- the core's side when the mirror ends: what the mirror submitted is forgotten, staged bytes go.
+        toCore(s);
+        {
+            AsCore as;
+            const auto stagedDir = ms::contents::stagedPath(s.coreId, "u", "g").parent_path();
+            {
+                const auto received = ms::contents::receivingPath(s.coreId);
+                vh::fs::ops::writeFileExclusive(received, {}, 0600);
+                ASSERT_TRUE(ms::contents::keepVerified(s.coreId, "00000000-0000-4000-8000-0000000000b1",
+                                                       {.generation = "x", .size = 0}, received).ok);
+            }
+            ASSERT_GT(one<int>("SELECT count(*) FROM mirror_submission WHERE vault_id = " + std::to_string(s.coreId)), 0);
+            EXPECT_TRUE(vh::mirror::start::cancelOnCore(s.coreId, "test", false, false, std::nullopt, ""));
+            EXPECT_EQ(one<int>("SELECT count(*) FROM mirror_submission WHERE vault_id = " + std::to_string(s.coreId)), 0);
+            EXPECT_FALSE(std::filesystem::exists(stagedDir)) << "what the mirror sent and never committed";
+        }
+        toMirror(s);
+    }
+
+    // ---- a copy removed (the core asked, or its first copy never finished): the vault, its rows and its three
+    // directories go.
+    {
+        auto s = begin([](const EnginePtr& e) { e->mkdir("/docs", superUser); });
+        Wire wire(s);
+        followAll(wire, s);
+        write(s.mirror, "/docs/a.txt", "pending");
+        write(s.mirror, "/docs/b.txt", "held");
+        wire.contentRefusal = "invalid_contents";
+        (void)mf::Follower::instance()->step(s.mirrorId, wire);   // one goes, is refused and held
+        wire.contentRefusal.reset();
+        const auto v = s.mirrorId;
+        const auto pendingDir = ms::contents::pendingBlob(v, 1).parent_path();
+        const auto heldDir = ms::contents::heldBlob(v, 1).parent_path();
+        std::filesystem::create_directories(heldDir);
+        ASSERT_TRUE(std::filesystem::exists(pendingDir));
+        vh::mirror::start::removeCopy(v);
+        EXPECT_FALSE(std::filesystem::exists(pendingDir));
+        EXPECT_FALSE(std::filesystem::exists(heldDir));
+        EXPECT_FALSE(std::filesystem::exists(ms::contents::stagedPath(v, "u", "g").parent_path()));
+        for (const auto* t : {"mirror_pending", "mirror_dirty", "mirror_held", "mirror_vault"})
+            EXPECT_EQ(one<int>(std::string("SELECT count(*) FROM ") + t + " WHERE vault_id = " + std::to_string(v)), 0)
+                << t;
+    }
 }
 
 TEST_F(MirrorSubmitDbTest, AFileWhoseContentsHaveNotArrivedIsRenamedAndTrashedAsMetadata) {
