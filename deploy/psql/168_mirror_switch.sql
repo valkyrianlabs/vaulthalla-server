@@ -19,11 +19,15 @@
 --                      accepted that the old core may hold no role on the vault afterwards, who asked and where, why
 --                      it was abandoned, its deadline. At most one open switch per vault.
 --
+--   mirror_takeover, mirror_fork_base   a mirror that took over as core (mirror.takeover): the record (the fork
+--                      point, what became of its changes) and the fork base (its tree as the old core last confirmed it),
+--                      kept until the old core rejoins.
+--
 -- The backstop of the freeze: vh_mirror_core_term (every entry trigger of a core vault asks it for the term) and the
 -- vault-settings trigger refuse a change of a core vault whose row is switching, so nothing commits on the core after
 -- the position the switch hands over; the write surfaces refuse first (mirror::access, reason mirror_switching).
 --
--- Idempotent and safe on upgraded installs: new nullable columns and one with a default, a new table, the state CHECK
+-- Idempotent and safe on upgraded installs: new nullable columns and one with a default, new tables, the state CHECK
 -- widened once, two functions replaced; nothing is mirrored before this release.
 
 ALTER TABLE mirror_vault ADD COLUMN IF NOT EXISTS resync_at TIMESTAMPTZ;
@@ -172,3 +176,48 @@ BEGIN
     RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
+
+-- ---------------------------------------------------------------------------------------------------- take over
+
+-- A mirror promoted itself to the vault's core while its core was gone (mirror.takeover; design/peers/mirror.md
+-- "Forced promotion", "As built: take over"; db::query::mirror::Takeovers, mirror::takeover). One row per take over on
+-- the server that took over: the term it left and the new one, the fork point (the last position it applied from the
+-- old core) with its digest, what became of its changes (pending ones made ordinary, held ones kept), the files whose
+-- contents never arrived, who did it and when; settled once the old core rejoined (step 4) or the mirror ended.
+CREATE TABLE IF NOT EXISTS mirror_takeover
+(
+    id                 BIGSERIAL PRIMARY KEY,
+    vault_id           INTEGER     NOT NULL REFERENCES vault (id) ON DELETE CASCADE,
+    peer_id            INTEGER     NOT NULL REFERENCES peer (id),
+    from_term          BIGINT      NOT NULL CHECK (from_term >= 1),
+    term               BIGINT      NOT NULL CHECK (term > from_term),
+    fork_seq           BIGINT      NOT NULL CHECK (fork_seq >= 0),
+    fork_digest        BYTEA       NOT NULL CHECK (octet_length(fork_digest) = 32),
+    fork_entries       BIGINT      NOT NULL,
+    fork_rows          BIGINT      NOT NULL DEFAULT 0,
+    pending_made_local INTEGER     NOT NULL DEFAULT 0,
+    held               INTEGER     NOT NULL DEFAULT 0,
+    contents_missing   INTEGER     NOT NULL DEFAULT 0,
+    by_id              INTEGER,
+    by_name            TEXT        CHECK (by_name IS NULL OR length(by_name) <= 255),
+    detail             JSONB,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    settled_at         TIMESTAMPTZ,
+    settled_how        TEXT        CHECK (settled_how IS NULL OR settled_how IN ('switched', 'returned', 'merged', 'ended')),
+    CHECK ((settled_at IS NULL) = (settled_how IS NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS mirror_takeover_open_key ON mirror_takeover (vault_id) WHERE settled_at IS NULL;
+
+-- The fork base: the tree the server that took over held as its old core last confirmed it, at the fork point (every
+-- entry's state document as the log would write it, and its hash; a folder before what is under it, trashed files
+-- last), kept for the old core's return (the base of the three-way merge) and dropped once it is settled.
+CREATE TABLE IF NOT EXISTS mirror_fork_base
+(
+    takeover_id BIGINT NOT NULL REFERENCES mirror_takeover (id) ON DELETE CASCADE,
+    ord         BIGINT NOT NULL,
+    entry_uid   UUID   NOT NULL,
+    state       JSONB  NOT NULL,
+    entry_hash  BYTEA  NOT NULL CHECK (octet_length(entry_hash) = 32),
+    PRIMARY KEY (takeover_id, ord)
+);

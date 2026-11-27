@@ -152,6 +152,7 @@ std::vector<WsEffect> effectTable() {
         {"mirror.held.retry", "write"},
         {"mirror.resync", "write"},
         {"mirror.switch", "write"},
+        {"mirror.takeover", "write"},
         {"mirror.keep_removed.set", "write"},
         {"mirror.list", "read"},
         {"mirror.pending", "read"},

@@ -333,6 +333,12 @@ bool MirrorVaults::remove(const uint32_t vaultId) {
         txn.exec("DELETE FROM mirror_submission WHERE vault_id = $1", pqxx::params{vaultId});
         txn.exec("DELETE FROM mirror_pending WHERE vault_id = $1", pqxx::params{vaultId});
         txn.exec("DELETE FROM mirror_dirty WHERE vault_id = $1", pqxx::params{vaultId});
+        // Migration 168: a take over still waiting for its old core ends with the mirror (its fork base goes).
+        txn.exec("DELETE FROM mirror_fork_base WHERE takeover_id IN (SELECT id FROM mirror_takeover WHERE vault_id = $1)",
+                 pqxx::params{vaultId});
+        txn.exec("UPDATE mirror_takeover SET settled_at = CURRENT_TIMESTAMP, settled_how = 'ended' "
+                 "WHERE vault_id = $1 AND settled_at IS NULL",
+                 pqxx::params{vaultId});
         return gone > 0;
     }));
 }

@@ -520,6 +520,53 @@ def _whole_mirror(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, re
                  _sql(b, f"SELECT count(*) FROM fs_change_log WHERE vault_id = {vb} AND kind = 'create' "
                          "AND name = 'offline.txt'") == "1")
 
+    _takeover(a, va, b, vb, node_a, node_b, report)
+
+
+def _takeover(a: Node, va: int, b: Node, vb: int, node_a: str, node_b: str, report: Report) -> None:
+    """7q (wave 5 piece B, step 3): B takes over as the vault's core while A, its core, is gone; refused while A answers.
+    A's return (becoming the mirror, the merge) is step 4: here A comes back as the core of the old term, the two never
+    cores of one term. The last step of 7: the later steps use vaults of their own."""
+    ok = _wait_synced(a, va, b, vb, "settled before the take over", timeout=180)
+    report.check("7q: settled before the take over", bool(ok), json.dumps(ok)[:300])
+    name = _sql(b, f"SELECT name FROM vault WHERE id = {vb}")
+    cp = b.vh("mirror", "takeover", str(vb), "--confirm", name, check=False)
+    report.check("7q: while A answers, `vh mirror takeover` on B is refused (use the planned switch)",
+                 cp.returncode != 0 and "switch" in (cp.stdout + cp.stderr), (cp.stdout + cp.stderr)[-300:])
+    cp = b.vh("mirror", "takeover", str(vb), "--confirm", name + "-not-it", check=False)
+    report.check("7q: and with the name not typed exactly", cp.returncode != 0, (cp.stdout + cp.stderr)[-300:])
+    before = _mv(b, vb)
+
+    a.close()
+    a.inst.proc.kill()
+    a.inst.proc.wait(timeout=30)
+    _wait("B sees the link down", lambda: not _connected(b, node_a) or None, timeout=120)
+    code, out = b.vh_json("mirror", "takeover", str(vb), "--confirm", name, check=False)
+    now = _mv(b, vb)
+    report.check("7q: with A gone, B takes over: the core in the next term, its fork point the position it applied",
+                 code == 0 and now.get("role") == "core" and now.get("state") == "live"
+                 and now.get("term") == before["term"] + 1
+                 and (out.get("fork") or {}).get("seq") == before["seq"]
+                 and (out.get("fork") or {}).get("digest") == before["digest"] and out.get("fork_base_matches") is True,
+                 json.dumps({"out": out, "before": before, "now": now})[:600])
+    report.check("7q: it warns that A may hold changes B never received, and audits it",
+                 "may hold changes" in out.get("warning", "")
+                 and _sql(b, f"SELECT count(*) FROM audit_event WHERE action = 'mirror.takeover' AND vault_id = {vb}")
+                 != "0")
+    b.sh("printf 'written on B, the core by take over\\n' > MNT/whole/docs/after_takeover.txt")
+    logged = _wait("B logs its own change in the new term", lambda: _sql(
+        b, f"SELECT count(*) FROM vault_replication_log WHERE vault_id = {vb} AND term = {before['term'] + 1} "
+           "AND seq IS NOT NULL") not in ("", "0") or None, timeout=60)
+    report.check("7q: B takes writes as the core and logs them in its term", bool(logged))
+    report.check("7q: `vh mirror info` on B shows the take over waiting for its old core",
+                 "took over" in (b.vh("mirror", "info", str(vb), check=False).stdout or ""))
+    a.inst.restart(kill=True)
+    _wait("the link back on B", lambda: _connected(b, node_a), timeout=180)
+    ma = _mv(a, va)
+    report.check("7q: A came back as the core of the old term: never two cores of one term (its return is step 4)",
+                 ma.get("role") == "core" and ma.get("term") == before["term"]
+                 and _mv(b, vb).get("term") == before["term"] + 1, json.dumps({"a": ma, "b": _mv(b, vb)})[:400])
+
 
 def _put(node: Node, args: tuple, text: str) -> subprocess.CompletedProcess:
     """`vh fs put ... -` on `node` with `text` on stdin (its own exit code, not checked)."""

@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'f1da94f09faa9f30dff3d140cc060a930ab847a127b98699c4667b82ddaea0a8'
+export const WS_CONTRACT_HASH = 'e4be1bb49bb9bf1a5d3ad1d242b9ff7da6ee17085e098fa47ccb97f866b1eeaa'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
@@ -5723,6 +5723,23 @@ export interface WsContract {
           expires_at: number
           finished_at: number | null
         } | null
+        switch: {
+          switch_id: string
+          side: 'core' | 'mirror'
+          phase: 'requested' | 'draining' | 'preparing' | 'prepared' | 'switched' | 'abandoned'
+          term: number
+          reason: string | null
+          created_at: number
+          ended_at: number | null
+        } | null
+        takeover: {
+          term: number
+          fork: { term: number; seq: number }
+          peer_id: number
+          contents_missing: number
+          created_at: number
+        } | null
+        advice: string | null
       }
     }
   }
@@ -5873,6 +5890,23 @@ export interface WsContract {
           expires_at: number
           finished_at: number | null
         } | null
+        switch: {
+          switch_id: string
+          side: 'core' | 'mirror'
+          phase: 'requested' | 'draining' | 'preparing' | 'prepared' | 'switched' | 'abandoned'
+          term: number
+          reason: string | null
+          created_at: number
+          ended_at: number | null
+        } | null
+        takeover: {
+          term: number
+          fork: { term: number; seq: number }
+          peer_id: number
+          contents_missing: number
+          created_at: number
+        } | null
+        advice: string | null
       }[]
     }
   }
@@ -5960,6 +5994,37 @@ export interface WsContract {
       ended_at: number | null
       peer_role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
       peer_access: 'read-only' | 'read-write' | 'none'
+    }
+  }
+  /**
+   * On a mirror whose core is gone or cannot be reached: take over as the vault's core. This server records
+   * the next term with itself as the core, the last change it applied from the old core as the fork point and
+   * its tree as the old core last confirmed it as the fork base (kept for the old core's return); changes
+   * made here and still pending become ordinary changes, held ones stay listed. Refused while the core
+   * answers (mirror_core_reachable: use mirror.switch). Also the way out of a planned switch whose core never
+   * came back. `confirm` is the vault's name, typed. Super admins (Take over as core); the data.destroy
+   * step-up in the console; audited mirror.takeover.
+   */
+  'mirror.takeover': {
+    payload: { vault_id: number; confirm: string }
+    response: {
+      id: number
+      vault_id: number
+      peer_id: number
+      from_term: number
+      term: number
+      fork: { term: number; seq: number; digest: string; entries: number }
+      fork_rows: number
+      pending_made_local: number
+      held: number
+      contents_missing: number
+      by: { id: number | null; name: string }
+      created_at: number
+      settled_at: number | null
+      settled_how: string | null
+      detail: object
+      warning: string
+      fork_base_matches: boolean
     }
   }
   /**
@@ -9374,6 +9439,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'mirror.pending',
   'mirror.resync',
   'mirror.switch',
+  'mirror.takeover',
   'peer.endpoints',
   'peer.get',
   'peer.hello',
@@ -9677,6 +9743,7 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'group.remove': 'identity.admin',
   'mirror.add': 'keys',
   'mirror.cancel': 'data.destroy',
+  'mirror.takeover': 'data.destroy',
   'peer.link.start': 'device.trust',
   'peer.pairing.approve': 'device.trust',
   'peer.policy.set': 'identity.admin',
@@ -9869,6 +9936,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'mirror.pending': 15000,
   'mirror.resync': 15000,
   'mirror.switch': 60000,
+  'mirror.takeover': 15000,
   'peer.endpoints': 15000,
   'peer.get': 15000,
   'peer.hello': 15000,

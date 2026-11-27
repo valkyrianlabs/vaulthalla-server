@@ -1,0 +1,473 @@
+// vh-test-tier: db-only
+// Every test here needs VH_TEST_DB_*, so -Ddb_tests=false builds (CI) leave this file out.
+// Take over (forced promotion; wave 5 piece B; migration 168 mirror_takeover, mirror_fork_base; design/peers/mirror.md
+// "Forced promotion", "As built: take over"; mirror::takeover), with the two servers of test_mirror_submit_db.cpp
+// (helpers/mirror_pair.hpp).
+//
+// Covered: a mirror whose core is gone takes over with a pending change and a held one present (the pending change an
+// ordinary change of the vault now, its sealed copy dropped, the held one still listed; the fork point the position it
+// applied, the fork base the tree as the core last confirmed it, its digest the fork point's; the new term, the gate
+// lifted, the log from (term + 1, 1)); files whose contents never arrived counted; refused while the core answers, for
+// a name not typed exactly, an orphaned copy, an unfinished first copy, a diverged copy; the way out of a planned switch
+// whose core never came back (from prepared), and the old core's later decision: switched (the two agree: settled, the
+// old core follows) or abandoned; an unlink ending a switch's telling on both sides; who may, and the console's step-up.
+
+#include "../helpers/mirror_pair.hpp"
+
+#include "../helpers/identities.hpp"
+#include "auth/model/RefreshToken.hpp"
+#include "auth/stepup/StepUp.hpp"
+#include "db/query/mirror/Switch.hpp"
+#include "db/query/mirror/Takeover.hpp"
+#include "db/query/rbac/role/Admin.hpp"
+#include "device/Peer.hpp"
+#include "mirror/switching/Switch.hpp"
+#include "mirror/takeover/Takeover.hpp"
+#include "ops/PeerPolicy.hpp"
+#include "protocols/ws/Router.hpp"
+#include "protocols/ws/Session.hpp"
+
+#include <filesystem>
+
+namespace vh::test_mirror_takeover {
+
+using namespace vh::test_mirror_pair;   // the fixture and its aliases (json, mq, mf, ap, ms)
+namespace sw = vh::mirror::switching;
+namespace tk = vh::mirror::takeover;
+
+class MirrorTakeoverDbTest : public MirrorPairDb {
+protected:
+    static void SetUpTestSuite() {
+        setUpPair("test_mirror_takeover");
+        sw::setTellPauseForTesting(true);
+    }
+
+    static void TearDownTestSuite() {
+        sw::setTellPauseForTesting(false);
+        vh::mirror::access::linkChanged(mirrorPeer, false);
+        MirrorPairDb::TearDownTestSuite();
+    }
+
+    void SetUp() override {
+        MirrorPairDb::SetUp();
+        if (IsSkipped()) return;
+        vh::mirror::access::linkChanged(mirrorPeer, true);
+        sql("UPDATE peer SET revoked_at = NULL WHERE id IN (" + std::to_string(mirrorPeer) + ", " +
+            std::to_string(corePeer) + ")");
+        sql("UPDATE mirror_switch SET notify = FALSE, phase = CASE WHEN ended_at IS NULL THEN 'abandoned' ELSE phase END, "
+            "  ended_at = COALESCE(ended_at, CURRENT_TIMESTAMP) WHERE ended_at IS NULL OR notify");
+        (void)ops::peer_policy::set(superUser, std::to_string(corePeer), ops::roles::Ref{std::string("power_user")});
+    }
+
+    static void node(const std::string& id) { sql("UPDATE device_node SET node_id = '" + id + "' WHERE singleton"); }
+
+    template <class F>
+    static auto onCore(Scenario& s, F&& f) {
+        const bool wasMirror = !s.coreActive;
+        toCore(s);
+        node(coreNode);
+        struct Back {
+            Scenario& s;
+            bool wasMirror;
+            ~Back() {
+                node(ownNode);
+                if (wasMirror) toMirror(s);
+            }
+        } back{s, wasMirror};
+        return f();
+    }
+
+    template <class F>
+    static auto onMirror(Scenario& s, F&& f) {
+        const bool wasCore = s.coreActive;
+        toMirror(s);
+        node(ownNode);
+        struct Back {
+            Scenario& s;
+            bool wasCore;
+            ~Back() {
+                if (wasCore) {
+                    toCore(s);
+                    node(coreNode);
+                }
+            }
+        } back{s, wasCore};
+        return f();
+    }
+
+    static mf::Transport::Answer answerOf(const std::function<json()>& serve) {
+        try {
+            return {.ok = true, .data = serve()};
+        } catch (const ops::Refused& e) {
+            return {.ok = false, .code = e.code, .error = e.what()};
+        } catch (const ops::NotFound& e) {
+            return {.ok = false, .code = "not_found", .error = e.what()};
+        } catch (const ops::Error& e) {
+            return {.ok = false, .code = "invalid", .error = e.what()};
+        }
+    }
+
+    // The planned switch's messages between the turns (test_mirror_switch_db.cpp's wire); `dropCommit` loses the core's
+    // decision on its way.
+    class SwitchWire final : public mf::Transport {
+    public:
+        SwitchWire(Scenario& s, Wire& follow) : s_(s), follow_(follow) {}
+        bool up{true};
+        bool dropCommit{false};
+        bool loseAnswer{false};
+        bool connected(uint32_t) override { return up; }
+        std::optional<Answer> request(const uint32_t peer, const std::string& command, const json& payload) override {
+            if (!up) return std::nullopt;
+            if (command == "peer.mirror.switch.prepare") {
+                auto out = onMirror(s_, [&] { return answerOf([&] { return sw::servePrepare(corePeer, payload); }); });
+                if (loseAnswer) return std::nullopt;
+                return out;
+            }
+            if (command == "peer.mirror.switch.commit") {
+                if (dropCommit) return std::nullopt;
+                return onMirror(s_, [&] { return answerOf([&] { return sw::serveCommit(corePeer, payload); }); });
+            }
+            return follow_.request(peer, command, payload);
+        }
+        bool notify(uint32_t, const std::string&, const json&) override { return true; }
+
+    private:
+        Scenario& s_;
+        Wire& follow_;
+    };
+
+    // The core gone: no connection, no answer.
+    struct Down final : mf::Transport {
+        bool connected(uint32_t) override { return false; }
+        std::optional<Answer> request(uint32_t, const std::string&, const json&) override { return std::nullopt; }
+        bool notify(uint32_t, const std::string&, const json&) override { return false; }
+    };
+
+    static std::string refusalOf(const std::function<void()>& f) {
+        try {
+            f();
+        } catch (const ops::Refused& e) {
+            return e.code;
+        } catch (const ops::Error& e) {
+            return std::string("error: ") + e.what();
+        }
+        return "not refused";
+    }
+
+    static std::string vaultName(const Scenario& s) { return s.mirror->vault->name; }
+
+    static mq::MirrorVault coreRow(Scenario& s) {
+        return onCore(s, [&] { return mq::MirrorVaults::get(s.coreId).value_or(mq::MirrorVault{}); });
+    }
+
+    static Scenario settledPair(const bool contents = true) {
+        auto s = begin([](const EnginePtr& e) {
+            e->mkdir("/docs", superUser);
+            write(e, "/docs/a.txt", "the first file");
+        });
+        Wire wire(s);
+        followAll(wire, s);
+        if (contents) {
+            receiveAll(s);
+            expectSettled(s);
+        }
+        return s;
+    }
+};
+
+// ---- take over -----------------------------------------------------------------------------------------------------------
+
+TEST_F(MirrorTakeoverDbTest, AMirrorWhoseCoreIsGoneTakesOverWithItsPendingChangesMadeOrdinaryAndHeldOnesKept) {
+    auto s = settledPair();
+    Wire wire(s);
+    // A change the core refused (held), then one still pending when the core goes.
+    write(s.mirror, "/docs/held.txt", "refused for its bytes");
+    wire.contentRefusal = "invalid_contents";
+    followAll(wire, s);
+    wire.contentRefusal.reset();
+    ASSERT_EQ(mq::Pending::heldChanges(s.mirrorId).size(), 1u);
+    write(s.mirror, "/docs/pending.txt", "never confirmed by the core");
+    ASSERT_EQ(mq::Pending::list(s.mirrorId).size(), 1u);
+    const auto pendingId = mq::Pending::list(s.mirrorId).front().id;
+    ASSERT_TRUE(std::filesystem::exists(ms::contents::pendingBlob(s.mirrorId, pendingId)));
+    const auto before = mirrorRow(s);
+    vh::mirror::access::linkChanged(corePeer, false);
+
+    Down down;
+    const auto answer = tk::take(s.mirrorId, vaultName(s), superUser->id, "admin", down);
+    EXPECT_EQ(answer.value("term", uint64_t{0}), before.term + 1);
+    EXPECT_EQ(answer.at("fork").value("term", uint64_t{0}), before.term);
+    EXPECT_EQ(answer.at("fork").value("seq", uint64_t{0}), before.last_seq);
+    EXPECT_EQ(answer.at("fork").value("digest", ""), before.digest.hex());
+    EXPECT_TRUE(answer.value("fork_base_matches", false)) << "the fork base is the tree the core last confirmed";
+    EXPECT_EQ(answer.value("pending_made_local", 0u), 1u);
+    EXPECT_EQ(answer.value("held", 0u), 1u);
+    EXPECT_EQ(answer.value("contents_missing", 0u), 0u);
+    EXPECT_NE(answer.value("warning", "").find("may hold changes"), std::string::npos);
+
+    // The core in term + 1: live, the gate lifted, the grant gone, the tree as it is here (the person's file in it).
+    const auto now = mirrorRow(s);
+    EXPECT_EQ(now.role, "core");
+    EXPECT_EQ(now.state, "live");
+    EXPECT_EQ(now.term, before.term + 1);
+    EXPECT_EQ(now.last_seq, 0u);
+    EXPECT_FALSE(now.grant);
+    EXPECT_EQ(now.digest, mq::Digests::recompute(s.mirrorId)) << "its digest is its tables'";
+    EXPECT_EQ(now.digest, mq::Digests::stored(s.mirrorId));
+    EXPECT_NE(now.digest, before.digest) << "the pending file is in the tree now";
+    EXPECT_EQ(vh::mirror::access::state(s.mirrorId), vh::mirror::access::State::NotMirrored);
+    EXPECT_FALSE(uidOf(s.mirrorId, "/docs/pending.txt").empty());
+    EXPECT_TRUE(mq::Pending::list(s.mirrorId).empty());
+    EXPECT_TRUE(mq::Pending::dirtyUids(s.mirrorId).empty());
+    EXPECT_FALSE(std::filesystem::exists(ms::contents::pendingBlob(s.mirrorId, pendingId)))
+        << "its sealed copy goes: the file holds the bytes";
+    EXPECT_EQ(mq::Pending::heldChanges(s.mirrorId).size(), 1u) << "the held change stays listed";
+
+    // The fork base: the core's tree at the fork point, entry for entry (the pending file is not in it).
+    const auto t = mq::Takeovers::openOf(s.mirrorId);
+    ASSERT_TRUE(t);
+    EXPECT_EQ(t->fork_rows, static_cast<uint64_t>(before.digest.entries));
+    const auto base = mq::Takeovers::forkBase(t->id, 0, 1000);
+    EXPECT_EQ(base.size(), static_cast<std::size_t>(before.digest.entries));
+    const auto pendingUid = uidOf(s.mirrorId, "/docs/pending.txt");
+    EXPECT_TRUE(std::ranges::none_of(base, [&](const json& b) { return b.value("uid", "") == pendingUid; }));
+
+    // A change here is the core's own now, logged in the new term from seq 1.
+    ops::fs::mkdir(superUser, s.mirrorId, "/docs/after");
+    const auto numbered = mq::Log::sequence(s.mirrorId);
+    ASSERT_TRUE(numbered);
+    EXPECT_EQ(numbered->last.term, before.term + 1);
+    EXPECT_EQ(one<int>("SELECT min(seq)::int FROM vault_replication_log WHERE vault_id = " + std::to_string(s.mirrorId)),
+              1);
+    EXPECT_TRUE(audit::Trail::instance()->flushNow());
+    EXPECT_EQ(one<int>("SELECT count(*)::int FROM audit_event WHERE action = 'mirror.takeover' AND vault_id = " +
+                       std::to_string(s.mirrorId)),
+              1);
+    vh::mirror::access::linkChanged(corePeer, true);
+}
+
+TEST_F(MirrorTakeoverDbTest, FilesWhoseContentsNeverArrivedAreCountedAndTheirRowsKept) {
+    auto s = settledPair(false);
+    vh::mirror::access::linkChanged(corePeer, false);
+    Down down;
+    const auto answer = tk::take(s.mirrorId, vaultName(s), superUser->id, "admin", down);
+    EXPECT_EQ(answer.value("contents_missing", 0u), 1u);
+    EXPECT_EQ(one<int>("SELECT count(*)::int FROM mirror_content_pending WHERE vault_id = " + std::to_string(s.mirrorId)),
+              1)
+        << "the list of what is missing stays (the old core can serve them when it returns)";
+    vh::mirror::access::linkChanged(corePeer, true);
+}
+
+TEST_F(MirrorTakeoverDbTest, TakeOverIsRefusedWhileTheCoreAnswersAndForAWrongNameAnOrphanedUnfinishedOrDivergedCopy) {
+    auto s = settledPair();
+    Wire wire(s);
+    const auto before = mirrorRow(s);
+    EXPECT_EQ(refusalOf([&] { (void)tk::take(s.mirrorId, vaultName(s), superUser->id, "admin", wire); }),
+              "mirror_core_reachable")
+        << "the core answers: the planned switch";
+    Down down;
+    EXPECT_EQ(refusalOf([&] { (void)tk::take(s.mirrorId, vaultName(s) + "x", superUser->id, "admin", down); }),
+              "mirror_name_mismatch");
+    ASSERT_TRUE(mq::MirrorVaults::stop(s.mirrorId, "diverged", "mirror_digest_mismatch", {{"why", "a test"}}));
+    EXPECT_EQ(refusalOf([&] { (void)tk::take(s.mirrorId, vaultName(s), superUser->id, "admin", down); }),
+              "mirror_diverged");
+    ASSERT_TRUE(mq::MirrorVaults::setState(s.mirrorId, "live"));
+    sql("UPDATE mirror_vault SET copy_finished = FALSE WHERE vault_id = " + std::to_string(s.mirrorId));
+    EXPECT_EQ(refusalOf([&] { (void)tk::take(s.mirrorId, vaultName(s), superUser->id, "admin", down); }),
+              "mirror_first_copy");
+    sql("UPDATE mirror_vault SET copy_finished = TRUE WHERE vault_id = " + std::to_string(s.mirrorId));
+    ASSERT_TRUE(mq::MirrorVaults::orphan(s.mirrorId));
+    EXPECT_EQ(refusalOf([&] { (void)tk::take(s.mirrorId, vaultName(s), superUser->id, "admin", down); }),
+              "mirror_orphaned");
+    const auto after = mirrorRow(s);
+    EXPECT_EQ(after.term, before.term) << "no refusal changed the term";
+    EXPECT_FALSE(mq::Takeovers::latestOf(s.mirrorId));
+}
+
+// ---- the way out of a planned switch whose core never came back ----------------------------------------------------
+
+TEST_F(MirrorTakeoverDbTest, APreparedMirrorTakesOverAndTheOldCoresLaterSwitchedDecisionAgreesWithIt) {
+    auto s = settledPair();
+    Wire follow(s);
+    SwitchWire wire(s, follow);
+    const auto digest = mirrorRow(s).digest;
+    const auto begun = onCore(s, [&] {
+        return sw::begin(s.coreId, {.on = "core", .by = mq::Account{.node = coreNode, .id = superUser->id},
+                                    .name = "admin"},
+                         wire);
+    });
+    // The core decides switched and its decision never arrives: the mirror is prepared and waits.
+    wire.dropCommit = true;
+    (void)onCore(s, [&] { return sw::advance(begun.id, wire); });
+    ASSERT_EQ(mq::Switches::bySwitchId(begun.switch_id, "mirror")->phase, "prepared");
+    ASSERT_EQ(mirrorRow(s).state, "switching");
+    // `vh mirror info` says what to do.
+    const auto info = ops::mirrors::toJson(ops::mirrors::get(superUser, s.mirrorId));
+    EXPECT_NE(info.value("advice", "").find("vh mirror takeover"), std::string::npos) << info.dump();
+
+    // The core never comes back (as far as this server can tell): take over from prepared.
+    Down down;
+    vh::mirror::access::linkChanged(corePeer, false);
+    const auto answer = tk::take(s.mirrorId, vaultName(s), superUser->id, "admin", down);
+    EXPECT_EQ(answer.value("term", uint64_t{0}), 2u);
+    EXPECT_EQ(mq::Switches::bySwitchId(begun.switch_id, "mirror")->reason.value_or(""), "mirror_taken_over");
+    EXPECT_EQ(mirrorRow(s).role, "core");
+    EXPECT_EQ(mirrorRow(s).state, "live");
+    vh::mirror::access::linkChanged(corePeer, true);
+
+    // The old core comes back and tells its decision: the same fork point and next term, so they agree; told again,
+    // the same answer; the take over settles and the old core is a live mirror of the new one.
+    wire.dropCommit = false;
+    for (int i = 0; i < 3; ++i) (void)onCore(s, [&] { return sw::advance(begun.id, wire); });
+    const auto a = coreRow(s);
+    EXPECT_EQ(a.role, "mirror");
+    EXPECT_EQ(a.state, "live");
+    EXPECT_EQ(a.term, 2u);
+    EXPECT_EQ(a.digest, digest);
+    EXPECT_FALSE(onCore(s, [&] { return mq::Switches::get(begun.id); })->notify) << "told";
+    const auto t = mq::Takeovers::latestOf(s.mirrorId);
+    ASSERT_TRUE(t);
+    EXPECT_EQ(t->settled_how.value_or(""), "switched");
+    EXPECT_TRUE(mq::Takeovers::forkBase(t->id, 0, 10).empty()) << "nothing left to merge";
+    const auto b = mirrorRow(s);
+    EXPECT_EQ(b.baseline.value_or(mq::Position{}), (mq::Position{2, 0}));
+    EXPECT_EQ(b.baseline_digest.value_or(vh::mirror::Digest{}), digest) << "the old core's first acknowledgement compares";
+    const auto told = answerOf([&] {
+        return sw::serveCommit(corePeer, {{"vault_uid", s.vaultUid}, {"switch_id", begun.switch_id},
+                                          {"outcome", "switched"}});
+    });
+    EXPECT_TRUE(told.ok) << told.code;
+    EXPECT_EQ(told.data.value("outcome", ""), "switched");
+}
+
+TEST_F(MirrorTakeoverDbTest, APreparedMirrorTakesOverAndTheOldCoresAbandonedDecisionIsAnsweredWithoutUndoingIt) {
+    auto s = settledPair();
+    Wire follow(s);
+    SwitchWire wire(s, follow);
+    const auto begun = onCore(s, [&] {
+        return sw::begin(s.coreId, {.on = "core", .by = mq::Account{.node = coreNode, .id = superUser->id},
+                                    .name = "admin"},
+                         wire);
+    });
+    wire.loseAnswer = true;   // prepared, and the core never heard it
+    (void)onCore(s, [&] { return sw::advance(begun.id, wire); });
+    ASSERT_EQ(mq::Switches::bySwitchId(begun.switch_id, "mirror")->phase, "prepared");
+    Down down;
+    vh::mirror::access::linkChanged(corePeer, false);
+    (void)tk::take(s.mirrorId, vaultName(s), superUser->id, "admin", down);
+    vh::mirror::access::linkChanged(corePeer, true);
+    // The core abandons by its deadline and tells it: answered, nothing undone here (this server stays the core of the
+    // next term; the old core's return is the next piece).
+    onCore(s, [&] {
+        sql("UPDATE mirror_switch SET deadline = CURRENT_TIMESTAMP - interval '1 minute' WHERE id = " +
+            std::to_string(begun.id));
+        return 0;
+    });
+    wire.loseAnswer = false;
+    for (int i = 0; i < 3; ++i) (void)onCore(s, [&] { return sw::advance(begun.id, wire); });
+    const auto ended = onCore(s, [&] { return mq::Switches::get(begun.id); });
+    EXPECT_EQ(ended->phase, "abandoned");
+    EXPECT_FALSE(ended->notify) << "told, and the telling ended";
+    EXPECT_EQ(mirrorRow(s).role, "core");
+    EXPECT_EQ(mirrorRow(s).term, 2u);
+    EXPECT_TRUE(mq::Takeovers::openOf(s.mirrorId)) << "still waiting for the old core's return";
+    EXPECT_EQ(coreRow(s).role, "core");
+    EXPECT_EQ(coreRow(s).term, 1u) << "two cores, never in one term (invariant 12)";
+}
+
+TEST_F(MirrorTakeoverDbTest, AnUnlinkEndsASwitchsTellingOnBothSides) {
+    auto s = settledPair();
+    Wire follow(s);
+    SwitchWire wire(s, follow);
+    const auto begun = onCore(s, [&] {
+        return sw::begin(s.coreId, {.on = "core", .by = mq::Account{.node = coreNode, .id = superUser->id},
+                                    .name = "admin"},
+                         wire);
+    });
+    wire.dropCommit = true;
+    (void)onCore(s, [&] { return sw::advance(begun.id, wire); });
+    ASSERT_TRUE(onCore(s, [&] { return mq::Switches::get(begun.id); })->notify);
+    ASSERT_EQ(coreRow(s).state, "switching");
+    ASSERT_EQ(mq::Switches::bySwitchId(begun.switch_id, "mirror")->phase, "prepared");
+
+    // Both servers unlink (the core's row for the mirror, the mirror's for the core).
+    sql("UPDATE peer SET revoked_at = CURRENT_TIMESTAMP WHERE id IN (" + std::to_string(mirrorPeer) + ", " +
+        std::to_string(corePeer) + ")");
+    // One pass ends both (in one database both servers' switches are this pass's).
+    EXPECT_EQ(onCore(s, [&] { return sw::tick(wire); }), 2u);
+    const auto core = onCore(s, [&] { return mq::Switches::get(begun.id); });
+    EXPECT_FALSE(core->notify) << "nothing left to tell";
+    EXPECT_TRUE(core->detail.value("unlinked", false));
+    EXPECT_EQ(coreRow(s).state, "live") << "not held switching any more";
+    const auto mine = mq::Switches::bySwitchId(begun.switch_id, "mirror");
+    EXPECT_EQ(mine->phase, "abandoned");
+    EXPECT_EQ(mine->reason.value_or(""), "mirror_unlinked");
+    EXPECT_EQ(mirrorRow(s).state, "live");
+    EXPECT_EQ(sw::tick(wire), 0u) << "nothing is active any more";
+    sql("UPDATE peer SET revoked_at = NULL WHERE id IN (" + std::to_string(mirrorPeer) + ", " +
+        std::to_string(corePeer) + ")");
+}
+
+// ---- who may -----------------------------------------------------------------------------------------------------------
+
+TEST_F(MirrorTakeoverDbTest, OnlyASuperAdminPersonMayTakeOverNeverAnAgentOrARelayedDevice) {
+    auto s = settledPair();
+    vh::mirror::access::linkChanged(corePeer, false);
+    const auto name = "mto_user_" + msTag();
+    const auto plain = test::identities::createUser(name, db::query::rbac::role::Admin::get("unprivileged"),
+                                                    name + "@vaulthalla.test");
+    EXPECT_THROW((void)ops::mirrors::takeover(plain, s.mirrorId, vaultName(s)), ops::Denied);
+    {
+        const auth::stepup::Scope agent(auth::stepup::Channel::Agent);
+        EXPECT_EQ(refusalOf([&] { (void)ops::mirrors::takeover(superUser, s.mirrorId, vaultName(s)); }),
+                  "peer_forbidden");
+    }
+    auto p = std::make_shared<vh::device::Peer>();
+    p->spki.fill(0x33);
+    p->spkiHex = std::string(64, '3');
+    p->address = "10.0.0.9";
+    p->deviceRowId = 9;
+    p->relayed = true;
+    const auto relayed = protocols::ws::Session::devicePrincipal(std::move(p), superUser, [] {});
+    {
+        const auth::stepup::Scope scope(relayed);
+        EXPECT_EQ(refusalOf([&] { (void)ops::mirrors::takeover(superUser, s.mirrorId, vaultName(s)); }),
+                  "peer_forbidden");
+    }
+    relayed->close();
+    EXPECT_EQ(mirrorRow(s).role, "mirror") << "nothing changed";
+    vh::mirror::access::linkChanged(corePeer, true);
+}
+
+TEST_F(MirrorTakeoverDbTest, TheConsoleStepsUpBoundToTheVaultBeforeTakingOver) {
+    auto s = settledPair();
+    vh::mirror::access::linkChanged(corePeer, false);
+    auto web = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
+    web->user = superUser;
+    web->tokens->refreshToken = std::make_shared<auth::model::RefreshToken>();
+    web->tokens->refreshToken->jti = "takeover-stepup-jti-" + msTag();
+    web->tokens->refreshToken->aal = 1;
+    web->tokens->refreshToken->amr = {"pwd"};
+    web->tokens->refreshToken->authTime = std::chrono::system_clock::now() - std::chrono::hours(1);
+    const auth::stepup::Scope scope(web);
+    const auto target = "mirror.takeover:" + std::to_string(s.mirrorId);
+    try {
+        (void)ops::mirrors::takeover(superUser, s.mirrorId, vaultName(s));
+        ADD_FAILURE() << "taken over without the step-up";
+    } catch (const ops::StepUpRequired& e) {
+        EXPECT_EQ(e.family, "data.destroy");
+        EXPECT_EQ(e.target.value_or(""), target);
+    }
+    EXPECT_EQ(mirrorRow(s).role, "mirror") << "nothing changed without the step-up";
+    web->stepUp().addGrant({.user_id = superUser->id, .refresh_jti = web->tokens->refreshToken->jti,
+                            .family = auth::stepup::Family::DataDestroy, .target = target, .method = "test",
+                            .expires_at = std::chrono::system_clock::now() + std::chrono::minutes(5)});
+    // With the grant it goes on to the take over itself (here the core still answers the link service: no link in
+    // this process, so it is taken over).
+    const auto answer = ops::mirrors::takeover(superUser, s.mirrorId, vaultName(s));
+    EXPECT_EQ(answer.value("term", uint64_t{0}), 2u);
+    EXPECT_EQ(mirrorRow(s).role, "core");
+    vh::mirror::access::linkChanged(corePeer, true);
+}
+
+}

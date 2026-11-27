@@ -8,6 +8,7 @@
 #include "log/Registry.hpp"
 #include "mirror/start/Start.hpp"
 #include "mirror/submit/Local.hpp"
+#include "mirror/takeover/Takeover.hpp"
 #include "ops/Error.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
 
@@ -254,6 +255,14 @@ bool advance(const uint64_t id, vh::mirror::follow::Transport& transport) {
     std::scoped_lock step(switchStepMutex());
     auto sw = mq::Switches::get(id);
     if (!sw) return false;
+    // Unlinked (the trust ended by an explicit act): nothing more is asked or told, on either side.
+    if (const auto peer = vh::db::query::peer::Peers::byId(sw->peer_id); !peer || peer->revoked()) {
+        if (!mq::Switches::endUnlinked(id)) return false;
+        vh::log::Registry::sync()->info("[MirrorSwitch] Vault {}: the switch with linked server {} ended: the servers "
+                                        "are unlinked",
+                                        sw->vault_id, sw->peer_id);
+        return true;
+    }
     if (sw->side != "core") {
         // The mirror waits for the core's decision; a request the core never prepared ends at its deadline.
         return mq::Switches::expireRequested() > 0;
@@ -321,7 +330,11 @@ std::size_t tick(vh::mirror::follow::Transport& transport) {
     std::size_t n = 0;
     (void)mq::Switches::expireRequested();
     for (const auto& sw : mq::Switches::active()) {
-        if (sw.side != "core") continue;
+        // The mirror's side waits for the core's decision; only an unlink ends it from here.
+        if (sw.side != "core") {
+            const auto peer = vh::db::query::peer::Peers::byId(sw.peer_id);
+            if (peer && !peer->revoked()) continue;
+        }
         try {
             if (advance(sw.id, transport)) ++n;
         } catch (const std::exception& e) {
@@ -431,6 +444,11 @@ json serveCommit(const uint32_t callerPeerId, const json& payload) {
 
     // Told again after it took the role: the same answer.
     if (mv->role == "core" && sw && sw->phase == "switched")
+        return {{"outcome", "switched"}, {"term", mv->term}, {"peer_role", switchPeerRole(callerPeerId, mv->vault_id)}};
+    // This server took over from the switch it had prepared (the core never came back in time), and the core had
+    // decided it: the take over is the switch's outcome (the same fork point, the same next term), so the two agree.
+    if (mv->role == "core" && sw && sw->phase == "abandoned" && sw->reason.value_or("") == "mirror_taken_over" && sw->seq &&
+        sw->digest && vh::mirror::takeover::settledBySwitch(mv->vault_id, sw->term, *sw->seq, *sw->digest))
         return {{"outcome", "switched"}, {"term", mv->term}, {"peer_role", switchPeerRole(callerPeerId, mv->vault_id)}};
     if (mv->role != "mirror") switchNotFound();
     if (!sw) throw vh::ops::Refused("mirror_not_prepared", "this server never prepared that switch");

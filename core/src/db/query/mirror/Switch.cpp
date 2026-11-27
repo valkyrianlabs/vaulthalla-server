@@ -521,6 +521,24 @@ bool Switches::abandonMirror(const uint64_t id, const std::string& reason, const
     return done;
 }
 
+bool Switches::endUnlinked(const uint64_t id) {
+    const bool done = Transactions::exec("mirror::Switches::endUnlinked", [&](pqxx::work& txn) {
+        const auto sw = switchOne(txn, "WHERE id = $1 FOR UPDATE", pqxx::params{static_cast<int64_t>(id)});
+        if (!sw || (!sw->open() && !sw->notify)) return false;
+        txn.exec("UPDATE mirror_vault SET state = 'live', updated_at = CURRENT_TIMESTAMP "
+                 "WHERE vault_id = $1 AND state = 'switching'",
+                 pqxx::params{sw->vault_id});
+        txn.exec("UPDATE mirror_switch SET phase = CASE WHEN ended_at IS NULL THEN 'abandoned' ELSE phase END, "
+                 "  reason = CASE WHEN ended_at IS NULL THEN 'mirror_unlinked' ELSE reason END, notify = FALSE, "
+                 "  detail = COALESCE(detail, '{}'::jsonb) || jsonb_build_object('unlinked', true), "
+                 "  ended_at = COALESCE(ended_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+                 pqxx::params{static_cast<int64_t>(id)});
+        return true;
+    });
+    if (done) switchRepublish(false);
+    return done;
+}
+
 bool Switches::following(const uint32_t vaultId) {
     return Transactions::exec("mirror::Switches::following", [&](pqxx::work& txn) {
         return txn.exec("SELECT EXISTS (SELECT 1 FROM mirror_switch WHERE vault_id = $1 AND side = 'mirror' "

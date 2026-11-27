@@ -3,6 +3,8 @@
 #include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "db/query/mirror/Pending.hpp"
+#include "db/query/mirror/Switch.hpp"
+#include "db/query/mirror/Takeover.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "identities/User.hpp"
@@ -13,6 +15,7 @@
 #include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Local.hpp"
 #include "mirror/switching/Switch.hpp"
+#include "mirror/takeover/Takeover.hpp"
 #include "ops/PeerPolicy.hpp"
 #include "ops/Peers.hpp"
 #include "rbac/permission/admin/Vaults.hpp"
@@ -346,6 +349,38 @@ nlohmann::json toJson(const Mirrored& m) {
         j["created_at"] = nullptr;
     }
     j["start"] = m.start ? toJson(*m.start) : nlohmann::json(nullptr);
+    // Moving the core (wave 5 piece B): the vault's latest planned switch here, a take over still waiting for its old
+    // core, and what a person does next when the vault waits on the other server.
+    j["switch"] = nullptr;
+    j["takeover"] = nullptr;
+    j["advice"] = nullptr;
+    if (m.row) {
+        const auto sw = vh::db::query::mirror::Switches::latestOf(m.vault_id);
+        if (sw)
+            j["switch"] = {{"switch_id", sw->switch_id}, {"side", sw->side}, {"phase", sw->phase}, {"term", sw->term},
+                           {"reason", opt(sw->reason)}, {"created_at", static_cast<int64_t>(sw->created_at)},
+                           {"ended_at", optTime(sw->ended_at)}};
+        const auto tk = vh::db::query::mirror::Takeovers::openOf(m.vault_id);
+        if (tk)
+            j["takeover"] = {{"term", tk->term}, {"fork", {{"term", tk->from_term}, {"seq", tk->fork_seq}}},
+                             {"peer_id", tk->peer_id}, {"contents_missing", tk->contents_missing},
+                             {"created_at", static_cast<int64_t>(tk->created_at)}};
+        const auto& r = *m.row;
+        if (r.role == "mirror" && r.state == "switching" && sw && sw->side == "mirror" && sw->open())
+            j["advice"] = fmt::format(
+                "This server is preparing to take the core role and waits for its core's decision. If the core never "
+                "comes back, take over as the core here (vh mirror takeover {} --confirm '{}'), or detach the copy "
+                "(vh mirror detach {}).",
+                m.vault_id, m.vault_name, m.vault_id);
+        else if (r.role == "mirror" && r.state == "switching")
+            j["advice"] = "This server handed the core role to the other server and waits for it to confirm; it is "
+                          "read-only until then.";
+        else if (r.role == "core" && tk)
+            j["advice"] = fmt::format("This server took over as the core in term {} (fork point ({}, {})); the old core, "
+                                      "linked server {}, may hold changes this server never received: they are merged "
+                                      "when it returns.",
+                                      tk->term, tk->from_term, tk->fork_seq, tk->peer_id);
+    }
     return j;
 }
 
@@ -378,6 +413,22 @@ nlohmann::json switchRole(const Actor& actor, const uint32_t vaultId, const bool
     (void)ops_mirrors_detail::liveVault(vaultId);
     return vh::mirror::switching::request(vaultId, actor->id, actor->name(), *vh::mirror::follow::linkTransport(),
                                           vh::mirror::switching::timeout() + std::chrono::seconds(10), acceptNoAccess);
+}
+
+// ---- take over (wave 5 piece B) ----------------------------------------------------------------------------------------
+
+void requireTakeover(const Actor& actor, const std::string& what) {
+    ops_mirrors_detail::requireMirrorPerson(actor, what);
+    // Piece A's admin::MirrorPermissions bit 1 (admin.mirror.takeover) joins super admins here once it lands.
+    if (!actor->isSuperAdmin()) throw Denied("only super admins of this server (Take over as core) may " + what);
+}
+
+nlohmann::json takeover(const Actor& actor, const uint32_t vaultId, const std::string& confirmName) {
+    requireTakeover(actor, "take over as a mirrored vault's core");
+    (void)ops_mirrors_detail::liveVault(vaultId);
+    auth::stepup::require(auth::stepup::Family::DataDestroy, "mirror.takeover:" + std::to_string(vaultId));
+    return vh::mirror::takeover::take(vaultId, confirmName, actor->id, actor->name(),
+                                      *vh::mirror::follow::linkTransport());
 }
 
 // ---- held changes ------------------------------------------------------------------------------------------------------

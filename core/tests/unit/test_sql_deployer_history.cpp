@@ -2574,6 +2574,8 @@ TEST_F(SqlDeployerHistoryDb, MirrorSwitchMigration168IsAdditiveAndIdempotent) {
         // ---- back to the schema before 168
         for (const auto* c : {"resync_at", "resync_by", "resync_count", "scrubbed_at"})
             txn.exec(std::string("ALTER TABLE mirror_vault DROP COLUMN IF EXISTS ") + c);
+        txn.exec("DROP TABLE IF EXISTS mirror_fork_base");
+        txn.exec("DROP TABLE IF EXISTS mirror_takeover");
         txn.exec("DROP TABLE IF EXISTS mirror_switch");
         // 164's state CHECK (no 'switching').
         txn.exec("ALTER TABLE mirror_vault DROP CONSTRAINT IF EXISTS mirror_vault_state_check");
@@ -2611,6 +2613,8 @@ TEST_F(SqlDeployerHistoryDb, MirrorSwitchMigration168IsAdditiveAndIdempotent) {
         // The planned switch: its table, the state it holds a vault in, the freeze in the triggers.
         EXPECT_TRUE(columnExists(txn, "mirror_switch", "switch_id"));
         EXPECT_TRUE(columnExists(txn, "mirror_switch", "accept_no_access"));
+        EXPECT_TRUE(columnExists(txn, "mirror_takeover", "fork_digest"));
+        EXPECT_TRUE(columnExists(txn, "mirror_fork_base", "entry_hash"));
         EXPECT_NO_THROW(txn.exec("SAVEPOINT s168; UPDATE mirror_vault SET state = 'switching' WHERE vault_id = " +
                                  std::to_string(vault) + "; ROLLBACK TO SAVEPOINT s168"));
         EXPECT_NE(txn.exec("SELECT prosrc FROM pg_proc WHERE proname = 'vh_mirror_core_term'")

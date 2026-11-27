@@ -1048,6 +1048,8 @@ export interface WebSocketCommandMap {
   'mirror.resync': WsContract['mirror.resync']
   // A planned switch of the core role, asked on either server (super admins); answers its outcome.
   'mirror.switch': WsContract['mirror.switch']
+  // A mirror whose core is gone takes over as the vault's core (super admins; the vault's name typed).
+  'mirror.takeover': WsContract['mirror.takeover']
   'peer.mirror.offer': WsContract['peer.mirror.offer']
   'peer.mirror.answer': WsContract['peer.mirror.answer']
   'peer.mirror.keys': WsContract['peer.mirror.keys']

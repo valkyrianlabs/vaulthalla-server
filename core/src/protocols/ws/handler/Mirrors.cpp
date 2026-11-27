@@ -158,6 +158,13 @@ json Mirrors::switchRole(const json& payload, const std::shared_ptr<Session>& se
     return mirrors::switchRole(mirrorActorOf(session), mirrorRequiredId(payload, "vault_id"), acceptNoAccess);
 }
 
+json Mirrors::takeover(const json& payload, const std::shared_ptr<Session>& session) {
+    if (!payload.is_object() || !payload.contains("confirm") || !payload.at("confirm").is_string())
+        throw ops::Invalid("confirm is the vault's name, typed");
+    return mirrors::takeover(mirrorActorOf(session), mirrorRequiredId(payload, "vault_id"),
+                             payload.at("confirm").get<std::string>());
+}
+
 json Mirrors::offer(const json& payload, const std::shared_ptr<Session>& session) {
     return vh::mirror::start::offerReceived(mirrorPeerOf(session), payload);
 }

@@ -40293,6 +40293,159 @@
                 "object",
                 "null"
               ]
+            },
+            {
+              "description": "The vault's latest planned switch here.",
+              "fields": [
+                {
+                  "name": "switch_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "enum": [
+                    "core",
+                    "mirror"
+                  ],
+                  "name": "side",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "enum": [
+                    "requested",
+                    "draining",
+                    "preparing",
+                    "prepared",
+                    "switched",
+                    "abandoned"
+                  ],
+                  "name": "phase",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "reason",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "created_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "ended_at",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "switch",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "A take over here still waiting for its old core to return.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "fork",
+                  "required": true,
+                  "types": [
+                    "object"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "peer_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "contents_missing",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "created_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "takeover",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "What a person does next when the vault waits on the other server.",
+              "name": "advice",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
             }
           ],
           "name": "vault",
@@ -41609,6 +41762,159 @@
                 "object",
                 "null"
               ]
+            },
+            {
+              "description": "The vault's latest planned switch here.",
+              "fields": [
+                {
+                  "name": "switch_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "enum": [
+                    "core",
+                    "mirror"
+                  ],
+                  "name": "side",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "enum": [
+                    "requested",
+                    "draining",
+                    "preparing",
+                    "prepared",
+                    "switched",
+                    "abandoned"
+                  ],
+                  "name": "phase",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "reason",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "created_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "ended_at",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "switch",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "A take over here still waiting for its old core to return.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "fork",
+                  "required": true,
+                  "types": [
+                    "object"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "peer_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "contents_missing",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "created_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "takeover",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "What a person does next when the vault waits on the other server.",
+              "name": "advice",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
             }
           ],
           "items": "object",
@@ -42446,6 +42752,275 @@
         }
       ],
       "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.takeover",
+      "confirmations": [],
+      "description": "On a mirror whose core is gone or cannot be reached: take over as the vault's core. This server records the next term with itself as the core, the last change it applied from the old core as the fork point and its tree as the old core last confirmed it as the fork base (kept for the old core's return); changes made here and still pending become ordinary changes, held ones stay listed. Refused while the core answers (mirror_core_reachable: use mirror.switch). Also the way out of a planned switch whose core never came back. `confirm` is the vault's name, typed. Super admins (Take over as core); the data.destroy step-up in the console; audited mirror.takeover.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The vault's name, typed exactly.",
+          "generator": {
+            "attrs": [
+              "name"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "confirm",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_not_mirror",
+        "mirror_orphaned",
+        "mirror_first_copy",
+        "mirror_diverged",
+        "mirror_core_reachable",
+        "mirror_name_mismatch",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_not_mirror",
+        "mirror_orphaned",
+        "mirror_first_copy",
+        "mirror_diverged",
+        "mirror_core_reachable",
+        "mirror_name_mismatch",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The old core.",
+          "minimum": 0,
+          "name": "peer_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "from_term",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "This server's term as the core.",
+          "minimum": 0,
+          "name": "term",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The fork point: the last change applied from the old core, and the digest there.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "seq",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "fork",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Entries in the fork base.",
+          "minimum": 0,
+          "name": "fork_rows",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "pending_made_local",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "held",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Files whose contents never arrived here.",
+          "minimum": 0,
+          "name": "contents_missing",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "by",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "created_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "settled_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "settled_how",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The fork base's own digest and whether it is the fork point's.",
+          "name": "detail",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "name": "warning",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "fork_base_matches",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -69152,5 +69727,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "f1da94f09faa9f30dff3d140cc060a930ab847a127b98699c4667b82ddaea0a8"
+  "ws_hash": "e4be1bb49bb9bf1a5d3ad1d242b9ff7da6ee17085e098fa47ccb97f866b1eeaa"
 }

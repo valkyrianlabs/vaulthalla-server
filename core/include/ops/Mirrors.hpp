@@ -117,6 +117,16 @@ struct Mirrored {
 // mirror_switch_no_role). The answer names that role and what it allows (peer_role, peer_access).
 [[nodiscard]] nlohmann::json switchRole(const Actor& actor, uint32_t vaultId, bool acceptNoAccess = false);
 
+// "Take over as core" (design/peers/mirror.md "Who may do it"): a person (never an agent, a scoped or relayed device,
+// a linked server) who is a super admin of this server. Piece A's admin permission bit (admin.mirror.takeover) joins it
+// when that piece lands; until then super admins alone. Throws ops::Refused peer_forbidden or ops::Denied.
+void requireTakeover(const Actor& actor, const std::string& what);
+
+// Take over as the vault's core (wave 5 piece B; mirror::takeover::take): this server holds the vault as a mirror and
+// its core is gone or does not answer. requireTakeover, the vault's name typed (`confirmName`), and the data-destroy
+// step-up in the console (target mirror.takeover:<vault>). Audited mirror.takeover.
+[[nodiscard]] nlohmann::json takeover(const Actor& actor, uint32_t vaultId, const std::string& confirmName);
+
 [[nodiscard]] nlohmann::json toJson(const Offer& offer);
 [[nodiscard]] nlohmann::json toJson(const Mirrored& m);
 [[nodiscard]] nlohmann::json toJson(const Cancelled& c);
