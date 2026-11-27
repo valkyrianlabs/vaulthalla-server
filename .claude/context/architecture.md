@@ -714,9 +714,15 @@ through on a Live mirror.
 - **Contents (`mirror/submit/Contents`):** a write's sealed bytes linked into the pending store
   (`.vh-mirror-pending/<vault>/<row>` under the backing root); `peer::object::put` sends them before the submit;
   the core's sealed lane takes PUT (`peer_object::beginPut|finishPut`, `http::Session::handle_peer_object_put`),
-  verifies (size, BLAKE2b, `verifyFd`) and stages them (`.vh-mirror-staged/<vault>/<uuid>.<gen>`, swept after a day);
-  `submitExecuteWrite` commits from them (`ops::fs::commitSealed`) with the mirror's uid and generation. Held bytes:
-  `.vh-mirror-held/<vault>/<id>`. A not-received file renames as metadata (`handleRename`).
+  refuses a mirror whose role writes no file (403 `denied`) or bytes over the quota (413), verifies (size, BLAKE2b,
+  `verifyFd`) and stages them with the verified facts (`.vh-mirror-staged/<vault>/<uuid>.<gen>` + `.facts`);
+  `submitExecuteWrite` commits from them (`ops::fs::commitSealed`) with the mirror's uid and the verified facts (a
+  submit claiming others: `invalid_contents`). Held bytes: `.vh-mirror-held/<vault>/<id>` (go with a discard, move
+  with a retry). `contents::housekeeping` (follower loop, startup + hourly) sweeps what nothing names; a removed vault
+  drops all three directories; an orphaned copy's pending changes become held (`submit::orphaned`). A not-received
+  file renames as metadata (`handleRename`). An HTTP upload's staging file is never content: 166 leaves
+  `.upload-http-*.part` out of the log and tree (`vh_mirror_upload_staging` = `vh::fs::isUploadStagingName`), and on a
+  mirror it is scratch (`submit::Scratch`: past the backstop, no pending row).
 - **Submit (`mirror::submit::submitPending`, from `Follower::step` before the log):** `peer.mirror.submit` (peer wire
   set), one change at a time per vault in order. Core: `serveSubmit` answers at once from `mirror_submission` (queued,
   running, executed with groups, refused with code: never executed twice) and `drain`s on the sync pool, one vault's in

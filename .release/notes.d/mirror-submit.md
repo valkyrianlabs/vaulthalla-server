@@ -11,5 +11,6 @@
   to the other server's state. A file open for writing when the link drops is kept and sent when the link returns;
   anything new waits until then (the copy is read-only while the link is down). A copy made on the mirror is carried
   out by the vault's own server and appears when it comes back; owners and symlinks are not changed on a mirror. All of
-  it is behind the experimental linked-servers switch; the upgrade adds four empty tables and nothing runs on a server
-  that mirrors nothing. There is nothing to do before or after upgrading.
+  it is behind the experimental linked-servers switch; the upgrade adds four empty tables, and the replication log
+  stops recording web uploads' temporary staging files (`.upload-http-*.part`), which were never content; nothing runs
+  on a server that mirrors nothing. There is nothing to do before or after upgrading.
