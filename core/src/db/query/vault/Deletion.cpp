@@ -45,7 +45,10 @@ Deletion::DeletionPtr Deletion::schedule(const Schedule& s) {
         const auto row = vault.one_row_ref();
 
         txn.exec("UPDATE vault SET deleted_at = NOW() WHERE id = $1", pqxx::params{s.vault_id});
-        // Off the mount: the root is no longer a child of the mount root, and no inode leads into the vault.
+        // Off the mount: the root is no longer a child of the mount root, and no inode leads into the vault. Bookkeeping,
+        // not a change to any entry: every modification time is kept (migration 149's switch; a mirrored vault's log
+        // records nothing for it, so a restore comes back exactly as it was).
+        txn.exec("SELECT set_config('vh.keep_mtime', 'on', true)");
         txn.exec("UPDATE fs_entry SET parent_id = NULL WHERE vault_id = $1 AND path = '/'", pqxx::params{s.vault_id});
         txn.exec("UPDATE fs_entry SET inode = NULL WHERE vault_id = $1 AND inode IS NOT NULL", pqxx::params{s.vault_id});
 
@@ -103,6 +106,7 @@ bool Deletion::restore(const unsigned int vaultId) {
                                       pqxx::params{vaultId});
         if (revived.affected_rows() == 0)
             throw std::runtime_error("vault " + std::to_string(vaultId) + " has a pending deletion but no deleted vault row");
+        txn.exec("SELECT set_config('vh.keep_mtime', 'on', true)");   // re-attaching the root changes no entry's time
         txn.exec(std::string("UPDATE fs_entry SET parent_id = ") + kMountRootId + " WHERE vault_id = $1 AND path = '/'",
                  pqxx::params{vaultId});
         return true;

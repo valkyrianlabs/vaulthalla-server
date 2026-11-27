@@ -771,6 +771,32 @@ TEST_F(MirrorLeaveDbTest, DeletingAMirroredVaultRecordsTheChoiceAndKeepsTheMirro
     }
 }
 
+// After a restore the core's vault is the mirror's core again: its next write is logged, the digest moves with it, and
+// the entries it held before the deletion hash as they did (the deletion and the restore are never replicated).
+TEST_F(MirrorLeaveDbTest, ARestoredVaultLogsItsNextWriteAndItsEntriesHashAsBefore) {
+    const auto mirror = newPeer("mirror");
+    const auto c = coreMirrored(mirror);
+    (void)mq::Log::sequence(c.vaultId);
+    const auto before = mq::MirrorVaults::get(c.vaultId);
+    const auto recomputedBefore = mq::Digests::recompute(c.vaultId);
+    EXPECT_EQ(recomputedBefore, before->digest) << "the tables are the log's tree";
+    (void)ops::vaults::remove(superUser, {.id = c.vaultId, .mirror_copy = "leave"});
+    ASSERT_TRUE(ops::vaults::restore(superUser, c.vaultId));
+    (void)mq::Log::sequence(c.vaultId);
+    // The round trip logs the vault's own document once (its soft deletion, migration 160's rule) and no entry: the
+    // deletion's bookkeeping keeps every modification time.
+    EXPECT_EQ(count("SELECT count(*) FROM vault_replication_log WHERE vault_id = " + std::to_string(c.vaultId) +
+                    " AND seq > " + std::to_string(before->last_seq) + " AND op <> 'vault'"),
+              0)
+        << "no entry changed";
+    EXPECT_EQ(mq::Digests::recompute(c.vaultId), recomputedBefore) << "every entry hashes as before";
+    write(engineOf(c.vaultId), "/after_restore.txt", "after the restore");
+    (void)mq::Log::sequence(c.vaultId);
+    const auto after = mq::MirrorVaults::get(c.vaultId);
+    EXPECT_GT(after->last_seq, before->last_seq) << "the write after the restore is logged";
+    EXPECT_EQ(mq::Digests::recompute(c.vaultId), after->digest);
+}
+
 TEST_F(MirrorLeaveDbTest, ThePurgeEndsTheMirrorWithTheRecordedChoiceWhichCanChangeInTheWindow) {
     const auto mirror = newPeer("mirror");
     const auto purge = [](const uint32_t vaultId) {
