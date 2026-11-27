@@ -59,6 +59,11 @@ Then 7, a whole mirror (design/peers/mirror.md, waves 1 to 3), with no row writt
 cancel without --remove-copy leaves B an orphaned copy that B's super admin removes; --remove-copy with B's keep
 setting on leaves it, with it off removes it; an unfinished copy (held back) is removed although A did not ask; an
 offer B declines is reported declined on A.
+9, leaving a mirror (wave 5 piece A): B turns versions on and keeps what A replaces and deletes; with A stopped, B
+detaches with a change pending and one file's contents held back: the preview names exactly that file, every other file
+opens, the missing one is refused, B writes to the vault; A restarted learns of it and ends its side, and refuses to
+mirror that vault with B again; a vault deleted on A with --mirror-copy remove is gone on B, one with leave is orphaned
+on B and then detached there.
 
 Nothing secret is printed or kept: the drill's directory holds only its report.
 """
@@ -847,6 +852,159 @@ def _ending_rule(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, rep
     report.check("8: B declines an offer and A is told", bool(dec), json.dumps(dec)[:300])
 
 
+def _contents_here(b: Node, vb: int, what: str) -> None:
+    """Every file's contents arrived on B (nothing waiting or failed)."""
+    _wait(what, lambda: _sql(b, f"SELECT count(*) FROM mirror_content_pending WHERE vault_id = {vb} "
+                                "AND state <> 'missing'") == "0" or None, timeout=120)
+
+
+def _new_mirror(a: Node, b: Node, node_b: str, name: str) -> tuple[int, int, str]:
+    """A local vault on A with one file, mirrored to B (accepted there), its first copy finished on B."""
+    a.vh("vault", "create", name, "--local")
+    v = int(_sql(a, f"SELECT id FROM vault WHERE name = '{name}' AND deleted_at IS NULL"))
+    try:
+        _wait(f"A's mount showing {name}", lambda: (a.inst.mount / name).is_dir(), timeout=60)
+    except DrillError as e:
+        seen = a.sh("ls -la MNT 2>&1; echo; ls -la MNT/" + name + " 2>&1 || true").stdout
+        raise DrillError(f"{e}; the mount as the admin: {seen[-800:]}") from e
+    a.sh(f"printf 'content of {name}\\n' > MNT/{name}/f.txt")
+    _wait(f"{name}'s file sealed", lambda: _sql(a, (
+        "SELECT 1 FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id "
+        f"WHERE e.vault_id = {v} AND length(f.encryption_iv) = 44")), timeout=60)
+    uid = _sql(a, f"SELECT uid FROM vault WHERE id = {v}")
+    _json(a, "mirror", "add", str(v), "--to", node_b)
+    offer = _wait(f"B's offer of {name}", lambda: [o for o in (_json(b, "mirror", "pending")[1].get("offers") or [])
+                                                  if o.get("name") == name], timeout=60)[0]
+    b.vh("mirror", "accept", str(offer["id"]))
+    _wait(f"{name} started", lambda: (_mirror_info(a, v).get("start") or {}).get("state") == "started" or None,
+          timeout=90)
+    bv = int(_wait(f"B's {name}", lambda: _sql(b, f"SELECT id FROM vault WHERE uid = '{uid}'"), timeout=30))
+    _wait_synced(a, v, b, bv, f"B's first copy of {name}", timeout=180)
+    _contents_here(b, bv, f"{name}'s contents on B")
+    return v, bv, uid
+
+
+def _leaving(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, report: Report) -> None:
+    """9 (wave 5 piece A): versions on the mirror, detach with A stopped, A told when it comes back, deleting a mirrored
+    vault on A in one step with each choice for B's copy."""
+    contents_hold = faults_b / "mirror-contents-hold"
+    submit_hold = faults_b / "mirror-submit-hold"
+    va = int(_sql(a, "SELECT id FROM vault WHERE name = 'whole' AND deleted_at IS NULL"))
+    uid = _sql(a, f"SELECT uid FROM vault WHERE id = {va}")
+    vb = int(_sql(b, f"SELECT id FROM vault WHERE uid = '{uid}'"))
+
+    # ---- 9a. B keeps versions of what A replaces or deletes
+    code, out, text = _json(b, "mirror", "versions", str(vb), "on", "--keep-last", "3")
+    report.check("9a: B turns versions on for its copy (a super admin there)",
+                 code == 0 and (out.get("versions") or {}).get("enabled") is True, text[-300:])
+    a.sh("printf 'top, second version\\n' > MNT/whole/top.txt && rm MNT/whole/other/x.txt")
+    ok = _wait_synced(a, va, b, vb, "A's replacement and delete on B", timeout=120)
+    _contents_here(b, vb, "the replacement's bytes on B")
+    cp = b.vh("recovery", "list", str(vb), "/top.txt", "--versions-only", "--json", check=False)
+    text = (cp.stdout or "") + (cp.stderr or "")
+    try:
+        listed = json.loads(cp.stdout[cp.stdout.index("["):]) if "[" in (cp.stdout or "") else []
+    except (ValueError, json.JSONDecodeError):
+        listed = []
+    points = listed if isinstance(listed, list) else (listed.get("points") or [])
+    report.check("9a: A replaced a file and deleted another: B kept both prior versions (equal digests all the same)",
+                 bool(ok) and len(points) == 1 and _sql(b, f"SELECT count(*) FROM file_versions WHERE vault_id = {vb} "
+                                                           "AND origin = 'version' AND reason = 'delete'") == "1",
+                 text[-400:])
+    if points:
+        code, inspected, text = _json(b, "recovery", "inspect", str(points[0].get("id")))
+        report.check("9a: B reads the kept version's record", code == 0 and inspected, text[-300:])
+    report.check("9a: nothing of them reached A's log or B's pending changes",
+                 _sql(b, f"SELECT count(*) FROM mirror_pending WHERE vault_id = {vb}") == "0")
+
+    # ---- 9b. A stopped; B detaches with a change pending and one file's contents held back
+    a.vh("peer", "policy", "set", node_b, "power_user")
+    _wait("B's grant (power_user)", lambda: (_mirror_info(b, vb).get("grant") or {}).get("role_name") == "power_user"
+          or None, timeout=30)
+    contents_hold.write_text("drill")
+    submit_hold.write_text("drill")
+    try:
+        a.sh("printf 'never reaches B\\n' > MNT/whole/docs/held_back.txt")
+        _wait("B has the file's entry, its contents held back", lambda: _sql(b, (
+            "SELECT 1 FROM mirror_content_pending p JOIN files f ON f.object_uid = p.object_uid "
+            f"JOIN fs_entry e ON e.id = f.fs_entry_id WHERE e.vault_id = {vb} AND e.name = 'held_back.txt'")), timeout=90)
+        b.sh("mkdir MNT/whole/made_on_b")
+        _wait("B's change pending", lambda: _pending_rows(b, vb) >= 1 or None, timeout=30)
+        _stop(a, b, node_a)
+        code, prev, text = _json(b, "mirror", "detach", str(vb), "--dry-run")
+        preview = prev.get("preview") or {}
+        missing = sorted(m.get("path") for m in preview.get("missing") or [])
+        report.check("9b: B's preview names the fork point, the pending change and exactly the missing file",
+                     code == 0 and missing == ["/docs/held_back.txt"] and preview.get("pending_changes", 0) >= 1
+                     and (preview.get("applied") or {}).get("seq", 0) > 0, text[-500:])
+        code, det, text = _json(b, "mirror", "detach", str(vb))
+        report.check("9b: B detaches with A unreachable", code == 0 and (det.get("detached") or {}).get("missing") == 1,
+                     text[-400:])
+    finally:
+        contents_hold.unlink(missing_ok=True)
+        submit_hold.unlink(missing_ok=True)
+    report.check("9b: no mirror row, nothing pending, the owner B's super admin",
+                 _sql(b, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {vb}") == "0"
+                 and _pending_rows(b, vb) == 0
+                 and _sql(b, f"SELECT u.remote FROM vault v JOIN users u ON u.id = v.owner_id WHERE v.id = {vb}") == "f")
+    files = [line for line in _sql(b, (
+        "SELECT string_agg(e.path, '|') FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id "
+        f"WHERE e.vault_id = {vb} AND f.size_bytes > 0")).split("|") if line]
+    unreadable = []
+    for rel in files:
+        opened = b.sh(f"cat 'MNT/whole{rel}' > /dev/null 2>&1 && echo OPENED || echo REFUSED").stdout.strip()
+        if (opened == "OPENED") == (rel == "/docs/held_back.txt"):
+            unreadable.append(rel)
+    report.check("9b: every confirmed file opens on B, the missing one is refused (never read as anything)",
+                 files and not unreadable, json.dumps({"files": files, "wrong": unreadable})[:500])
+    wrote = b.sh("printf 'mine now\\n' > MNT/whole/after_detach.txt && mv MNT/whole/after_detach.txt MNT/whole/docs/ "
+                 "&& mkdir MNT/whole/made_after && echo WROTE || echo REFUSED").stdout.strip()
+    report.check("9b: B writes to the vault, as any local vault (nothing pending, nothing refused)",
+                 wrote == "WROTE" and _plain(b, "whole/docs/after_detach.txt") == hashlib.sha256(b"mine now\n").hexdigest()
+                 and _pending_rows(b, vb) == 0, wrote)
+    report.check("9b: the detach is audited on B (fork point, missing count; no path)",
+                 _sql(b, f"SELECT count(*) FROM audit_event WHERE action = 'mirror.detach' AND vault_id = {vb} "
+                         "AND details::text NOT LIKE '%held_back%'") == "1")
+
+    # ---- 9c. A comes back: told, it ends its side
+    _start(a, b, node_a, node_b)
+    _wait("A told of the detach", lambda: _sql(a, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {va}") == "0"
+          or None, timeout=90)
+    info = _mirror_info(a, va)
+    report.check("9c: A learns of the detach and ends its side (no core row, no log); its own vault unaffected",
+                 (info.get("start") or {}).get("copy") == "detached" and (info.get("detached") or {}).get("side") == "core"
+                 and _sql(a, f"SELECT count(*) FROM vault_replication_log WHERE vault_id = {va}") == "0"
+                 and _plain(a, "whole/docs/held_back.txt") == hashlib.sha256(b"never reaches B\n").hexdigest(), json.dumps(info)[:500])
+    report.check("9c: B's notice was told once", _sql(b, (
+        f"SELECT notify FROM mirror_offer WHERE side = 'mirror' AND vault_uid = '{uid}' ORDER BY id DESC LIMIT 1")) == "f")
+    code, _, text = _json(a, "mirror", "add", str(va), "--to", node_b)
+    report.check("9c: A won't mirror that vault with B again (they share its uid and keys)",
+                 code != 0 and "mirror_detached_copy" in text, text[-300:])
+
+    # ---- 9d. Deleting a mirrored vault on A in one step
+    v2, bv2, uid2 = _new_mirror(a, b, node_b, "dropped")
+    cp = a.vh("vault", "delete", str(v2), "--yes", check=False)
+    report.check("9d: A's delete of a mirrored vault without a choice for the copy is refused",
+                 cp.returncode != 0 and "--mirror-copy remove" in (cp.stdout + cp.stderr)
+                 and _sql(a, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {v2}") == "1",
+                 (cp.stdout + cp.stderr)[-300:])
+    cp = a.vh("vault", "delete", str(v2), "--mirror-copy", "remove", "--yes", check=False)
+    _wait("B's copy removed", lambda: _sql(b, f"SELECT count(*) FROM vault WHERE uid = '{uid2}'") == "0" or None,
+          timeout=90)
+    report.check("9d: A deletes it with --mirror-copy remove: deleted on A (restorable), gone on B",
+                 cp.returncode == 0 and _sql(a, f"SELECT count(*) FROM vault WHERE id = {v2} AND deleted_at IS NOT NULL")
+                 == "1", (cp.stdout + cp.stderr)[-300:])
+    v3, bv3, uid3 = _new_mirror(a, b, node_b, "leftover")
+    cp = a.vh("vault", "delete", str(v3), "--mirror-copy", "leave", "--yes", check=False)
+    _wait("B's copy orphaned", lambda: _mirror_info(b, bv3).get("role") == "orphaned" or None, timeout=90)
+    report.check("9d: --mirror-copy leave: deleted on A, B keeps an orphaned copy", cp.returncode == 0,
+                 (cp.stdout + cp.stderr)[-300:])
+    code, det, text = _json(b, "mirror", "detach", str(bv3))
+    report.check("9d: B detaches the orphaned copy: a local vault, readable and writable",
+                 code == 0 and _sql(b, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {bv3}") == "0"
+                 and _plain(b, "leftover/f.txt") == hashlib.sha256(b"content of leftover\n").hexdigest(), text[-300:])
+
+
 def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bool, dict]:
     report = Report()
     run_id = time.strftime("%Y%m%dT%H%M%S") + "_" + secrets.token_hex(3)
@@ -951,6 +1109,11 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
         # ------------------------------------------------------------------ 8. ending a mirror
         print("vhh drill peers: 8. ending a mirror: kept, removed, the keep setting, unfinished, declined", flush=True)
         _ending_rule(a, b, faults["b"], node_a, node_b, report)
+
+        # ------------------------------------------------------------------ 9. leaving a mirror
+        print("vhh drill peers: 9. leaving a mirror: versions on B, detach with A down, A told, delete in one step",
+              flush=True)
+        _leaving(a, b, faults["b"], node_a, node_b, report)
 
         # ------------------------------------------------------------------ 2. restarts
         print("vhh drill peers: 2. B restarts, then A restarts: the link comes back", flush=True)
