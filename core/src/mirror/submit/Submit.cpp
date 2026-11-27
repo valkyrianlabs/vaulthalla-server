@@ -380,6 +380,8 @@ json serveSubmit(const uint32_t callerPeerId, const json& payload) {
 std::size_t drain(const uint32_t vaultId) {
     // A running row is one a stop interrupted (this process runs one drain of a vault at a time).
     (void)mq::Pending::recoverRunning(vaultId);
+    // What the core did with a request is kept as long as the log keeps its rows (30 days), then forgotten.
+    (void)mq::Pending::sweep(std::chrono::hours(24 * 30));
     std::size_t n = 0;
     while (const auto sub = mq::Pending::claimNext(vaultId)) {
         submitExecute(*sub);

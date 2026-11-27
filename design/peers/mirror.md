@@ -717,7 +717,8 @@ instruction to build without waiting for review); each is listed for confirmatio
   io threads would block for a large folder). `mirror_submission` keeps each request id with what the core did the first
   time: `queued`, `running`, `executed` with the number of groups it logged, `refused` with the code. A repeated submit
   is answered from it and never executed twice; a `running` row a stop interrupted is executed again only if nothing of
-  it reached the log (else it counts as executed). Kept 30 days (the log's own retention; not swept yet: known limit).
+  it reached the log (else it counts as executed). Kept 30 days after it finished (the log's own retention; swept
+  when the vault's submissions are next drained).
 - **Executing** (`mirror::submit::drain`): as the remote account for (the mirror's node id, the person's id there),
   created the first time it is named; the person must be one of the submitting server's own accounts (`invalid`
   otherwise). Through `ops::fs` inside an `ops::fs::PeerSubmission`: the linked server's vault role
@@ -755,9 +756,13 @@ instruction to build without waiting for review); each is listed for confirmatio
   a conflict copy refused again for its name, and every other refusal (`denied`, `not_found`, `invalid`, a fault) is a
   **held change**: the entries settle back to the core's state and `mirror_held` keeps the operation, its arguments,
   where it was, the person and the core's code and text (kind `held`). Held changes of these operations carry no
-  bytes, so there is nothing to seal; `Pending::resolveHeld` marks one `discarded` or `retried`. **Not built:** the
-  person's commands (`mirror.held.list|get|retry|discard`, CLI, console) and generalising Sync Conflicts to list them;
-  the record and its queries exist.
+  bytes, so there is nothing to seal or download. Listed, discarded and retried by super admins of the mirror
+  (`ops::mirrors::held|discardHeld|retryHeld`; ws `mirror.held.list|discard|retry`; `vh mirror held [--vault N]
+  [--all]`, `vh mirror discard|retry <n>`; audited `mirror.held.discard|retry`): a retry submits the change again as it
+  was, as its person, at the end of the queue and without applying it here first (its result comes back in the log; a
+  new refusal is held again). **Deviation:** they are their own listing, not Sync Conflicts (that record stays the cloud
+  engine's: generalising it is not needed for these). No `mirror.held.get` and no download (no bytes yet); the console
+  and Desktop do not show them yet.
 - **Restart:** rows survive; a `local` row a stop left is submitted (the core decides; its answer settles the entries),
   a `submitted` row is asked again under its request id. Waits are bounded: the link's request timeout, the follower's
   3 s visit, 100 ms between asking again about a queued change.
@@ -766,8 +771,14 @@ Not built here: contents (step 2: the `PUT` lane, staged bytes and their sweep, 
 mirror, FUSE seals, an open file kept when the link drops; until then `ops::fs::authorizeUpload` and `commitSealed`
 refuse on a vault held here with `MirrorReadOnly("mirror_contents_not_built")`, and the other content surfaces must be
 refused by piece A's gate: `mirror::submit::supportsLocally(operation)` says which operations this piece takes), restore
-and set-attributes (no surface on a local vault has them), the held-change commands, per-account rules on the core, the
-two-daemon drill step.
+and set-attributes (no surface on a local vault has them), per-account rules on the core, the two-daemon drill step.
+
+Known limits: a file whose contents have not arrived here yet cannot be renamed, moved or trashed here
+(`Filesystem::rename` and the trash need its backing file; the refusal is the engine's, nothing becomes pending); a
+folder change captures every entry under the folder into the pending row (a very large folder makes a large row); an
+unrelated core change to a pending entry shows the core's version of that entry until the person's change comes back;
+the person's change made on an orphaned copy (none can be made: read-only) or left pending when a vault stops (diverged,
+expired) stays pending until the vault is live again or detached (wave 5: pending changes become ordinary changes).
 
 ### Key rotation
 

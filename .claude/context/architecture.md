@@ -691,7 +691,8 @@ through on a Live mirror.
   transaction; dirty entries are applied from where they stand (no second apply), set aside to `name (conflict <uid8>)`
   when they hold a name the core's entry needs, reverted when in the way; `apply::settle` reverts on refusal.
   Refusals: `conflict` for mkdir/move/rename resubmits under the conflict name (record kind conflict in `mirror_held`),
-  anything else is a held change (`mirror_held` kind held, entries reverted).
+  anything else is a held change (`mirror_held` kind held, entries reverted); `ops::mirrors::held|discardHeld|
+  retryHeld` (ws `mirror.held.list|discard|retry`, `vh mirror held|discard|retry`), super admins, audited.
 - Tests: `MirrorSubmitDbTest.*` (`test_mirror_submit_db.cpp`: both servers in one database, the inactive one parked).
 
 ### A linked server's vault role and mirrored vaults (migration 162; `design/peers/identity.md`)
