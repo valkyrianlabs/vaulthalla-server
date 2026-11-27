@@ -3,6 +3,7 @@
 // where they meet and the only place they are authorized. See .claude/context/recovery.md.
 
 #include "ops/Recovery.hpp"
+#include "mirror/access/Access.hpp"
 #include "auth/stepup/StepUp.hpp"
 
 #include "db/query/recovery/ObjectVersion.hpp"
@@ -533,6 +534,9 @@ RestoreResult restore(const Actor& actor, const RestoreRequest& req) {
                                 "bucket): restore them only if you trust where they came from");
 
     const auto engine = rpEngine(plan.vault_id);
+    // A vault held here as another server's copy takes no restore (the mirror gate): its history and its contents are
+    // its core's. Refused before the plan starts, so nothing is written.
+    vh::mirror::access::requireWritable(plan.vault_id, "recovery.restore");
     const auto cloud = rpCloud(engine);
     if (!rq::Plan::start(static_cast<int64_t>(plan.id), now))
         throw Conflict("restore plan " + std::to_string(req.plan_id) + " can't be started (state " + row.state + ")");

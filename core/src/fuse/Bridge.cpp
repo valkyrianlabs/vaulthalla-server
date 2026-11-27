@@ -13,6 +13,7 @@
 #include "db/query/fs/Directory.hpp"
 #include "log/Registry.hpp"
 #include "log/Redact.hpp"
+#include "mirror/access/Access.hpp"
 #include "ops/Error.hpp"
 #include "ops/Fs.hpp"
 #include "fs/cache/Registry.hpp"
@@ -105,6 +106,8 @@ void recordCloseHandle() noexcept {
 WorkingCopies::Handle workingHandle(const FileHandle& fh) { return {fh.copy, fh.flags}; }
 
 int errnoFrom(const std::exception& e) {
+    // A seal refused by the mirror gate (a copy of another server's vault): read-only, not an I/O error.
+    if (dynamic_cast<const vh::mirror::access::MirrorReadOnly*>(&e)) return EROFS;
     if (const auto* sys = dynamic_cast<const std::system_error*>(&e); sys && sys->code().value() > 0)
         return sys->code().value();
     return EIO;
@@ -261,6 +264,9 @@ void setattr(const fuse_req_t req, const fuse_ino_t ino,
             const auto vaultId = resolved.engine && resolved.engine->vault ? resolved.engine->vault->id : 0u;
             vh::ops::fs::setAttributes(resolved.user, vaultId,
                                        resolved.engine->fusePathToVaultPath(resolved.entry->fuse_path), attrs);
+        } catch (const vh::ops::ReadOnly&) {
+            replyError(req, timer, EROFS);
+            return;
         } catch (const vh::ops::Denied&) {
             replyError(req, timer, EPERM);
             return;

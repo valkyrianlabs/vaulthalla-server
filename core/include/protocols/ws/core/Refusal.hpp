@@ -42,6 +42,8 @@ namespace vh::protocols::ws::core {
         } catch (const ops::RecoveryCooldown &e) {
             return {e.what(), nlohmann::json{{"code", e.code}, {"family", e.family},
                                              {"cooldown_until", e.cooldown_until}}};
+        } catch (const ops::ReadOnly &e) {
+            return {e.what(), nlohmann::json{{"code", e.code}, {"reason", e.reason}}};
         } catch (const DetailedRefusal &e) {
             nlohmann::json data = e.details.is_object() ? e.details : nlohmann::json::object();
             data["code"] = e.code;

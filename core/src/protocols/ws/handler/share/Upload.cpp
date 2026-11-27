@@ -6,6 +6,7 @@
 #include "fs/model/File.hpp"
 #include "fs/model/Path.hpp"
 #include "identities/User.hpp"
+#include "mirror/access/Access.hpp"
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/fs/Upload.hpp"
 #include "rbac/Actor.hpp"
@@ -308,6 +309,7 @@ void requireAcceptedDuplicatePolicy(const json& payload) {
     const auto scope = mgr->authorize(actor, vh::share::Operation::Upload, finalVaultPath,
                                       vh::share::TargetType::File, parent.vault_id);
     if (!scope.allowed) throw vh::ops::Denied("Share upload scope denied: " + scope.reason);
+    vh::mirror::access::requireWritable(parent.vault_id, "share.upload.start");  // mirror gate: read_only
 
     ensureNoExistingTarget(*resolver, actor, parent.vault_id, finalVaultPath);
 

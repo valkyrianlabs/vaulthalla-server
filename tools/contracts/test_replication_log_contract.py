@@ -40,7 +40,9 @@ LOG_TABLES = ("vault_replication_log", "mirror_entry_hash", "mirror_vault")
 TRASH_WRITE_RE = re.compile(r"\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+files_trashed\b")
 LOG_WRITE_RE = re.compile(r"\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(" + "|".join(LOG_TABLES)
                           + r")\b", re.IGNORECASE)
-APPLY_SWITCH_RE = re.compile(r"vh\.mirror_apply")
+APPLY_SWITCH_RE = re.compile(r"vh\.mirror_(?:apply|local)")
+GATE_MIGRATION = PSQL / "165_mirror_gate.sql"
+GATE_TABLES = ("fs_entry", "files", "directories", "symlinks", "files_trashed")
 BYPASS_RE = re.compile(r"session_replication_role|DISABLE\s+TRIGGER|TRUNCATE\s+(?:TABLE\s+)?(?:files_trashed|vault_keys"
                        r"|vault_replication_log|mirror_entry_hash)\b", re.IGNORECASE)
 
@@ -144,8 +146,22 @@ class ReplicationLogContractTests(unittest.TestCase):
             for match in LOG_WRITE_RE.finditer(text):
                 offenders.append(f"{r}: {match.group(0)}")
             for match in APPLY_SWITCH_RE.finditer(text):
-                offenders.append(f"{r}: {match.group(0)} (use db::query::mirror::Log::markMirrorApply)")
+                offenders.append(f"{r}: {match.group(0)} (use db::query::mirror::Log::markMirrorApply / markMirrorLocal)")
         self.assertEqual(offenders, [])
+
+    def test_the_backstop_guards_every_entry_table(self) -> None:
+        """Migration 165: a held copy's entry tables refuse a change outside the follower's or a pending change's flag."""
+        sql = GATE_MIGRATION.read_text(encoding="utf-8")
+        on: dict[str, set[str]] = {}
+        for match in re.finditer(r"CREATE TRIGGER vh_mirror_gate\w* BEFORE ([A-Z ]+?) ON (\w+)", sql):
+            on.setdefault(match.group(2), set()).update(e.strip() for e in match.group(1).split(" OR "))
+        self.assertEqual(set(on), set(GATE_TABLES))
+        for table in GATE_TABLES:
+            self.assertTrue({"INSERT", "DELETE"} <= on[table], f"{table}: creates and removals are refused")
+        for table in ("fs_entry", "files", "symlinks", "files_trashed"):
+            self.assertIn("UPDATE", on[table], f"{table}: a replicated change in place is refused")
+        self.assertIn("vh.mirror_apply", sql)
+        self.assertIn("vh.mirror_local", sql)
 
     def test_nothing_bypasses_the_triggers(self) -> None:
         offenders = []

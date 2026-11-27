@@ -2,6 +2,7 @@
 
 #include "log/Registry.hpp"
 #include "mirror/Contents.hpp"
+#include "ops/Error.hpp"
 #include "preview/render/Raster.hpp"
 #include "preview/render/Service.hpp"
 #include "protocols/http/Access.hpp"
@@ -51,6 +52,18 @@ model::preview::Response errorFor(const request& req, const std::exception& e) {
     if (dynamic_cast<const access::Forbidden*>(&e)) return jsonError(req, status::forbidden, "denied", e.what());
     if (dynamic_cast<const access::NotFound*>(&e)) return jsonError(req, status::not_found, "not_found", "Not found");
     if (dynamic_cast<const access::BadRequest*>(&e)) return jsonError(req, status::bad_request, "invalid", e.what());
+    // A vault held as another server's copy (the server mirror's gate, mirror/access/Access.hpp): read-only here.
+    // 503 so a client backs off and retries (the link may come back), with the reason a person can act on.
+    if (const auto* ro = dynamic_cast<const vh::ops::ReadOnly*>(&e)) {
+        string_response res{status::service_unavailable, req.version()};
+        res.set(field::content_type, "application/json");
+        res.set(field::cache_control, "no-store");
+        res.set(field::retry_after, "30");
+        res.body() = nlohmann::json{{"error", e.what()}, {"code", "read_only"}, {"reason", ro->reason}}.dump();
+        res.prepare_payload();
+        res.keep_alive(req.keep_alive());
+        return res;
+    }
     if (dynamic_cast<const storage::ContentUnavailable*>(&e)) {
         // A mirror's file that has not arrived from its core (design/peers/mirror.md "Contents") says why.
         const auto mirrorCode = ::vh::mirror::contents::reasonCodeIn(e.what());

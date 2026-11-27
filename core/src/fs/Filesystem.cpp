@@ -35,6 +35,7 @@
 #include "recovery/local/Versions.hpp"
 #include "vault/Content.hpp"
 #include "vault/model/S3Vault.hpp"
+#include "mirror/access/Access.hpp"
 
 #include <ranges>
 #include <set>
@@ -106,6 +107,17 @@ std::optional<int32_t> linuxGidFor(const std::shared_ptr<vh::identities::Group>&
 std::optional<int32_t> userIdFor(const std::shared_ptr<vh::identities::User>& user) {
     if (!user) return std::nullopt;
     return static_cast<int32_t>(user->id);
+}
+
+// The server mirror's write gate (mirror/access/Access.hpp), checked by every mutating call here after its engine is
+// known: a vault held as another server's copy changes through nothing but its core's log (which never calls these).
+// The surfaces ask first and report the refusal in their own terms; this is the layer under all of them.
+bool filesystemMirrorRefused(const std::shared_ptr<vh::storage::Engine>& engine, const std::string_view operation) {
+    if (!engine || !engine->vault) return false;
+    const auto why = vh::mirror::access::refusalReason(engine->vault->id);
+    if (!why) return false;
+    vh::log::Registry::fs()->debug("[Filesystem] {} refused in vault {}: {}", operation, engine->vault->id, *why);
+    return true;
 }
 
 } // namespace
@@ -202,6 +214,7 @@ int Filesystem::mkdir(const MkdirContext& ctx) {
             log::Registry::fs()->error("[Filesystem::mkdir] No storage engine found for path: {}", log::path(absPath));
             return -EIO;
         }
+        if (!toCreate.empty() && filesystemMirrorRefused(engine, "mkdir")) return -EROFS;
 
         for (const auto& p : toCreate) {
             const auto path = makeAbsolute(p);
@@ -355,6 +368,7 @@ Filesystem::createSymlink(const FuseCreateSymlinkContext& ctx) {
         if (!resolved.ok()) return {-resolved.errnum, nullptr};
         if (!resolved.user) return {-EACCES, nullptr};
         if (!resolved.path || !resolved.engine || !resolved.parentEntry) return {-EINVAL, nullptr};
+        if (filesystemMirrorRefused(resolved.engine, "symlink")) return {-EROFS, nullptr};
 
         if (!storageManager_) {
             log::Registry::fs()->error("[Filesystem::createSymlink] StorageManager is not initialized");
@@ -526,6 +540,7 @@ int Filesystem::copy(const CopyContext& ctx) {
                 log::Registry::fs()->error("[Filesystem::copy] Cross-vault copy not supported: {} -> {}", from.string(), to.string());
                 return -EXDEV;
             }
+            if (filesystemMirrorRefused(engine, "copy")) return -EROFS;
         }
 
         if (from == to) return 0;
@@ -819,6 +834,7 @@ void Filesystem::remove(const std::filesystem::path& path, const unsigned int us
 
     // Trashing ends a file id (its cache_index rows cascade): its sealed derived artifacts go with it.
     const auto engine = storageManager_ ? storageManager_->getEngine(*entry->vault_id) : nullptr;
+    vh::mirror::access::requireWritable(static_cast<uint32_t>(*entry->vault_id), "delete");
     const auto purgeDerived = [&engine](const unsigned int fileId) {
         if (engine) engine->purgeDerivedArtifacts(fileId);
     };
@@ -893,6 +909,7 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
 
     const auto engine = ctx.engine ? ctx.engine : storageManager_->resolveStorageEngine(ctx.path);
     if (!engine) throw std::runtime_error("[Filesystem] No storage engine found for file creation");
+    if (engine->vault) vh::mirror::access::requireWritable(engine->vault->id, "a file write");
 
     log::Registry::fs()->debug("Creating file at path: {}, fuse_path: {}", log::path(ctx.path), log::path(ctx.fuse_path));
 
@@ -1112,6 +1129,7 @@ Filesystem::createFile(const FuseCreateFileContext& ctx) {
         if (!resolved.ok()) return {-resolved.errnum, nullptr};
         if (!resolved.user) return {-EACCES, nullptr};
         if (!resolved.path || !resolved.engine || !resolved.parentEntry) return {-EINVAL, nullptr};
+        if (filesystemMirrorRefused(resolved.engine, "create")) return {-EROFS, nullptr};
 
         if (!storageManager_) {
             log::Registry::fs()->error("[Filesystem::createFile] StorageManager is not initialized");
@@ -1299,6 +1317,9 @@ int Filesystem::rename(const std::filesystem::path& oldPath,
                 "[Filesystem::rename] No storage engine found for source path: {}",
                 oldPath.string());
             return -ENOENT;
+        }
+        if (filesystemMirrorRefused(engine, "rename")) {
+            return -EROFS;
         }
 
         const auto toEngine = storageManager_->resolveStorageEngine(newPath);

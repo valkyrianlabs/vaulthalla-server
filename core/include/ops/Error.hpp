@@ -42,6 +42,14 @@ struct Refused : Error {
     Refused(std::string code_, const std::string& text) : Error(text), code(std::move(code_)) {}
 };
 
+// The vault is read-only here (code "read_only"): `reason` says why, in a stable code a client can act on (the server
+// mirror's gate, mirror/access/Access.hpp: a copy of another server's vault). ws: ERROR {code: "read_only", reason};
+// the HTTP lanes answer 503 with Retry-After and the reason; `vh fs put` exits with its read-only code.
+struct ReadOnly : Refused {
+    std::string reason;
+    ReadOnly(std::string reason_, const std::string& text) : Refused("read_only", text), reason(std::move(reason_)) {}
+};
+
 // A step-up refusal (auth/stepup/StepUp.hpp, #359): the operation runs only after the person proves they are present.
 // ws: ERROR {code: "step_up_required", family, target, methods, max_age_seconds}; the console runs auth.stepup.begin
 // and .finish, then resends the request. The CLI never sees it (the host is exempt), except under an agent, where it is

@@ -15,6 +15,7 @@
 #include "protocols/cookie.hpp"
 #include "protocols/ws/Session.hpp"
 #include "rbac/resolver/Vault.hpp"
+#include "mirror/access/Access.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
 #include "runtime/Deps.hpp"
 #include "share/Manager.hpp"
@@ -256,6 +257,7 @@ void enforceHumanWritePermission(
         .vault_id = engine->vault->id,
         .path = fusePath
     })) throw std::runtime_error("Permission denied");
+    vh::mirror::access::requireWritable(engine->vault->id, "an upload");  // mirror gate: nothing is staged
 }
 
 [[nodiscard]] uint64_t fileSizeFromJson(const nlohmann::json& item) {
@@ -719,6 +721,7 @@ nlohmann::json Coordinator::createSession(const request& req, const nlohmann::js
                     parent.vault_id
                 );
                 if (!scope.allowed) throw std::runtime_error("Share upload scope denied: " + scope.reason);
+                vh::mirror::access::requireWritable(parent.vault_id, "a share upload");  // mirror gate
                 ensureNoExistingShareTarget(*resolver, actor, parent.vault_id, finalVaultPath);
 
                 const auto size = fileSizeFromJson(item);

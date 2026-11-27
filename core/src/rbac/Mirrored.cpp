@@ -3,6 +3,7 @@
 #include "concurrency/AtomicSharedPtr.hpp"
 #include "db/query/mirror/MirrorVault.hpp"
 #include "log/Registry.hpp"
+#include "mirror/access/Access.hpp"
 #include "rbac/PolicyEpoch.hpp"
 #include "rbac/role/Vault.hpp"
 
@@ -131,6 +132,9 @@ void Watcher::runLoop() {
     while (!shouldStop()) {
         try {
             (void)reconcile();
+            // The write gate of the same vaults (mirror::access): its rows' states and the links' state, healed here
+            // when a hook was missed.
+            (void)vh::mirror::access::reconcile();
             backoff = kWatchInterval;
         } catch (const std::exception& e) {
             log::Registry::auth()->debug("[rbac::mirrored::Watcher] Reconcile failed: {}", e.what());

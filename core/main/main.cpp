@@ -30,6 +30,7 @@
 #include "connector/Grants.hpp"
 #include "storage/upstream/Guard.hpp"
 #include "rbac/Mirrored.hpp"
+#include "mirror/access/Access.hpp"
 #include "seed/include/init_db_tables.hpp"
 
 // Misc
@@ -210,6 +211,9 @@ void wireStorage() {
     // alone, from the first request on: loaded before any engine serves one, and a failure stops startup rather than
     // resolving them from local roles.
     vh::rbac::mirrored::reload();
+    // Their write gate (design/peers/mirror.md "Strict mode"): every write surface asks it, so it is loaded before any
+    // engine serves a request too, and a failure stops startup rather than leaving such a copy writable.
+    vh::mirror::access::reload();
     Filesystem::init(vh::runtime::Deps::get().storageManager);
     vh::runtime::Deps::get().storageManager->initStorageEngines();
 

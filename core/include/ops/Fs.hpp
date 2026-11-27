@@ -22,6 +22,9 @@
 // (no permission, no actor), NotFound (no engine for the vault, a missing source or destination folder), Conflict
 // (the name is taken), Invalid (into itself), ContentConflict below. Anything else is a fault.
 //
+// Every operation that changes the vault refuses first, after its permission check, for a vault held here as another
+// server's copy (vh::mirror::access::requireWritable: MirrorReadOnly, ws code "read_only" with its reason).
+//
 // Callers today: the ws fs.* handlers (protocols/ws/handler/fs/Storage.cpp, Upload.cpp) and FUSE setattr. The HTTP
 // lanes, text save, `vh fs put`, shares, the S3 gateway and the rest of FUSE still have their own paths to
 // vh::fs::Filesystem (which refuses for such a vault too).

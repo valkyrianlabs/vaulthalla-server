@@ -34,6 +34,7 @@
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/PeerPolicy.hpp"
+#include "mirror/access/Access.hpp"
 #include "rbac/Mirrored.hpp"
 #include "rbac/PolicyEpoch.hpp"
 #include "rbac/permission/admin/VaultGlobals.hpp"
@@ -108,6 +109,7 @@ protected:
         if (skipTests) return;
         config::Registry::set(savedConfig);
         rbac::mirrored::resetForTesting();
+        vh::mirror::access::resetForTesting();
         tearDownDbSuite();
     }
 

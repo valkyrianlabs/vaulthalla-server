@@ -9,6 +9,7 @@
 #include "fs/model/File.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "mirror/access/Access.hpp"
 #include "protocols/http/upload/CreateClaim.hpp"
 #include "rbac/fs/Placement.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
@@ -104,7 +105,7 @@ void auditFs(const Actor& actor, const EnginePtr& engine, const std::string& act
 }
 
 void syncSoon(const uint32_t vaultId) {
-    vh::runtime::Deps::get().syncController->runNow(vaultId);
+    if (const auto& controller = vh::runtime::Deps::get().syncController) controller->runNow(vaultId);
 }
 
 // The `operations` row of a move, rename or copy: pending while it runs, then its outcome. Best effort: a failure to
@@ -208,6 +209,7 @@ void transfer(const Actor& actor, const uint32_t vaultId, const std::filesystem:
     require(actor, engine, from, isMove ? FsAction::Move : FsAction::Rename,
             isMove ? "Permission denied: User does not have move permission for the source path in the vault"
                    : "Permission denied: User does not have rename permission for the source path in the vault");
+    vh::mirror::access::requireWritable(engine->vault->id, isMove ? "fs.entry.move" : "fs.entry.rename");  // mirror gate
     requireCreateAtDestination(actor, engine, from, to);
     requireTransferEndpoints(engine, from, to);
 
@@ -234,6 +236,7 @@ void mkdir(const Actor& actor, const uint32_t vaultId, const std::filesystem::pa
 
     require(actor, engine, path, FsAction::Touch,
             "Permission denied: User does not have create-directory permission for this path in the vault");
+    vh::mirror::access::requireWritable(engine->vault->id, "fs.dir.create");  // mirror gate
 
     // The engine refuses both with one untyped error; tell them apart first (same text) so the answer is typed.
     if (existsAt(engine, path)) throw Conflict("Failed to create directory: " + path.string());
@@ -262,6 +265,7 @@ void copy(const Actor& actor, const uint32_t vaultId, const std::filesystem::pat
 
     require(actor, engine, from, FsAction::Copy,
             "Permission denied: User does not have copy permission for the source path in the vault");
+    vh::mirror::access::requireWritable(engine->vault->id, "fs.entry.copy");  // mirror gate
     requireTransferEndpoints(engine, from, to);
 
     // Every copied entry passes the checks a single one would (#167), before anything is written: Copy on the source,
@@ -298,6 +302,7 @@ void remove(const Actor& actor, const uint32_t vaultId, const std::filesystem::p
 
     require(actor, engine, path, FsAction::Delete,
             "Permission denied: User does not have delete permission for this path in the vault");
+    vh::mirror::access::requireWritable(engine->vault->id, "fs.entry.delete");  // mirror gate
 
     const auto removedId = entryIdAt(engine, path);
     engine->remove(path, actor->id);
@@ -310,6 +315,7 @@ EnginePtr authorizeUpload(const Actor& actor, const uint32_t vaultId, const std:
     auto engine = engineFor(vaultId, "Unknown storage engine");
     require(actor, engine, path, FsAction::Write,
             "Permission denied: User does not have upload permission for this path in the vault");
+    vh::mirror::access::requireWritable(engine->vault->id, "fs.upload");  // mirror gate
     return engine;
 }
 
@@ -342,6 +348,7 @@ void setAttributes(const Actor& actor, const uint32_t vaultId, const std::filesy
     const auto engine = engineFor(vaultId);
     require(actor, engine, path, FsAction::Write,
             "Permission denied: User does not have write permission for this path in the vault");
+    vh::mirror::access::requireWritable(engine->vault->id, "a setattr");  // mirror gate
 
     const auto& cache = vh::runtime::Deps::get().fsCache;
     const auto entry = cache->getEntry(engine->vaultPathToFusePath(path));
@@ -379,6 +386,7 @@ std::shared_ptr<vh::fs::model::File> commitSealed(const Actor& actor, const Seal
     require(actor, engine, path, replace ? FsAction::Overwrite : FsAction::Write,
             replace ? "Permission denied: User does not have overwrite permission for this path in the vault"
                     : "Permission denied: User does not have upload permission for this path in the vault");
+    vh::mirror::access::requireWritable(engine->vault->id, "fs.commit");  // mirror gate
 
     const auto parent = parentFolder(path);
     if (!existsAt(engine, parent)) throw NotFound("destination folder does not exist: " + parent.string());
