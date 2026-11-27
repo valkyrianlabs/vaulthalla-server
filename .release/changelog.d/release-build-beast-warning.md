@@ -1,0 +1,1 @@
+- Package build: Boost.Beast's websocket headers are included through `compat/beast_websocket.hpp`, which silences a GCC 14 `-O3` false positive (`-Wmaybe-uninitialized` in Beast's `prepare_key`) for Beast's code only; it failed the 1.27.0 package build, which was never published.

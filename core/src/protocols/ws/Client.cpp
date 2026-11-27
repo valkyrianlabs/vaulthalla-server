@@ -9,8 +9,7 @@
 #include <boost/asio/steady_timer.hpp>
 #include <boost/asio/strand.hpp>
 #include <boost/beast/core.hpp>
-#include <boost/beast/websocket.hpp>
-#include <boost/beast/websocket/ssl.hpp>
+#include "compat/beast_websocket.hpp"
 
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
