@@ -1,6 +1,7 @@
 #include "ops/Fs.hpp"
 
 #include "audit/Trail.hpp"
+#include "db/query/fs/Entry.hpp"
 #include "db/query/sync/Operation.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
@@ -333,6 +334,37 @@ Access check(const Actor& actor, const uint32_t vaultId, const std::filesystem::
     } catch (const Denied&) {
         return Access::Denied;
     }
+}
+
+void setAttributes(const Actor& actor, const uint32_t vaultId, const std::filesystem::path& path,
+                   const Attributes& attrs) {
+    requireActor(actor);
+    const auto engine = engineFor(vaultId);
+    require(actor, engine, path, FsAction::Write,
+            "Permission denied: User does not have write permission for this path in the vault");
+
+    const auto& cache = vh::runtime::Deps::get().fsCache;
+    const auto entry = cache->getEntry(engine->vaultPathToFusePath(path));
+    if (!entry) throw NotFound("no such entry: " + path.string());
+
+    const bool ownerChanges = (attrs.owner_uid && attrs.owner_uid != entry->owner_uid) ||
+                              (attrs.group_gid && attrs.group_gid != entry->group_gid);
+    if (ownerChanges && !actor->isSuperAdmin())
+        throw Denied("Permission denied: only a super admin may change an entry's owner or group");
+
+    const vh::db::query::fs::Entry::Attributes rowAttrs{.mode = attrs.mode, .owner_uid = attrs.owner_uid,
+                                                       .group_gid = attrs.group_gid, .mtime_us = attrs.mtime_us};
+    if (!vh::db::query::fs::Entry::setAttributes(entry->id, rowAttrs, actor->id))
+        throw NotFound("no such entry: " + path.string());
+
+    // The cache answers getattr: the row as it is now, replacing the cached entry (a reader holding the old one keeps
+    // it whole).
+    if (const auto fresh = vh::db::query::fs::Entry::getFSEntryById(entry->id)) cache->cacheEntry(fresh);
+
+    if (ownerChanges)
+        auditFs(actor, engine, "fs.chown", "changed the owner of", entry->id,
+                {{"owner_uid", attrs.owner_uid ? nlohmann::json(*attrs.owner_uid) : nlohmann::json(nullptr)},
+                 {"group_gid", attrs.group_gid ? nlohmann::json(*attrs.group_gid) : nlohmann::json(nullptr)}});
 }
 
 std::shared_ptr<vh::fs::model::File> commitSealed(const Actor& actor, const SealedCommit& commit) {

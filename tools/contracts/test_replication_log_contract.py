@@ -78,6 +78,8 @@ ENTRY_WRITERS_LOG: dict[str, str] = {
                                           "whose role here is mirror is never logged",
     "core/src/db/query/vault/Deletion.cpp": "nothing: the vault root, inodes, a soft-deleted vault",
     "core/src/db/query/mirror/Start.cpp": "nothing: the mirror's new vault and its root; never a core vault",
+    "core/src/db/query/fs/Entry.cpp": "upsert (a setattr: mode, owner, group, modification time; ops::fs::setAttributes, "
+                                      "with vh.actor)",
 }
 
 

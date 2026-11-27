@@ -22,8 +22,9 @@
 // (no permission, no actor), NotFound (no engine for the vault, a missing source or destination folder), Conflict
 // (the name is taken), Invalid (into itself), ContentConflict below. Anything else is a fault.
 //
-// Callers today: the ws fs.* handlers (protocols/ws/handler/fs/Storage.cpp, Upload.cpp). The HTTP lanes, text save,
-// `vh fs put`, shares, the S3 gateway and FUSE still have their own paths to vh::fs::Filesystem.
+// Callers today: the ws fs.* handlers (protocols/ws/handler/fs/Storage.cpp, Upload.cpp) and FUSE setattr. The HTTP
+// lanes, text save, `vh fs put`, shares, the S3 gateway and the rest of FUSE still have their own paths to
+// vh::fs::Filesystem (which refuses for such a vault too).
 namespace vh::ops::fs {
 
 // A sealed commit was based on a generation the file no longer has (or the file is gone, or open through the mount).
@@ -73,6 +74,19 @@ struct StagedCommit {
 std::shared_ptr<vh::storage::Engine> authorizeUpload(const Actor& actor, uint32_t vaultId,
                                                      const std::filesystem::path& path);
 void commitStaged(const Actor& actor, const StagedCommit& commit);
+
+// A setattr through the mount (chmod, chown, utimens; design/peers/mirror.md, the known limit of migration 160): the
+// entry's mode, owner uid, group gid and modification time, each only when given, in one transaction
+// (db::query::fs::Entry::setAttributes) so the change journal and the replication log record it. Write at `path` for
+// any of them; an owner or group that differs from the entry's needs a super admin (as chown needs root), else Denied.
+// Audited fs.chown when the owner or group changes (mode and times are not audited: a copy with `cp -p` sets them on
+// every file). NotFound for a missing entry.
+struct Attributes {
+    std::optional<uint32_t> mode{};
+    std::optional<int32_t> owner_uid{}, group_gid{};
+    std::optional<int64_t> mtime_us{};
+};
+void setAttributes(const Actor& actor, uint32_t vaultId, const std::filesystem::path& path, const Attributes& attrs);
 
 // Commits a file from bytes that are already sealed (vh::fs::NewFileContext::sealed): nothing is encrypted and no
 // plaintext exists. Without `base`, a new file: Write at `path`, and a name already taken (a file, a folder, or a
