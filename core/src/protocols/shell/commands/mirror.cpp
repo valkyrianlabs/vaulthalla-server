@@ -355,15 +355,15 @@ CommandResult handleVersions(const CommandCall& call) {
                        });
 }
 
-// `vh mirror held get <id> <dest>`: the person's version of a held write, streamed to the client's file (the
+// `vh mirror save <id> <dest>`: the person's version of a held write, streamed to the client's file (the
 // transfer frames of `vh fs get`; the client writes <dest>, "-" is stdout). Nothing in the vault changes.
-CommandResult heldGetFail(const int code, const std::string& msg) { return {code, "", "mirror held get: " + msg}; }
+CommandResult heldGetFail(const int code, const std::string& msg) { return {code, "", "mirror save: " + msg}; }
 
 CommandResult handleHeldGet(const CommandCall& call) {
     namespace tx = ::vh::protocols::shell::transfer;
-    const auto usage = resolveUsage({"mirror", "held", "get"});
+    const auto usage = resolveUsage({"mirror", "save"});
     if (call.positionals.size() != usage->positionals.size())
-        return heldGetFail(tx::exitcode::kUsage, "usage: vh mirror held get <id> <dest|->");
+        return heldGetFail(tx::exitcode::kUsage, "usage: vh mirror save <id> <dest|->");
     if (!call.transfer)
         return heldGetFail(tx::exitcode::kUsage, "this vh client can't receive files; use the vh that came with the daemon");
     const auto id = parseUInt(call.positionals.at(0));
@@ -429,11 +429,8 @@ CommandResult handleMirror(const CommandCall& call) {
     if (is("info")) return handleInfo(subcall);
     if (is("accept-all")) return handleAcceptAll(subcall);
     if (is("keep-removed")) return handleKeep(subcall);
-    if (is("held")) {
-        if (!subcall.positionals.empty() && isCommandMatch({"mirror", "held", "get"}, subcall.positionals.front()))
-            return handleHeldGet(descend(subcall).second);
-        return handleHeld(subcall);
-    }
+    if (is("held")) return handleHeld(subcall);
+    if (is("save")) return handleHeldGet(subcall);
     if (is("discard")) return handleHeldDecision(subcall, false);
     if (is("retry")) return handleHeldDecision(subcall, true);
     if (is("detach")) return handleDetach(subcall);

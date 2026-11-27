@@ -138,15 +138,15 @@ std::shared_ptr<CommandUsage> keep(const std::weak_ptr<CommandUsage>& parent) {
 const auto heldPos = Positional::WithAliases("held", "The held change's number (vh mirror held)", {"held", "id"},
                                              contract::gen::pattern("{9}"));
 
-std::shared_ptr<CommandUsage> heldGet(const std::weak_ptr<CommandUsage>& parent) {
+std::shared_ptr<CommandUsage> save(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->effect = CommandEffect::Read;
-    cmd->aliases = {"get", "download"};
+    cmd->aliases = {"save"};
     cmd->description = "Save the person's version of a held write (decrypted) to a local file; nothing in the vault "
                        "changes. Super admins only.";
     cmd->positionals = {heldPos, Positional::Alias("dest", "The local file to write, or - for stdout", "dest",
                                                    contract::gen::constant("-"))};
-    cmd->examples = {{"vh mirror held get 7 ./mine.txt", "Save held change 7's version as ./mine.txt."}};
+    cmd->examples = {{"vh mirror save 7 ./mine.txt", "Save held change 7's version as ./mine.txt."}};
     return cmd;
 }
 
@@ -160,8 +160,7 @@ std::shared_ptr<CommandUsage> held(const std::weak_ptr<CommandUsage>& parent) {
     cmd->optional = {Optional::ManyToOne("vault", "One vault only (its number here)", {"vault"}, "vault")};
     cmd->optional_flags = {Flag::WithAliases("all", "Include the ones discarded or retried", {"all"}), jsonFlag};
     cmd->examples = {{"vh mirror held", "Held changes and conflict copies."},
-                     {"vh mirror held get 7 ./mine.txt", "Save the person's version of held write 7."}};
-    cmd->subcommands = {heldGet(cmd->weak_from_this())};
+                     {"vh mirror save 7 ./mine.txt", "Save the person's version of held write 7."}};
     return cmd;
 }
 
@@ -270,7 +269,7 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
                          decline(root->weak_from_this()), cancel(root->weak_from_this()), list(root->weak_from_this()),
                          info(root->weak_from_this()),    acceptAll(root->weak_from_this()),
                          keep(root->weak_from_this()),    held(root->weak_from_this()),    discard(root->weak_from_this()),
-                         retry(root->weak_from_this()), detach(root->weak_from_this()),
+                         retry(root->weak_from_this()), save(root->weak_from_this()), detach(root->weak_from_this()),
                          versions(root->weak_from_this()), resync(root->weak_from_this())};
     root->examples = {
         {"vh mirror add <vault> --to <server>", "On the core: offer a vault."},

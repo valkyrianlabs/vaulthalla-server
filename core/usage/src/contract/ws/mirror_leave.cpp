@@ -126,7 +126,7 @@ std::vector<WsCommandUsage> mirrorLeaveCommands() {
     out.push_back({
         .command = "mirror.held.get",
         .description = "A held write's bytes: the person's version, decrypted, inline (base64) up to 8 MiB; a larger "
-                       "one is refused too_large (vh mirror held get streams it). Nothing in the vault changes. Super "
+                       "one is refused too_large (vh mirror save streams it). Nothing in the vault changes. Super "
                        "admins (whoever may list held changes).",
         .payload = {uinteger("id").gen(gen::ref("mirror.held", {"id"}))},
         .response = {object("held", "", {uinteger("id"), uinteger("vault_id"), str("kind"), str("op"),

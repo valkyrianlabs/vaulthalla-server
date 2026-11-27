@@ -151,13 +151,13 @@ namespace detail {
 // output option is --output/-o; everything else the daemon validates against the usage book.
 [[nodiscard]] inline LocalPlan planLocal(const std::vector<std::string>& argv) {
     LocalPlan plan;
-    // `vh mirror held get <id> <dest|->`: a held write's version, written by the client (the server mirror, wave 5).
-    if (argv.size() >= 3 && argv[0] == "mirror" && argv[1] == "held" && isGetAlias(argv[2])) {
+    // `vh mirror save <id> <dest|->`: a held write's version, written by the client (the server mirror, wave 5).
+    if (argv.size() >= 2 && (argv[0] == "mirror" || argv[0] == "mirrors") && argv[1] == "save") {
         plan.kind = LocalPlan::Kind::Get;
         std::vector<std::string> positionals;
-        for (std::size_t i = 3; i < argv.size(); ++i)
+        for (std::size_t i = 2; i < argv.size(); ++i)
             if (!detail::isFlag(argv[i])) positionals.push_back(argv[i]);
-        if (positionals.size() != 2) { plan.error = "usage: vh mirror held get <id> <dest|->"; return plan; }
+        if (positionals.size() != 2) { plan.error = "usage: vh mirror save <id> <dest|->"; return plan; }
         plan.explicitStdout = positionals[1] == "-";
         plan.local = positionals[1] == "-" ? std::string{} : positionals[1];
         return plan;

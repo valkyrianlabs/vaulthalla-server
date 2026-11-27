@@ -1364,7 +1364,7 @@ instruction to build without waiting for review); each is listed for confirmatio
   (`MirrorSubmitDbTest.DISABLED_VersionsOnTheMirrorCostPerGroup`, dev VM, ASan build, PostgreSQL 16, 2026-11-27, load
   about 2: 100 groups each replacing one file): 12.1 ms a group off, 16.7 ms on (+4.6 ms: the hard link of the prior
   bytes, the version and blob rows under a savepoint, the per-file prune).
-- **A held change's bytes** (`mirror.held.get`, `vh mirror held get <id> <dest|->`): the person's version of a held write,
+- **A held change's bytes** (`mirror.held.get`, `vh mirror save <id> <dest|->`): the person's version of a held write,
   decrypted with the vault's key at that generation, for super admins (who may list held changes); inline base64 up to
   8 MiB on ws (`too_large` beyond), streamed with `vh fs get`'s transfer frames on the CLI (the client writes `<dest>`).
   Nothing in the vault changes; a detached vault's held changes stay listed.

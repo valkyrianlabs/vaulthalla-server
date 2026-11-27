@@ -62,8 +62,9 @@ offer B declines is reported declined on A.
 9, leaving a mirror (wave 5 piece A): B turns versions on and keeps what A replaces and deletes; with A stopped, B
 detaches with a change pending and one file's contents held back: the preview names exactly that file, every other file
 opens, the missing one is refused, B writes to the vault; A restarted learns of it and ends its side, and refuses to
-mirror that vault with B again; a vault deleted on A with --mirror-copy remove is gone on B, one with leave is orphaned
-on B and then detached there.
+mirror that vault with B again; a vault deleted on A (restorable) leaves B's copy read-only with the reason, a restore
+and B follows again; deleted --now with --mirror-copy remove it is gone on B, another with leave is orphaned on B and
+then detached there; the held write from 7k is saved with `vh mirror save`.
 
 Nothing secret is printed or kept: the drill's directory holds only its report.
 """
@@ -999,6 +1000,14 @@ def _leaving(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, report:
     report.check("9b: B writes to the vault, as any local vault (nothing pending, nothing refused)",
                  wrote == "WROTE" and _plain(b, "whole/docs/after_detach.txt") == hashlib.sha256(b"mine now\n").hexdigest()
                  and _pending_rows(b, vb) == 0, wrote)
+    code, held, text = _json(b, "mirror", "held", "--vault", str(vb))
+    writes = [h for h in held.get("held") or [] if h.get("op") == "write" and h.get("name") == "refused.txt"]
+    saved = ""
+    if writes:
+        b.vh("mirror", "save", str(writes[0]["id"]), "saved_refused.txt")
+        saved = (b.private / "saved_refused.txt").read_text()
+    report.check("9b: the held write from 7k stays listed after the detach, and `vh mirror save` gives the person's "
+                 "version", saved == "refused on A\n", text[-300:])
     report.check("9b: the detach is audited on B (fork point, missing count; no path)",
                  _sql(b, f"SELECT count(*) FROM audit_event WHERE action = 'mirror.detach' AND vault_id = {vb} "
                          "AND details::text NOT LIKE '%held_back%'") == "1")
