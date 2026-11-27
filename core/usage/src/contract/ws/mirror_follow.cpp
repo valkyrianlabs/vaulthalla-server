@@ -27,7 +27,7 @@ WsField mfPosition(std::string name) {
 }
 
 WsField mfCoreState() {
-    return str("core_state").oneOf({"live", "paused", "diverged", "expired", "stopped", "switching"}).opt()
+    return str("core_state").oneOf({"live", "paused", "diverged", "expired", "stopped", "switching", "rejoining", "forked"}).opt()
         .desc("The vault's state on the core: diverged stops the mirror too.");
 }
 
@@ -224,6 +224,33 @@ std::vector<WsCommandUsage> mirrorFollowCommands() {
             auto r = mfRefusals();
             r.emplace_back("peer_revoked");
             r.emplace_back("mirror_not_prepared");
+            return r;
+        }(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "peer.mirror.promoted",
+        .description = "The new core tells its old core it took over (mirror.takeover), on every pass while the link is "
+                       "up until answered: the new term, the fork point and its digest, and the new core's digest at "
+                       "(term, 0). The old core stops taking changes for the vault at once (read-only) and answers "
+                       "pending until it decided: following (it committed nothing after the fork point: the vault's "
+                       "mirror in the new term), rejoining (it did: read-only with them until the merge; changes is "
+                       "their count) or forced (it had taken over too: both read-only until an operator picks one).",
+        .auth = "peer",
+        .payload = {mfVaultUid(), uinteger("term").gen(gen::ref("mirror.position", {"term"})).desc("The new term."),
+                    object("fork", "", {uinteger("term"), uinteger("seq"), str("digest"), integer("entries")})
+                        .gen(gen::ref("mirror.takeover", {"fork"}))
+                        .desc("The last position the new core applied from the old one, and its digest there."),
+                    object("baseline", "", {str("digest"), integer("entries")})
+                        .opt().gen(gen::ref("mirror.takeover", {"baseline"}))
+                        .desc("The new core's digest at (term, 0).")},
+        .response = {str("outcome").oneOf({"pending", "following", "rejoining", "forced"}),
+                     uinteger("changes").opt().desc("rejoining: the old core's changes past the fork point.")},
+        .refusal_codes = [] {
+            auto r = mfRefusals();
+            r.emplace_back("peer_revoked");
+            r.emplace_back("mirror_term_stale");
             return r;
         }(),
         .client_timeout = kDefaultTimeout,

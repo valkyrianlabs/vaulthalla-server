@@ -255,6 +255,7 @@ const std::map<std::string, std::string>& opaqueObjects() {
         {"peer.mirror.log response.groups[].rows[].state", "a replication log row's state document (design/peers/mirror.md \"State documents\"), carried verbatim and hashed by its canonical encoding (mirror/Hash.hpp), never read by the contract"},
         {"peer.mirror.log response.part.rows[].state", "a replication log row's state document, as in groups[].rows[].state"},
         {"peer.mirror.tree response.items[].state", "a baseline entry's state document, the same documents the replication log carries"},
+        {"mirror.takeover response.detail", "a take over's record of its fork base (its own digest, whether it is the fork point's, the copy's state before): shown verbatim, never read by the contract"},
         {"mirror.switch response.detail", "what the other server last said of a planned switch (its prepare's answer), or why the switch ended: shown verbatim, never read by the contract"},
         {"peer.mirror.tree response.vault", "the vault's document (vh_mirror_vault_state) as of the baseline, recorded by the mirror verbatim"},
         {"cloud.storage.status response.billing", "the account's billing summary as the service last answered GET /v1/billing, passed through for display"},
@@ -462,7 +463,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"peer_revoked", {"peer.mirror.offer", "peer.mirror.answer", "peer.mirror.keys", "peer.mirror.begin",
                               "peer.mirror.grant", "peer.mirror.cancel", "peer.mirror.submit", "peer.mirror.detached",
                               "peer.mirror.deleting", "peer.mirror.resync", "peer.mirror.switch.request",
-                              "peer.mirror.switch.prepare", "peer.mirror.switch.commit"}},
+                              "peer.mirror.switch.prepare", "peer.mirror.switch.commit", "peer.mirror.promoted"}},
             {"mirror_already", {"mirror.add"}}, {"mirror_start_running", {"mirror.add"}},
             {"vault_replicated", {"mirror.add"}}, {"vault_attach_running", {"mirror.add"}},
             {"vault_detach_running", {"mirror.add"}}, {"layout_migration_running", {"mirror.add"}},
@@ -502,12 +503,16 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"mirror_has_remote", {"mirror.switch", "peer.mirror.switch.request"}},
             {"mirror_pending_changes", {"mirror.switch", "peer.mirror.switch.prepare"}},
             {"mirror_contents_missing", {"mirror.switch", "peer.mirror.switch.prepare"}},
-            {"mirror_first_copy", {"mirror.switch", "peer.mirror.switch.prepare"}},
-            {"mirror_switch_refused", {"mirror.switch"}}, {"mirror_switch_no_role", {"mirror.switch"}}, {"mirror_orphaned", {"mirror.switch"}},
+            {"mirror_first_copy", {"mirror.switch", "peer.mirror.switch.prepare", "mirror.takeover"}},
+            {"mirror_switch_refused", {"mirror.switch"}}, {"mirror_switch_no_role", {"mirror.switch"}}, {"mirror_orphaned", {"mirror.switch", "mirror.takeover"}},
             {"mirror_term_mismatch", {"peer.mirror.switch.prepare"}},
             {"mirror_switch_ended", {"peer.mirror.switch.prepare"}}, {"mirror_ahead", {"peer.mirror.switch.prepare"}},
             {"mirror_digest_mismatch", {"peer.mirror.switch.prepare"}},
             {"mirror_not_prepared", {"peer.mirror.switch.commit"}},
+            {"mirror_term_stale", {"peer.mirror.promoted"}},
+            // Take over (wave 5 piece B, mirror::takeover).
+            {"mirror_not_mirror", {"mirror.takeover"}}, {"mirror_diverged", {"mirror.takeover"}},
+            {"mirror_core_reachable", {"mirror.takeover"}}, {"mirror_name_mismatch", {"mirror.takeover"}},
         };
         if (const auto m = kMirrorCodes.find(code); m != kMirrorCodes.end() && m->second.contains(command)) return true;
         if ((code == "no_pairing_window" || code == "rate_limited" || code == "device_unknown") &&

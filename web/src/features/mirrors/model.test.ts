@@ -37,6 +37,9 @@ const row = (over: Partial<MirroredVault> = {}): MirroredVault => ({
   rekey_recommended: false,
   deleting: null,
   stop_reason: null,
+  switch: null,
+  takeover: null,
+  advice: null,
   ...over,
 })
 

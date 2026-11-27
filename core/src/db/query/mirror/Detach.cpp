@@ -42,6 +42,19 @@ DetachRecord recordFrom(const pqxx::row_ref row) {
     return r;
 }
 
+// A core row a detach takes (MirrorDetach::detachable): the other server took over (rejoining, forked), or this
+// server's own take over is still open.
+bool coreDetachable(pqxx::work& txn, const MirrorVault& row) {
+    if (row.role != "core") return false;
+    if (row.state == "rejoining" || row.state == "forked") return true;
+    return txn.exec("SELECT 1 FROM mirror_takeover WHERE vault_id = $1 AND settled_at IS NULL", pqxx::params{row.vault_id})
+               .size() > 0;
+}
+
+bool detachableIn(pqxx::work& txn, const MirrorVault& row) {
+    return row.role == "mirror" || row.role == "orphaned" || coreDetachable(txn, row);
+}
+
 // A live file whose current generation a content row still expects: its contents are not here.
 constexpr auto kMissingFrom =
     " FROM mirror_content_pending p "
@@ -79,12 +92,17 @@ uint64_t MirrorDetach::countMissing(const uint32_t vaultId) {
     });
 }
 
+bool MirrorDetach::detachable(const MirrorVault& row) {
+    using namespace mirror_detach_detail;
+    return Transactions::exec("mirror::MirrorDetach::detachable", [&](pqxx::work& txn) { return detachableIn(txn, row); });
+}
+
 DetachOutcome MirrorDetach::detach(const DetachInput& in) {
     using namespace mirror_detach_detail;
     return Transactions::exec("mirror::MirrorDetach::detach", [&](pqxx::work& txn) {
         DetachOutcome out;
         const auto row = MirrorVaults::get(txn, in.vault_id, true);
-        if (!row || (row->role != "mirror" && row->role != "orphaned"))
+        if (!row || !detachableIn(txn, *row))
             throw vh::ops::Conflict("vault " + std::to_string(in.vault_id) + " is not held here as another server's copy");
         out.was = *row;
         const auto vault = txn.exec("SELECT uid::text, owner_id FROM vault WHERE id = $1 FOR UPDATE",
@@ -119,11 +137,13 @@ DetachOutcome MirrorDetach::detach(const DetachInput& in) {
         txn.exec("UPDATE vault SET owner_id = $2 WHERE id = $1", pqxx::params{in.vault_id, in.owner_id});
 
         // The mirror's offer of the vault ends: told to the core when it is next reachable (unless the link is gone).
-        txn.exec("UPDATE mirror_offer SET state = 'detached', notify = $3, reason = 'detached_by_mirror', "
+        // A core row's offer (a take over or a switch turned it) ends on the mirror's side too: this server leaves the
+        // other with the vault, and is the one that tells.
+        txn.exec("UPDATE mirror_offer SET side = 'mirror', state = 'detached', notify = $3, reason = 'detached_by_mirror', "
                  "  finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP "
-                 "WHERE side = 'mirror' AND vault_uid = $1::uuid AND peer_id = $2 "
+                 "WHERE (side = 'mirror' OR $4) AND vault_uid = $1::uuid AND peer_id = $2 "
                  "  AND state IN ('installed', 'started', 'orphaned')",
-                 pqxx::params{vaultUid, row->peer_id, in.tell_core});
+                 pqxx::params{vaultUid, row->peer_id, in.tell_core, row->role == "core"});
 
         std::optional<bool> matched;
         if (row->state == "diverged") matched = false;

@@ -75,11 +75,18 @@ public:
     [[nodiscard]] static std::vector<MissingFile> missing(uint32_t vaultId);
     [[nodiscard]] static uint64_t countMissing(uint32_t vaultId);
 
+    // A row a detach takes: the vault's mirror or orphaned row, or (wave 5 piece B) a core row the other server's
+    // take over left (rejoining, forked) or one this server's own open take over holds (the old core may still hold
+    // the vault): leaving it makes the vault this server's alone, and the other server is told as a mirror's detach.
+    [[nodiscard]] static bool detachable(const MirrorVault& row);
+
     // One transaction: the vault's mirror or orphaned row (locked first) and what hangs off it go (log, entry hashes,
     // baseline, dirty rows, submissions; the grant with the row; the linked server's vault-role assignments), the files
     // whose contents never arrived are marked missing (every other content row goes), the pending changes as `changes`
     // says, the owner is set, the mirror's offer of the vault ends `detached` (to be told when `tell_core`), and the
-    // detach is recorded (side mirror). ops::Conflict when the vault is not held here (or no longer). Republishes
+    // detach is recorded (side mirror). A core row (detachable) is taken the same way: its open take over and rejoin
+    // settle `ended` and the fork base goes with the row (MirrorVaults::remove), its offer ends `detached` on the
+    // mirror's side so the other server is told. ops::Conflict when the vault is not held here (or no longer). Republishes
     // nothing: the caller does (rbac::mirrored, mirror::access) once it returns.
     static DetachOutcome detach(const DetachInput& in);
 

@@ -3,7 +3,9 @@
 #include "audit/Trail.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/mirror/MirrorVault.hpp"
+#include "db/query/mirror/Rejoin.hpp"
 #include "db/query/mirror/Resync.hpp"
+#include "db/query/mirror/Takeover.hpp"
 #include "log/Registry.hpp"
 #include "mirror/access/Access.hpp"
 #include "mirror/submit/Local.hpp"
@@ -58,6 +60,11 @@ json serveResync(const uint32_t callerPeerId, const json& payload) {
                                std::string("the core could not take its tree again now; ask again: ") + e.what());
     }
     mq::Resync::recordCoreResync(vaultId);
+    // Its old core (rejoining or forked) starts over from this server's tree: the take over has nothing left to wait
+    // for (nothing of the other's is merged; what it held is kept there as held changes).
+    if (const auto t = mq::Takeovers::openOf(vaultId); t && t->peer_id == callerPeerId)
+        (void)mq::Takeovers::settle(t->id, "returned", {{"why", "the old core started its copy over from this server"}});
+    (void)mq::Rejoins::closeForked(vaultId);
     const auto entries = fresh.baseline_digest ? fresh.baseline_digest->entries : 0;
     audit::record({.action = "mirror.resync", .outcome = audit::Outcome::Info, .vault_id = vaultId,
                    .details = {{"peer", callerPeerId}, {"side", "core"}, {"term", fresh.term},
@@ -73,6 +80,15 @@ json serveResync(const uint32_t callerPeerId, const json& payload) {
 
 json start(const uint32_t vaultId, const uint32_t actorId, const std::string& actorName,
            vh::mirror::follow::Transport& transport) {
+    // An old core that learned another server took over (rejoining: it holds changes the new core never received; or
+    // forked: both took over): starting over from the other server makes it that server's mirror in its term first;
+    // what it holds that the other's tree does not is kept as held changes by the copy's own rule.
+    if (const auto before = mq::MirrorVaults::get(vaultId);
+        before && before->role == "core" && (before->state == "rejoining" || before->state == "forked")) {
+        if (!transport.connected(before->peer_id))
+            throw vh::ops::Refused("mirror_core_unreachable", "the link to the other server is down; try again later");
+        if (!mq::Rejoins::toMirrorForResync(vaultId)) throw vh::ops::NotFound("no rejoin of this vault here");
+    }
     const auto mv = mq::MirrorVaults::get(vaultId);
     if (!mv || mv->role != "mirror")
         throw vh::ops::NotFound("vault " + std::to_string(vaultId) + " is not held here as another server's copy");

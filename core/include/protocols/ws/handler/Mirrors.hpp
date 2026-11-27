@@ -31,6 +31,8 @@ struct Mirrors {
     static json resync(const json& payload, const std::shared_ptr<Session>& session);
     // mirror.switch: a planned switch of the core role, asked on either server (wave 5 piece B).
     static json switchRole(const json& payload, const std::shared_ptr<Session>& session);
+    // mirror.takeover: the mirror takes over as the vault's core while its core is gone (wave 5 piece B).
+    static json takeover(const json& payload, const std::shared_ptr<Session>& session);
 
     // A linked server's session.
     static json offer(const json& payload, const std::shared_ptr<Session>& session);

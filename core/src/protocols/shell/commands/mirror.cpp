@@ -203,7 +203,13 @@ CommandResult handleInfo(const CommandCall& call) {
     if (!vault) return invalid("mirror info: the vault is its number (vh vault list)");
     return runMirrorOp("mirror info", [&] { return mirrors::get(call.user, static_cast<uint32_t>(*vault)); },
                        [&](const mirrors::Mirrored& m) {
-                           return json ? mirrorPretty({{"vault", mirrors::toJson(m)}}) : mirroredText(m);
+                           if (json) return mirrorPretty({{"vault", mirrors::toJson(m)}});
+                           // What to do next when the vault waits on the other server (a switch, a take over).
+                           const auto j = mirrors::toJson(m);
+                           auto text = mirroredText(m);
+                           if (j.contains("advice") && j["advice"].is_string())
+                               text += "  " + j["advice"].get<std::string>() + "\n";
+                           return text;
                        });
 }
 
@@ -474,6 +480,27 @@ CommandResult handleSwitch(const CommandCall& call) {
         });
 }
 
+CommandResult handleTakeover(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"mirror", "takeover"}));
+    const auto json = hasFlag(call, "json");
+    const auto vault = parseUInt(call.positionals.at(0));
+    if (!vault || *vault == 0) return invalid("mirror takeover: the vault is its number (vh vault list)");
+    const auto confirm = optVal(call, "confirm");
+    if (!confirm || confirm->empty()) return invalid("mirror takeover: type the vault's name with --confirm <name>");
+    return runMirrorOp(
+        "mirror takeover", [&] { return mirrors::takeover(call.user, static_cast<uint32_t>(*vault), *confirm); },
+        [&](const nlohmann::json& r) {
+            if (json) return mirrorPretty(r);
+            const auto fork = r.value("fork", nlohmann::json::object());
+            return fmt::format("This server is vault {}'s core now (term {}; fork point ({}, {})). {} pending change(s) "
+                               "became ordinary changes here, {} held change(s) stay listed, {} file(s) whose contents "
+                               "never arrived. Warning: {}.\n",
+                               *vault, r.value("term", uint64_t{0}), fork.value("term", uint64_t{0}),
+                               fork.value("seq", uint64_t{0}), r.value("pending_made_local", 0u), r.value("held", 0u),
+                               r.value("contents_missing", 0u), r.value("warning", std::string{}));
+        });
+}
+
 CommandResult handleMirror(const CommandCall& call) {
     if (call.positionals.empty()) return usage(call.constructFullArgs());
     const auto [sub, subcall] = descend(call);
@@ -495,6 +522,7 @@ CommandResult handleMirror(const CommandCall& call) {
     if (is("versions")) return handleVersions(subcall);
     if (is("resync")) return handleResync(subcall);
     if (is("switch")) return handleSwitch(subcall);
+    if (is("takeover")) return handleTakeover(subcall);
     return invalid(call.constructFullArgs(), "Unknown mirror subcommand: '" + std::string(sub) + "'");
 }
 

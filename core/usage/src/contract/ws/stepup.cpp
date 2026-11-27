@@ -101,6 +101,8 @@ std::vector<WsStepUp> stepUpTable() {
         // data.destroy: target-bound, single use
         {"storage.vault.remove", "data.destroy", kTarget, ""},
         {"mirror.cancel", "data.destroy", kTarget, "with remove_copy on a mirror that has begun, or removing an orphaned copy"},
+        {"mirror.takeover", "data.destroy", kTarget,
+         "bound to the vault: the old core's changes this server never received are left to the merge when it returns"},
         {"recovery.point.delete", "data.destroy", kTarget, ""},
         {"vault.recovery.suspend", "data.destroy", kTarget, ""},
         {"vault.recovery.update", "data.destroy", kTarget,
