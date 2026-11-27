@@ -1001,11 +1001,12 @@ def _leaving(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, report:
                  wrote == "WROTE" and _plain(b, "whole/docs/after_detach.txt") == hashlib.sha256(b"mine now\n").hexdigest()
                  and _pending_rows(b, vb) == 0, wrote)
     code, held, text = _json(b, "mirror", "held", "--vault", str(vb))
-    # 7k's refused write is the drill's only held write (its entry went back to A's state, so it may name no path).
-    writes = [h for h in held.get("held") or [] if h.get("op") == "write" and h.get("state") == "open"]
+    # 7k's refused file: the mount's create, truncate and write each held (in that order); the last holds the bytes.
+    writes = sorted((h for h in held.get("held") or [] if h.get("op") == "write" and h.get("state") == "open"),
+                    key=lambda h: h["id"])
     saved = ""
     if writes:
-        b.vh("mirror", "save", str(writes[0]["id"]), "saved_refused.txt")
+        b.vh("mirror", "save", str(writes[-1]["id"]), "saved_refused.txt")
         saved = (b.private / "saved_refused.txt").read_text()
     report.check("9b: the held write from 7k stays listed after the detach, and `vh mirror save` gives the person's "
                  "version", saved == "refused on A\n", text[-300:])
