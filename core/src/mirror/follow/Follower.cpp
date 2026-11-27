@@ -6,6 +6,7 @@
 #include "mirror/Contents.hpp"
 #include "mirror/follow/Protocol.hpp"
 #include "mirror/start/Start.hpp"
+#include "mirror/submit/Submit.hpp"
 #include "peer/Links.hpp"
 
 #include <paths.h>
@@ -234,6 +235,9 @@ StepResult Follower::step(const uint32_t vaultId, Transport& transport, const ap
         return {.step = Step::Progress, .applied = out.applied};
     }
 
+    // ---- this server's own changes, in order, before the log: their confirmations come back in it
+    const auto own = vh::mirror::submit::submitPending(vaultId, transport, deadline);
+
     // ---- the log
     bool appliedAny = false;
     bool more = true;
@@ -307,7 +311,8 @@ StepResult Follower::step(const uint32_t vaultId, Transport& transport, const ap
                                         vaultId, mv->term, mv->last_seq, mv->digest.hex(), mv->digest.entries);
         (void)acknowledge(transport, *mv, *uid, mv->position(), mv->digest);
     }
-    out.step = appliedAny ? Step::Progress : Step::Idle;
+    out.step = appliedAny || own.submitted > 0 ? Step::Progress : own.waiting ? Step::Waiting : Step::Idle;
+    if (own.waiting) out.detail = own.detail;
     return out;
 }
 

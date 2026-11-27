@@ -157,6 +157,17 @@ uint64_t ApplyRows::childCount(pqxx::work& txn, const uint32_t dirId) {
     return txn.exec("SELECT count(*) FROM fs_entry WHERE parent_id = $1", pqxx::params{dirId}).one_field().as<uint64_t>();
 }
 
+bool ApplyRows::inodeTaken(pqxx::work& txn, const uint64_t inode) {
+    return !txn.exec("SELECT 1 FROM fs_entry WHERE inode = $1", pqxx::params{static_cast<int64_t>(inode)}).empty();
+}
+
+std::vector<uint32_t> ApplyRows::children(pqxx::work& txn, const uint32_t dirId) {
+    std::vector<uint32_t> out;
+    for (const auto row : txn.exec("SELECT id FROM fs_entry WHERE parent_id = $1 ORDER BY id", pqxx::params{dirId}))
+        out.push_back(row[0].as<uint32_t>());
+    return out;
+}
+
 bool ApplyRows::within(pqxx::work& txn, const uint32_t entryId, const uint32_t ancestorId) {
     return txn.exec("WITH RECURSIVE up AS (SELECT id, parent_id FROM fs_entry WHERE id = $1 "
                     "  UNION ALL SELECT e.id, e.parent_id FROM fs_entry e JOIN up ON e.id = up.parent_id) "

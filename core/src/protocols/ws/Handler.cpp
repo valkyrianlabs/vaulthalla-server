@@ -164,6 +164,8 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("peer.mirror.log", &handler::MirrorFollow::log);
     r->registerPayload("peer.mirror.ack", &handler::MirrorFollow::ack);
     r->registerPayload("peer.mirror.notify", &handler::MirrorFollow::notify);
+    // A change made on the mirror (wave 4 piece B; design/peers/mirror.md "As built: a change made on the mirror").
+    r->registerPayload("peer.mirror.submit", &handler::MirrorFollow::submit);
 }
 
 void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {

@@ -4,7 +4,8 @@ Status: design, phase 0 of the server mirror plan (2026-11-25). Built so far: pe
 migrations 158/159), the core side of the replication log (phase 2 piece 1, migration 160; "As built: the
 replication log" below) and the sealed contents lane with the mirror's receive path (phase 2 wave 2, migration 161;
 "As built: sealed contents" below) and following the core (phase 2 wave 3 piece B, migration 164; "As built: following
-the core" below). The rest is not implemented. It covers how a vault
+the core" below), and changes made on the mirror without contents (wave 4 piece B, migration 166; "As built: a change
+made on the mirror" below). The rest is not implemented. It covers how a vault
 is kept identical on two linked servers: the core role, the replication log, applying it, changes made on the
 mirror, behaviour while the link is down, moving the core, leaving a mirror, and vaults that also have a remote. The
 link is in [`link.md`](link.md); accounts, ownership and audits are in [`identity.md`](identity.md). Section "What
@@ -678,6 +679,95 @@ refused yet), submitting the mirror's changes, history.
   by hand. Restore and purge have no person's command on a local vault (the purge is a bucket vault's pass, a restore
   the manifest applier's), so the drill does not do them; `MirrorFollowDbTest` applies both from a real core's log.
   A single-group swap needs a rename exchange, which the mount does not offer: the drill swaps with three renames.
+
+### As built: a change made on the mirror (phase 2 wave 4, piece B, migration 166)
+
+Steps 1, 3, 4 and 5 of "A change made on the mirror" and "When the core refuses" for the operations without contents.
+Contents (step 2, uploads, FUSE seals, a file open for writing when the link drops, the staged bytes on the core) are
+not built: see "Not built here" below. Piece A's gate (`mirror::access`) decides whether a write may happen at all;
+everything here is behind it, entered only while the vault is `Live` here. Decided while building (owner's
+instruction to build without waiting for review); each is listed for confirmation in the hand-off:
+
+- **Local apply** (`mirror::submit::Local`, built by `ops::fs` right after the gate's `requireWritable` line):
+  `mkdir`, `move`, `rename` and `remove` (a file to the trash, a folder or symlink deleted, as `ops::fs::remove` does)
+  are applied here at once, through the same `vh::fs` calls a local change uses, so the journal fires and this server's
+  clients see the change. Under the vault's local-change lock (`submit::vaultMutex`, also held by the applier around
+  every page, group and settle, so a change here and a group from the core never interleave) it first records the
+  change (`mirror_pending`, state `local`) with every entry it touches as the tables hold it now (the entry and, for a
+  folder, everything under it: a rename re-stamps them), then runs the mutation with `vh.mirror_local = on` (piece A's
+  backstop) and `vh.mirror_request` in every transaction it begins (`db::SessionSettings`, applied by
+  `Transactions::exec`), then marks it `pending` and wakes the follower. A mutation that fails having changed nothing
+  leaves nothing; one that changed something is submitted all the same.
+- **A created entry's uid is chosen by the mirror** (`db::query::fs::AssignedUid`, consulted by the folder, file and
+  symlink inserts for that one path on that thread) and the core creates it under the same uid, so the entry never
+  changes id and the confirmation finds it by uid. The core refuses a uid it already holds (`invalid`).
+- **Copy is submitted only** (deviation): its new entries need new uids for a whole tree, so the mirror does not copy
+  locally; the core copies and the entries arrive in the log with the core's uids.
+- **What "dirty" means.** A pending change never moves `mirror_entry_hash` or the digest: they stay what the core last
+  confirmed, so every acknowledgement is of the core's tree. `mirror_dirty` holds, per entry a pending change touched,
+  the state the core last confirmed for it (captured from the tables while the entry was clean; kind `none` for an
+  entry the mirror created). The compare-and-set of every group is against the recorded hash, which is the last one the
+  core confirmed, never the pending one.
+- **Submit** (`peer.mirror.submit`, from the follower's visit before it pulls the log; never on a FUSE worker or the
+  link's thread): `{vault_uid, request_id, person: {node, id}, at: {term, seq}, op, entry_uid, args: {uid, parent_uid,
+  name}}`, every entry by uid (the vault's uid names its root). One change at a time per vault, oldest first; the next
+  goes once the core has answered the previous one (executed or refused), so a refusal that renames and resubmits keeps
+  its place (the same row, a new request id).
+- **The core answers at once and executes on the sync pool** (deviation from executing in the handler: the link's two
+  io threads would block for a large folder). `mirror_submission` keeps each request id with what the core did the first
+  time: `queued`, `running`, `executed` with the number of groups it logged, `refused` with the code. A repeated submit
+  is answered from it and never executed twice; a `running` row a stop interrupted is executed again only if nothing of
+  it reached the log (else it counts as executed). Kept 30 days (the log's own retention; not swept yet: known limit).
+- **Executing** (`mirror::submit::drain`): as the remote account for (the mirror's node id, the person's id there),
+  created the first time it is named; the person must be one of the submitting server's own accounts (`invalid`
+  otherwise). Through `ops::fs` inside an `ops::fs::PeerSubmission`: the linked server's vault role
+  (`rbac::resolver::PeerVault::may`) is the ceiling and, **with no per-account rules yet, the only check** (the
+  person's own role on the core is a later piece; a remote account never authorizes on its own); then the op's own
+  checks: a taken name is `conflict` (never replaced), a missing entry or folder `not_found`, the ceiling `denied`.
+  Every transaction carries `vh.mirror_origin` (the request id: the log's `origin`) and `vh.actor` (the person: the
+  log's actor). The audit event is the op's own (`fs.mkdir`, `fs.move`, ...) with the person as actor and `peer_id`,
+  `peer_node` and `origin` in its details. Something logged before a failure counts as executed (its groups confirm
+  what happened).
+- **Confirm** (the applier): log rows carry `origin` on the wire. A group whose origin is one of this server's pending
+  requests counts towards it (`groups_applied`); once the core's answer (`groups_expected`) and the groups agree, the
+  change is confirmed in the same transaction: its row goes and its entries settle. **It is not applied a second time:**
+  the group is applied to the entries where they stand here (a dirty entry may be created, moved, trashed or removed
+  here already; the existence checks tolerate it), which for the person's own change moves nothing (the same row, the
+  same inode, no backing file touched) and writes only the core's values (times, owner, attribution); each entry's hash
+  from the tables must then be the core's, and the digest moves exactly as on the core. Bytes already on this disk at
+  the generation the core names are not fetched again (the comparison is with the entry as it was before the
+  transaction).
+- **An unrelated core change to a pending entry arrives first:** the compare-and-set passes (it is against what the
+  core confirmed), the group applies the core's state to the entry (so the person's pending view of that entry gives
+  way to the core's until their change comes back: known limit, no rebase), and `mirror_dirty` takes the core's new
+  state as the one to come back to. The person's change then goes to the core, which executes it on top.
+- **A pending entry in the way of the core's change** is brought into line in the same transaction, nothing else:
+  one that holds the name the core's entry needs steps aside to its conflict name (`name (conflict <first 8 hex of its
+  uid>)`, before the extension of a file) and stays pending; a folder a pending change removed that the core's entry
+  needs comes back as the core has it; an entry a pending change made in a folder the core removed goes back to where
+  the core has it (or, made here, is removed: its change will be refused and held).
+- **Settling** (`apply::settle`, and at confirmation): every entry of the settled change that no other pending change
+  holds is brought back to its confirmed state where its tables differ (a revert, in the applier's work loop, verified
+  against the recorded hash; the digest must not move), then is clean.
+- **When the core refuses** (the design's table, as built): `conflict` for mkdir, move or rename becomes a conflict
+  copy: the same entry takes its conflict name here (unless the applier set it aside already) and the change is
+  resubmitted under that name with a new request id, recorded in `mirror_held` as kind `conflict` (copy name, reason);
+  a conflict copy refused again for its name, and every other refusal (`denied`, `not_found`, `invalid`, a fault) is a
+  **held change**: the entries settle back to the core's state and `mirror_held` keeps the operation, its arguments,
+  where it was, the person and the core's code and text (kind `held`). Held changes of these operations carry no
+  bytes, so there is nothing to seal; `Pending::resolveHeld` marks one `discarded` or `retried`. **Not built:** the
+  person's commands (`mirror.held.list|get|retry|discard`, CLI, console) and generalising Sync Conflicts to list them;
+  the record and its queries exist.
+- **Restart:** rows survive; a `local` row a stop left is submitted (the core decides; its answer settles the entries),
+  a `submitted` row is asked again under its request id. Waits are bounded: the link's request timeout, the follower's
+  3 s visit, 100 ms between asking again about a queued change.
+
+Not built here: contents (step 2: the `PUT` lane, staged bytes and their sweep, `commitSealed` from them; uploads on the
+mirror, FUSE seals, an open file kept when the link drops; until then `ops::fs::authorizeUpload` and `commitSealed`
+refuse on a vault held here with `MirrorReadOnly("mirror_contents_not_built")`, and the other content surfaces must be
+refused by piece A's gate: `mirror::submit::supportsLocally(operation)` says which operations this piece takes), restore
+and set-attributes (no surface on a local vault has them), the held-change commands, per-account rules on the core, the
+two-daemon drill step.
 
 ### Key rotation
 

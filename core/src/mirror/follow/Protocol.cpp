@@ -94,7 +94,8 @@ json toJson(const mq::Row& row) {
             {"state", row.state},
             {"entry_hash", followHashOrNull(row.entry_hash)},
             {"prev_hash", followHashOrNull(row.prev_hash)},
-            {"actor", row.actor ? json{{"node", row.actor->node}, {"id", row.actor->id}} : json(nullptr)}};
+            {"actor", row.actor ? json{{"node", row.actor->node}, {"id", row.actor->id}} : json(nullptr)},
+            {"origin", row.origin ? json(*row.origin) : json(nullptr)}};
 }
 
 vh::mirror::apply::LogRow rowFromJson(const json& j) {
@@ -106,6 +107,7 @@ vh::mirror::apply::LogRow rowFromJson(const json& j) {
     r.state = j.value("state", json::object());
     r.entry_hash = followHashFrom(j, "entry_hash");
     r.prev_hash = followHashFrom(j, "prev_hash");
+    if (j.contains("origin") && j["origin"].is_string()) r.origin = j["origin"].get<std::string>();
     return r;
 }
 

@@ -283,7 +283,9 @@ bool Router::isPeerWireCommand(const std::string_view command) {
         std::string_view{"peer.mirror.tree"},
         std::string_view{"peer.mirror.log"},
         std::string_view{"peer.mirror.ack"},
-        std::string_view{"peer.mirror.notify"}
+        std::string_view{"peer.mirror.notify"},
+        // A change made on the mirror (wave 4 piece B; handler/MirrorFollow.hpp).
+        std::string_view{"peer.mirror.submit"}
     };
     return containsCommand(commands, command);
 }

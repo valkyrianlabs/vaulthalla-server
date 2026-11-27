@@ -1051,6 +1051,8 @@ export interface WebSocketCommandMap {
   'peer.mirror.log': WsContract['peer.mirror.log']
   'peer.mirror.ack': WsContract['peer.mirror.ack']
   'peer.mirror.notify': WsContract['peer.mirror.notify']
+  // A change made on the mirror, submitted to the core (design/peers/mirror.md "As built: a change made on the mirror").
+  'peer.mirror.submit': WsContract['peer.mirror.submit']
   // Any signed-in user pairs devices to their own account: open a 10-minute window, then approve a request by picking
   // the one of its three code_choices the device shows (a wrong pick denies the request).
   'device.pairing.open': WsContract['device.pairing.open']

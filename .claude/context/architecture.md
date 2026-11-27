@@ -508,7 +508,7 @@ the console reads to leave the Linked servers page out (`web-client.md`, "Linked
   pairing refuses a key in `peer`, `peer.pair.request` a key in `devices`. HTTP lanes answer 403 to a peer key; the
   sealed lane (`/peer/object/…`, below) is the one HTTP route it gets, and nobody else does (404).
 - **What a peer session runs:** `Router::isPeerWireCommand` (peer.hello, peer.ping, peer.endpoints,
-  peer.identity.rotate, peer.unlinked, and piece A's peer.mirror.offer|answer|keys|begin|grant|cancel) plus meta.hello / meta.contract.get; anything else `Deny` (fail closed). A
+  peer.identity.rotate, peer.unlinked, peer.mirror.offer|answer|keys|begin|grant|cancel|tree|log|ack|notify|submit) plus meta.hello / meta.contract.get; anything else `Deny` (fail closed). A
   pairing connection this server dialled (`Principal::pairing`) runs nothing. The wire set and `peer.pair.*` are
   refused on every other session kind; `peer.pair.*` runs on pairing-only connections. Answers on a Peer session
   (frames with `status`) go to the link's pending table (`PeerHooks::onResponse`), never to the router; an unknown one
@@ -668,6 +668,31 @@ that a `mirror` row exists (`MirrorVaults::startMirror`) and that `MirrorVaults:
   compare-and-set, `ManifestApply::replaceContent`), as the type trigger does: no crossing with fs_entry-then-files.
 - Tests: `MirrorFollowDbTest.*` (`test_mirror_follow_db.cpp`: capture and replay, serving, retention, the per-vault
   baseline, the deadlock); contracts as for 160; `SqlDeployerHistoryDb.*` for 164.
+
+### A change made on the mirror (`mirror/submit`, `db::query::mirror::Pending`, migration 166)
+
+Phase 2 wave 4 piece B (`design/peers/mirror.md` "As built: a change made on the mirror"); piece A's gate
+(`mirror/access`, `requireWritable`) decides whether a write may happen at all; this is what happens to one it lets
+through on a Live mirror.
+- **Local (`mirror::submit::Local`, in `ops::fs` after the gate's line):** mkdir, move, rename, remove applied here as
+  pending under the vault's local-change lock (`submit::vaultMutex`, also taken by `mirror::apply::run`): `mirror_pending`
+  (state local, then pending) and `mirror_dirty` (each touched entry's last confirmed state) first, then the mutation with
+  `vh.mirror_local`/`vh.mirror_request` in every transaction (`db::SessionSettings`, applied by `Transactions::exec`); a
+  created entry's uid chosen first (`db::query::fs::AssignedUid`, read by the Directory/File/Symlink inserts). Copy is
+  submitted only. Contents are refused on a held vault (`submit::requireSupported`: `mirror_contents_not_built`).
+  `mirror_entry_hash` and the digest never move for a pending change.
+- **Submit (`mirror::submit::submitPending`, from `Follower::step` before the log):** `peer.mirror.submit` (peer wire
+  set), one change at a time per vault in order. Core: `serveSubmit` answers at once from `mirror_submission` (queued,
+  running, executed with groups, refused with code: never executed twice) and `drain`s on the sync pool, one vault's in
+  order, as the remote account for the person inside `ops::fs::PeerSubmission` (ceiling `PeerVault::may` is the whole
+  check for now; audit details `peer_id`, `peer_node`, `origin`), with `vh.mirror_origin` and `vh.actor` set.
+- **Confirm/settle (`mirror::apply`):** log rows carry `origin`; a group of a pending request counts
+  (`groups_applied` vs the answer's `groups_expected`), confirmation drops the row and settles its entries in the same
+  transaction; dirty entries are applied from where they stand (no second apply), set aside to `name (conflict <uid8>)`
+  when they hold a name the core's entry needs, reverted when in the way; `apply::settle` reverts on refusal.
+  Refusals: `conflict` for mkdir/move/rename resubmits under the conflict name (record kind conflict in `mirror_held`),
+  anything else is a held change (`mirror_held` kind held, entries reverted).
+- Tests: `MirrorSubmitDbTest.*` (`test_mirror_submit_db.cpp`: both servers in one database, the inactive one parked).
 
 ### A linked server's vault role and mirrored vaults (migration 162; `design/peers/identity.md`)
 
