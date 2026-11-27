@@ -143,6 +143,7 @@ std::vector<WsEffect> effectTable() {
         {"meta.hello", "read"},
         {"mirror.accept", "write"},
         {"mirror.accept_all.set", "write"},
+        {"mirror.mirror_all.set", "write"},
         {"mirror.add", "write"},
         {"mirror.cancel", "destructive"},
         {"mirror.decline", "write"},

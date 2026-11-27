@@ -227,6 +227,22 @@ CommandResult handleAcceptAll(const CommandCall& call) {
                        });
 }
 
+CommandResult handleMirrorAll(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"mirror", "mirror-all"}));
+    const auto json = hasFlag(call, "json");
+    const auto& peerRef = call.positionals.at(0);
+    const auto& state = call.positionals.at(1);
+    if (state != "on" && state != "off") return invalid("mirror mirror-all: the state is on or off");
+    return runMirrorOp("mirror mirror-all", [&] { return mirrors::setMirrorAll(call.user, peerRef, state == "on"); },
+                       [&](const ::vh::db::query::mirror::AcceptVaults& a) {
+                           if (json) return mirrorPretty(mirrors::toJson(a, ::vh::ops::peers::resolveRef(peerRef)));
+                           return std::string(a.enabled
+                                                  ? "Every vault of this server that is not mirrored yet, and each new "
+                                                    "one, is offered to that server now.\n"
+                                                  : "Vaults are offered to that server only with vh mirror add now.\n");
+                       });
+}
+
 CommandResult handleKeep(const CommandCall& call) {
     validatePositionals(call, resolveUsage({"mirror", "keep-removed"}));
     const auto json = hasFlag(call, "json");
@@ -513,6 +529,7 @@ CommandResult handleMirror(const CommandCall& call) {
     if (is("list")) return handleList(subcall);
     if (is("info")) return handleInfo(subcall);
     if (is("accept-all")) return handleAcceptAll(subcall);
+    if (is("mirror-all")) return handleMirrorAll(subcall);
     if (is("keep-removed")) return handleKeep(subcall);
     if (is("held")) return handleHeld(subcall);
     if (is("save")) return handleHeldGet(subcall);

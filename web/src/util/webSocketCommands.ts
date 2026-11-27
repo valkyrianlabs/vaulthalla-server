@@ -1040,6 +1040,8 @@ export interface WebSocketCommandMap {
   'mirror.get': WsContract['mirror.get']
   'mirror.accept_all.set': WsContract['mirror.accept_all.set']
   'mirror.keep_removed.set': WsContract['mirror.keep_removed.set']
+  // On the core: offer every vault (new ones included) to a linked server (super admins; keys step-up to turn on).
+  'mirror.mirror_all.set': WsContract['mirror.mirror_all.set']
   // Changes made here that the core refused: held changes and conflict copies (super admins).
   'mirror.held.list': WsContract['mirror.held.list']
   'mirror.held.discard': WsContract['mirror.held.discard']

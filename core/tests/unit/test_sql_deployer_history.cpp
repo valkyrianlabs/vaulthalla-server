@@ -2645,6 +2645,40 @@ TEST_F(SqlDeployerHistoryDb, MirrorSwitchMigration168IsAdditiveAndIdempotent) {
     });
 }
 
+// Migration 170 (mirror every vault to a linked server): on an upgraded database with a linked server, the three
+// peer.mirror_vaults columns are added off, the row is untouched, and a second run changes nothing.
+TEST_F(SqlDeployerHistoryDb, MirrorAllMigration170IsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        const std::string file = "170_mirror_all.sql";
+        for (const auto* c : {"mirror_vaults", "mirror_vaults_set_by", "mirror_vaults_set_at"})
+            txn.exec(std::string("ALTER TABLE peer DROP COLUMN IF EXISTS ") + c);
+        txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
+        const auto peer = txn.exec("INSERT INTO peer (node_id, name, spki_sha256, wrap_public_key, accept_vaults) "
+                                   "VALUES ('claude-170-node', 'vps', repeat('cf', 32), decode(repeat('00', 32), 'hex'), "
+                                   "TRUE) RETURNING id").one_field_ref().as<int>();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, file));
+        EXPECT_EQ(report.applied.size(), 1u) << "only 170 was missing";
+        EXPECT_EQ(recordedHash(txn, file), currentHash(file));
+        for (const auto* c : {"mirror_vaults", "mirror_vaults_set_by", "mirror_vaults_set_at"})
+            EXPECT_TRUE(columnExists(txn, "peer", c)) << c;
+        const auto row = txn.exec("SELECT mirror_vaults, mirror_vaults_set_by IS NULL, mirror_vaults_set_at IS NULL, "
+                                  "  accept_vaults FROM peer WHERE id = $1", pqxx::params{peer}).one_row();
+        EXPECT_FALSE(row[0].as<bool>()) << "off on an upgraded link";
+        EXPECT_TRUE(row[1].as<bool>());
+        EXPECT_TRUE(row[2].as<bool>());
+        EXPECT_TRUE(row[3].as<bool>()) << "the row is untouched";
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / file)));
+        EXPECT_FALSE(txn.exec("SELECT mirror_vaults FROM peer WHERE id = $1", pqxx::params{peer}).one_field_ref().as<bool>());
+    });
+}
+
 // Migration 167 (leaving a mirror, wave 5 piece A): on an upgraded database with mirror offers and expected contents in
 // it, admin.mirror.detach goes to super_admin only (the fresh seed's grants), the offer and content CHECKs learn
 // 'detached' and 'missing' without changing a row, mirror_detached and keep_versions are added empty, and a second run

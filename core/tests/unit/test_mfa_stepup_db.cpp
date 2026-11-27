@@ -153,6 +153,7 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
     const std::map<std::string, std::string> elsewhere{
         {"vault.keys.export", "console: export_requires_device first; device: test_key_backup_grants_db.cpp"},
         {"mirror.add", "needs a linked server and its link up: MirrorStartDbTest.TheConsoleStepsUpToSendAVaultsKeys..."},
+        {"mirror.mirror_all.set", "needs a linked server: MirrorStartDbTest.MirrorEveryVaultOffersEachVaultOnceNewOnesToo..."},
         {"mirror.cancel", "with remove_copy on a mirror that has begun, or an orphaned copy: MirrorStartDbTest."
                           "TheConsoleStepsUpToSendAVaultsKeysToRemoveACopyOrAnOrphanedCopyAndForNothingElse"},
         {"mirror.takeover", "needs a mirror whose core is gone: MirrorTakeoverDbTest.TheConsoleStepsUpBoundToTheVault..."},

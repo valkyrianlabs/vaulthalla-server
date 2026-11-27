@@ -14,6 +14,7 @@
 #include <fmt/format.h>
 
 #include <set>
+#include <utility>
 
 namespace vh::mirror::start {
 
@@ -107,13 +108,17 @@ const std::shared_ptr<Service>& Service::instance() {
 void Service::wake() {
     std::scoped_lock lock(mutex_);
     woken_ = true;
+    everyVaultWoken_ = true;
 }
 
 void Service::resetForTesting() {
     std::scoped_lock lock(mutex_);
     sentGrants_.clear();
     retryAt_.clear();
+    everyVaultRetry_.clear();
+    everyVaultAt_ = {};
     woken_ = false;
+    everyVaultWoken_ = false;
 }
 
 void Service::runLoop() {
@@ -139,6 +144,12 @@ void Service::runLoop() {
 void Service::tick() {
     using namespace start_service_detail;
     if (!config::Registry::get().peers.experimental) return;
+    bool woken = false;
+    {
+        std::scoped_lock lock(mutex_);
+        woken = everyVaultWoken_;
+        everyVaultWoken_ = false;
+    }
     // Unlinking ends the trust: the copies of an unlinked core are kept orphaned, its queued notices dropped.
     (void)reconcileUnlinked();
     for (const auto& o : Q::expireOffers())
@@ -168,6 +179,7 @@ void Service::tick() {
         }
     }
     syncGrants();
+    offerEveryVault(woken);
     // A vault this server is deleting (its retention window): its mirror is told, and told again after a link-up.
     vh::mirror::leave::syncDeletionNotices();
 }
@@ -296,6 +308,44 @@ void Service::step(const Offer& o) {
     if (o.state == "detached" && o.notify) {
         const auto a = ask("peer.mirror.detached", vh::mirror::leave::detachedPayload(o), std::chrono::seconds(15));
         if (ok(a) || (a && codeOf(*a) == "not_found")) (void)Q::told(o.id, o.state);
+    }
+}
+
+void Service::offerEveryVault(const bool now) {
+    using namespace start_service_detail;
+    const auto clock = SteadyClock::now();
+    if (!now && clock < everyVaultAt_) return;
+    everyVaultAt_ = clock + kEveryVaultInterval;
+    const auto t = transport();
+    if (!t.request || !t.upSince) return;
+    for (const auto& [peerId, setting] : Q::mirroringEveryVault()) {
+        if (!t.upSince(peerId)) continue;   // offered once the link is up
+        const auto peer = db::query::peer::Peers::byId(peerId);
+        if (!peer || peer->revoked()) continue;
+        for (const auto vaultId : Q::mirrorEveryVaultCandidates(peerId, setting.set_at.value_or(0))) {
+            const auto key = std::make_pair(peerId, vaultId);
+            {
+                std::scoped_lock lock(mutex_);
+                if (const auto it = everyVaultRetry_.find(key); it != everyVaultRetry_.end() && clock < it->second)
+                    continue;
+            }
+            try {
+                const auto offer = offerVault(vaultId, *peer, setting.set_by, "this server (mirror every vault to it)");
+                log::Registry::sync()->info("[MirrorStarter] Offered vault {} to linked server {} (it receives every "
+                                            "vault; offer {})", vaultId, peer->node_id, offer.id);
+            } catch (const ops::Refused& e) {
+                // Not mirrored as it is (legacy content, a running migration, ...): looked at again later.
+                log::Registry::sync()->info("[MirrorStarter] Vault {} is not offered to linked server {} yet ({}): {}",
+                                            vaultId, peer->node_id, e.code, e.what());
+                std::scoped_lock lock(mutex_);
+                everyVaultRetry_[key] = clock + kEveryVaultRetry;
+            } catch (const std::exception& e) {
+                log::Registry::sync()->warn("[MirrorStarter] Vault {} could not be offered to linked server {}: {}",
+                                            vaultId, peer->node_id, e.what());
+                std::scoped_lock lock(mutex_);
+                everyVaultRetry_[key] = clock + kEveryVaultRetry;
+            }
+        }
     }
 }
 

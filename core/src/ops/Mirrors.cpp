@@ -305,6 +305,31 @@ db::query::mirror::AcceptVaults setKeepRemoved(const Actor& actor, const std::st
     return Q::keepVaults(peer.id);
 }
 
+db::query::mirror::AcceptVaults mirrorAll(const Actor& actor, const std::string& peerRef) {
+    using namespace ops_mirrors_detail;
+    requireSuperAdmin(actor, "see which linked servers this server mirrors every vault to");
+    return Q::mirrorVaults(peers::resolveRef(peerRef).id);
+}
+
+db::query::mirror::AcceptVaults setMirrorAll(const Actor& actor, const std::string& peerRef, const bool enabled) {
+    using namespace ops_mirrors_detail;
+    requireSuperAdmin(actor, "decide whether this server mirrors every vault to a linked server");
+    const auto peer = peers::resolveRef(peerRef);
+    if (peer.revoked()) throw Refused("peer_not_linked", "server '" + peer.name + "' is unlinked: link it again first");
+    const auto before = Q::mirrorVaults(peer.id);
+    // Every vault's keys go to that server from now on: the keys step-up, bound to the server (none to turn it off).
+    if (enabled && !before.enabled)
+        auth::stepup::require(auth::stepup::Family::Keys, "mirror.mirror_all:" + std::to_string(peer.id));
+    Q::setMirrorVaults(peer.id, enabled, actor->id);
+    audit::record({.action = "mirror.mirror_all.set", .actor_id = actor->id, .actor = actor->name(),
+                   .details = {{"peer", peer.id}, {"node_id", peer.node_id}, {"enabled", enabled},
+                               {"was", before.enabled}}},
+                  fmt::format("[mirror] {} {} mirroring every vault of this server to linked server {} ('{}')",
+                              actor->name(), enabled ? "turned on" : "turned off", peer.node_id, peer.name));
+    vh::mirror::start::Service::instance()->wake();
+    return Q::mirrorVaults(peer.id);
+}
+
 // ---- json ---------------------------------------------------------------------------------------------------------
 
 namespace ops_mirrors_detail {

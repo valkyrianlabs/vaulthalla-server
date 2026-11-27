@@ -37,6 +37,7 @@ struct Mirrors {
     // A linked server's session.
     static json offer(const json& payload, const std::shared_ptr<Session>& session);
     static json answer(const json& payload, const std::shared_ptr<Session>& session);
+    static json mirrorAllSet(const json& payload, const std::shared_ptr<Session>& session);
     static json keys(const json& payload, const std::shared_ptr<Session>& session);
     static json key(const json& payload, const std::shared_ptr<Session>& session);   // peer.mirror.key (a rotation)
     static json begin(const json& payload, const std::shared_ptr<Session>& session);

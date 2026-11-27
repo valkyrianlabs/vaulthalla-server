@@ -472,7 +472,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"vault_pending_deletion", {"mirror.add"}}, {"vault_unavailable", {"mirror.add"}},
             {"legacy_content", {"mirror.add"}}, {"key_version_missing", {"mirror.add"}},
             {"key_version_unattested", {"mirror.add"}}, {"trashed_without_uid", {"mirror.add"}},
-            {"contents_not_held", {"mirror.add"}}, {"peer_not_linked", {"mirror.add"}},
+            {"contents_not_held", {"mirror.add"}}, {"peer_not_linked", {"mirror.add", "mirror.mirror_all.set"}},
             {"peer_link_down", {"mirror.add", "mirror.switch"}},
             {"mirror_offer_not_pending", {"mirror.accept", "mirror.decline"}},
             {"mirror_vault_exists", {"mirror.accept", "peer.mirror.keys"}},

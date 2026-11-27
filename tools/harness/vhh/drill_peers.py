@@ -1318,6 +1318,30 @@ def _rotation(a: Node, b: Node, node_a: str, node_b: str, report: Report) -> Non
     _start(b, a, node_b, node_a)
 
 
+def _mirror_every_vault(a: Node, b: Node, node_a: str, node_b: str, report: Report) -> None:
+    """10b: A mirrors every vault to B (its link's setting) and B accepts every vault A offers: a vault made on A is
+    mirrored to B with nobody asked on either side."""
+    on_b = b.vh("mirror", "accept-all", node_a, "on", check=False)
+    on_a = a.vh("mirror", "mirror-all", node_b, "on", check=False)
+    name = "everything"
+    a.vh("vault", "create", name, "--local")
+    v = int(_sql(a, f"SELECT id FROM vault WHERE name = '{name}' AND deleted_at IS NULL"))
+    _wait(f"A's mount showing {name}", lambda: (a.inst.mount / name).is_dir(), timeout=60)
+    a.sh(f"printf 'mirrored without asking\\n' > MNT/{name}/f.txt")
+    uid = _sql(a, f"SELECT uid FROM vault WHERE id = {v}")
+    bv = int(_wait(f"B's {name}, offered and accepted by the settings", lambda: _sql(
+        b, f"SELECT id FROM vault WHERE uid = '{uid}'"), timeout=180))
+    ok = _wait_synced(a, v, b, bv, f"B's first copy of {name}", timeout=180)
+    _contents_here(b, bv, f"{name}'s contents on B")
+    offer = _mirror_info(a, v).get("start") or {}
+    report.check("10b: with A's mirror-all and B's accept-all on, a new vault on A is mirrored to B with nobody asked",
+                 on_a.returncode == 0 and on_b.returncode == 0 and bool(ok) and offer.get("state") == "started"
+                 and _plain(b, f"{name}/f.txt") == hashlib.sha256(b"mirrored without asking\n").hexdigest(),
+                 (on_a.stdout + on_a.stderr)[-200:] + " " + json.dumps(offer)[:300])
+    a.vh("mirror", "mirror-all", node_b, "off")
+    b.vh("mirror", "accept-all", node_a, "off")
+
+
 def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bool, dict]:
     report = Report()
     run_id = time.strftime("%Y%m%dT%H%M%S") + "_" + secrets.token_hex(3)
@@ -1431,6 +1455,8 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
         # ------------------------------------------------------------------ 10. keys and the link's settings
         print("vhh drill peers: 10. a key rotation on a mirrored vault; refused while the mirror is down", flush=True)
         _rotation(a, b, node_a, node_b, report)
+        print("vhh drill peers: 10. mirror every vault: A's link setting and B's accept-all", flush=True)
+        _mirror_every_vault(a, b, node_a, node_b, report)
 
         # ------------------------------------------------------------------ 2. restarts
         print("vhh drill peers: 2. B restarts, then A restarts: the link comes back", flush=True)

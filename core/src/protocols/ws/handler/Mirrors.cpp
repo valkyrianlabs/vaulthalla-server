@@ -126,6 +126,13 @@ json Mirrors::keepRemovedSet(const json& payload, const std::shared_ptr<Session>
     return mirrors::toJson(set, ::vh::ops::peers::resolveRef(peerRef));
 }
 
+json Mirrors::mirrorAllSet(const json& payload, const std::shared_ptr<Session>& session) {
+    const auto peerRef = mirrorRequiredText(payload, "peer");
+    if (!payload.contains("enabled") || !payload.at("enabled").is_boolean()) throw ops::Invalid("enabled is required (a boolean)");
+    const auto set = mirrors::setMirrorAll(mirrorActorOf(session), peerRef, payload.at("enabled").get<bool>());
+    return mirrors::toJson(set, ::vh::ops::peers::resolveRef(peerRef));
+}
+
 json Mirrors::heldList(const json& payload, const std::shared_ptr<Session>& session) {
     bool all = false;
     if (payload.is_object() && payload.contains("all") && !payload.at("all").is_null()) {

@@ -248,6 +248,22 @@ std::vector<WsCommandUsage> mirrorCommands() {
         .client_timeout = kDefaultTimeout,
     });
 
+    out.push_back({
+        .command = "mirror.mirror_all.set",
+        .description = "On the core: whether this server mirrors every vault it owns to a linked server, new ones "
+                       "included (default off). When on, the start service offers each vault that is not mirrored yet "
+                       "and each new one as it is created (an offer the other server declined, or that ended, is not "
+                       "made again until the setting is turned on again); with the other server's accept_all on it is "
+                       "fully automatic. A vault whose preconditions refuse it waits until they pass. Super admins, a "
+                       "person only; turning it on asks the keys step-up in the console (every vault's keys go "
+                       "there). Audited mirror.mirror_all.set.",
+        .payload = {str("peer").gen(gen::ref("peer", {"id"})), boolean("enabled").gen(gen::boolean())},
+        .response = {object("peer", "", {uinteger("id"), str("node_id"), str("name")}), boolean("enabled"),
+                     integer("set_by").nullable(), integer("set_at").nullable()},
+        .refusal_codes = mcMirrorRefusals({"peer_not_linked"}),
+        .client_timeout = kDefaultTimeout,
+    });
+
     // ---- a change made on the mirror that the core refused (mirror::submit; ops::mirrors::held*)
 
     const auto heldFields = [] {

@@ -91,6 +91,13 @@ struct Mirrored {
 // here, orphaned, instead. Super admins; audited mirror.keep_removed.set.
 [[nodiscard]] db::query::mirror::AcceptVaults keepRemoved(const Actor& actor, const std::string& peer);
 [[nodiscard]] db::query::mirror::AcceptVaults setKeepRemoved(const Actor& actor, const std::string& peer, bool enabled);
+// On the core, the link's "mirror every vault to this server" (default off): every vault this server owns that is not
+// mirrored yet, and each new one, is offered to the linked server (mirror::start::Service; with the receiver's
+// accept-all on it is fully automatic). Super admins, a person only (never an agent, a scoped or relayed device);
+// turning it on sends vaults' keys, so the console asks the keys step-up (target mirror.mirror_all:<peer id>), as
+// mirror.add does. Audited mirror.mirror_all.set.
+[[nodiscard]] db::query::mirror::AcceptVaults mirrorAll(const Actor& actor, const std::string& peer);
+[[nodiscard]] db::query::mirror::AcceptVaults setMirrorAll(const Actor& actor, const std::string& peer, bool enabled);
 
 // Held changes and conflict copies (design/peers/mirror.md "As built: a change made on the mirror"): a person's change
 // to a vault this server mirrors that the core refused (kind held: the entry came back to the core's state, the

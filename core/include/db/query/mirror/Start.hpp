@@ -8,6 +8,7 @@
 #include <ctime>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Starting a mirror, the database side (migration 163; design/peers/mirror.md "Starting a mirror", "As built: starting
@@ -165,6 +166,16 @@ public:
     // Keep the vaults this linked server (their core) asks to remove: peer.keep_vaults (same shape).
     [[nodiscard]] static AcceptVaults keepVaults(uint32_t peerId);
     static void setKeepVaults(uint32_t peerId, bool enabled, std::optional<uint32_t> setBy);
+    // On the core: mirror every vault this server owns to the linked server, new ones included: peer.mirror_vaults
+    // (migration 170; same shape).
+    [[nodiscard]] static AcceptVaults mirrorVaults(uint32_t peerId);
+    static void setMirrorVaults(uint32_t peerId, bool enabled, std::optional<uint32_t> setBy);
+    // Linked servers (not unlinked) with mirror_vaults on, and when it was turned on.
+    [[nodiscard]] static std::vector<std::pair<uint32_t, AcceptVaults>> mirroringEveryVault();
+    // The vaults mirror_vaults would offer `peerId` now: this server's own (no mirror row of any role, not deleted, with
+    // a uid), no start of it running on this side, and no offer of it to that server that ended (or was made) since
+    // `since` (a declined, cancelled, expired or failed offer is not made again). Ascending ids.
+    [[nodiscard]] static std::vector<uint32_t> mirrorEveryVaultCandidates(uint32_t peerId, std::time_t since);
 
     // ---- the core's vault
 

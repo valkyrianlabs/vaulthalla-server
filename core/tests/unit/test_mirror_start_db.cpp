@@ -1443,4 +1443,65 @@ TEST_F(MirrorStartDbTest, BackgroundContentsFetchWhileTheLinkIsUpAndBackOffFromF
     (void)MirrorVaults::remove(v);
 }
 
+
+// ============================================================================ mirror every vault (the core's link)
+
+TEST_F(MirrorStartDbTest, MirrorEveryVaultOffersEachVaultOnceNewOnesTooAndNeverOneTheOtherServerDeclined) {
+    namespace stepup = auth::stepup;
+    const auto peer = newPeer(false);
+    const auto ref = std::to_string(peer.id);
+    const auto offers = [&](const uint32_t v, const bool active = false) {
+        return std::stoi(scalar("SELECT count(*) FROM mirror_offer WHERE side = 'core' AND vault_id = " +
+                                std::to_string(v) + " AND peer_id = " + ref +
+                                (active ? " AND finished_at IS NULL" : "")));
+    };
+    const auto a = coreVault("every"), b = coreVault("every");
+    start::Service::instance()->tick();
+    EXPECT_EQ(offers(a), 0) << "off by default";
+    EXPECT_FALSE(MirrorStart::mirrorVaults(peer.id).enabled);
+
+    // Turning it on sends vaults' keys: the console asks the keys step-up, bound to the server.
+    const auto web = mirrorConsole(superUser);
+    {
+        const stepup::Scope scope(web);
+        const auto asked = stepUpAsked([&] { (void)ops::mirrors::setMirrorAll(superUser, ref, true); });
+        ASSERT_TRUE(asked);
+        EXPECT_EQ(asked->first, "keys");
+        EXPECT_EQ(asked->second, "mirror.mirror_all:" + ref);
+        EXPECT_FALSE(MirrorStart::mirrorVaults(peer.id).enabled) << "nothing set without the step-up";
+        grantStepUp(web, stepup::Family::Keys, "mirror.mirror_all:" + ref);
+        EXPECT_TRUE(ops::mirrors::setMirrorAll(superUser, ref, true).enabled);
+    }
+    start::Service::instance()->tick();
+    EXPECT_EQ(offers(a, true), 1) << "every vault that is not mirrored is offered";
+    EXPECT_EQ(offers(b, true), 1);
+    start::Service::instance()->tick();
+    EXPECT_EQ(offers(a), 1) << "once";
+
+    // The other server declines a's offer: never made again. A vault made now is offered.
+    const auto offerA = *MirrorStart::activeOffer(MirrorStart::facts(a)->vault_uid, "core");
+    (void)start::answerReceived(peer, json{{"offer_uid", offerA.offer_uid}, {"decision", "declined"},
+                                           {"reason", "declined"}});
+    const auto c = coreVault("every");
+    start::Service::instance()->wake();
+    start::Service::instance()->tick();
+    EXPECT_EQ(offers(c, true), 1) << "a new vault is offered as it is created";
+    EXPECT_EQ(offers(a), 1) << "a declined offer is not made again";
+    EXPECT_EQ(MirrorStart::latestOffer(offerA.vault_uid, "core")->state, "declined");
+
+    // Off: a new vault waits for mirror.add.
+    EXPECT_FALSE(ops::mirrors::setMirrorAll(superUser, ref, false).enabled);
+    const auto d = coreVault("every");
+    start::Service::instance()->wake();
+    start::Service::instance()->tick();
+    EXPECT_EQ(offers(d), 0);
+    audit::Trail::instance()->flushNow();
+    EXPECT_GE(std::stoi(scalar("SELECT count(*) FROM audit_event WHERE action = 'mirror.mirror_all.set'")), 2);
+
+    // Every offer made here ends (the database, and its other tests' vaults, are shared).
+    for (const auto& o : MirrorStart::offers("core", true))
+        if (o.peer_id == peer.id && o.vault_id)
+            (void)start::cancelOnCore(*o.vault_id, "cancelled_by_core", false, false, std::nullopt, "test");
+}
+
 }

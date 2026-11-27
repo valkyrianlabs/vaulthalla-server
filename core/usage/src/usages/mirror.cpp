@@ -295,6 +295,21 @@ std::shared_ptr<CommandUsage> acceptAll(const std::weak_ptr<CommandUsage>& paren
     return cmd;
 }
 
+
+std::shared_ptr<CommandUsage> mirrorAll(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
+    cmd->aliases = {"mirror-all"};
+    cmd->description = "On the core: whether this server mirrors every vault it owns to a linked server, new ones "
+                       "included (off by default). Each vault that is not mirrored yet is offered, and each new one as "
+                       "it is created; an offer that server declined is not made again. With accept-all on there it is "
+                       "fully automatic. Super admins only; audited.";
+    cmd->positionals = {peerPos, Positional::Alias("state", "on or off", "state", contract::gen::constant("off"))};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh mirror mirror-all vps on", "Mirror every vault of this server to \"vps\"."}};
+    return cmd;
+}
+
 }
 
 std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
@@ -308,6 +323,7 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
     root->subcommands = {add(root->weak_from_this()),    pending(root->weak_from_this()), accept(root->weak_from_this()),
                          decline(root->weak_from_this()), cancel(root->weak_from_this()), list(root->weak_from_this()),
                          info(root->weak_from_this()),    acceptAll(root->weak_from_this()),
+                         mirrorAll(root->weak_from_this()),
                          keep(root->weak_from_this()),    held(root->weak_from_this()),    discard(root->weak_from_this()),
                          retry(root->weak_from_this()), save(root->weak_from_this()), detach(root->weak_from_this()),
                          versions(root->weak_from_this()), resync(root->weak_from_this()),
