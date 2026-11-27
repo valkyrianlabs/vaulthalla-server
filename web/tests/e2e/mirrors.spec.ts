@@ -6,7 +6,9 @@ import { NOW, OFFLINE, count, scriptWs, type Answer, type Frame, type ScriptedRo
 // exists for a super admin on a server with peers.experimental on; the list's states and reasons in words, offers
 // (accept, decline), mirroring a vault (the keys step-up), a vault's page with its advice and only the actions its role
 // and state allow (resync, switch with the no-access choice, detach with its preview and typed name, versions, ending
-// a mirror with the copy choice) and held changes (retry, discard). mirror.*, peer.*, storage.vault.list and
+// a mirror with the copy choice, take over as core with its step-up and refusal, detach a copy with its progress, cancel
+// and the files left out), the states take over brings (rejoining, forked, an open take over, the server's advice line)
+// and held changes (retry, discard). mirror.*, peer.*, storage.vault.list and
 // auth.stepup.* are scripted on the console socket (helpers/scriptedWs.ts), so the suite proves the console's own
 // rules; a real two-server mirror is the `vhh drill` harness's job. Screenshots land in test-results/.
 //
@@ -376,7 +378,7 @@ test.describe.serial('mirrored vaults', () => {
     await expect(page.getByTestId('mirror-advice')).toContainText('2 changes made here were refused by the core')
     await expect(page.getByTestId('mirror-pending')).toHaveText('2')
     // Only what a diverged mirror allows: no switch (not live), no cancel (a completed mirror leaves by detaching).
-    await expect(page.getByTestId('mirror-actions').getByRole('button')).toHaveText(['Resync…', 'Detach…', 'Versions…'])
+    await expect(page.getByTestId('mirror-actions').getByRole('button')).toHaveText(['Resync…', 'Detach…', 'Detach a copy…', 'Versions…'])
     await expect(page.getByTestId('mirror-held-reason').first()).toContainText('may not overwrite files in /plans')
     await expect(page.getByTestId('mirror-held')).toContainText('Conflict copy kept as “notes (conflict).md”')
     // Retry needs the vault live here.
@@ -481,6 +483,8 @@ test.describe.serial('mirrored vaults', () => {
     await expect(page.getByTestId('mirror-status-label')).toHaveText('First copy')
     await expect(page.getByTestId('mirror-first-copy')).toContainText('120 of 400 entries')
     await expect(page.getByRole('meter')).toHaveAttribute('aria-valuenow', '30')
+    // No take over before the first copy finished: there is no whole tree to be the core of.
+    await expect(page.getByTestId('mirror-action-takeover')).toHaveCount(0)
     await page.getByTestId('mirror-action-switch').click()
     await page.getByTestId('mirror-switch-confirm').click()
     await expect(page.getByTestId('peer-error')).toContainText('the first copy is not finished')
@@ -537,5 +541,171 @@ test.describe.serial('mirrored vaults', () => {
     await page.getByTestId('vault-delete-open').click()
     await expect(page.getByTestId('vault-delete-mirror-held')).toContainText('This vault is a copy of vps’s vault, so it can’t be deleted here.')
     await expect(page.getByTestId('vault-delete-confirm')).toBeDisabled()
+  })
+
+  test('take over: what it does, the warning, the typed name, the step-up, the server’s refusal, then the new core', async ({ page }) => {
+    let stepped = false
+    let reachable = true
+    let row = mirrored({ peer: ref(PEERS[1]), stop_reason: null })
+    const sent = await scriptMirrors(page, frame => {
+      if (frame.command === 'mirror.get') return { data: { vault: row } }
+      if (frame.command === 'mirror.detach.preview')
+        return { data: { preview: preview({ state: 'live', stop_reason: null, peer: ref(PEERS[1]), link_up: false, digest_matched: true, pending_changes: 3, held_changes: 0, missing_count: 1, missing: [] }) } }
+      if (frame.command === 'mirror.takeover') {
+        if (!stepped) return stepUpFor('data.destroy', 'mirror.takeover:5')
+        if (reachable)
+          return { error: 'the vault’s core answers: move the core by agreement; take over is for a core that is gone or cannot be reached', code: 'mirror_core_reachable' }
+        row = mirrored({ role: 'core', peer: ref(PEERS[1]), term: 3, takeover: { term: 3, fork: { term: 2, seq: 40 }, peer_id: 4, contents_missing: 1, created_at: NOW } })
+        return {
+          data: {
+            id: 1, vault_id: 5, peer_id: 4, from_term: 2, term: 3, fork: { term: 2, seq: 40, digest: 'd', entries: 400 }, fork_rows: 400,
+            pending_made_local: 3, held: 0, contents_missing: 1, by: { id: 7, name: 'e2e-user' }, created_at: NOW, settled_at: null, settled_how: null,
+            detail: {}, warning: 'office may hold changes this server never received; they are merged when it returns.', fork_base_matches: true,
+          },
+        }
+      }
+      if (frame.command === 'auth.stepup.finish') stepped = true
+      return undefined
+    })
+    await page.goto('/linked-servers/mirrors/5')
+    await expect(page.getByTestId('mirror-status-label')).toHaveText('Read-only: link down')
+    await expect(page.getByTestId('mirror-actions').getByRole('button')).toHaveText(['Switch the core…', 'Take over as core…', 'Detach…', 'Detach a copy…', 'Versions…'])
+
+    await page.getByTestId('mirror-action-takeover').click()
+    const dialog = page.getByTestId('mirror-takeover-dialog')
+    await expect(dialog).toContainText('This server becomes the vault’s core without asking office')
+    await expect(dialog.getByTestId('mirror-takeover-warn')).toContainText('office may hold changes this server never received')
+    await expect(dialog.getByTestId('mirror-takeover-preview')).toContainText('3 changes made here become ordinary changes.')
+    await expect(dialog.getByTestId('mirror-takeover-preview')).toContainText('1 file’s contents never arrived here')
+    await expect(dialog.getByTestId('mirror-takeover-confirm')).toBeDisabled()
+    await dialog.getByTestId('mirror-takeover-typed').fill('Project')
+    await expect(dialog.getByTestId('mirror-takeover-confirm')).toBeDisabled()
+    await dialog.getByTestId('mirror-takeover-typed').fill('Projects')
+    await shoot(page, 'mirrors-takeover')
+    await dialog.getByTestId('mirror-takeover-confirm').click()
+    await confirmStepUp(page, 'Take over as a vault’s core')
+    // The core still answers: the server's sentence and code, and nothing changed.
+    await expect(dialog.getByTestId('peer-error')).toContainText('move the core by agreement')
+    await expect(dialog.getByTestId('peer-error-code')).toHaveText('(mirror_core_reachable)')
+    await shoot(page, 'mirrors-takeover-refused')
+
+    reachable = false
+    await dialog.getByTestId('mirror-takeover-confirm').click()
+    await expect(dialog.getByTestId('mirror-takeover-result')).toContainText('This server is the core now')
+    await expect(dialog.getByTestId('mirror-takeover-result')).toContainText('3 changes made here became ordinary changes.')
+    await expect(dialog.getByTestId('mirror-takeover-warning')).toContainText('they are merged when it returns')
+    expect(sent.filter(f => f.command === 'mirror.takeover').map(f => f.payload)).toEqual([
+      { vault_id: 5, confirm: 'Projects' },
+      { vault_id: 5, confirm: 'Projects' },
+      { vault_id: 5, confirm: 'Projects' },
+    ])
+    await dialog.getByRole('button', { name: 'Done' }).click()
+    await expect(page.getByTestId('mirror-role')).toHaveText('Core')
+    await expect(page.getByTestId('mirror-status-label')).toHaveText('Took over')
+    await expect(page.getByTestId('mirror-status-sentence')).toContainText('The old core, office, has not returned yet')
+    await expect(page.getByTestId('mirror-advice')).toContainText('The old core has not returned yet')
+  })
+
+  test('take over’s states in words: replaced, both took over, an open take over, and the server’s advice line', async ({ page }) => {
+    const advice =
+      'Linked server 3 took over as this vault’s core in term 4 while this server was cut off, and this server holds 2 change(s) it never received.'
+    const vaults = [
+      mirrored({ role: 'core', state: 'rejoining', stop_reason: 'mirror_rejoining', advice }),
+      mirrored({ vault_id: 6, vault_name: 'Archive', role: 'core', state: 'forked', stop_reason: 'mirror_both_forced' }),
+      mirrored({ vault_id: 8, vault_name: 'Design', role: 'core', peer: ref(PEERS[1]), takeover: { term: 3, fork: { term: 2, seq: 40 }, peer_id: 4, contents_missing: 0, created_at: NOW } }),
+    ]
+    await scriptMirrors(page, frame => {
+      if (frame.command === 'mirror.list') return { data: { vaults } }
+      if (frame.command === 'mirror.get') return { data: { vault: vaults.find(v => v.vault_id === frame.payload?.vault_id) } }
+      if (frame.command === 'mirror.detach.preview') return { data: { preview: preview({ role: 'core', state: 'rejoining', stop_reason: 'mirror_rejoining' }) } }
+      return undefined
+    })
+    await page.goto('/linked-servers/mirrors')
+    const row = (name: string) => page.getByRole('row', { name: new RegExp(name) })
+    await expect(row('Projects').getByTestId('mirror-status-label')).toHaveText('Replaced as the core')
+    await expect(row('Projects').getByTestId('mirror-status-sentence')).toContainText('this server holds changes vps never received')
+    await expect(row('Archive').getByTestId('mirror-status-label')).toHaveText('Both took over')
+    await expect(row('Archive').getByTestId('mirror-status-sentence')).toContainText('Pick the server whose files stay')
+    await expect(row('Design').getByTestId('mirror-status-label')).toHaveText('Took over')
+    await expect(row('Design').getByTestId('mirror-status-sentence')).toContainText('has not returned yet')
+    await expect(page.locator('main')).not.toContainText(/mirror_rejoining|mirror_both_forced/)
+    await shoot(page, 'mirrors-takeover-states')
+
+    await page.goto('/linked-servers/mirrors/5')
+    await expect(page.getByTestId('mirror-advice')).toHaveText(new RegExp(advice.replace(/[()]/g, '\\$&')))
+    await expect(page.getByTestId('mirror-actions').getByRole('button')).toHaveText(['Resync…', 'Detach…'])
+
+    await page.goto('/linked-servers/mirrors/6')
+    await expect(page.getByTestId('mirror-advice')).toContainText('On the server whose files should not stay, resync the vault')
+    await expect(page.getByTestId('mirror-actions').getByRole('button')).toHaveText(['Resync…', 'Detach…'])
+  })
+
+  test('detach a copy: name and owner, the copy stays, progress, the files left out, another copy cancelled', async ({ page }) => {
+    const job = (over: Record<string, unknown> = {}) => ({
+      id: 1, source_vault_id: 5, vault_id: 30, name: 'Projects 2', owner_id: 7, state: 'running', entries_total: 400, entries_done: 120,
+      bytes_total: 4 * 1024 ** 3, bytes_done: 1024 ** 3, skipped_count: 0, skipped: [], error: null, requested_by: 7, cancel_requested: false,
+      attempts: 1, created_at: NOW, updated_at: NOW, finished_at: null, ...over,
+    })
+    let current: ReturnType<typeof job> | null = null
+    const sent = await scriptMirrors(page, frame => {
+      if (frame.command === 'mirror.get') return { data: { vault: mirrored() } }
+      if (frame.command === 'mirror.detach.preview') return { data: { preview: preview({ state: 'live', stop_reason: null, digest_matched: true }) } }
+      if (frame.command === 'mirror.detach.copy.get') return { data: { copy: current } }
+      if (frame.command === 'mirror.detach.copy') {
+        current = job({ id: (current?.id ?? 0) + 1, name: String(frame.payload?.name ?? 'Projects copy') })
+        return { data: { copy: current } }
+      }
+      if (frame.command === 'mirror.detach.copy.cancel') {
+        current = job({ id: current!.id, name: current!.name, state: 'cancelled', vault_id: null, finished_at: NOW })
+        return { data: { copy: current } }
+      }
+      return undefined
+    })
+    await page.goto('/linked-servers/mirrors/5')
+    await page.getByTestId('mirror-action-copy').click()
+    const dialog = page.getByTestId('mirror-copy-dialog')
+    await expect(dialog).toContainText('The copy held here stays exactly as it is and keeps following vps.')
+    await expect(dialog).toContainText('A new, separate vault is written from it')
+    await expect(dialog.getByTestId('mirror-copy-name')).toHaveAttribute('placeholder', 'Projects copy')
+    await dialog.getByTestId('mirror-copy-name').fill('Projects 2')
+    await shoot(page, 'mirrors-copy-form')
+    await dialog.getByTestId('mirror-copy-start').click()
+    await expect(dialog.getByTestId('mirror-copy-state')).toHaveText('Writing the copy')
+    await expect(dialog.getByTestId('mirror-copy-progress')).toHaveText('120 of 400 entries · 1.00 GB of 4.00 GB')
+    await expect(dialog.getByRole('meter')).toHaveAttribute('aria-valuenow', '25')
+    await shoot(page, 'mirrors-copy-running')
+    expect(sent.find(f => f.command === 'mirror.detach.copy')?.payload).toEqual({ vault_id: 5, name: 'Projects 2', owner: null })
+
+    // The poll brings the outcome: finished, with the files left out.
+    current = job({
+      state: 'finished', entries_done: 400, bytes_done: 4 * 1024 ** 3, finished_at: NOW, skipped_count: 2,
+      skipped: [
+        { path: '/video/raw-01.mov', size_bytes: 2 * 1024 ** 3, reason: 'contents_missing' },
+        { path: '/video/raw-02.mov', size_bytes: 1024 ** 3, reason: 'contents_missing' },
+      ],
+    })
+    await expect(dialog.getByTestId('mirror-copy-state')).toHaveText('Finished')
+    await expect(dialog).toContainText('“Projects 2” is a vault of this server now.')
+    await expect(dialog.getByTestId('mirror-copy-skipped')).toContainText('2 files were left out')
+    await expect(dialog.getByTestId('mirror-copy-skipped')).toContainText('/video/raw-01.mov')
+    await expect(dialog.getByTestId('mirror-copy-skipped')).toContainText('its contents never arrived here')
+    await expect(dialog.getByRole('link', { name: 'Open the new vault' })).toHaveAttribute('href', '/vaults/30')
+    await shoot(page, 'mirrors-copy-finished')
+
+    // Another one, cancelled while it runs.
+    await dialog.getByTestId('mirror-copy-again').click()
+    await expect(dialog).toContainText('The last copy, “Projects 2”, ended')
+    await dialog.getByTestId('mirror-copy-start').click()
+    await expect(dialog.getByTestId('mirror-copy-state')).toHaveText('Writing the copy')
+    await dialog.getByTestId('mirror-copy-cancel').click()
+    const ask = page.getByRole('dialog', { name: 'Cancel writing “Projects copy”?' })
+    await expect(ask).toContainText('The copy held here isn’t affected')
+    await ask.getByRole('button', { name: 'Cancel the copy' }).click()
+    await expect(dialog.getByTestId('mirror-copy-state')).toHaveText('Cancelled')
+    expect(sent.filter(f => f.command === 'mirror.detach.copy').map(f => f.payload)).toEqual([
+      { vault_id: 5, name: 'Projects 2', owner: null },
+      { vault_id: 5, name: null, owner: null },
+    ])
+    expect(sent.find(f => f.command === 'mirror.detach.copy.cancel')?.payload).toEqual({ vault_id: 5 })
   })
 })
