@@ -1,5 +1,7 @@
 #include "vault/EncryptionManager.hpp"
 
+#include "db/query/mirror/MirrorVault.hpp"
+#include "mirror/rotate/Rotate.hpp"
 #include "mirror/start/Guard.hpp"
 #include "vault/Content.hpp"
 #include "crypto/SecretBytes.hpp"
@@ -252,8 +254,10 @@ void EncryptionManager::prepare_key_rotation() {
     if (!sealed_) throw std::logic_error("prepare_key_rotation requires a TPM-backed EncryptionManager");
     // Only a solo vault mints key versions (design/cloud/mirrors.md, as amended: no replica keys yet).
     sync::replicas::refuseIfReplicated(vault_id_, "a key rotation", sync::replicas::kRotateHow);
-    // Nor a mirrored one, on either server, until rotation over the link is built (design/peers/mirror.md).
-    vh::mirror::start::refuseIfMirrored(vault_id_, "a key rotation");
+    // A copy of another server's vault never rotates here; a mirrored core delivers the new version to its mirror
+    // before committing it (below).
+    if (const auto row = db::query::mirror::MirrorVaults::get(vault_id_); row && row->role != "core")
+        vh::mirror::start::refuseIfMirrored(vault_id_, "a key rotation");
     if (db::query::vault::Key::keyRotationInProgress(vault_id_)) {
         log::Registry::crypto()->warn("[VaultEncryptionManager] Key rotation already in progress for vault {}", vault_id_);
         return;
@@ -273,6 +277,9 @@ void EncryptionManager::prepare_key_rotation() {
     const db::query::vault::Key::Outgoing outgoing{
         .version = outgoingVersion,
         .provenance = attestation::provenanceOf(vault_id_, outgoingVersion, outgoingKey->bytes())};
+    // A mirrored vault: the mirror holds the new version before anything is sealed under it (or nothing happens).
+    vh::mirror::rotate::deliverBeforeRotation(vault_id_, expected.version, next->bytes(),
+                                              expected.provenance.value_or(db::query::vault::Key::Provenance{}));
     // Persist first: if this throws, the in-memory keys are untouched.
     {
         const master::Writer writer;
@@ -424,27 +431,30 @@ void EncryptionManager::encryptFileToFile(
 }
 
 SecretKeyPtr EncryptionManager::keySnapshot(const unsigned int keyVersion) const {
-    std::shared_lock lock(keyMutex_);
-    if (!key_) throw std::runtime_error("Vault key is not initialized");
+    unsigned int current = 0;
+    {
+        std::shared_lock lock(keyMutex_);
+        if (!key_) throw std::runtime_error("Vault key is not initialized");
 
-    if (rotation_in_progress_.load()) {
-        if (!old_key_) throw std::runtime_error("Key rotation in progress but keys are not set");
-
-        if (keyVersion == version_) return key_;
-        if (keyVersion + 1 == version_) return old_key_;
-
-        log::Registry::crypto()->warn("[VaultEncryptionManager] Key version {} is not resolvable during rotation to {} for vault {}",
-                                      keyVersion, version_, vault_id_);
-        throw std::runtime_error("Key version mismatch");
+        if (rotation_in_progress_.load()) {
+            if (!old_key_) throw std::runtime_error("Key rotation in progress but keys are not set");
+            if (keyVersion == version_) return key_;
+            if (keyVersion + 1 == version_) return old_key_;
+        } else if (keyVersion == version_) {
+            return key_;
+        }
+        current = version_;
     }
 
-    if (keyVersion != version_) {
-        log::Registry::crypto()->warn("[VaultEncryptionManager] Key version mismatch: expected {}, got {} for vault {}",
-                                    version_, keyVersion, vault_id_);
-        throw std::runtime_error("Key version mismatch");
-    }
+    // A mirrored vault (design/peers/mirror.md "Key rotation"): the core rotates, and this server holds the outgoing
+    // version (and a version the core delivered ahead of its rotation) while the re-sealed files arrive; they stay
+    // readable under the version they were sealed with. Any other vault reads its current key only.
+    if (sealed_ && keyVersion != 0 && db::query::mirror::MirrorVaults::get(vault_id_))
+        if (hasKeyVersion(keyVersion)) return historicalKeySnapshot(keyVersion);
 
-    return key_;
+    log::Registry::crypto()->warn("[VaultEncryptionManager] Key version mismatch: expected {}, got {} for vault {}",
+                                  current, keyVersion, vault_id_);
+    throw std::runtime_error("Key version mismatch");
 }
 
 SecretKeyPtr EncryptionManager::liveKeyFor(const unsigned int keyVersion) const {

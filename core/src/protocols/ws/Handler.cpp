@@ -165,6 +165,8 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("peer.mirror.begin", &handler::Mirrors::begin);
     r->registerPayload("peer.mirror.grant", &handler::Mirrors::grant);
     r->registerPayload("peer.mirror.cancel", &handler::Mirrors::cancelWire);
+    // Key rotation on a mirrored vault (mirror/rotate/Rotate.hpp).
+    r->registerPayload("peer.mirror.key", &handler::Mirrors::key);
 
     // The server mirror's data plane (wave 3 piece B; design/peers/mirror.md "As built: following the core").
     r->registerPayload("peer.mirror.tree", &handler::MirrorFollow::tree);

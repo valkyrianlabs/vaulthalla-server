@@ -1053,6 +1053,8 @@ export interface WebSocketCommandMap {
   'peer.mirror.offer': WsContract['peer.mirror.offer']
   'peer.mirror.answer': WsContract['peer.mirror.answer']
   'peer.mirror.keys': WsContract['peer.mirror.keys']
+  // A key rotation on the core delivers its new version first (between two servers only).
+  'peer.mirror.key': WsContract['peer.mirror.key']
   'peer.mirror.begin': WsContract['peer.mirror.begin']
   'peer.mirror.grant': WsContract['peer.mirror.grant']
   'peer.mirror.cancel': WsContract['peer.mirror.cancel']

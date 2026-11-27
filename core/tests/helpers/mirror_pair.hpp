@@ -40,6 +40,7 @@
 #include "ops/Mirrors.hpp"
 #include "ops/Roles.hpp"
 #include "ops/Vaults.hpp"
+#include "peer/Keys.hpp"
 #include "rbac/role/Vault.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
@@ -91,6 +92,9 @@ protected:
     // The derived fixture's SetUpTestSuite calls this with its suite's database name.
     static void setUpPair(const char* suite) {
         if (!setUpDbSuite(suite)) return;
+        // This server's peer wrap key, made before any linked server pins it (as the first pairing does): a suite
+        // that delivers keys over the link wraps them to it.
+        (void)vh::peer::keys::wrapPublicKey();
         ownNode = vh::db::query::device::Devices::nodeId();
         coreNode = "core-node-" + msTag();
         for (auto* id : {&mirrorPeer, &corePeer}) {

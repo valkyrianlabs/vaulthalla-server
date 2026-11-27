@@ -136,7 +136,10 @@ std::optional<uint32_t> ApplyRows::account(pqxx::work& txn, const std::string& o
 }
 
 bool ApplyRows::keyHeld(pqxx::work& txn, const uint32_t vaultId, const uint32_t version) {
-    return !txn.exec("SELECT 1 FROM vault_keys WHERE vault_id = $1 AND version = $2",
+    // The current version or a retired one this server still holds (a rotation's outgoing version, whose files arrive
+    // re-sealed later; a version delivered ahead of the core's rotation).
+    return !txn.exec("SELECT 1 FROM vault_keys WHERE vault_id = $1 AND version = $2 UNION ALL "
+                     "SELECT 1 FROM vault_keys_trashed WHERE vault_id = $1 AND version = $2",
                      pqxx::params{vaultId, static_cast<int64_t>(version)})
                 .empty();
 }

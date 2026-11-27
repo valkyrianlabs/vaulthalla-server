@@ -1284,6 +1284,40 @@ def _leaving(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, report:
                  and _plain(b, "leftover/f.txt") == hashlib.sha256(b"content of leftover\n").hexdigest(), text[-300:])
 
 
+def _rotation(a: Node, b: Node, node_a: str, node_b: str, report: Report) -> None:
+    """10a: a key rotation on a mirrored vault, run by A (its core): the new version reaches B first; A re-seals; B makes
+    it current when A's log names it and fetches the re-sealed files, never stopping. Refused while B is down."""
+    v, bv, uid = _new_mirror(a, b, node_b, "rotated")
+    a.sh("printf 'a second file\\n' > MNT/rotated/g.txt")
+    _wait_synced(a, v, b, bv, "B holding rotated's second file", timeout=120)
+    _contents_here(b, bv, "rotated's contents on B")
+    before = int(_sql(a, f"SELECT version FROM vault_keys WHERE vault_id = {v}"))
+    sealed = ("SELECT count(*) FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id "
+              "WHERE e.vault_id = {vid} AND COALESCE(f.size_bytes, 0) > 0 AND f.encrypted_with_key_version <> {ver}")
+    cp = a.vh("vault", "keys", "rotate", str(v), "--sync-now", check=False)
+    _wait("A re-sealed every file", lambda: _sql(a, sealed.format(vid=v, ver=before + 1)) == "0" or None, timeout=180)
+    ok = _wait_synced(a, v, b, bv, "B following the rotation", timeout=180)
+    _contents_here(b, bv, "the re-sealed files on B")
+    stops = _sql(b, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {bv} AND state <> 'live'")
+    report.check("10a: A rotates a mirrored vault's key: B holds the new version, every file re-sealed under it on B "
+                 "and readable there, equal digests, B never stopped",
+                 cp.returncode == 0 and bool(ok) and stops == "0"
+                 and _sql(b, f"SELECT version FROM vault_keys WHERE vault_id = {bv}") == str(before + 1)
+                 and _sql(b, sealed.format(vid=bv, ver=before + 1)) == "0"
+                 and _sql(b, f"SELECT count(*) FROM vault_keys_trashed WHERE vault_id = {bv} AND version = {before}") == "1"
+                 and _plain(b, "rotated/f.txt") == hashlib.sha256(b"content of rotated\n").hexdigest()
+                 and _plain(b, "rotated/g.txt") == hashlib.sha256(b"a second file\n").hexdigest(),
+                 (cp.stdout + cp.stderr)[-300:] + " " + json.dumps(ok)[:300])
+    # B down: A refuses the rotation, says why, and changes nothing.
+    _stop(b, a, node_b)
+    cp = a.vh("vault", "keys", "rotate", str(v), check=False)
+    report.check("10a: with B down A refuses the rotation (mirror_link_down) and rotates nothing",
+                 cp.returncode != 0 and "mirror_link_down" in (cp.stdout + cp.stderr)
+                 and _sql(a, f"SELECT version FROM vault_keys WHERE vault_id = {v}") == str(before + 1),
+                 (cp.stdout + cp.stderr)[-300:])
+    _start(b, a, node_b, node_a)
+
+
 def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bool, dict]:
     report = Report()
     run_id = time.strftime("%Y%m%dT%H%M%S") + "_" + secrets.token_hex(3)
@@ -1393,6 +1427,10 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
         print("vhh drill peers: 9. leaving a mirror: versions on B, detach with A down, A told, delete in one step",
               flush=True)
         _leaving(a, b, faults["b"], node_a, node_b, report)
+
+        # ------------------------------------------------------------------ 10. keys and the link's settings
+        print("vhh drill peers: 10. a key rotation on a mirrored vault; refused while the mirror is down", flush=True)
+        _rotation(a, b, node_a, node_b, report)
 
         # ------------------------------------------------------------------ 2. restarts
         print("vhh drill peers: 2. B restarts, then A restarts: the link comes back", flush=True)

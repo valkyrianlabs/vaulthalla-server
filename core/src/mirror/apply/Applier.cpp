@@ -9,6 +9,7 @@
 #include "db/query/fs/File.hpp"
 #include "db/query/mirror/Apply.hpp"
 #include "db/query/mirror/Contents.hpp"
+#include "db/query/mirror/Keys.hpp"
 #include "db/query/mirror/Pending.hpp"
 #include "db/query/mirror/Resync.hpp"
 #include "db/query/vault/Vault.hpp"
@@ -30,6 +31,7 @@
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
+#include "vault/EncryptionManager.hpp"
 #include "vault/model/Vault.hpp"
 
 #include <fmt/format.h>
@@ -145,6 +147,7 @@ struct Effects {
     std::vector<uint32_t> live;
     std::vector<uint64_t> confirmed;   // pending changes confirmed: their sealed bytes leave the pending store
     bool vaultChanged{false};
+    bool keysChanged{false};           // a delivered key version became the current one: the engine reloads its keys
 };
 
 struct Committed {
@@ -867,13 +870,22 @@ Committed applyInTransaction(pqxx::work& txn, Run& run) {
                      {"why", "this server's copy of the entry is not the one the core changed"}});
     }
 
-    // ---- keys: a version this server does not hold stops the vault (rotation over the link is not built)
+    // ---- keys: a version this server does not hold stops the vault. A rotation on the core delivers its new version
+    // first (mirror/rotate): held here, it becomes the current one when the core's log names it, with the core's key
+    // check (another key under that version stops the vault).
     for (const auto& k : batch.keyDocs) {
         const auto version = integer(k, "version");
-        if (!version || !mq::ApplyRows::keyHeld(txn, vaultId, static_cast<uint32_t>(*version)))
+        if (!version || *version <= 0 || !mq::ApplyRows::keyHeld(txn, vaultId, static_cast<uint32_t>(*version)))
             throw Halt{Status::Stopped, "stopped", "mirror_key_missing",
                        {{"version", version ? json(*version) : json(nullptr)},
                         {"why", "the core uses a key version this server does not hold"}}};
+        try {
+            if (mq::MirrorKeys::promote(txn, vaultId, static_cast<uint32_t>(*version), text(k, "key_check")))
+                fx.keysChanged = true;
+        } catch (const ops::Conflict& e) {
+            throw Halt{Status::Stopped, "stopped", "mirror_key_mismatch",
+                       {{"version", *version}, {"why", std::string(e.what())}}};
+        }
     }
     for (const auto& c : p.changes)
         if (c.outcome == Outcome::Live && c.type == "file" && !text(c.state, "generation").value_or("").empty()) {
@@ -1030,6 +1042,14 @@ void afterCommit(const Run& run, const Effects& fx) {
     for (const auto id : fx.live) ta::cacheFresh(t, id);
     for (const auto id : fx.confirmed)
         vh::mirror::submit::contents::dropBlob(vh::mirror::submit::contents::pendingBlob(run.vaultId, id));
+    if (fx.keysChanged && t.engine && t.engine->encryptionManager) {
+        try {
+            t.engine->encryptionManager->load_key();
+        } catch (const std::exception& e) {
+            log::Registry::sync()->warn("[MirrorApply] Vault {}: the engine did not take the core's new key version: {}",
+                                        run.vaultId, e.what());
+        }
+    }
     if (fx.vaultChanged)
         if (const auto& deps = runtime::Deps::get(); deps.storageManager)
             if (const auto v = db::query::vault::Vault::getVault(run.vaultId)) {

@@ -1,6 +1,7 @@
 #include "protocols/ws/handler/Mirrors.hpp"
 
 #include "db/query/peer/Peer.hpp"
+#include "mirror/rotate/Rotate.hpp"
 #include "mirror/start/Start.hpp"
 #include "ops/Error.hpp"
 #include "ops/Mirrors.hpp"
@@ -175,6 +176,10 @@ json Mirrors::answer(const json& payload, const std::shared_ptr<Session>& sessio
 
 json Mirrors::keys(const json& payload, const std::shared_ptr<Session>& session) {
     return vh::mirror::start::keysReceived(mirrorPeerOf(session), payload);
+}
+
+json Mirrors::key(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::rotate::keyReceived(mirrorPeerOf(session), payload);
 }
 
 json Mirrors::begin(const json& payload, const std::shared_ptr<Session>& session) {

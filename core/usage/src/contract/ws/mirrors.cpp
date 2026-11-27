@@ -360,6 +360,25 @@ std::vector<WsCommandUsage> mirrorCommands() {
     });
 
     out.push_back({
+        .command = "peer.mirror.key",
+        .description = "A key rotation on the core of a mirrored vault, before anything is sealed under the new "
+                       "version: that version as a KEV1 envelope (suite X25519) to the receiver's peer wrap key, the "
+                       "core's key check over its vault id and its attestation. The receiver (the vault's mirror for "
+                       "this very server) proves it against the attestation keys it pinned at pairing and holds it "
+                       "sealed under its own vault master with its origin; it becomes the current version there when "
+                       "the core's log names it. The same key again: the same answer. Refused (mirror_key_refused) "
+                       "when unprovable or when this server holds that version with another key; nothing is written.",
+        .auth = "peer",
+        .payload = mcGenerated("peer.mirror.key", {str("vault_uid"), uinteger("core_vault_id"),
+                    uinteger("version").min(1), str("envelope").desc("KEV1, standard base64."),
+                    str("key_check").desc("32 hex digits, over the core's vault id."),
+                    object("attestation", "", {uinteger("key_id"), str("signature"), str("public_key").opt()})}),
+        .response = {str("vault_uid"), uinteger("version"), boolean("installed")},
+        .refusal_codes = mcWireRefusals({"mirror_key_refused"}),
+        .client_timeout = std::chrono::milliseconds(30'000),
+    });
+
+    out.push_back({
         .command = "mirror.takeover",
         .description = "On a mirror whose core is gone or cannot be reached: take over as the vault's core. This server "
                        "records the next term with itself as the core, the last change it applied from the old core as "

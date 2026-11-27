@@ -26,6 +26,7 @@
 #include "db/query/fs/File.hpp"
 #include "db/query/mirror/Contents.hpp"
 #include "db/query/mirror/MirrorVault.hpp"
+#include "db/query/vault/Key.hpp"
 #include "db/query/mirror/Start.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "db/query/vault/Vault.hpp"
@@ -997,17 +998,51 @@ TEST_F(MirrorStartDbTest, OffersExpireAndFinishedOnesAreSweptButAStartedOneStays
     EXPECT_TRUE(MirrorStart::offer(s.offer.id));
 }
 
-TEST_F(MirrorStartDbTest, KeyRotationIsRefusedOnAMirroredVaultAndWhileAStartRuns) {
+TEST_F(MirrorStartDbTest, KeyRotationWaitsForAStartAndOnTheCoreGoesOverTheLinkFirst) {
     const auto peer = newPeer(false);
     const auto v = coreVault();
     const auto em = runtime::Deps::get().storageManager->getEngine(v)->encryptionManager;
     (void)ops::mirrors::add(superUser, {.vault_id = v, .peer = std::to_string(peer.id)});
-    EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "vault_mirrored") << "while the start runs";
+    EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "mirror_start_running") << "while the start runs";
     (void)MirrorVaults::startCore(v, peer.id);
-    EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "vault_mirrored");
-    EXPECT_EQ(refusalCode([&] { (void)vh::vault::EncryptionManager::mintSalvageKey(v, 99, true); }), "vault_mirrored");
+    const auto version = em->get_key_version();
+    {   // the link down: refused, nothing rotated
+        std::scoped_lock lock(wire->mutex);
+        wire->up.reset();
+    }
+    EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "mirror_link_down");
+    EXPECT_EQ(em->get_key_version(), version);
+    {   // up, the mirror refuses the key: refused, nothing rotated
+        std::scoped_lock lock(wire->mutex);
+        wire->up = 1;
+        wire->answer = [](const std::string&, const json&) -> std::optional<json> {
+            return refusal("mirror_key_refused", "a test");
+        };
+    }
+    EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "mirror_key_refused");
+    EXPECT_EQ(em->get_key_version(), version);
+    EXPECT_FALSE(db::query::vault::Key::keyRotationInProgress(v));
+    {
+        std::scoped_lock lock(wire->mutex);
+        wire->answer = nullptr;
+        wire->sent.clear();
+    }
+    // The mirror holds it: the rotation goes on, and what went over the link was an envelope, never the key.
+    EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "");
+    EXPECT_EQ(em->get_key_version(), version + 1);
+    {
+        std::scoped_lock lock(wire->mutex);
+        ASSERT_FALSE(wire->sent.empty());
+        const auto& [command, payload] = wire->sent.back();
+        EXPECT_EQ(command, "peer.mirror.key");
+        EXPECT_EQ(payload.value("version", 0u), version + 1);
+        EXPECT_FALSE(payload.value("envelope", std::string{}).empty());
+        for (const auto* secret : {"key", "encrypted_key", "iv"}) EXPECT_FALSE(payload.contains(secret)) << secret;
+    }
+    EXPECT_EQ(refusalCode([&] { (void)vh::vault::EncryptionManager::mintSalvageKey(v, 99, true); }), "vault_mirrored")
+        << "a key salvage stays refused";
+    em->finish_key_rotation();
     (void)ops::mirrors::cancel(superUser, {.vault_id = v});
-    EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "") << "free again once the mirror ended";
 }
 
 // =============================================================================== ending a mirror (owner, 2026-11-26)
