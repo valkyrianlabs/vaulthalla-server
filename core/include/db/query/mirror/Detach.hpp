@@ -3,6 +3,7 @@
 #include "db/query/mirror/MirrorVault.hpp"
 #include "db/query/mirror/Pending.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <ctime>
 #include <optional>
@@ -101,6 +102,9 @@ public:
     // The mirror: its core is deleting the vault. A live copy (or one already paused for this) is paused with reason
     // `reason` and `detail`; any other state is left as it is. False when nothing changed.
     static bool pauseForCore(uint32_t vaultId, const std::string& reason, const nlohmann::json& detail);
+    // Every planned switch of the vault here that is open (or decided and not yet told) ends: abandoned with `reason`,
+    // nothing more told. How many there were.
+    static std::size_t endSwitches(uint32_t vaultId, const std::string& reason);
     // The core restored it: a copy paused for `reason` is live again where it was. False when nothing changed.
     static bool resumeFromCore(uint32_t vaultId, const std::string& reason);
 };

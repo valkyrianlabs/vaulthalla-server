@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -20,6 +21,15 @@ std::atomic<bool>& loaded() {
     static std::atomic<bool> v{false};
     return v;
 }
+// When the rows were read (steady clock, ns): read again after kReloadAfter, so a role a planned switch changed (a
+// mirror that became the core keeps its setting dormant; a core that became the mirror again uses it) is seen without
+// a hook in the switch.
+std::atomic<int64_t>& loadedAt() {
+    static std::atomic<int64_t> v{0};
+    return v;
+}
+constexpr std::chrono::seconds kReloadAfter{10};
+
 std::atomic<bool>& anyOn() {
     static std::atomic<bool> v{false};
     return v;
@@ -60,6 +70,7 @@ void load() {
     std::scoped_lock lock(mapMutex());
     anyOn().store(!map->empty(), std::memory_order_release);
     published() = std::move(map);
+    loadedAt().store(std::chrono::steady_clock::now().time_since_epoch().count(), std::memory_order_release);
     loaded().store(true, std::memory_order_release);
 }
 
@@ -102,7 +113,9 @@ Setting set(const uint32_t vaultId, const vh::recovery::LocalVersioningPatch& pa
 
 std::optional<vh::recovery::LocalVersioningPolicy> policyFor(const uint32_t vaultId) {
     using namespace mirror_versions_detail;
-    if (!loaded().load(std::memory_order_acquire)) {
+    const auto age = std::chrono::steady_clock::now().time_since_epoch().count() - loadedAt().load(std::memory_order_acquire);
+    if (!loaded().load(std::memory_order_acquire) ||
+        age > std::chrono::duration_cast<std::chrono::steady_clock::duration>(kReloadAfter).count()) {
         try {
             load();
         } catch (const std::exception&) {

@@ -33,9 +33,10 @@ inline constexpr unsigned int kDefaultKeepLast = 10;
 inline constexpr unsigned int kDefaultMaxAgeDays = 30;
 Setting set(uint32_t vaultId, const vh::recovery::LocalVersioningPatch& patch, std::optional<uint32_t> by);
 
-// The applier's question, per group: the policy when this vault keeps versions, nullopt otherwise. One atomic load
-// while no vault here keeps any (every server but a mirror that turned it on); the rows are read once per process and
-// again after each set().
+// The applier's question, per group: the policy when this vault keeps versions, nullopt otherwise. Two atomic loads
+// while no vault here keeps any (every server but a mirror that turned it on); the rows are read again after each set()
+// and every 10 s (a planned switch changes roles: the setting belongs to the server while it is the vault's mirror,
+// stays dormant on its row while it is the core, and applies again when it is the mirror again).
 [[nodiscard]] std::optional<vh::recovery::LocalVersioningPolicy> policyFor(uint32_t vaultId);
 void invalidate() noexcept;
 

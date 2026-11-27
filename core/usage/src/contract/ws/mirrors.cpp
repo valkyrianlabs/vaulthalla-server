@@ -342,7 +342,8 @@ std::vector<WsCommandUsage> mirrorCommands() {
                                            "mirror_switch_running",
                                            "mirror_submissions_queued", "mirror_has_remote", "mirror_pending_changes",
                                            "mirror_contents_missing", "mirror_core_unreachable", "mirror_core_gone",
-                                           "mirror_switch_refused", "mirror_orphaned", "peer_link_down"}),
+                                           "mirror_switch_refused", "mirror_orphaned", "peer_link_down",
+                                           "mirror_vault_deleting"}),
         .client_timeout = std::chrono::milliseconds(60'000),
     });
 

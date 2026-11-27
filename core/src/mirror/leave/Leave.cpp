@@ -16,6 +16,7 @@
 #include "mirror/start/Start.hpp"
 #include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Local.hpp"
+#include "mirror/submit/Submit.hpp"
 #include "mirror/versions/Versions.hpp"
 #include "ops/Error.hpp"
 #include "rbac/Mirrored.hpp"
@@ -222,6 +223,25 @@ json detachedReceived(const vh::peer::Record& from, const json& payload) {
     if (!vaultId) return {{"recorded", false}};
     const auto row = mq::MirrorVaults::get(*vaultId);
     const auto latest = mq::MirrorStart::latestOffer(vh::crypto::id::fromUuid(vaultUuid), "core");
+    // A planned switch with that server ends here whatever its phase (the server it would hand the role to left).
+    (void)mq::MirrorDetach::endSwitches(*vaultId, "peer_detached");
+    // This server decided a switch and became that server's mirror, which then left with the vault before taking the
+    // core role: this copy has no core any more. It is kept as an orphaned copy, by the ending rule (the other side
+    // ended the mirror and asked nothing removed): read-only, its pending changes held; a super admin here detaches it
+    // (it becomes this server's vault again) or removes it.
+    if (row && row->role == "mirror" && row->peer_id == from.id) {
+        (void)mq::MirrorVaults::orphan(*vaultId);
+        (void)vh::mirror::submit::orphaned(*vaultId);
+        const auto rec = mq::MirrorDetach::recordCore(*vaultId, from.id, row->position(), 0);
+        audit::record({.action = "mirror.detached", .outcome = audit::Outcome::Info, .vault_id = *vaultId,
+                       .details = {{"peer", from.id}, {"node_id", from.node_id}, {"side", "mirror"},
+                                   {"orphaned", true}}},
+                      fmt::format("[mirror] linked server {} detached the vault while it was taking the core role from "
+                                  "this server: vault {} is kept here as an orphaned copy (vh mirror detach {} makes it "
+                                  "this server's vault again)", from.node_id, *vaultId, *vaultId),
+                      spdlog::level::warn);
+        return {{"recorded", true}, {"record", rec.id}, {"copy", "kept"}};
+    }
     const bool mirroredWithIt = row && row->role == "core" && row->peer_id == from.id;
     // Only the server this one mirrored the vault with (now or last) can say it left with a copy of it.
     if (!mirroredWithIt && !(latest && latest->peer_id == from.id)) return {{"recorded", false}};

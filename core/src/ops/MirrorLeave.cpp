@@ -37,8 +37,8 @@ bool leaveDigits(const std::string& s) {
 std::shared_ptr<identities::User> ownerOf(const Actor& actor, const std::optional<std::string>& ref) {
     std::shared_ptr<identities::User> user;
     if (!ref || ref->empty()) user = actor;
-    else if (leaveDigits(*ref)) user = identities::manager().user(static_cast<uint32_t>(std::strtoul(ref->c_str(), nullptr, 10)));
-    else user = identities::manager().userByName(*ref);
+    else if (leaveDigits(*ref)) user = vh::identities::manager().user(static_cast<uint32_t>(std::strtoul(ref->c_str(), nullptr, 10)));
+    else user = vh::identities::manager().userByName(*ref);
     if (!user) throw NotFound("no account '" + ref.value_or("") + "' on this server");
     if (user->remote()) throw Invalid("the new owner must be a sign-in account of this server, not another server's person");
     if (!user->isActive()) throw Invalid("account '" + user->name() + "' is deactivated: choose an active account");
@@ -73,7 +73,7 @@ vh::mirror::leave::Detached detach(const Actor& actor, const DetachRequest& requ
     using namespace ops_mirror_leave_detail;
     requireDetacher(actor, "detach a mirrored vault");
     if (request.vault_id == 0) throw Invalid("vault ID must be a positive integer");
-    const auto vault = db::query::vault::Vault::getVault(request.vault_id);
+    const auto vault = vh::db::query::vault::Vault::getVault(request.vault_id);
     if (!vault) throw NotFound("no vault with ID " + std::to_string(request.vault_id));
     if (request.confirm_name && *request.confirm_name != vault->name)
         throw Invalid("type the vault's name exactly to detach it");
@@ -87,7 +87,7 @@ vh::mirror::versions::Setting setVersions(const Actor& actor, const VersionsRequ
     peer_policy::requirePerson(actor, "decide which versions this server keeps of a mirrored vault");
     if (!actor->isSuperAdmin()) throw Denied("only super admins of this server may decide which versions it keeps");
     if (request.vault_id == 0) throw Invalid("vault ID must be a positive integer");
-    const auto row = db::query::mirror::MirrorVaults::get(request.vault_id);
+    const auto row = vh::db::query::mirror::MirrorVaults::get(request.vault_id);
     if (!row || row->role != "mirror")
         throw Refused("mirror_not_held", "vault " + std::to_string(request.vault_id) +
                                              " is not held here as another server's mirror: its versions are its own "
@@ -124,7 +124,7 @@ nlohmann::json toJson(const vh::mirror::versions::Setting& s) {
 HeldContent heldContent(const Actor& actor, const uint64_t id) {
     peer_policy::requirePerson(actor, "read a held change");
     if (!actor->isSuperAdmin()) throw Denied("only super admins of this server may read held changes");
-    const auto h = db::query::mirror::Pending::heldChange(id);
+    const auto h = vh::db::query::mirror::Pending::heldChange(id);
     if (!h) throw NotFound("no held change " + std::to_string(id));
     if (h->op != "write" || h->state == "discarded")
         throw Invalid("held change " + std::to_string(id) + " holds no file version (" + h->op + ", " + h->state + ")");
@@ -137,7 +137,7 @@ HeldContent heldContent(const Actor& actor, const uint64_t id) {
     if (!engine) throw NotFound("vault " + std::to_string(h->vault_id) + " is not loaded");
     // The person's sealed bytes, read as the file they would have been (the vault's key, that generation); never a
     // vault entry, so nothing about the vault is asked or changed.
-    auto f = std::make_shared<fs::model::File>();
+    auto f = std::make_shared<vh::fs::model::File>();
     f->vault_id = static_cast<int32_t>(h->vault_id);
     f->backing_path = blob;
     f->path = h->path.value_or("/" + h->args.value("name", std::string("held")));

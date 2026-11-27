@@ -497,6 +497,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"mirror_resync_failed", {"mirror.resync", "peer.mirror.resync"}},
             // The planned switch (wave 5 piece B, mirror::switching).
             {"mirror_switch_running", {"mirror.switch", "peer.mirror.switch.request"}},
+            {"mirror_vault_deleting", {"mirror.switch", "peer.mirror.switch.request"}},
             {"mirror_submissions_queued", {"mirror.switch", "peer.mirror.switch.request"}},
             {"mirror_has_remote", {"mirror.switch", "peer.mirror.switch.request"}},
             {"mirror_pending_changes", {"mirror.switch", "peer.mirror.switch.prepare"}},

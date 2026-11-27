@@ -42,6 +42,8 @@
 #include "mirror/access/Access.hpp"
 #include "mirror/leave/Leave.hpp"
 #include "mirror/start/Start.hpp"
+#include "mirror/follow/Follower.hpp"
+#include "mirror/switching/Switch.hpp"
 #include "mirror/submit/Contents.hpp"
 #include "mirror/versions/Versions.hpp"
 #include "recovery/local/Versions.hpp"
@@ -1093,6 +1095,117 @@ TEST_F(MirrorLeaveDbTest, AHeldWritesBytesAreDownloadedDecryptedAndNothingInTheV
     EXPECT_EQ(std::string(bytes.begin(), bytes.end()), "alpha from the core");
     EXPECT_EQ(entries(h.vaultId), before) << "nothing in the vault changes";
     EXPECT_EQ(mq::Pending::heldChange(heldId)->state, "open");
+}
+
+// ================================================================================== with the planned switch (piece B)
+
+// A link that answers nothing (the switch refusals asked here come before any request).
+class MlNoLink final : public vh::mirror::follow::Transport {
+public:
+    bool connected(uint32_t) override { return true; }
+    std::optional<Answer> request(uint32_t, const std::string&, const json&) override { return std::nullopt; }
+    bool notify(uint32_t, const std::string&, const json&) override { return true; }
+};
+
+// A switch open on the mirror (prepared, waiting for the core's decision) never holds a detach up, and ends with it.
+TEST_F(MirrorLeaveDbTest, ADetachDuringAPlannedSwitchCompletesAndLeavesNoSwitchOpen) {
+    const auto h = heldCopy("live");
+    sql("UPDATE mirror_vault SET state = 'switching' WHERE vault_id = " + std::to_string(h.vaultId));
+    sql("INSERT INTO mirror_switch (switch_id, vault_id, peer_id, side, phase, term, deadline, asked_on) VALUES "
+        "(gen_random_uuid(), " + std::to_string(h.vaultId) + ", " + std::to_string(h.core.id) +
+        ", 'mirror', 'prepared', 1, now() + interval '1 minute', 'core')");
+    vh::mirror::access::reload();
+    const auto d = ops::mirrors::detach(superUser, {.vault_id = h.vaultId});
+    EXPECT_EQ(d.record.was_state.value_or(""), "switching");
+    EXPECT_FALSE(mq::MirrorVaults::get(h.vaultId));
+    EXPECT_EQ(count("SELECT count(*) FROM mirror_switch WHERE vault_id = " + std::to_string(h.vaultId) +
+                    " AND (ended_at IS NULL OR notify)"),
+              0)
+        << "no switch is left open on this side";
+    EXPECT_EQ(scalar("SELECT phase || ':' || reason FROM mirror_switch WHERE vault_id = " + std::to_string(h.vaultId)),
+              "abandoned:mirror_detached");
+    write(engineOf(h.vaultId), "/after.txt", "a local vault");
+    EXPECT_EQ(read(h.vaultId, "/after.txt"), "a local vault");
+}
+
+// The old core decided `switched` (it is now the other server's mirror) when that server detached instead of taking
+// the role: the detach notice leaves this server's copy orphaned (kept, read-only; its super admin detaches or removes
+// it), and no switch here waits to be told.
+TEST_F(MirrorLeaveDbTest, ADetachNoticeAfterASwitchWasDecidedLeavesTheOldCoreAnOrphanedCopy) {
+    const auto h = heldCopy("live");   // this server: the old core, now the mirror of h.core in term 2
+    sql("UPDATE mirror_vault SET state = 'switching', term = 2, last_seq = 0 WHERE vault_id = " + std::to_string(h.vaultId));
+    sql("INSERT INTO mirror_switch (switch_id, vault_id, peer_id, side, phase, term, deadline, asked_on, notify, ended_at) "
+        "VALUES (gen_random_uuid(), " + std::to_string(h.vaultId) + ", " + std::to_string(h.core.id) +
+        ", 'core', 'switched', 1, now() + interval '1 minute', 'core', TRUE, now())");
+    vh::mirror::access::reload();
+    const auto answer = leave::detachedReceived(h.core, {{"vault_uid", vl::keykit::toBase32(crypto::id::fromUuid(h.vaultUuid))},
+                                                         {"at", {{"term", 1}, {"seq", 12}}}, {"missing", 0}});
+    EXPECT_TRUE(answer.at("recorded").get<bool>());
+    EXPECT_EQ(answer.value("copy", ""), "kept");
+    ASSERT_TRUE(mq::MirrorVaults::get(h.vaultId));
+    EXPECT_EQ(mq::MirrorVaults::get(h.vaultId)->role, "orphaned");
+    EXPECT_EQ(vh::mirror::access::reason(h.vaultId), vh::mirror::access::kOrphaned);
+    EXPECT_TRUE(mq::Pending::list(h.vaultId).empty()) << "its pending changes are held";
+    EXPECT_EQ(count("SELECT count(*) FROM mirror_switch WHERE vault_id = " + std::to_string(h.vaultId) + " AND notify"), 0)
+        << "nothing left to tell a server that left";
+    EXPECT_TRUE(mq::MirrorDetach::forVault(h.vaultId)) << "the same-uid refusal holds between the two";
+    // Its super admin makes it this server's vault again.
+    (void)ops::mirrors::detach(superUser, {.vault_id = h.vaultId});
+    EXPECT_FALSE(mq::MirrorVaults::get(h.vaultId));
+}
+
+// While the core deletes the vault no switch moves the role, asked on either side; and each of this piece's settings
+// follows the role a server holds now.
+TEST_F(MirrorLeaveDbTest, ASwitchIsRefusedDuringTheDeletionWindowAndSettingsFollowTheRoleHeldNow) {
+    MlNoLink link;
+    const auto mirror = newPeer("mirror");
+    const auto c = coreMirrored(mirror);
+    (void)ops::vaults::remove(superUser, {.id = c.vaultId, .mirror_copy = "leave"});
+    EXPECT_EQ(refusalCode([&] {
+                  (void)vh::mirror::switching::request(c.vaultId, superUser->id, superUser->name(), link,
+                                                       std::chrono::milliseconds(0));
+              }),
+              "mirror_vault_deleting")
+        << "on the core";
+    const auto h = heldCopy("live");
+    (void)leave::deletingReceived(h.core, {{"vault_uid", vl::keykit::toBase32(crypto::id::fromUuid(h.vaultUuid))},
+                                           {"deleting", true}, {"purge_after", static_cast<int64_t>(std::time(nullptr) + 600)},
+                                           {"copy", "leave"}});
+    EXPECT_EQ(refusalCode([&] {
+                  (void)vh::mirror::switching::request(h.vaultId, superUser->id, superUser->name(), link,
+                                                       std::chrono::milliseconds(0));
+              }),
+              "mirror_vault_deleting")
+        << "on the mirror";
+    (void)leave::deletingReceived(h.core, {{"vault_uid", vl::keykit::toBase32(crypto::id::fromUuid(h.vaultUuid))},
+                                           {"deleting", false}});
+
+    // Versions: the mirror's setting is dormant while that server is the core, and applies again when it is the mirror.
+    (void)ops::mirrors::setVersions(superUser, {.vault_id = h.vaultId, .enabled = true});
+    ASSERT_TRUE(vh::mirror::versions::policyFor(h.vaultId));
+    // As a switch leaves it: the core in a new term, the grant gone (a core holds none).
+    sql("UPDATE mirror_vault SET role = 'core', granted_role_name = NULL, granted_files_permissions = NULL, "
+        "granted_directories_permissions = NULL, granted_sync_permissions = NULL, granted_roles_permissions = NULL, "
+        "granted_by_node = NULL, granted_at = NULL WHERE vault_id = " + std::to_string(h.vaultId));
+    vh::mirror::access::reload();
+    rbac::mirrored::reload();
+    vh::mirror::versions::invalidate();
+    EXPECT_FALSE(vh::mirror::versions::policyFor(h.vaultId)) << "a core keeps no versions of its own changes";
+    EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::setVersions(superUser, {.vault_id = h.vaultId, .enabled = false}); }),
+              "mirror_not_held")
+        << "the setting is the mirror's";
+    // Detach is the mirror's: a core is not detached.
+    EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::detach(superUser, {.vault_id = h.vaultId}); }), "mirror_not_held");
+    // The one-step delete is the core's: now it needs the choice.
+    EXPECT_EQ(refusalCode([&] { (void)ops::vaults::remove(superUser, {.id = h.vaultId}); }), "mirror_copy_choice_required");
+    sql("UPDATE mirror_vault SET role = 'mirror' WHERE vault_id = " + std::to_string(h.vaultId));
+    vh::mirror::access::reload();
+    rbac::mirrored::reload();
+    vh::mirror::versions::invalidate();
+    ASSERT_TRUE(vh::mirror::versions::policyFor(h.vaultId)) << "the mirror again: its setting applies again";
+    EXPECT_EQ(refusalCode([&] { (void)ops::vaults::remove(superUser, {.id = h.vaultId, .mirror_copy = "leave"}); }),
+              "vault_mirrored")
+        << "and a copy held here is never deleted as a vault";
 }
 
 }

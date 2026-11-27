@@ -1468,6 +1468,22 @@ instruction to build without waiting for review); each is listed for confirmatio
   8 MiB on ws (`too_large` beyond), streamed with `vh fs get`'s transfer frames on the CLI (the client writes `<dest>`).
   Nothing in the vault changes; a detached vault's held changes stay listed.
 
+- **With the planned switch** (piece B, merged into this branch):
+  - A detach while a switch is running or prepared completes (invariant 10) and ends every switch of the vault on this
+    side (`mirror_switch` abandoned with `mirror_detached`, nothing left to tell); the old core is told by
+    `peer.mirror.detached` as usual and ends its own switch (`peer_detached`).
+  - If the core had already decided `switched` (it is the other server's mirror now) and that server detaches instead
+    of taking the role, the notice leaves the old core an **orphaned copy** (decision: the ending rule's outcome when the
+    other side ends a mirror without asking a removal; read-only, pending changes held; its super admin makes it a local
+    vault again with `vh mirror detach`, or removes it). Turning it into a local vault by itself was not taken: that is
+    a person's act here (the owner, the same-uid record), never the other server's.
+  - Every setting follows the role a server holds now: the one-step delete and the retention-window state are the
+    core's, detach and `mirror.versions.set` the mirror's. The versions setting stays on the server's row through a
+    switch: dormant while it is the core (the applier does not run there; `policyFor` reads mirror rows only, again
+    every 10 s), in force again when it is the mirror again.
+  - While the core deletes the vault (its retention window) a switch is refused on either side with
+    `mirror_vault_deleting` (`switching::begin` on the core, `switching::request` on the mirror).
+
 Proven: `MirrorLeaveDbTest` (`test_mirror_leave_db.cpp`), `MirrorSubmitDbTest.VersionsOnTheMirror...`,
 `RoleParityTest.MirrorDetach...`, `SqlDeployerHistoryDb.MirrorLeaveMigration167...`, and `vhh drill peers` step 9.
 

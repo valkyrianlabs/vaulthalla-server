@@ -9,6 +9,16 @@ namespace vh::db::query::mirror {
 
 namespace mirror_detach_detail {
 
+// A planned switch of the vault that has not ended (or ended and not told) ends here with `reason`: nothing is asked of
+// the other server, nothing will be told (migration 168's mirror_switch).
+void endSwitchesIn(pqxx::work& txn, const uint32_t vaultId, const std::string& reason) {
+    txn.exec("UPDATE mirror_switch SET phase = 'abandoned', reason = $2, ended_at = CURRENT_TIMESTAMP, notify = FALSE, "
+             "  updated_at = CURRENT_TIMESTAMP WHERE vault_id = $1 AND ended_at IS NULL",
+             pqxx::params{vaultId, reason});
+    txn.exec("UPDATE mirror_switch SET notify = FALSE, updated_at = CURRENT_TIMESTAMP WHERE vault_id = $1 AND notify",
+             pqxx::params{vaultId});
+}
+
 constexpr auto kRecordColumns =
     "id, side, vault_id, vault_uid::text AS vault_uid, peer_id, fork_term, fork_seq, digest_matched, was_state, missing, "
     "owner_id, detached_by, EXTRACT(EPOCH FROM detached_at)::BIGINT AS detached_at, "
@@ -128,6 +138,8 @@ DetachOutcome MirrorDetach::detach(const DetachInput& in) {
                                                static_cast<int64_t>(out.missing), in.owner_id, in.actor_id});
         out.record = recordFrom(rec.one_row_ref());
 
+        // A planned switch running or prepared ends here (invariant 10: a detach never waits for one).
+        endSwitchesIn(txn, in.vault_id, "mirror_detached");
         // The row and what hangs off it (log, entry hashes, baseline, submissions, the rest of pending and dirty).
         (void)MirrorVaults::remove(txn, in.vault_id);
         return out;
@@ -224,6 +236,16 @@ bool MirrorDetach::resumeFromCore(const uint32_t vaultId, const std::string& rea
                         "WHERE vault_id = $1 AND role = 'mirror' AND state = 'paused' AND stop_reason = $2",
                         pqxx::params{vaultId, reason})
                    .affected_rows() > 0;
+    });
+}
+
+std::size_t MirrorDetach::endSwitches(const uint32_t vaultId, const std::string& reason) {
+    using namespace mirror_detach_detail;
+    return Transactions::exec("mirror::MirrorDetach::endSwitches", [&](pqxx::work& txn) {
+        const auto open = txn.exec("SELECT count(*) FROM mirror_switch WHERE vault_id = $1 AND (ended_at IS NULL OR notify)",
+                                   pqxx::params{vaultId}).one_field_ref().as<std::size_t>();
+        endSwitchesIn(txn, vaultId, reason);
+        return open;
     });
 }
 
