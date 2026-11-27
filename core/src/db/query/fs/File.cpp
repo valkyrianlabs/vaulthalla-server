@@ -366,12 +366,16 @@ void File::setEncryptionIVAndVersion(const FilePtr& f) {
     });
 }
 
-bool File::compareAndSetEncryptionIVAndVersion(const F& f, const std::string& expectedIv, const unsigned int expectedVersion) {
+bool File::compareAndSetEncryptionIVAndVersion(const F& f, const std::string& expectedIv, const unsigned int expectedVersion,
+                                               const std::optional<std::string>& contentHash) {
     if (!f.vault_id) throw std::invalid_argument("File::compareAndSetEncryptionIVAndVersion: file has no vault");
     return Transactions::exec("File::compareAndSetEncryptionIVAndVersion", [&](pqxx::work& txn) {
         pqxx::params p{*f.vault_id, to_utf8_string(f.path.u8string()), f.encryption_iv, f.encrypted_with_key_version,
                        expectedIv, expectedVersion};
-        return txn.exec(pqxx::prepped{"compare_and_set_file_encryption_iv_and_version"}, p).affected_rows() == 1;
+        if (!contentHash)
+            return txn.exec(pqxx::prepped{"compare_and_set_file_encryption_iv_and_version"}, p).affected_rows() == 1;
+        p.append(*contentHash);
+        return txn.exec(pqxx::prepped{"compare_and_set_file_encryption_iv_version_and_hash"}, p).affected_rows() == 1;
     });
 }
 

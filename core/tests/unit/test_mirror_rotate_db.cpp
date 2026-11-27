@@ -13,6 +13,7 @@
 #include "../helpers/mirror_pair.hpp"
 
 #include "crypto/SecretKey.hpp"
+#include "crypto/util/hash.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/vault/Key.hpp"
 #include "db/query/mirror/Keys.hpp"
@@ -229,6 +230,12 @@ TEST_F(MirrorRotateDbTest, ARotationOnTheCoreEndsWithEqualDigestsAndEveryFileRea
     const auto newVersion = link->delivered.front().at("version").get<uint32_t>();
     toCore(s);
     EXPECT_EQ(s.core->encryptionManager->get_key_version(), newVersion);
+    for (const auto& [path, text] : files()) {
+        // The row records the new generation's sealed-bytes hash: what the mirror checks the bytes it fetches against.
+        const auto f = db::query::fs::File::getFileByPath(s.coreId, path);
+        ASSERT_TRUE(f);
+        EXPECT_EQ(f->content_hash.value_or(""), crypto::hash::blake2b(f->backing_path)) << path;
+    }
     EXPECT_FALSE(s.core->encryptionManager->rotation_in_progress()) << "every file was re-sealed on the core";
     toMirror(s);
 

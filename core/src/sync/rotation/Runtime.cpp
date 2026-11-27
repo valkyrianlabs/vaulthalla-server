@@ -153,7 +153,9 @@ Deps runtimeDeps(const std::shared_ptr<storage::Engine>& engine) {
     };
 
     deps.catalog.commit = [](const fs::model::File& file, const EncryptionState& expected) {
-        return db::query::fs::File::compareAndSetEncryptionIVAndVersion(file, expected.iv_b64, expected.key_version);
+        // The rotated copy's sealed-bytes hash (rotateLocalCopy sets it) goes in the same update.
+        return db::query::fs::File::compareAndSetEncryptionIVAndVersion(file, expected.iv_b64, expected.key_version,
+                                                                         file.content_hash);
     };
     deps.catalog.committed = [](const FileSP& file) { refreshCachedEncryption(file); };
     deps.catalog.lock = [](const FileSP& file) { return std::unique_lock(fs::Filesystem::contentWriteMutex(file->id)); };

@@ -1,6 +1,7 @@
 #include "sync/rotation/Rotation.hpp"
 
 #include "crypto/util/encrypt.hpp"
+#include "crypto/util/hash.hpp"
 #include "fs/model/File.hpp"
 #include "fs/ops/file.hpp"
 #include "log/Registry.hpp"
@@ -95,6 +96,9 @@ Outcome rotateLocalCopy(const FileSP& file, const EncryptionState& expected, con
         fs::ops::writeFileExclusive(sidecar, next, sidecarMode(backing));
         created = true;
         fs::ops::fsyncDirectory(dir);
+        // The row records the sealed bytes' hash (files.content_hash, what a mirror checks the bytes it fetches
+        // against): the new generation's, committed with it.
+        file->content_hash = crypto::hash::blake2b(sidecar);
         reachedStep(deps, Step::SidecarWritten, file);
 
         if (publish) {

@@ -1036,7 +1036,9 @@ def _ending_rule(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, rep
 
     v1, bv1, uid1 = mirrored("ending")
     cp = a.vh("vault", "keys", "rotate", str(v1), check=False)
-    report.check("8: key rotation on the mirrored vault is refused on A", "vault_mirrored" in (cp.stdout + cp.stderr),
+    report.check("8: key rotation on the mirrored vault runs on A once B holds the new version (10a follows it through)",
+                 cp.returncode == 0 and "Key rotation started" in cp.stdout
+                 and _sql(b, f"SELECT count(*) FROM vault_keys_trashed WHERE vault_id = {bv1}") != "0",
                  (cp.stdout + cp.stderr)[-300:])
     cp = b.vh("mirror", "cancel", str(bv1), check=False)
     report.check("8: B can't remove a live mirror (mirror_detach_required)",
