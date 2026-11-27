@@ -62,9 +62,16 @@ export const STEP_UP_ACTION: Readonly<Record<StepUpFamily, string>> = {
 }
 
 // The dialog's sentence for one request. Linking two servers asks for the device.trust family too (bound to the
-// request or the address: peer.pairing.approve:… / peer.link.start:…), but trusts a server, not a device.
-export const stepUpAction = (request: Pick<StepUpRequest, 'family' | 'target'>): string =>
-  request.family === 'device.trust' && request.target?.startsWith('peer.') ? 'Link this server with another server' : STEP_UP_ACTION[request.family]
+// request or the address: peer.pairing.approve:… / peer.link.start:…), but trusts a server, not a device. Mirroring a
+// vault gives a linked server its keys (keys, mirror.add:<vault>); ending one may remove the other server's copy
+// (data.destroy, mirror.cancel:<vault>).
+export const stepUpAction = (request: Pick<StepUpRequest, 'family' | 'target'>): string => {
+  const target = request.target ?? ''
+  if (request.family === 'device.trust' && target.startsWith('peer.')) return 'Link this server with another server'
+  if (request.family === 'keys' && target.startsWith('mirror.add:')) return 'Give a linked server this vault’s keys'
+  if (request.family === 'data.destroy' && target.startsWith('mirror.cancel:')) return 'End a vault’s mirror'
+  return STEP_UP_ACTION[request.family]
+}
 
 // Target-bound families confirm one exact action, once; the others hold for the grant window.
 export const isTargetBound = (family: StepUpFamily): boolean =>
