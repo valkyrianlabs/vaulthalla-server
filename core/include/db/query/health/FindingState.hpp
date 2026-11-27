@@ -4,7 +4,7 @@
 
 #include <vector>
 
-// health_finding_state (migration 170): the acknowledged and silenced marks on health finding classes. Trusted:
+// health_finding_state (migration 172): the acknowledged and silenced marks on health finding classes. Trusted:
 // ops::health authorizes; health::Findings applies the rules.
 namespace vh::db::query::health {
 

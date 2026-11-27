@@ -10,7 +10,7 @@ valkyrianlabs/vaulthalla-desktop#75; server issues #482, #483).
   worth interrupting someone (`notifies`: every error; a warning only when it is not normal work, so not
   `system.operations.active_work`), and remedies. A new code without a catalog entry fails
   `HealthCatalog.CoversEveryCodeTheCardsRaise`.
-- **State** is `health_finding_state` (migration 170), one row per (class, subject): `acknowledged` (this occurrence;
+- **State** is `health_finding_state` (migration 172), one row per (class, subject): `acknowledged` (this occurrence;
   removed when it clears or gets worse) or `silenced` (the class; optional expiry; does not cover a higher severity).
   The rules are `health::resolve` (pure); `health::snapshot()` applies them and deletes stale rows.
 - **Severity is never rewritten** ("stats never fake health"). Clients get `state` per finding and the

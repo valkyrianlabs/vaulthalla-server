@@ -255,9 +255,9 @@ TEST_F(SqlDeployerHistoryDb, StatsPermissionMigrationMatchesFreshSeedAndKeepsOld
         txn.exec("ALTER TABLE admin_role DROP COLUMN stats_permissions");
         txn.exec("DELETE FROM schema_migrations WHERE filename = '105_admin_stats_permission.sql'");
         txn.exec("DELETE FROM permission WHERE name = 'admin.stats.view' AND category = 'admin'");
-        // Such a database has not run 170 either (admin.stats.manage, bit 1, for the built-in super_admin): it runs
+        // Such a database has not run 172 either (admin.stats.manage, bit 1, for the built-in super_admin): it runs
         // after 105 on the same upgrade.
-        txn.exec("DELETE FROM schema_migrations WHERE filename = '170_health_finding_state.sql'");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '172_health_finding_state.sql'");
         txn.exec("DELETE FROM permission WHERE name = 'admin.stats.manage' AND category = 'admin'");
 
         const auto upsert = [&](const std::string& name, const vh::rbac::role::Admin& bits) {
@@ -293,7 +293,7 @@ TEST_F(SqlDeployerHistoryDb, StatsPermissionMigrationMatchesFreshSeedAndKeepsOld
         migseed::SqlDeployReport report;
         ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
         EXPECT_TRUE(applied(report, "105_admin_stats_permission.sql"));
-        EXPECT_TRUE(applied(report, "170_health_finding_state.sql"));
+        EXPECT_TRUE(applied(report, "172_health_finding_state.sql"));
 
         const auto bitsOf = [&](const std::string& name) {
             return txn.exec("SELECT stats_permissions::text FROM admin_role WHERE name = $1", pqxx::params{name})

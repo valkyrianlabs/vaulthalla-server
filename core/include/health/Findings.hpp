@@ -14,7 +14,7 @@
 namespace vh::stats::model { struct DashboardOverview; }
 
 // Health findings with what an operator said about them (design/health/findings.md §3). The dashboard computes the
-// findings (stats::model::DashboardOverview); this adds the stored state (migration 170, db::query::health) under
+// findings (stats::model::DashboardOverview); this adds the stored state (migration 172, db::query::health) under
 // fixed rules, and never changes a severity or a count: a silenced error is still an error, only no longer one that
 // asks for a person.
 namespace vh::health {

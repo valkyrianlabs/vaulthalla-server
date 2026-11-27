@@ -87,7 +87,7 @@ TEST(StatsPermission, IsExportedAsAdminStatsViewAtAStableBit) {
         EXPECT_NE(std::ranges::find(p.flags, "--allow-stats-view"), p.flags.end());
     }
     EXPECT_TRUE(found);
-    // Bit 1 is admin.stats.manage (acknowledging and silencing health findings; migration 170): super admins hold
+    // Bit 1 is admin.stats.manage (acknowledging and silencing health findings; migration 172): super admins hold
     // both, and a role that only watches health holds only the first.
     EXPECT_EQ(Admin::SuperAdmin().stats.toBitString(), "00000011");
     EXPECT_EQ(Admin::OrgAdmin().stats.toBitString(), "00000001");

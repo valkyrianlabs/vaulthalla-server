@@ -85,7 +85,7 @@ std::vector<Capability> capabilities() {
          .description = "An entry keeps its id across rename and move (ws, FUSE), children of a moved folder "
                         "included."},
         {.name = "health.findings",
-         .since = "1.27.0",
+         .since = "1.28.0",
          .description = "Health findings carry a state operators set (health.findings.list; health.finding."
                         "acknowledge, .silence and .unsilence with admin.stats.manage), and stats.dashboard.overview "
                         "and .severity answer unattended_error_count and unattended_warning_count: the counts "

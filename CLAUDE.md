@@ -40,7 +40,7 @@ Vault key backup and restoration (key check, `vault.keys.*`, `vh vault keys stat
 `.claude/context/key-backup.md`.
 Filesystem change journal (migration 115 `fs_change_log`, `fs.changes.list`, ws push; Desktop File Provider):
 `.claude/context/change-journal.md`.
-Health findings (classes, acknowledged and silenced state, `health.*`, `vh health`, migration 170):
+Health findings (classes, acknowledged and silenced state, `health.*`, `vh health`, migration 172):
 `.claude/context/health-findings.md`.
 Other context: `.claude/context/environment.md` (VM topology: this box, the lab, dev-db, price bot), `link-sharing.md`
 (share model, invariants, open gaps), `history/stats-dashboard.md` (dashboard design log).

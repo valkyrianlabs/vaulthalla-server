@@ -52,7 +52,7 @@ by every upload. The full table is written with the catalog.
 
 ## 3. State: acknowledged and silenced
 
-Stored in the database so it is the server's and survives a restart (migration 170, `health_finding_state`):
+Stored in the database so it is the server's and survives a restart (migration 172, `health_finding_state`):
 
 | Column | Meaning |
 | --- | --- |
