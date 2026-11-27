@@ -157,7 +157,11 @@ const stepUpFor = (family: string, target: string): Answer => ({
 })
 
 const owns = (command: string) =>
-  command.startsWith('peer.') || command.startsWith('mirror.') || command.startsWith('auth.stepup.') || command === 'storage.vault.list' || command === 'auth.users.list'
+  command.startsWith('peer.') ||
+  command.startsWith('mirror.') ||
+  command.startsWith('auth.stepup.') ||
+  command.startsWith('storage.vault.') ||
+  command === 'auth.users.list'
 
 const scriptMirrors = (page: Page, answer: (frame: Frame) => Answer | undefined, { role = true as ScriptedRole, enabled = true } = {}) =>
   scriptWs(
@@ -481,5 +485,57 @@ test.describe.serial('mirrored vaults', () => {
     await page.getByTestId('mirror-switch-confirm').click()
     await expect(page.getByTestId('peer-error')).toContainText('the first copy is not finished')
     await expect(page.getByTestId('peer-error-code')).toHaveText('(mirror_first_copy)')
+  })
+
+  test('deleting a mirrored vault asks what happens to the copy; a copy held here can’t be deleted', async ({ page }) => {
+    let role = 'core'
+    const vault = {
+      id: 6, name: 'Archive', slug: 'archive', fuse_name: null, effective_fuse_name: 'Archive', type: 'local', description: '', quota: 0,
+      owner_id: 7, owner: 'e2e-user', mount_point: '/Archive', allow_fs_write: true, is_active: true, created_at: new Date().toISOString(), vault_uid: 'u-6',
+    }
+    const plan = {
+      vault_id: 6, name: 'Archive', type: 'local', provider: null, bucket: null, encrypted_upstream: false, key_version: 1, key_exported: true,
+      key_exported_at: new Date().toISOString(), retention_window: '7 days', retention_window_seconds: 604_800, key_retention_window: '30 days',
+      key_retention_window_seconds: 2_592_000, export_command: 'vh vault keys export 6',
+    }
+    const sent = await scriptMirrors(page, frame => {
+      if (frame.command === 'storage.vault.get') return { data: { vault } }
+      if (frame.command === 'storage.vault.remove.plan') return { data: { plan } }
+      if (frame.command === 'mirror.get')
+        return { data: { vault: mirrored({ vault_id: 6, vault_name: 'Archive', role, ...(role === 'core' ? { peer: ref(PEERS[1]) } : role === 'none' ? { peer: null } : {}) }) } }
+      if (frame.command === 'storage.vault.remove') {
+        if (!frame.payload?.mirror_copy) return { error: 'this vault is mirrored: say what happens to the copy', code: 'mirror_copy_choice_required' }
+        return { data: { deletion: null } }
+      }
+      return undefined
+    })
+    await page.goto('/vaults/6/settings')
+    await page.getByTestId('vault-delete-open').click()
+    const dialog = page.getByTestId('vault-delete-dialog')
+    const choice = dialog.getByTestId('vault-delete-mirror-copy')
+    await expect(choice).toContainText('This vault is mirrored to office: what happens to its copy there?')
+    await expect(dialog.getByTestId('vault-delete-confirm')).toBeDisabled()
+    await choice.getByTestId('vault-delete-mirror-copy-remove').check()
+    await shoot(page, 'mirrors-vault-delete')
+    await dialog.getByTestId('vault-delete-confirm').click()
+    await expect.poll(() => sent.filter(f => f.command === 'storage.vault.remove').map(f => f.payload?.mirror_copy ?? null)).toEqual(['remove'])
+
+    // Not known to be mirrored here (another admin, an older answer): the refusal asks, and the resend carries it.
+    role = 'none'
+    await page.goto('/vaults/6/settings')
+    await page.getByTestId('vault-delete-open').click()
+    await expect(page.getByTestId('vault-delete-mirror-copy')).toHaveCount(0)
+    await page.getByTestId('vault-delete-confirm').click()
+    await expect(page.getByTestId('vault-delete-mirror-copy')).toContainText('This vault is mirrored: what happens to the copy on the other server?')
+    await expect(page.getByTestId('vault-delete-dialog').getByRole('alert')).toContainText('say what happens to the copy')
+    await page.getByTestId('vault-delete-mirror-copy-leave').check()
+    await page.getByTestId('vault-delete-confirm').click()
+    await expect.poll(() => sent.filter(f => f.command === 'storage.vault.remove').map(f => f.payload?.mirror_copy ?? null)).toEqual(['remove', null, 'leave'])
+
+    role = 'mirror'
+    await page.goto('/vaults/6/settings')
+    await page.getByTestId('vault-delete-open').click()
+    await expect(page.getByTestId('vault-delete-mirror-held')).toContainText('This vault is a copy of vps’s vault, so it can’t be deleted here.')
+    await expect(page.getByTestId('vault-delete-confirm')).toBeDisabled()
   })
 })

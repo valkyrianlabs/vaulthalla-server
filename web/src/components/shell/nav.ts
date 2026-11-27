@@ -108,7 +108,7 @@ export const NAV: NavSection[] = [
         icon: ServerIcon,
         requires: { superAdmin: true },
         shownWhen: 'peers',
-        keywords: 'peer link pair server experimental',
+        keywords: 'peer link pair server experimental mirror mirrored vaults',
       },
       { label: 'Notifications', href: '/notifications', icon: EnvelopeIcon, requires: { superAdmin: true }, keywords: 'operator email' },
       { label: 'Settings', href: '/settings', icon: SlidersIcon, requires: { superAdmin: true }, keywords: 'config' },
