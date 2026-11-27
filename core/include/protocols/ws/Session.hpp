@@ -4,7 +4,7 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
-#include <boost/beast/websocket.hpp>
+#include "compat/beast_websocket.hpp"
 
 #include "WsProtocol.hpp"
 #include "auth/Fwd.hpp"

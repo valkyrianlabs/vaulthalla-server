@@ -23,7 +23,7 @@
 #include <boost/asio/strand.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
-#include <boost/beast/websocket.hpp>
+#include "compat/beast_websocket.hpp"
 
 #include <openssl/ssl.h>
 #include <openssl/x509.h>

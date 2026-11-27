@@ -13,7 +13,7 @@
 #include <boost/asio/ssl.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
-#include <boost/beast/websocket.hpp>
+#include "compat/beast_websocket.hpp"
 #include <boost/beast/websocket/ssl.hpp>
 #include <nlohmann/json.hpp>
 #include <openssl/evp.h>
