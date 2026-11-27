@@ -25,6 +25,7 @@
 #include <boost/beast/core.hpp>
 #include <boost/beast/ssl.hpp>
 #include "compat/beast_websocket.hpp"
+#include <boost/beast/websocket/ssl.hpp>
 #include <nlohmann/json.hpp>
 #include <sodium.h>
 #include <vl/keykit/base64url.hpp>

@@ -15,7 +15,6 @@
 #pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #endif
 #include <boost/beast/websocket.hpp>
-#include <boost/beast/websocket/ssl.hpp>
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic pop
 #endif

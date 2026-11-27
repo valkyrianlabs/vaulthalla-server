@@ -3,6 +3,7 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/stream.hpp>
 #include "compat/beast_websocket.hpp"
+#include <boost/beast/websocket/ssl.hpp>
 
 // A websocket over TLS (the device listener). ws::Session runs the same protocol over this or a plain TCP socket;
 // the listener does the TLS handshake and reads the upgrade request on next_layer() before handing it over.
