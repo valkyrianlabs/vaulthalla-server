@@ -24,6 +24,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 
 namespace vh::protocols::ws::handler::share {
@@ -52,14 +53,20 @@ public:
         const auto vaultPath = std::filesystem::path(finalVaultPath);
         const auto fusePath = engine->vaultPathToFusePath(vaultPath);
 
-        return vh::fs::Filesystem::createFile({
-            .path = vaultPath,
-            .fuse_path = fusePath,
-            .buffer = bytes,
-            .engine = engine,
-            .user = user,
-            .overwrite = false
-        });
+        try {
+            return vh::fs::Filesystem::createFile({
+                .path = vaultPath,
+                .fuse_path = fusePath,
+                .buffer = bytes,
+                .engine = engine,
+                .user = user,
+                .overwrite = false
+            });
+        } catch (const std::filesystem::filesystem_error& e) {
+            // Created by someone else since the upload began: refused, never reported as this upload's file.
+            if (e.code() == std::errc::file_exists) throw vh::ops::Conflict("Share upload target already exists");
+            throw;
+        }
     }
 };
 

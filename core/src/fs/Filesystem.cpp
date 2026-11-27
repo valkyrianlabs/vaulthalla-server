@@ -900,14 +900,15 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
 
     if (ctx.path.empty()) throw std::runtime_error("Cannot create file at empty path");
     if (cache->entryExists(ctx.fuse_path)) {
+        // A create (overwrite false) never returns what is already there: a caller that lost a create race must not
+        // report its bytes as stored (`vh fs put`, share uploads, restores of a new file). EEXIST either way.
         if (!ctx.overwrite) {
-            log::Registry::fs()->warn("File already exists at path: {}", log::path(ctx.fuse_path));
             const auto entry = cache->getEntry(ctx.fuse_path);
-            if (entry->isDirectory()) throw std::filesystem::filesystem_error(
-                "[Filesystem] Cannot create file at path, a directory already exists",
+            throw std::filesystem::filesystem_error(
+                entry && entry->isDirectory() ? "[Filesystem] Cannot create file at path, a directory already exists"
+                                              : "[Filesystem] Cannot create file at path, a file already exists",
                 ctx.fuse_path,
                 std::make_error_code(std::errc::file_exists));
-            return std::static_pointer_cast<File>(entry);
         }
 
         log::Registry::fs()->debug("File already exists at path: {}, overwriting", log::path(ctx.fuse_path));

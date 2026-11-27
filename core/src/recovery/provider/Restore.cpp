@@ -54,6 +54,7 @@
 #include <ctime>
 #include <fcntl.h>
 #include <fstream>
+#include <filesystem>
 #include <system_error>
 #include <unistd.h>
 #include <unordered_map>
@@ -1032,8 +1033,16 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
             std::string expectedNow;
             d::FilePtr target = dest;
             if (creating) {
-                target = fs::Filesystem::createFile({.path = destPath, .fuse_path = engine->vaultPathToFusePath(destPath),
-                                                     .buffer = {}, .engine = engine, .user = user, .overwrite = false});
+                try {
+                    target = fs::Filesystem::createFile({.path = destPath,
+                                                         .fuse_path = engine->vaultPathToFusePath(destPath),
+                                                         .buffer = {}, .engine = engine, .user = user,
+                                                         .overwrite = false});
+                } catch (const std::filesystem::filesystem_error& e) {
+                    if (e.code() == std::errc::file_exists)
+                        throw fs::ContentConflict("a file appeared at the destination meanwhile");
+                    throw;
+                }
                 if (!target || target->size_bytes != 0 || !target->encryption_iv.empty() ||
                     std::time(nullptr) - target->created_at > 60)
                     throw fs::ContentConflict("a file appeared at the destination meanwhile");
@@ -1162,11 +1171,18 @@ RestoreOutcome restore(const std::shared_ptr<storage::CloudEngine>& engine, cons
         // 3b. Local commit under CAS (a new destination is created empty first, then filled the same way).
         std::string expectedNow;
         if (creating) {
-            const auto created = fs::Filesystem::createFile({.path = destPath,
-                                                             .fuse_path = engine->vaultPathToFusePath(destPath),
-                                                             .buffer = {}, .engine = engine, .user = user,
-                                                             .overwrite = false});
-            // A file someone created meanwhile (createFile returns it unchanged) is not ours to fill.
+            // A file someone created meanwhile (createFile refuses with EEXIST) is not ours to fill.
+            std::shared_ptr<fs::model::File> created;
+            try {
+                created = fs::Filesystem::createFile({.path = destPath,
+                                                      .fuse_path = engine->vaultPathToFusePath(destPath),
+                                                      .buffer = {}, .engine = engine, .user = user,
+                                                      .overwrite = false});
+            } catch (const std::filesystem::filesystem_error& e) {
+                if (e.code() == std::errc::file_exists)
+                    throw fs::ContentConflict("a file appeared at the destination meanwhile");
+                throw;
+            }
             if (!created || created->size_bytes != 0 || !created->encryption_iv.empty() ||
                 std::time(nullptr) - created->created_at > 60)
                 throw fs::ContentConflict("a file appeared at the destination meanwhile");
