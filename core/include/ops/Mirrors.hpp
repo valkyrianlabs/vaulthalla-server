@@ -1,6 +1,7 @@
 #pragma once
 
 #include "db/query/mirror/MirrorVault.hpp"
+#include "db/query/mirror/Pending.hpp"
 #include "db/query/mirror/Start.hpp"
 #include "ops/Actor.hpp"
 #include "peer/Peer.hpp"
@@ -86,6 +87,23 @@ struct Mirrored {
 // here, orphaned, instead. Super admins; audited mirror.keep_removed.set.
 [[nodiscard]] db::query::mirror::AcceptVaults keepRemoved(const Actor& actor, const std::string& peer);
 [[nodiscard]] db::query::mirror::AcceptVaults setKeepRemoved(const Actor& actor, const std::string& peer, bool enabled);
+
+// Held changes and conflict copies (design/peers/mirror.md "As built: a change made on the mirror"): a person's change
+// to a vault this server mirrors that the core refused (kind held: the entry came back to the core's state, the
+// change is kept with the reason) or that became a conflict copy (kind conflict: a record of the rename). Super admins
+// of this server (the people who may change a mirrored vault here). `vaultId` narrows to one vault; `all` includes
+// the ones discarded or retried.
+[[nodiscard]] std::vector<db::query::mirror::HeldChange> held(const Actor& actor, std::optional<uint32_t> vaultId,
+                                                              bool all);
+// Drops the held change (or dismisses a conflict record): nothing changes in the vault. Audited mirror.held.discard.
+[[nodiscard]] db::query::mirror::HeldChange discardHeld(const Actor& actor, uint64_t id);
+// Submits a held change again as it was (a new request, at the end of the vault's queue, as the person who made it):
+// the core executes it or refuses it again (a refusal is held again). Not applied here first: its result comes back in
+// the log. The vault must be live here (mirror_read_only otherwise); a conflict record is not retried (invalid).
+// Audited mirror.held.retry.
+[[nodiscard]] db::query::mirror::HeldChange retryHeld(const Actor& actor, uint64_t id);
+
+[[nodiscard]] nlohmann::json toJson(const db::query::mirror::HeldChange& h);
 
 [[nodiscard]] nlohmann::json toJson(const Offer& offer);
 [[nodiscard]] nlohmann::json toJson(const Mirrored& m);

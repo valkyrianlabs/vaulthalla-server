@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '7b9eabc96b44fb5daa1af3d119020a0a81bad26554a42cc43aa8b1a1e318546f'
+export const WS_CONTRACT_HASH = 'feaf0e3f694f824c86326190bc31840aabe122c137b65a70ceea4ab901fd46e9'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
@@ -5727,6 +5727,82 @@ export interface WsContract {
     }
   }
   /**
+   * Drops a held change (or dismisses a conflict record); nothing in the vault changes. Super admins; audited
+   * mirror.held.discard.
+   */
+  'mirror.held.discard': {
+    payload: { id: number }
+    response: {
+      held: {
+        id: number
+        vault_id: number
+        kind: 'held' | 'conflict'
+        op: 'mkdir' | 'move' | 'rename' | 'remove' | 'copy' | 'write'
+        entry_uid: string | null
+        path: string | null
+        name: string
+        copy_name: string | null
+        person: { node: string; id: number }
+        reason_code: string
+        reason: string
+        state: 'open' | 'retried' | 'discarded'
+        created_at: number
+        resolved_at: number | null
+      }
+    }
+  }
+  /**
+   * Changes made on this server to a vault it mirrors that the core refused (held: the entry came back to the
+   * core's state, the change is kept with the reason) or turned into a conflict copy. Super admins.
+   */
+  'mirror.held.list': {
+    payload: { vault_id?: number; all?: boolean }
+    response: {
+      held: {
+        id: number
+        vault_id: number
+        kind: 'held' | 'conflict'
+        op: 'mkdir' | 'move' | 'rename' | 'remove' | 'copy' | 'write'
+        entry_uid: string | null
+        path: string | null
+        name: string
+        copy_name: string | null
+        person: { node: string; id: number }
+        reason_code: string
+        reason: string
+        state: 'open' | 'retried' | 'discarded'
+        created_at: number
+        resolved_at: number | null
+      }[]
+    }
+  }
+  /**
+   * Submits a held change to the core again as it was, as the person who made it; its result comes back in
+   * the log (a new refusal is held again). The vault must be live here. Super admins; audited
+   * mirror.held.retry.
+   */
+  'mirror.held.retry': {
+    payload: { id: number }
+    response: {
+      held: {
+        id: number
+        vault_id: number
+        kind: 'held' | 'conflict'
+        op: 'mkdir' | 'move' | 'rename' | 'remove' | 'copy' | 'write'
+        entry_uid: string | null
+        path: string | null
+        name: string
+        copy_name: string | null
+        person: { node: string; id: number }
+        reason_code: string
+        reason: string
+        state: 'open' | 'retried' | 'discarded'
+        created_at: number
+        resolved_at: number | null
+      }
+    }
+  }
+  /**
    * Whether this server keeps the vaults a linked server (their core) removes: a cancel that asks to remove a
    * finished copy leaves it here as an orphaned copy instead (default off). Super admins; audited
    * mirror.keep_removed.set.
@@ -9173,6 +9249,9 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'mirror.cancel',
   'mirror.decline',
   'mirror.get',
+  'mirror.held.discard',
+  'mirror.held.list',
+  'mirror.held.retry',
   'mirror.keep_removed.set',
   'mirror.list',
   'mirror.pending',
@@ -9659,6 +9738,9 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'mirror.cancel': 15000,
   'mirror.decline': 15000,
   'mirror.get': 15000,
+  'mirror.held.discard': 15000,
+  'mirror.held.list': 15000,
+  'mirror.held.retry': 15000,
   'mirror.keep_removed.set': 15000,
   'mirror.list': 15000,
   'mirror.pending': 15000,

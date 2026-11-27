@@ -40305,6 +40305,630 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
+      "command": "mirror.held.discard",
+      "confirmations": [],
+      "description": "Drops a held change (or dismisses a conflict record); nothing in the vault changes. Super admins; audited mirror.held.discard.",
+      "effect": "destructive",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "mirror.held",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "enum": [
+                "held",
+                "conflict"
+              ],
+              "name": "kind",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "mkdir",
+                "move",
+                "rename",
+                "remove",
+                "copy",
+                "write"
+              ],
+              "name": "op",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entry_uid",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Where the person's version was (vault path).",
+              "name": "path",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The name the change gave the entry.",
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "kind conflict: the name the person's version took.",
+              "name": "copy_name",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Who made the change ({node, id}).",
+              "fields": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "person",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "The core's refusal code (denied, not_found, conflict, ...).",
+              "name": "reason_code",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "open",
+                "retried",
+                "discarded"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "resolved_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "held",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.held.list",
+      "confirmations": [],
+      "description": "Changes made on this server to a vault it mirrors that the core refused (held: the entry came back to the core's state, the change is kept with the reason) or turned into a conflict copy. Super admins.",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "One vault only.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Include discarded and retried ones.",
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "all",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "enum": [
+                "held",
+                "conflict"
+              ],
+              "name": "kind",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "mkdir",
+                "move",
+                "rename",
+                "remove",
+                "copy",
+                "write"
+              ],
+              "name": "op",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entry_uid",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Where the person's version was (vault path).",
+              "name": "path",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The name the change gave the entry.",
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "kind conflict: the name the person's version took.",
+              "name": "copy_name",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Who made the change ({node, id}).",
+              "fields": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "person",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "The core's refusal code (denied, not_found, conflict, ...).",
+              "name": "reason_code",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "open",
+                "retried",
+                "discarded"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "resolved_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "held",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.held.retry",
+      "confirmations": [],
+      "description": "Submits a held change to the core again as it was, as the person who made it; its result comes back in the log (a new refusal is held again). The vault must be live here. Super admins; audited mirror.held.retry.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "mirror.held",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_read_only"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_read_only"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "enum": [
+                "held",
+                "conflict"
+              ],
+              "name": "kind",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "mkdir",
+                "move",
+                "rename",
+                "remove",
+                "copy",
+                "write"
+              ],
+              "name": "op",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entry_uid",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Where the person's version was (vault path).",
+              "name": "path",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The name the change gave the entry.",
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "kind conflict: the name the person's version took.",
+              "name": "copy_name",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "Who made the change ({node, id}).",
+              "fields": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "person",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "The core's refusal code (denied, not_found, conflict, ...).",
+              "name": "reason_code",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "open",
+                "retried",
+                "discarded"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "resolved_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "held",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
       "command": "mirror.keep_removed.set",
       "confirmations": [],
       "description": "Whether this server keeps the vaults a linked server (their core) removes: a cancel that asks to remove a finished copy leaves it here as an orphaned copy instead (default off). Super admins; audited mirror.keep_removed.set.",
@@ -67269,5 +67893,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "7b9eabc96b44fb5daa1af3d119020a0a81bad26554a42cc43aa8b1a1e318546f"
+  "ws_hash": "feaf0e3f694f824c86326190bc31840aabe122c137b65a70ceea4ab901fd46e9"
 }

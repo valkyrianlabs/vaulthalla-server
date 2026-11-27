@@ -125,6 +125,26 @@ json Mirrors::keepRemovedSet(const json& payload, const std::shared_ptr<Session>
     return mirrors::toJson(set, ::vh::ops::peers::resolveRef(peerRef));
 }
 
+json Mirrors::heldList(const json& payload, const std::shared_ptr<Session>& session) {
+    bool all = false;
+    if (payload.is_object() && payload.contains("all") && !payload.at("all").is_null()) {
+        if (!payload.at("all").is_boolean()) throw ops::Invalid("all must be a boolean");
+        all = payload.at("all").get<bool>();
+    }
+    json out = json::array();
+    for (const auto& h : mirrors::held(mirrorActorOf(session), mirrorOptionalId(payload, "vault_id"), all))
+        out.push_back(mirrors::toJson(h));
+    return {{"held", std::move(out)}};
+}
+
+json Mirrors::heldDiscard(const json& payload, const std::shared_ptr<Session>& session) {
+    return {{"held", mirrors::toJson(mirrors::discardHeld(mirrorActorOf(session), mirrorRequiredId(payload, "id")))}};
+}
+
+json Mirrors::heldRetry(const json& payload, const std::shared_ptr<Session>& session) {
+    return {{"held", mirrors::toJson(mirrors::retryHeld(mirrorActorOf(session), mirrorRequiredId(payload, "id")))}};
+}
+
 json Mirrors::offer(const json& payload, const std::shared_ptr<Session>& session) {
     return vh::mirror::start::offerReceived(mirrorPeerOf(session), payload);
 }

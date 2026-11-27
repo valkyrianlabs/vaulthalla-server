@@ -201,6 +201,53 @@ CommandResult handleKeep(const CommandCall& call) {
                        });
 }
 
+std::string heldLine(const ::vh::db::query::mirror::HeldChange& h) {
+    return fmt::format("{} {}  vault {}  {} {}{}  {} ({}: {}){}\n", h.kind == "conflict" ? "conflict" : "held", h.id,
+                       h.vault_id, h.op, h.path.value_or("?"), h.copy_name ? " -> " + *h.copy_name : std::string(),
+                       h.state, h.reason_code, h.reason, h.kind == "held" && h.state == "open"
+                                                             ? fmt::format("  (vh mirror retry|discard {})", h.id)
+                                                             : std::string());
+}
+
+CommandResult handleHeld(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"mirror", "held"}));
+    const auto json = hasFlag(call, "json");
+    std::optional<uint32_t> vault;
+    if (const auto v = optVal(call, "vault")) {
+        const auto n = parseUInt(*v);
+        if (!n || *n == 0) return invalid("mirror held: --vault is the vault's number (vh vault list)");
+        vault = static_cast<uint32_t>(*n);
+    }
+    return runMirrorOp("mirror held", [&] { return mirrors::held(call.user, vault, hasFlag(call, "all")); },
+                       [&](const std::vector<::vh::db::query::mirror::HeldChange>& list) {
+                           if (json) {
+                               nlohmann::json out = nlohmann::json::array();
+                               for (const auto& h : list) out.push_back(mirrors::toJson(h));
+                               return mirrorPretty({{"held", std::move(out)}});
+                           }
+                           if (list.empty()) return std::string("No held changes and no conflict copies.\n");
+                           std::string out;
+                           for (const auto& h : list) out += heldLine(h);
+                           return out;
+                       });
+}
+
+CommandResult handleHeldDecision(const CommandCall& call, const bool retryIt) {
+    const char* name = retryIt ? "retry" : "discard";
+    validatePositionals(call, resolveUsage({"mirror", name}));
+    const auto json = hasFlag(call, "json");
+    const auto id = parseUInt(call.positionals.at(0));
+    if (!id || *id == 0) return invalid(std::string("mirror ") + name + ": the held change is its number (vh mirror held)");
+    return runMirrorOp(std::string("mirror ") + name,
+                       [&] {
+                           return retryIt ? mirrors::retryHeld(call.user, *id) : mirrors::discardHeld(call.user, *id);
+                       },
+                       [&](const ::vh::db::query::mirror::HeldChange& h) {
+                           if (json) return mirrorPretty({{"held", mirrors::toJson(h)}});
+                           return std::string(retryIt ? "Sent to the core again.\n" : "Discarded.\n");
+                       });
+}
+
 CommandResult handleMirror(const CommandCall& call) {
     if (call.positionals.empty()) return usage(call.constructFullArgs());
     const auto [sub, subcall] = descend(call);
@@ -214,6 +261,9 @@ CommandResult handleMirror(const CommandCall& call) {
     if (is("info")) return handleInfo(subcall);
     if (is("accept-all")) return handleAcceptAll(subcall);
     if (is("keep-removed")) return handleKeep(subcall);
+    if (is("held")) return handleHeld(subcall);
+    if (is("discard")) return handleHeldDecision(subcall, false);
+    if (is("retry")) return handleHeldDecision(subcall, true);
     return invalid(call.constructFullArgs(), "Unknown mirror subcommand: '" + std::string(sub) + "'");
 }
 

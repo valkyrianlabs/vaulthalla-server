@@ -41,6 +41,7 @@
 #include "mirror/submit/Submit.hpp"
 #include "ops/Error.hpp"
 #include "ops/Fs.hpp"
+#include "ops/Mirrors.hpp"
 #include "ops/Roles.hpp"
 #include "ops/Vaults.hpp"
 #include "rbac/role/Vault.hpp"
@@ -757,6 +758,21 @@ TEST_F(MirrorSubmitDbTest, ARefusalByTheCeilingIsHeldAndTheEntryComesBackToTheCo
     expectSettled(s);
     EXPECT_FALSE(pathsOf(s.mirrorId).contains("/docs/new"));
     EXPECT_EQ(mq::Pending::heldChanges(s.mirrorId).size(), 2u);
+
+    // A super admin here retries one (the core still refuses: held again) and discards the other.
+    const auto open = ops::mirrors::held(superUser, s.mirrorId, false);
+    ASSERT_EQ(open.size(), 2u);
+    EXPECT_EQ(ops::mirrors::retryHeld(superUser, open[0].id).state, "retried");
+    EXPECT_THROW((void)ops::mirrors::retryHeld(superUser, open[0].id), ops::Conflict) << "once";
+    followAll(wire, s);
+    expectSettled(s);
+    EXPECT_EQ(wire.answersGiven.back().value("code", ""), "denied");
+    EXPECT_EQ(ops::mirrors::held(superUser, s.mirrorId, false).size(), 2u) << "refused again: held again";
+    EXPECT_EQ(ops::mirrors::held(superUser, s.mirrorId, true).size(), 3u);
+    EXPECT_EQ(ops::mirrors::discardHeld(superUser, open[1].id).state, "discarded");
+    EXPECT_THROW((void)ops::mirrors::discardHeld(superUser, open[1].id), ops::Conflict);
+    EXPECT_EQ(ops::mirrors::held(superUser, s.mirrorId, false).size(), 1u);
+    EXPECT_EQ(pathsOf(s.mirrorId), corePaths(s)) << "neither touched the vault";
 }
 
 TEST_F(MirrorSubmitDbTest, ARepeatedSubmitIsAnsweredWithWhatTheCoreDidTheFirstTime) {

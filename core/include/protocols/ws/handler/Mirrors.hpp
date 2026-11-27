@@ -23,6 +23,10 @@ struct Mirrors {
     static json get(const json& payload, const std::shared_ptr<Session>& session);
     static json acceptAllSet(const json& payload, const std::shared_ptr<Session>& session);
     static json keepRemovedSet(const json& payload, const std::shared_ptr<Session>& session);
+    // A change made here that the core refused (wave 4 piece B): mirror.held.list | discard | retry.
+    static json heldList(const json& payload, const std::shared_ptr<Session>& session);
+    static json heldDiscard(const json& payload, const std::shared_ptr<Session>& session);
+    static json heldRetry(const json& payload, const std::shared_ptr<Session>& session);
 
     // A linked server's session.
     static json offer(const json& payload, const std::shared_ptr<Session>& session);
