@@ -52,16 +52,31 @@ using SyncOperation = vh::sync::model::Operation;
     return engineFor(vaultId, "No storage engine found for vault with ID: " + std::to_string(vaultId));
 }
 
-// The filesystem permission `action` at `path` (vault-relative), as the vault's RBAC resolves it.
+[[nodiscard]] bool allowedAt(const Actor& actor, const EnginePtr& engine, const std::filesystem::path& path,
+                             const FsAction action) {
+    return vh::rbac::resolver::Vault::has<FsAction>({.user = actor,
+                                                     .permission = action,
+                                                     .vault_id = engine->vault->id,
+                                                     .path = engine->vaultPathToFusePath(path)});
+}
+
+// The filesystem permission `action` at `path` (vault-relative), as the vault's RBAC resolves it. A refusal for an
+// entry that is not there is NotFound to a caller who may list the nearest folder that is (they could see it is
+// missing anyway), Denied to anyone else (no existence oracle): ops::fs::check.
 void require(const Actor& actor, const EnginePtr& engine, const std::filesystem::path& path, const FsAction action,
              const std::string_view error) {
     requireActor(actor);
     if (!engine || !engine->vault) throw std::runtime_error("Internal server error: Storage engine not available");
-    if (!vh::rbac::resolver::Vault::has<FsAction>({.user = actor,
-                                                   .permission = action,
-                                                   .vault_id = engine->vault->id,
-                                                   .path = engine->vaultPathToFusePath(path)}))
-        throw Denied(std::string(error));
+    if (allowedAt(actor, engine, path, action)) return;
+    if (!vh::fs::Filesystem::exists(engine->vaultPathToFusePath(path))) {
+        auto ancestor = path.lexically_normal().parent_path();
+        while (!ancestor.empty() && ancestor != ancestor.root_path() &&
+               !vh::fs::Filesystem::exists(engine->vaultPathToFusePath(ancestor)))
+            ancestor = ancestor.parent_path();
+        if (ancestor.empty()) ancestor = "/";
+        if (allowedAt(actor, engine, ancestor, FsAction::List)) throw NotFound("no such entry: " + path.string());
+    }
+    throw Denied(std::string(error));
 }
 
 [[nodiscard]] bool existsAt(const EnginePtr& engine, const std::filesystem::path& path) {
@@ -304,6 +319,20 @@ void commitStaged(const Actor& actor, const StagedCommit& commit) {
         err)
         throw std::runtime_error(std::string("Failed to move uploaded file to final location: ") +
                                  std::strerror(err));
+}
+
+Access check(const Actor& actor, const uint32_t vaultId, const std::filesystem::path& path,
+             const vh::rbac::permission::vault::FilesystemAction action) {
+    requireActor(actor);
+    const auto engine = engineFor(vaultId);
+    try {
+        require(actor, engine, path, action, "denied");
+        return Access::Allowed;
+    } catch (const NotFound&) {
+        return Access::Missing;
+    } catch (const Denied&) {
+        return Access::Denied;
+    }
 }
 
 std::shared_ptr<vh::fs::model::File> commitSealed(const Actor& actor, const SealedCommit& commit) {

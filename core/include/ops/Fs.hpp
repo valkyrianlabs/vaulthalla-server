@@ -3,6 +3,7 @@
 #include "ops/Actor.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/Fwd.hpp"
+#include "rbac/permission/vault/Filesystem.hpp"
 #include "storage/Fwd.hpp"
 
 #include <cstdint>
@@ -30,6 +31,15 @@ namespace vh::ops::fs {
 struct ContentConflict final : Conflict {
     using Conflict::Conflict;
 };
+
+// Whether `actor` may do `action` at `path`, telling a missing entry from a refusal without an existence oracle
+// (design decision, wave 4; piece B's "changed meanwhile" needs it): Missing only when nothing is at `path` and the
+// actor may list the nearest folder that exists (they could see it is missing there anyway); Denied for a refusal, and
+// for a missing entry under a folder the actor may not list. Every op below refuses the same way: NotFound for Missing,
+// Denied for Denied. NotFound (thrown) without an engine for the vault.
+enum class Access { Allowed, Denied, Missing };
+[[nodiscard]] Access check(const Actor& actor, uint32_t vaultId, const std::filesystem::path& path,
+                           vh::rbac::permission::vault::FilesystemAction action);
 
 // fs.dir.create: Touch at `path`; Conflict when something is there, NotFound when its folder is missing. Audited
 // fs.mkdir.
