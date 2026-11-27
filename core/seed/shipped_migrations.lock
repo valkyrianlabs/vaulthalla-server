@@ -116,3 +116,4 @@ current    731c34c620cc142c461bfe170196355a515c8d7417f689d3778ba8e4e46dd61a  161
 current    46ea5c9acdd422594980dda872b1a62a4a50538e1edcb03f1783301e79640f60  162_peer_vault_role.sql  unreleased
 current    e4eae7c3eab32fcb9a89e77b552e36c0c23176be4d01b53387310274c6322d5b  163_mirror_start.sql  unreleased
 current    281f53b61f608ce8cec21e2b25cb929aede7675136857f028111bc8ff6ba32e9  164_mirror_follow.sql  unreleased
+current    f84602f2346c47609f8ee53ed8e20734eb8ed3b27ecbb4d1c87ac9097dcd0802  166_mirror_pending.sql  unreleased
