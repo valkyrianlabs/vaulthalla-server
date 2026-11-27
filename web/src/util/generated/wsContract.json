@@ -44009,6 +44009,15 @@
                         "object",
                         "null"
                       ]
+                    },
+                    {
+                      "description": "The mirror's request id when the change was one it submitted (peer.mirror.submit).",
+                      "name": "origin",
+                      "required": true,
+                      "types": [
+                        "string",
+                        "null"
+                      ]
                     }
                   ],
                   "name": "",
@@ -44194,6 +44203,15 @@
                     "required": true,
                     "types": [
                       "object",
+                      "null"
+                    ]
+                  },
+                  {
+                    "description": "The mirror's request id when the change was one it submitted (peer.mirror.submit).",
+                    "name": "origin",
+                    "required": true,
+                    "types": [
+                      "string",
                       "null"
                     ]
                   }
@@ -44655,6 +44673,265 @@
           ],
           "name": "state",
           "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.submit",
+      "confirmations": [],
+      "description": "A change made on the mirror, submitted to the core, which executes it as that person (the linked server's vault role is the ceiling) and logs it with the request id in `origin`. Answered at once: a new request is queued and executed in order on the core; asked again with the same request id, the core answers what it did the first time (never twice): running, executed with the number of groups it logged, or refused with the code (conflict: the name was taken; anything else is kept on the mirror as a held change).",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
+          "generator": {
+            "attrs": [
+              "uid"
+            ],
+            "entity": "mirror.vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The mirror's id for the change (8-64 lower-case letters, digits or -).",
+          "generator": {
+            "attrs": [
+              "request_id"
+            ],
+            "entity": "mirror.submit",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "request_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "description": "The mirror's node id.",
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The person's account id on the mirror.",
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "node",
+              "id"
+            ],
+            "entity": "mirror.person",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "person",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "The position the mirror had applied when it submitted.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "seq",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "term",
+              "seq"
+            ],
+            "entity": "mirror.position",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "at",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "enum": [
+            "mkdir",
+            "move",
+            "rename",
+            "remove",
+            "copy"
+          ],
+          "name": "op",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The entry the change is on (UUID text); a created folder's uid, chosen by the mirror.",
+          "generator": {
+            "attrs": [
+              "uid"
+            ],
+            "entity": "mirror.entry",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "entry_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "mkdir, move, rename and copy: where the entry goes.",
+          "fields": [
+            {
+              "description": "The entry's uid, as entry_uid.",
+              "name": "uid",
+              "required": false,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The destination folder's uid (the vault's uid for its root).",
+              "name": "parent_uid",
+              "required": false,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The entry's name there.",
+              "name": "name",
+              "required": false,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "args",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "The generation the change was based on (contents).",
+          "name": "base_generation",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental",
+        "mirror_not_live"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental",
+        "mirror_not_live"
+      ],
+      "response": [
+        {
+          "enum": [
+            "queued",
+            "running",
+            "executed",
+            "refused"
+          ],
+          "name": "status",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "executed: the groups the core logged for it.",
+          "minimum": 0,
+          "name": "groups",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "refused (or executed in part): the refusal's code.",
+          "name": "code",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "error",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The vault's state on the core: diverged stops the mirror too.",
+          "enum": [
+            "live",
+            "paused",
+            "diverged",
+            "expired",
+            "stopped"
+          ],
+          "name": "core_state",
+          "required": false,
           "types": [
             "string"
           ]
@@ -66990,5 +67267,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "c24d8019783110835e3f62e871acf01e5de3cf86d7e2716187bacc8d703a520d"
+  "ws_hash": "81c871cc5fcd4ac98ff4b8d5aeaf7c7e3525829f28732e77e411dacf33bc8ce1"
 }

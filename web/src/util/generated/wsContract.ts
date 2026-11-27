@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'c24d8019783110835e3f62e871acf01e5de3cf86d7e2716187bacc8d703a520d'
+export const WS_CONTRACT_HASH = '81c871cc5fcd4ac98ff4b8d5aeaf7c7e3525829f28732e77e411dacf33bc8ce1'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
@@ -6120,6 +6120,7 @@ export interface WsContract {
           entry_hash: string | null
           prev_hash: string | null
           actor: { node: string; id: number } | null
+          origin: string | null
         })[]
       })[]
       last?: { term: number; seq: number }
@@ -6138,6 +6139,7 @@ export interface WsContract {
           entry_hash: string | null
           prev_hash: string | null
           actor: { node: string; id: number } | null
+          origin: string | null
         })[]
         complete: boolean
       }
@@ -6179,6 +6181,32 @@ export interface WsContract {
     response: {
       offer_uid: string
       state: 'pending' | 'accepted' | 'declined' | 'installed' | 'started' | 'cancelled' | 'expired' | 'failed'
+    }
+  }
+  /**
+   * A change made on the mirror, submitted to the core, which executes it as that person (the linked server's
+   * vault role is the ceiling) and logs it with the request id in `origin`. Answered at once: a new request
+   * is queued and executed in order on the core; asked again with the same request id, the core answers what
+   * it did the first time (never twice): running, executed with the number of groups it logged, or refused
+   * with the code (conflict: the name was taken; anything else is kept on the mirror as a held change).
+   */
+  'peer.mirror.submit': {
+    payload: {
+      vault_uid: string
+      request_id: string
+      person: { node: string; id: number }
+      at: { term: number; seq: number }
+      op: 'mkdir' | 'move' | 'rename' | 'remove' | 'copy'
+      entry_uid: string
+      args?: { uid?: string; parent_uid?: string; name?: string }
+      base_generation?: string
+    }
+    response: {
+      status: 'queued' | 'running' | 'executed' | 'refused'
+      groups?: number
+      code?: string
+      error?: string
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped'
     }
   }
   /**
@@ -9165,6 +9193,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.mirror.log',
   'peer.mirror.notify',
   'peer.mirror.offer',
+  'peer.mirror.submit',
   'peer.mirror.tree',
   'peer.pair.confirm',
   'peer.pair.request',
@@ -9650,6 +9679,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.mirror.log': 15000,
   'peer.mirror.notify': 15000,
   'peer.mirror.offer': 15000,
+  'peer.mirror.submit': 15000,
   'peer.mirror.tree': 15000,
   'peer.pair.confirm': 15000,
   'peer.pair.request': 15000,
