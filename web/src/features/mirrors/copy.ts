@@ -69,6 +69,15 @@ export const MIRROR_COPY = {
   stStoppedMirror: (why: string | null) => `The copy stopped following the core${why ? ` because ${why}` : ''}. It is read-only here.`,
   stSwitching: 'Switching',
   stSwitchingBody: 'The core role is moving between the two servers. The vault is read-only on both for a moment.',
+  stRejoining: 'Replaced as the core',
+  stRejoiningBody: (peer: string) =>
+    `${peer} took over as the core while this server was cut off, and this server holds changes ${peer} never received. The vault is read-only here; resync it to follow ${peer}, or detach it.`,
+  stForked: 'Both took over',
+  stForkedBody:
+    'Both servers took over as the core while they were cut off, so the vault is read-only on both. Pick the server whose files stay, then resync or detach the vault on the other one.',
+  stTookOver: 'Took over',
+  stTookOverBody: (peer: string) =>
+    `This server took over as the core and takes changes. The old core, ${peer}, has not returned yet and may hold changes this server never received.`,
   stDeleting: 'Being deleted',
   stDeletingCore: (when: string, peer: string, remove: boolean) =>
     `This vault is deleted and is purged on ${when}. Then ${peer}’s copy is ${remove ? 'removed (unless that server keeps removed vaults)' : 'left there as an orphaned copy'}.`,
@@ -127,6 +136,10 @@ export const MIRROR_COPY = {
   advStoppedMirror: 'Resync it to start over from the core’s files, or detach it to keep it as this server’s own vault.',
   advStoppedMirrorLinkDown: 'Resyncing needs the link. Once it reconnects, resync it; or detach it to keep it as this server’s own vault.',
   advSwitching: 'Wait a moment; it finishes or changes nothing.',
+  advRejoining: (peer: string) =>
+    `Resync it to follow ${peer} again (the changes only this server has are kept as held changes), or detach it to keep it as this server’s own vault.`,
+  advForked: 'On the server whose files should not stay, resync the vault (what only it has is kept as held changes) or detach it.',
+  advTookOver: (peer: string) => `The old core has not returned yet. When ${peer} comes back, it stops taking changes and follows this server.`,
   advHeld: (n: number) =>
     n === 1 ? 'One change made here was refused by the core: review it under Held changes.' : `${n} changes made here were refused by the core: review them under Held changes.`,
 
@@ -296,6 +309,66 @@ export const MIRROR_COPY = {
   detached: (name: string) => `Detached “${name}”`,
   detachedHint: 'It is a standalone vault on this server now. Re-keying it is recommended.',
   detachFailed: 'The vault was not detached',
+
+  // ---- take over
+  takeoverTitle: (name: string) => `Take over as the core of “${name}”?`,
+  takeoverBody: (peer: string) =>
+    `This server becomes the vault’s core without asking ${peer}, for when ${peer} is gone for good or can’t be reached. Changes made here that were waiting for ${peer} become ordinary changes.`,
+  takeoverWarnTitle: (peer: string) => `${peer} may hold changes this server never received`,
+  takeoverWarnBody: (peer: string) =>
+    `Anything ${peer} took after this copy last caught up isn’t here. If ${peer} comes back, it keeps those changes, read-only, until it is resynced or detached there.`,
+  takeoverSwitchHint: (peer: string) => `If ${peer} still answers, the server refuses: switch the core instead.`,
+  takeoverMissing: (n: number) =>
+    n === 1 ? '1 file’s contents never arrived here; it stays listed, marked missing.' : `${n.toLocaleString('en-US')} files’ contents never arrived here; they stay listed, marked missing.`,
+  takeoverPending: (n: number) =>
+    n === 1 ? '1 change made here becomes an ordinary change.' : `${n.toLocaleString('en-US')} changes made here become ordinary changes.`,
+  takeoverType: (name: string) => `Type “${name}” to confirm`,
+  takeoverConfirm: 'Take over',
+  takingOver: 'Taking over…',
+  tookOver: 'This server is the core now',
+  tookOverBody: (made: number, held: number) =>
+    `${made === 1 ? '1 change' : `${made.toLocaleString('en-US')} changes`} made here became ordinary changes${held ? `; ${held === 1 ? '1 held change stays' : `${held.toLocaleString('en-US')} held changes stay`} listed` : ''}.`,
+  takeoverFailed: 'This server did not take over',
+  takeoverAction: 'Take over as core…',
+  takeoverHint: (peer: string) => `Only if ${peer} is gone for good or can’t be reached.`,
+
+  // ---- detach a copy
+  copyTitle: (name: string) => `Detach a copy of “${name}”?`,
+  copyBody: (peer: string, follows: boolean) =>
+    `The copy held here stays exactly as it is${follows ? ` and keeps following ${peer}` : ''}. A new, separate vault is written from it on this server, with its own key.`,
+  copyWhat: 'Every folder, file and link comes along with its name, place and modification time; the trash, versions, shares and access rules don’t.',
+  copyName: 'Name of the new vault',
+  copyNameHint: (name: string) => `Blank: “${name} copy”.`,
+  copyOwner: 'Owner of the new vault',
+  copyOwnerHint: 'The account that owns the new vault, with an owner’s usual access.',
+  copyStart: 'Write the copy',
+  copyStarted: (name: string) => `Writing “${name}”`,
+  copyLoading: 'Checking for a copy already running…',
+  copyRunning: 'Writing the copy',
+  copyRunningBody: (name: string) => `“${name}” is read-only until it is finished. It runs on the server: you can close this and come back.`,
+  copyBytes: (done: string, total: string) => `${done} of ${total}`,
+  copyCancel: 'Cancel the copy',
+  copyCancelling: 'Cancelling…',
+  copyCancelTitle: (name: string) => `Cancel writing “${name}”?`,
+  copyCancelBody: 'The partial vault is removed. The copy held here isn’t affected.',
+  copyFinished: 'Finished',
+  copyFinishedBody: (name: string) => `“${name}” is a vault of this server now.`,
+  copyOpen: 'Open the new vault',
+  copySkippedTitle: (n: number) => (n === 1 ? '1 file was left out' : `${n.toLocaleString('en-US')} files were left out`),
+  copySkippedMore: (n: number) => `and ${n.toLocaleString('en-US')} more`,
+  copySkippedList: 'Copy the list of files left out',
+  copyNoneSkipped: 'Nothing was left out.',
+  copyFailedState: 'Failed',
+  copyFailedBody: (why: string | null) => `The copy failed${why ? `: ${why}` : ''}. Its partial vault was removed.`,
+  copyCancelledState: 'Cancelled',
+  copyCancelledBody: 'The copy was cancelled and its partial vault removed.',
+  copyAgain: 'Write another copy',
+  copyLast: (name: string, when: string) => `The last copy, “${name}”, ended ${when}.`,
+  copyFailed: 'The copy didn’t start',
+  copyCancelFailed: 'The copy wasn’t cancelled',
+  copyAction: 'Detach a copy…',
+  copyHint: 'Write a new, separate vault from this copy; the copy stays as it is.',
+  done: 'Done',
 
   // ---- versions
   versionsTitle: 'Versions kept here',

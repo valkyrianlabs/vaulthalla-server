@@ -20,7 +20,9 @@ import {
   ChevronLeftIcon,
   CircleInfoIcon,
   ClockIcon,
+  CopyIcon,
   FolderOpenIcon,
+  ShieldHalvedIcon,
   TrashIcon,
   VaultIcon,
 } from '@/components/ui/icons'
@@ -53,6 +55,8 @@ const EndMirrorDialog = dynamic(() => import('@/features/mirrors/EndMirrorDialog
 const SwitchDialog = dynamic(() => import('@/features/mirrors/SwitchDialog'), { ssr: false })
 const DetachDialog = dynamic(() => import('@/features/mirrors/DetachDialog'), { ssr: false })
 const VersionsDialog = dynamic(() => import('@/features/mirrors/VersionsDialog'), { ssr: false })
+const TakeoverDialog = dynamic(() => import('@/features/mirrors/TakeoverDialog'), { ssr: false })
+const DetachCopyDialog = dynamic(() => import('@/features/mirrors/DetachCopyDialog'), { ssr: false })
 
 const useVaultParam = () => {
   const params = useParams<{ vaultId: string }>()
@@ -97,8 +101,10 @@ type Open = Exclude<MirrorAction, 'held' | 'resync'> | null
 
 const ACTION_ICON: Record<MirrorAction, React.ComponentType<React.SVGProps<SVGSVGElement>>> = {
   switch: ArrowRightArrowLeftIcon,
+  takeover: ShieldHalvedIcon,
   resync: ArrowsRotateIcon,
   detach: FolderOpenIcon,
+  copy: CopyIcon,
   versions: ClockIcon,
   cancel: BanIcon,
   held: CircleInfoIcon,
@@ -121,7 +127,7 @@ const Loaded = ({ row }: { row: MirroredVault }) => {
   const [open, setOpen] = useState<Open>(null)
   const [error, setError] = useState<{ error: unknown; fallback: string } | null>(null)
   const peer = peerName(row)
-  const actions = actionsFor(row)
+  const actions = actionsFor(row, { firstCopyFinished: p?.first_copy.finished ?? null })
   const status = statusText(row, { linkUp, firstCopy: p?.first_copy ?? null, date })
   const advice = adviceFor(row, { linkUp, held: openHeld })
   const progress = p ? firstCopyProgress(p.first_copy) : null
@@ -172,6 +178,10 @@ const Loaded = ({ row }: { row: MirroredVault }) => {
     switch (a) {
       case 'switch':
         return { label: 'Switch the core…', hint: row.role === 'core' ? `Make ${peer} the core; this server keeps a copy.` : `Make this server the core; ${peer} keeps a copy.` }
+      case 'takeover':
+        return { label: C.takeoverAction, hint: C.takeoverHint(peer), danger: true }
+      case 'copy':
+        return { label: C.copyAction, hint: C.copyHint }
       case 'resync':
         return { label: 'Resync…', hint: linkUp === false ? C.resyncNeedsLink : 'Start the copy over from the core’s files.' }
       case 'detach':
@@ -306,6 +316,8 @@ const Loaded = ({ row }: { row: MirroredVault }) => {
       {open === 'switch' ? <SwitchDialog row={row} open onOpenChange={onOpenChange} /> : null}
       {open === 'detach' ? <DetachDialog row={row} open onOpenChange={onOpenChange} /> : null}
       {open === 'versions' ? <VersionsDialog row={row} open onOpenChange={onOpenChange} /> : null}
+      {open === 'takeover' ? <TakeoverDialog row={row} open onOpenChange={onOpenChange} /> : null}
+      {open === 'copy' ? <DetachCopyDialog row={row} open onOpenChange={onOpenChange} /> : null}
     </>
   )
 }

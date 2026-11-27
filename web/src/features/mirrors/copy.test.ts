@@ -33,6 +33,11 @@ test('each confirmation says what will happen in one or two sentences', () => {
     MIRROR_COPY.acceptBody('Projects', 'vps'),
     MIRROR_COPY.declineBody('vps'),
     MIRROR_COPY.heldDiscardBody('a.txt'),
+    MIRROR_COPY.takeoverBody('vps'),
+    MIRROR_COPY.takeoverWarnBody('vps'),
+    MIRROR_COPY.copyBody('vps', true),
+    MIRROR_COPY.copyBody('vps', false),
+    MIRROR_COPY.copyCancelBody,
   ]
   for (const body of bodies) {
     const sentences = body.split(/(?<=[.!?])\s+/).filter(Boolean)
@@ -45,4 +50,10 @@ test('ending a mirror and removing a copy are told apart', () => {
   assert.match(MIRROR_COPY.endRemoveHint('vps'), /removes its copy/)
   assert.match(MIRROR_COPY.removeOrphanBody, /for good/)
   assert.match(MIRROR_COPY.detachBody('vps'), /Nothing is deleted/)
+})
+
+test('take over warns about the old core’s changes; detaching a copy says the copy stays', () => {
+  assert.match(MIRROR_COPY.takeoverWarnTitle('vps'), /may hold changes this server never received/)
+  assert.match(MIRROR_COPY.copyBody('vps', true), /stays exactly as it is.*new, separate vault/)
+  assert.match(MIRROR_COPY.stTookOverBody('vps'), /has not returned yet/)
 })

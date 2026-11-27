@@ -13,10 +13,12 @@ export type MirrorStart = NonNullable<MirroredVault['start']>
 export type HeldChange = Response<'mirror.held.list'>['held'][number]
 export type DetachPreview = Response<'mirror.detach.preview'>['preview']
 export type SwitchResult = Response<'mirror.switch'>
+export type TakeoverResult = Response<'mirror.takeover'>
+export type CopyJob = NonNullable<Response<'mirror.detach.copy.get'>['copy']>
 export type Tone = 'ok' | 'info' | 'warn' | 'danger' | 'neutral' | 'unknown'
 
 // Every read a mirror change can affect.
-export const MIRROR_READS = ['mirror.list', 'mirror.get', 'mirror.pending', 'mirror.held.list', 'mirror.detach.preview'] as const
+export const MIRROR_READS = ['mirror.list', 'mirror.get', 'mirror.pending', 'mirror.held.list', 'mirror.detach.preview', 'mirror.detach.copy.get'] as const
 
 // ---- the switch: linked servers off
 
@@ -106,6 +108,9 @@ export const REASON_TEXT: Readonly<Record<string, string>> = {
   mirror_first_copy: 'the first copy is not finished',
   mirror_stopped: 'the mirror stopped',
   mirror_peers_off: 'linked servers are switched off on this server',
+  mirror_rejoining: 'the other server took over as the core and this server holds changes it never received',
+  mirror_both_forced: 'both servers took over as the core while they were cut off',
+  mirror_copy_writing: 'a copy is still being written into it',
 }
 
 const DIVERGED_ITSELF: readonly string[] = ['mirror_diverged', 'mirror_core_diverged', 'mirror_digest_mismatch']
@@ -196,6 +201,7 @@ export const statusText = (row: MirroredVault, facts: StatusFacts): StatusText =
   const withCode = (s: Omit<StatusText, 'code'>): StatusText => ({ ...s, code: row.stop_reason && !reason ? row.stop_reason : null })
   switch (row.state) {
     case 'live': {
+      if (core && row.takeover) return { ...none, label: C.stTookOver, tone: 'info', sentence: C.stTookOverBody(peer) }
       if (!core && facts.firstCopy && !facts.firstCopy.finished) return firstCopy(row, facts, peer)
       if (facts.linkUp === false)
         return core ?
@@ -220,6 +226,10 @@ export const statusText = (row: MirroredVault, facts: StatusFacts): StatusText =
       return withCode({ label: C.stStopped, tone: 'danger', sentence: core ? C.stStoppedCore(peer, reason) : C.stStoppedMirror(reason) })
     case 'switching':
       return { ...none, label: C.stSwitching, tone: 'info', sentence: C.stSwitchingBody }
+    case 'rejoining':
+      return { ...none, label: C.stRejoining, tone: 'danger', sentence: C.stRejoiningBody(peer) }
+    case 'forked':
+      return { ...none, label: C.stForked, tone: 'danger', sentence: C.stForkedBody }
     default:
       return { ...none, label: C.stUnknown, tone: 'unknown', sentence: C.stUnknownBody }
   }
@@ -259,27 +269,46 @@ export const unconfirmed = (row: Pick<MirroredVault, 'role' | 'term' | 'last_seq
 
 // ---- actions
 
-export type MirrorAction = 'cancel' | 'switch' | 'resync' | 'detach' | 'versions' | 'held'
+export type MirrorAction = 'cancel' | 'switch' | 'takeover' | 'resync' | 'detach' | 'copy' | 'versions' | 'held'
 
 const START_OPEN: readonly MirrorStart['state'][] = ['offered', 'pending', 'accepted', 'keys_acked', 'installed', 'started', 'failed', 'expired']
 
+// Whether this server's copy may take over as the core (mirror.takeover): a mirror (not orphaned) whose first copy
+// finished and that still matches its core. The server also refuses while the core answers (mirror_core_reachable).
+export const canTakeOver = (row: Pick<MirroredVault, 'role' | 'state'>, firstCopyFinished: boolean | null | undefined): boolean =>
+  row.role === 'mirror' && firstCopyFinished === true && row.state !== 'diverged' && row.state !== 'starting'
+
+// A core that was replaced (rejoining), took over at the same time as the other server (forked), or whose own take over
+// still waits for the old core: it may be resynced (the first two) or detached (all three).
+const coreReplaced = (row: Pick<MirroredVault, 'role' | 'state'>) => row.role === 'core' && (row.state === 'rejoining' || row.state === 'forked')
+
 // Which actions a vault offers, by this server's role and the vault's state (the server checks again and refuses with
 // its sentence). A completed mirror on the mirror side ends by detaching, never by cancel (mirror_detach_required).
-export const actionsFor = (row: Pick<MirroredVault, 'role' | 'state' | 'start' | 'deleting'>): MirrorAction[] => {
+// `firstCopyFinished` (mirror.detach.preview) decides take over; unknown hides it.
+export const actionsFor = (
+  row: Pick<MirroredVault, 'role' | 'state' | 'start' | 'deleting'> & Partial<Pick<MirroredVault, 'takeover'>>,
+  facts: { firstCopyFinished?: boolean | null } = {},
+): MirrorAction[] => {
   const out: MirrorAction[] = []
   const deleting = Boolean(row.deleting?.deleting)
   switch (row.role) {
     case 'core':
+      if (coreReplaced(row)) {
+        out.push('resync', 'detach', 'held')
+        break
+      }
       if (row.state === 'live' && !deleting) out.push('switch')
+      if (row.takeover) out.push('detach')
       out.push('cancel')
       break
     case 'mirror':
       if (row.state === 'live' && !deleting) out.push('switch')
+      if (canTakeOver(row, facts.firstCopyFinished)) out.push('takeover')
       if (row.state === 'diverged' || row.state === 'expired' || row.state === 'stopped') out.push('resync')
-      out.push('detach', 'versions', 'held')
+      out.push('detach', 'copy', 'versions', 'held')
       break
     case 'orphaned':
-      out.push('detach', 'cancel', 'held')
+      out.push('detach', 'copy', 'cancel', 'held')
       break
     case 'starting':
       if (row.start && START_OPEN.includes(row.start.state)) out.push('cancel')
@@ -309,8 +338,12 @@ export const cancelTarget = (row: Pick<MirroredVault, 'vault_id' | 'start'>): { 
 
 // The next step in plain words, from the role and state (the server's own `vh mirror info` sentences). Null when
 // there is nothing to do.
+// The server's own advice line (mirror.get / mirror.list `advice`) replaces the console's wording when it is present;
+// the count of held changes is added either way.
 export const adviceFor = (row: MirroredVault, facts: { linkUp: boolean | null; held: number }): string | null => {
   const peer = peerName(row)
+  const heldLine = row.role !== 'core' && facts.held > 0 ? C.advHeld(facts.held) : null
+  if (row.advice) return heldLine ? `${row.advice} ${heldLine}` : row.advice
   if (row.role === 'starting') {
     const s = row.start
     if (!s) return null
@@ -339,10 +372,17 @@ export const adviceFor = (row: MirroredVault, facts: { linkUp: boolean | null; h
     case 'switching':
       parts.push(C.advSwitching)
       break
+    case 'rejoining':
+      parts.push(C.advRejoining(peer))
+      break
+    case 'forked':
+      parts.push(C.advForked)
+      break
     default:
       break
   }
-  if (!core && facts.held > 0) parts.push(C.advHeld(facts.held))
+  if (core && row.takeover && row.state === 'live') parts.push(C.advTookOver(peer))
+  if (heldLine) parts.push(heldLine)
   return parts.length ? parts.join(' ') : null
 }
 
@@ -410,4 +450,25 @@ export const parseLimit = (text: string): Parsed<number | null> => {
 export const offerable = <V extends { id: number }>(vaults: readonly V[], mirrored: readonly Pick<MirroredVault, 'vault_id' | 'role'>[]) => {
   const busy = new Set(mirrored.filter(m => m.role !== 'detached' && m.role !== 'none').map(m => m.vault_id))
   return vaults.filter(v => !busy.has(v.id))
+}
+
+// ---- detach a copy
+
+// A copy job's progress (mirror.detach.copy.get): a ratio for the meter (null while the totals are unknown) and
+// "120 of 400 entries · 1.2 GB of 3 GB".
+export const copyProgress = (job: Pick<CopyJob, 'entries_done' | 'entries_total' | 'bytes_done' | 'bytes_total'>, bytes: (n: number) => string) => {
+  const n = (v: number) => v.toLocaleString('en-US')
+  const ratio =
+    job.bytes_total > 0 ? Math.min(1, job.bytes_done / job.bytes_total)
+    : job.entries_total > 0 ? Math.min(1, job.entries_done / job.entries_total)
+    : null
+  const entries = job.entries_total > 0 ? C.progress(n(job.entries_done), n(job.entries_total)) : C.progressUnknown(n(job.entries_done))
+  const size = job.bytes_total > 0 ? C.copyBytes(bytes(job.bytes_done), bytes(job.bytes_total)) : null
+  return { ratio, text: size ? `${entries} · ${size}` : entries }
+}
+
+export const SKIP_TEXT: Readonly<Record<CopyJob['skipped'][number]['reason'], string>> = {
+  contents_missing: 'its contents never arrived here',
+  removed: 'it was removed while the copy ran',
+  unreadable: 'it could not be read',
 }

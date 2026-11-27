@@ -4,8 +4,10 @@ import {
   accessText,
   actionsFor,
   adviceFor,
+  canTakeOver,
   cancelKind,
   cancelTarget,
+  copyProgress,
   decodeBase64,
   firstCopyProgress,
   heldCounts,
@@ -129,10 +131,10 @@ test('starts read from the side that asks', () => {
 test('actions follow the role and state', () => {
   assert.deepEqual(actionsFor(row({ role: 'core' })), ['switch', 'cancel'])
   assert.deepEqual(actionsFor(row({ role: 'core', state: 'diverged' })), ['cancel'])
-  assert.deepEqual(actionsFor(row()), ['switch', 'detach', 'versions', 'held'])
-  assert.deepEqual(actionsFor(row({ state: 'diverged' })), ['resync', 'detach', 'versions', 'held'])
+  assert.deepEqual(actionsFor(row()), ['switch', 'detach', 'copy', 'versions', 'held'])
+  assert.deepEqual(actionsFor(row({ state: 'diverged' })), ['resync', 'detach', 'copy', 'versions', 'held'])
   assert.ok(!actionsFor(row()).includes('cancel'), 'a completed mirror leaves by detaching')
-  assert.deepEqual(actionsFor(row({ role: 'orphaned' })), ['detach', 'cancel', 'held'])
+  assert.deepEqual(actionsFor(row({ role: 'orphaned' })), ['detach', 'copy', 'cancel', 'held'])
   assert.deepEqual(actionsFor(row({ role: 'starting', start: start() })), ['cancel'])
   assert.deepEqual(actionsFor(row({ role: 'starting', start: start({ state: 'declined' }) })), [])
   assert.deepEqual(actionsFor(row({ role: 'core', deleting: { deleting: true, purge_after: 1, copy: 'leave' } })), ['cancel'])
@@ -192,4 +194,44 @@ test('limits and offerable vaults', () => {
     offerable([{ id: 1 }, { id: 5 }, { id: 6 }], [row(), row({ vault_id: 6, role: 'detached' })]).map(v => v.id),
     [1, 6],
   )
+})
+
+test('take over: a mirror whose first copy finished and that still matches, never an orphan', () => {
+  assert.deepEqual(actionsFor(row(), { firstCopyFinished: true }), ['switch', 'takeover', 'detach', 'copy', 'versions', 'held'])
+  assert.ok(actionsFor(row({ state: 'stopped' }), { firstCopyFinished: true }).includes('takeover'))
+  assert.ok(actionsFor(row({ state: 'switching' }), { firstCopyFinished: true }).includes('takeover'), 'the way out of a switch whose core never came back')
+  assert.equal(canTakeOver(row(), false), false)
+  assert.equal(canTakeOver(row(), null), false, 'unknown hides it')
+  assert.equal(canTakeOver(row({ state: 'diverged' }), true), false)
+  assert.equal(canTakeOver(row({ role: 'orphaned' }), true), false)
+  assert.equal(canTakeOver(row({ role: 'core' }), true), false)
+})
+
+test('a replaced core (rejoining), both taking over (forked) and an open take over read in words', () => {
+  const rejoining = statusText(row({ role: 'core', state: 'rejoining', stop_reason: 'mirror_rejoining' }), { linkUp: true, date })
+  assert.equal(rejoining.label, 'Replaced as the core')
+  assert.match(rejoining.sentence, /vps took over as the core.*never received.*read-only here; resync it.*or detach it/)
+  assert.equal(rejoining.code, null)
+  const forked = statusText(row({ role: 'core', state: 'forked', stop_reason: 'mirror_both_forced' }), { linkUp: true, date })
+  assert.match(forked.sentence, /Both servers took over.*Pick the server whose files stay/)
+  const took = row({ role: 'core', takeover: { term: 3, fork: { term: 2, seq: 40 }, peer_id: 3, contents_missing: 0, created_at: 1 } })
+  assert.match(statusText(took, { linkUp: false, date }).sentence, /has not returned yet/)
+  assert.match(adviceFor(took, { linkUp: false, held: 0 }) ?? '', /The old core has not returned yet/)
+  assert.deepEqual(actionsFor(row({ role: 'core', state: 'rejoining' })), ['resync', 'detach', 'held'])
+  assert.deepEqual(actionsFor(row({ role: 'core', state: 'forked' })), ['resync', 'detach', 'held'])
+  assert.deepEqual(actionsFor(took), ['switch', 'detach', 'cancel'])
+  assert.match(adviceFor(row({ role: 'core', state: 'rejoining' }), { linkUp: true, held: 0 }) ?? '', /Resync it to follow vps again/)
+})
+
+test('the server’s advice line replaces the console’s own', () => {
+  const advised = row({ state: 'diverged', advice: 'Linked server 3 took over in term 4.' })
+  assert.equal(adviceFor(advised, { linkUp: true, held: 0 }), 'Linked server 3 took over in term 4.')
+  assert.match(adviceFor(advised, { linkUp: true, held: 1 }) ?? '', /^Linked server 3 took over in term 4\. One change made here was refused/)
+})
+
+test('a copy’s progress counts bytes when it knows them, else entries', () => {
+  const bytes = (n: number) => `${n}B`
+  assert.deepEqual(copyProgress({ entries_done: 1, entries_total: 4, bytes_done: 30, bytes_total: 120 }, bytes), { ratio: 0.25, text: '1 of 4 entries · 30B of 120B' })
+  assert.equal(copyProgress({ entries_done: 2, entries_total: 4, bytes_done: 0, bytes_total: 0 }, bytes).ratio, 0.5)
+  assert.deepEqual(copyProgress({ entries_done: 3, entries_total: 0, bytes_done: 0, bytes_total: 0 }, bytes), { ratio: null, text: '3 entries so far' })
 })
