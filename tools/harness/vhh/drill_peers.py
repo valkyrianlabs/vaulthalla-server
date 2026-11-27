@@ -526,6 +526,43 @@ def _put(node: Node, args: tuple, text: str) -> subprocess.CompletedProcess:
                           capture_output=True, text=True, timeout=60, cwd=str(node.private))
 
 
+def _http_upload(node: Node, vault_id: int, path: str, data: bytes) -> dict:
+    """The console's HTTP upload lane on `node` (staged as `.upload-http-*.part` next to the target, through the mount on
+    Linux, then committed): as a web account of this node made for the drill (role unprivileged, power_user on the vault), its
+    generated password kept in memory only. Returns {path: error or None}."""
+    import asyncio
+    import re
+    import vhh._repo  # noqa: F401 - tools.lab importable
+    from tools.lab.pentest.client import Target as NetTarget, Ws, ok as ws_ok, upload_files
+
+    name = "drill_web"
+    password = getattr(node, "_drill_web_password", None)
+    if password is None:
+        env = [f"VAULTHALLA_CLI_SOCKET={node.inst.socket_path}", "VAULTHALLA_NONINTERACTIVE=1", "PATH=/usr/bin:/bin"]
+        cp = subprocess.run(["runuser", "-u", node.admin, "--", "env", "-i", *env, node.cli, "user", "create", name,
+                             "--role", "unprivileged", "--email", f"{name}@drill.invalid"],
+                            capture_output=True, text=True, timeout=60, cwd=str(node.private))
+        m = re.search(r"^Password:\s*(\S+)\s*$", cp.stdout, re.M)
+        if cp.returncode != 0 or not m:
+            raise DrillError(f"user create {name} failed (exit {cp.returncode}; output withheld: it may hold a secret)")
+        password = m.group(1)
+        node._drill_web_password = password
+    vault, owner = _sql(node, f"SELECT v.name || '|' || u.name FROM vault v JOIN users u ON u.id = v.owner_id "
+                              f"WHERE v.id = {vault_id}").split("|", 1)
+    node.vh("vault", "role", "assign", vault, "power_user", "-u", name, "--owner", owner, check=False)
+    target = NetTarget(hostname="127.0.0.1", connect_ip="127.0.0.1", ws_port=node.inst.target.ws_port,
+                       http_port=node.inst.target.http_port)
+
+    async def go() -> dict:
+        async with Ws(target) as ws:
+            res = await ws.sign_in(name, password)
+            if not ws_ok(res):
+                return {path: f"sign-in: {res.get('status')} {res.get('error')}"}
+            return upload_files(target, ws.cookie_header(), vault_id, [(path, data)])
+
+    return asyncio.run(go())
+
+
 def _stop(a: Node, b: Node, node_a: str) -> None:
     """A stops (killed): B's link to its core is down."""
     a.close()
@@ -595,6 +632,38 @@ def _changes_on_the_mirror(a: Node, va: int, b: Node, vb: int, faults_b: Path, n
                  _sql(b, f"SELECT count(*) FROM mirror_content_pending WHERE vault_id = {vb}") == "0"
                  and not any((b.inst.backing / ".vh-mirror-pending" / str(vb)).glob("*"))
                  if (b.inst.backing / ".vh-mirror-pending").exists() else True)
+
+    # ---- 7j. An HTTP upload's staging file (.upload-http-*.part, staged next to the target through the mount on Linux)
+    # is never content, in either direction. On A: the console's HTTP lane (a web account of A's). On B: the same staging
+    # file through B's mount (create, write, seal, remove: the lane's own steps there) around the commit's write (`vh fs
+    # put`), since on a mirrored vault only B's super admins have access and the drill's super admin has no web password
+    # (it is bound to its Linux account): B's staging file is B's scratch, never submitted, and the write is one change.
+    staging_b = "from_b/.upload-http-drill0b-f0.part"
+    b.sh(f"head -c 150000 /dev/urandom > MNT/whole/{staging_b}")
+    staged_rows = _pending_rows(b, vb)
+    cp = _put(b, ("fs", "put", str(vb), "-", "/from_b/uploaded_on_b.txt"), "committed from B's staging\n")
+    b.sh(f"rm MNT/whole/{staging_b}")
+    report.check("7j: B's staging file through the mount is scratch (nothing pending for it); its commit is stored",
+                 staged_rows == 0 and cp.returncode == 0, f"pending {staged_rows}; {(cp.stdout + cp.stderr)[-200:]}")
+    body_a = os.urandom(120_000)
+    errors = _http_upload(a, va, "/docs/uploaded_on_a.bin", body_a)
+    report.check("7j: an HTTP upload on A stores the file", errors == {"/docs/uploaded_on_a.bin": None}, json.dumps(errors))
+    ok = settled("the uploads on both sides")
+    on_b = b.inst.mount / "whole" / "docs" / "uploaded_on_a.bin"
+    report.check("7j: both arrive and come back confirmed",
+                 bool(ok) and _plain(a, "whole/from_b/uploaded_on_b.txt") == _plain(b, "whole/from_b/uploaded_on_b.txt")
+                 and on_b.is_file() and on_b.read_bytes() == body_a, json.dumps(ok)[:300])
+    report.check("7j: B's upload was exactly one change submitted to A (its write), no staging file among them",
+                 _sql(a, f"SELECT count(*) FROM mirror_submission WHERE vault_id = {va} "
+                         "AND payload -> 'args' ->> 'name' = 'uploaded_on_b.txt'") == "1"
+                 and _sql(a, f"SELECT count(*) FROM mirror_submission WHERE vault_id = {va} "
+                             "AND payload::text LIKE '%.upload-http-%'") == "0")
+    report.check("7j: no staging file in A's replication log, on B, or held on B",
+                 _sql(a, f"SELECT count(*) FROM vault_replication_log WHERE vault_id = {va} "
+                         "AND (name LIKE '.upload-http-%' OR state::text LIKE '%.upload-http-%')") == "0"
+                 and _sql(b, f"SELECT count(*) FROM fs_entry WHERE vault_id = {vb} AND name LIKE '.upload-http-%'") == "0"
+                 and _sql(b, f"SELECT count(*) FROM mirror_held WHERE vault_id = {vb} "
+                             "AND args::text LIKE '%.upload-http-%'") == "0")
 
     # ---- 7k. A refusal: a change submitted after A narrowed what B may do is kept on B as a held change
     hold.write_text("drill")

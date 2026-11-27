@@ -1193,6 +1193,83 @@ TEST_F(MirrorSubmitDbTest, HousekeepingSweepsWhatAStopLeftAndWhatNothingNamesAnd
     expectSettled(s);
 }
 
+// ---- an HTTP upload's staging file (.upload-http-*.part): never content, in either direction ---------------------------------
+
+TEST_F(MirrorSubmitDbTest, AnUploadOnTheMirrorIsOneWriteAndItsStagingFileIsScratchThatIsNeverSubmittedOrHashed) {
+    auto s = begin([](const EnginePtr& e) { e->mkdir("/docs", superUser); });
+    Wire wire(s);
+    followAll(wire, s);
+    // The upload coordinator stages next to the target (through the mount on Linux), then commits the real file.
+    const std::string staging = "/docs/.upload-http-0f1e2d3c-77.part";
+    write(s.mirror, staging, "the upload's bytes, staged");
+    EXPECT_TRUE(pathsOf(s.mirrorId).contains(staging)) << "written past the backstop";
+    EXPECT_TRUE(mq::Pending::list(s.mirrorId).empty()) << "scratch: nothing pending";
+    EXPECT_TRUE(mq::Pending::dirtyUids(s.mirrorId).empty()) << "nothing dirty";
+    write(s.mirror, "/docs/uploaded.txt", "the upload's bytes, staged");
+    ASSERT_EQ(mq::Pending::list(s.mirrorId).size(), 1u) << "the commit is the one change";
+
+    followAll(wire, s);
+    EXPECT_EQ(wire.submits.size(), 1u) << "exactly one pending write";
+    EXPECT_EQ(wire.contentsSent, 1u) << "and one PUT";
+    EXPECT_EQ(wire.submits.at(0).at("args").value("name", ""), "uploaded.txt");
+    expectSettled(s);   // the staging file is still here, outside the digest
+    EXPECT_EQ(coreCount(s, "SELECT count(*) FROM fs_entry WHERE vault_id = " + std::to_string(s.coreId) +
+                               " AND name LIKE '.upload-http-%'"),
+              0)
+        << "never on the core";
+
+    // The coordinator's discard (or a share upload's): scratch again, nothing pending.
+    ops::fs::remove(superUser, s.mirrorId, staging);
+    EXPECT_FALSE(pathsOf(s.mirrorId).contains(staging));
+    EXPECT_TRUE(mq::Pending::list(s.mirrorId).empty());
+    followAll(wire, s);
+    EXPECT_EQ(wire.submits.size(), 1u);
+    expectSettled(s);
+}
+
+TEST_F(MirrorSubmitDbTest, AnUploadOnTheCoreLogsOnlyItsFileAndAFileRenamedToAStagingNameLeavesTheTree) {
+    auto s = begin([](const EnginePtr& e) {
+        e->mkdir("/docs", superUser);
+        write(e, "/docs/old.txt", "a file that will take a staging name");
+    });
+    Wire wire(s);
+    followAll(wire, s);
+    receiveAll(s);
+    const std::string staging = "/docs/.upload-http-aa55-1.part";
+    const auto logged = [&](const std::string& uid) {
+        return coreCount(s, "SELECT count(*) FROM vault_replication_log WHERE vault_id = " + std::to_string(s.coreId) +
+                                " AND entry_uid = '" + uid + "'");
+    };
+    std::string stagingUid;
+    coreChange(s, [&](const EnginePtr& e) {
+        write(e, staging, "staged on the core");
+        stagingUid = uidOf(s.coreId, staging);
+        write(e, "/docs/up.txt", "staged on the core");
+    });
+    ASSERT_FALSE(stagingUid.empty());
+    EXPECT_EQ(logged(stagingUid), 0) << "the core never logs its staging file";
+    EXPECT_EQ(coreCount(s, "SELECT count(*) FROM vh_mirror_tree_states(" + std::to_string(s.coreId) + ") WHERE entry_uid = '" +
+                               stagingUid + "'"),
+              0)
+        << "nor counts it in its tree";
+    coreChange(s, [&](const EnginePtr&) { ops::fs::remove(superUser, s.coreId, staging); });
+    EXPECT_EQ(logged(stagingUid), 0) << "nor its trash or purge";
+    followAll(wire, s);
+    expectSettled(s);
+    EXPECT_TRUE(pathsOf(s.mirrorId).contains("/docs/up.txt"));
+    EXPECT_FALSE(pathsOf(s.mirrorId).contains(staging)) << "never fetched";
+
+    // A file renamed to a staging name leaves the replicated tree (a delete); the mirror follows.
+    const auto oldUid = uidOf(s.mirrorId, "/docs/old.txt");
+    coreChange(s, [&](const EnginePtr&) { ops::fs::rename(superUser, s.coreId, "/docs/old.txt", "/docs/.upload-http-x.part"); });
+    EXPECT_EQ(coreCount(s, "SELECT count(*) FROM vault_replication_log WHERE vault_id = " + std::to_string(s.coreId) +
+                               " AND entry_uid = '" + oldUid + "' AND op = 'delete'"),
+              1);
+    followAll(wire, s);
+    expectSettled(s);
+    EXPECT_FALSE(pathsOf(s.mirrorId).contains("/docs/old.txt"));
+}
+
 // ---- refusals ------------------------------------------------------------------------------------------------------------
 
 TEST_F(MirrorSubmitDbTest, ARefusalByTheCeilingIsHeldAndTheEntryComesBackToTheCoresState) {

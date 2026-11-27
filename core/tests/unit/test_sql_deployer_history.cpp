@@ -2491,9 +2491,28 @@ TEST_F(SqlDeployerHistoryDb, MirrorPendingMigration166IsAdditiveAndIdempotent) {
         const std::string file = "166_mirror_pending.sql";
         const auto count = [&](const std::string& q) { return txn.exec(q).one_field_ref().as<int64_t>(); };
 
-        // ---- back to the 165 schema
+        // ---- back to the 165 schema: no tables of 166, and 160's and 164's functions as those migrations left them
         txn.exec("DROP TABLE IF EXISTS mirror_pending, mirror_dirty, mirror_held, mirror_submission");
         txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
+        const auto definition = [](const std::string& migration, const std::string& name) {
+            const auto text = migseed::readFileToString(repoPsqlDir() / migration);
+            const auto at = text.find("CREATE OR REPLACE FUNCTION " + name + "(");
+            const auto end = at == std::string::npos ? at : text.find("\n$$ LANGUAGE", at);
+            const auto semi = end == std::string::npos ? end : text.find(';', end);
+            EXPECT_NE(semi, std::string::npos) << name << " in " << migration;
+            return semi == std::string::npos ? std::string{} : text.substr(at, semi + 1 - at);
+        };
+        const std::vector<std::pair<std::string, std::string>> replaced{
+            {"164_mirror_follow.sql", "vh_mirror_entry_state"}, {"164_mirror_follow.sql", "vh_mirror_tree_states"},
+            {"160_replication_log.sql", "vh_mirror_log_state"}, {"160_replication_log.sql", "vh_mirror_track_trash"}};
+        for (const auto& [migration, name] : replaced) txn.exec(definition(migration, name));
+        txn.exec("DROP FUNCTION IF EXISTS vh_mirror_upload_staging(text)");
+        const auto excludesStaging = [&](const std::string& name) {
+            return txn.exec("SELECT pg_get_functiondef(p.oid) LIKE '%vh_mirror_upload_staging%' FROM pg_proc p "
+                            "WHERE p.proname = $1",
+                            pqxx::params{name}).one_field_ref().as<bool>();
+        };
+        for (const auto& [migration, name] : replaced) ASSERT_FALSE(excludesStaging(name)) << name << " as " << migration;
 
         // ---- what an upgraded install holds: a vault mirrored with a linked server
         const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_166_owner', 'x') "
@@ -2523,6 +2542,13 @@ TEST_F(SqlDeployerHistoryDb, MirrorPendingMigration166IsAdditiveAndIdempotent) {
         for (const auto* t : {"mirror_pending", "mirror_dirty", "mirror_held", "mirror_submission"})
             EXPECT_EQ(count(std::string("SELECT count(*) FROM ") + t), 0) << t;
         EXPECT_EQ(rows(), rowsBefore) << "existing mirror rows untouched";
+        // An HTTP upload's staging file is never content (the log, the tree, the trash): the four functions replaced.
+        for (const auto& [migration, name] : replaced) EXPECT_TRUE(excludesStaging(name)) << name;
+        EXPECT_TRUE(txn.exec("SELECT vh_mirror_upload_staging('.upload-http-0a1b-2.part')").one_field_ref().as<bool>());
+        for (const auto* name : {"upload-http-0a1b-2.part", ".upload-http-0a1b-2.txt", "a.part", ".upload-https-x.part"})
+            EXPECT_FALSE(txn.exec("SELECT vh_mirror_upload_staging($1)", pqxx::params{std::string(name)})
+                             .one_field_ref().as<bool>())
+                << name;
 
         // A second run of the file, and of the deployer, changes nothing.
         migseed::SqlDeployReport again;

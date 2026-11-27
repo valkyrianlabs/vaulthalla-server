@@ -902,8 +902,11 @@ void unlink(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
         return;
     }
 
-    // A vault held here as a Live mirror: the delete is a pending change (applied here, submitted to the core).
-    vh::mirror::submit::Local pending(resolved.user, static_cast<uint32_t>(entry->vault_id.value_or(0)), "remove");
+    // A vault held here as a Live mirror: the delete is a pending change (applied here, submitted to the core); an
+    // upload's staging file is this server's scratch (never submitted).
+    const auto entryVault = static_cast<uint32_t>(entry->vault_id.value_or(0));
+    const vh::mirror::submit::Scratch scratch(isHttpUploadTemp ? entryVault : 0);
+    vh::mirror::submit::Local pending(resolved.user, isHttpUploadTemp ? 0 : entryVault, "remove");
     if (pending.active()) pending.on(entry->path, false);
 
     const auto removeIt = [&] {

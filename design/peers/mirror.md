@@ -807,6 +807,15 @@ review); each is listed for confirmation in the hand-off:
   still pending becomes a held change with its bytes (`mirror_orphaned`), listed until a super admin discards it;
   nothing is dirty any more. On the core, ending the mirror (`cancelOnCore`) forgets what the mirror submitted
   (`mirror_submission`) and drops `.vh-mirror-staged/<vault>`.
+- **An HTTP upload's staging file** (`.upload-http-*.part`, staged through the mount on Linux: CLAUDE.md) is never
+  content, in either direction. Migration 166 (chosen over a new migration: 166 is unreleased, and replacing
+  functions of 160 and 164 with `CREATE OR REPLACE` is safe on installs that ran them; its upgrade test proves it)
+  leaves such a file out of the state documents (`vh_mirror_entry_state`, `vh_mirror_tree_states`: so out of the log,
+  the hashes, the digest, the baseline and the scrub, and never fetched), out of the trash (`vh_mirror_track_trash`),
+  and logs a file renamed to such a name as a delete (`vh_mirror_log_state`); one rule, `vh_mirror_upload_staging`, the
+  same as `vh::fs::isUploadStagingName`. On a mirror the staging file is this server's scratch
+  (`mirror::submit::Scratch`): created, sealed, its attributes set and removed past the backstop with no pending or
+  dirty row, never submitted. The upload's commit is the one change: one pending write, one PUT.
 - **The person of a change** is a local account, always: the caller of the surface, or for a seal the one who wrote
   to the file or opened it for writing (`WorkingCopies::open` now records the opener; never the file's last modifier,
   which on a mirror is often the core's person, a remote account here). A `Local` refuses a remote account (inert, so

@@ -1245,6 +1245,10 @@ Filesystem::createFileImpl(const FuseCreateFileContext& ctx) {
     }
 }
 
+bool vh::fs::isUploadStagingName(const std::string_view name) noexcept {
+    return name.starts_with(kHttpUploadTempPrefix) && name.ends_with(".part");
+}
+
 // ---- a vault held here as a Live mirror: each mutator's body runs as a pending change (mirror::submit::Local) ----------
 
 namespace {
@@ -1317,6 +1321,10 @@ int Filesystem::rename(const std::filesystem::path& oldPath, const std::filesyst
 
 void Filesystem::remove(const std::filesystem::path& path, const unsigned int userId) {
     const auto engine = filesystemEngineOf(storageManager_, path);
+    if (engine && engine->vault && isUploadStagingName(path.filename().string())) {
+        const vh::mirror::submit::Scratch scratch(engine->vault->id);
+        return removeImpl(path, userId);
+    }
     const auto person = engine && engine->vault ? filesystemPersonOf(userId) : nullptr;
     if (!person) return removeImpl(path, userId);
     vh::mirror::submit::Local pending(person, engine->vault->id, "remove");
@@ -1344,6 +1352,10 @@ int Filesystem::copy(const CopyContext& ctx) {
 
 std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
     const auto engine = ctx.engine ? ctx.engine : filesystemEngineOf(storageManager_, ctx.path);
+    if (engine && engine->vault && isUploadStagingName(ctx.path.filename().string())) {
+        const vh::mirror::submit::Scratch scratch(engine->vault->id);
+        return createFileImpl(ctx);
+    }
     if (!ctx.user || !engine || !engine->vault) return createFileImpl(ctx);
     vh::mirror::submit::Local pending(ctx.user, engine->vault->id, "write");
     if (!pending.active()) return createFileImpl(ctx);
@@ -1367,6 +1379,11 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
 
 std::pair<int, std::shared_ptr<model::Entry>> Filesystem::createFile(const FuseCreateFileContext& ctx) {
     const auto& resolved = ctx.resolved;
+    if (resolved.ok() && resolved.path && resolved.engine && resolved.engine->vault &&
+        isUploadStagingName(resolved.path->filename().string())) {
+        const vh::mirror::submit::Scratch scratch(resolved.engine->vault->id);
+        return createFileImpl(ctx);
+    }
     if (!resolved.ok() || !resolved.user || !resolved.path || !resolved.engine || !resolved.engine->vault)
         return createFileImpl(ctx);
     vh::mirror::submit::Local pending(resolved.user, resolved.engine->vault->id, "write");

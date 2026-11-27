@@ -437,6 +437,8 @@ std::vector<std::pair<std::string, std::string>> Pending::localSettings(const st
     return {{"vh.mirror_local", "on"}, {"vh.mirror_request", requestId}};
 }
 
+std::vector<std::pair<std::string, std::string>> Pending::scratchSettings() { return {{"vh.mirror_local", "on"}}; }
+
 std::vector<std::pair<std::string, std::string>> Pending::originSettings(const std::string& requestId,
                                                                          const uint32_t actorId) {
     return {{"vh.mirror_origin", requestId}, {"vh.actor", std::to_string(actorId)}};

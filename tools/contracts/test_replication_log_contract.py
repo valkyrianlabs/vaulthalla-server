@@ -12,7 +12,11 @@ copy, trash, purge, restore, sync, recovery, key rotation and psql by hand all r
     core/tests/unit/test_replication_log.cpp (MirrorReplicationLogDbTest) drives each kind;
   * nothing bypasses row triggers on these tables, and nothing but db::query::mirror writes the log, the entry hashes
     or mirror_vault, or sets the transaction-local vh.mirror_apply switch that silences the triggers;
-  * the canonical field list of the entry hash is the same in the migration and in core/include/mirror/Hash.hpp.
+  * the canonical field list of the entry hash is the same in the migration and in core/include/mirror/Hash.hpp;
+  * an HTTP upload's staging file (`.upload-http-*.part`, staged through the FUSE mount) is the one file that is not
+    content: migration 166 leaves it out of the state documents, the tree and the trash (the four functions it
+    replaces, one SQL rule), with the same rule as vh::fs::isUploadStagingName in C++, and its own upgrade test
+    (SqlDeployerHistoryDb.MirrorPendingMigration166IsAdditiveAndIdempotent) proves the replacement.
 
 Run by module: python3 -m unittest tools.contracts.test_replication_log_contract
 """
@@ -185,6 +189,24 @@ class ReplicationLogContractTests(unittest.TestCase):
         self.assertIsNotNone(cpp)
         self.assertEqual(re.findall(r'"([\w.]+)"', cpp.group(1)), sql_fields)
         self.assertIn(f"std::array<std::string_view, {len(sql_fields)}>", header)
+
+    def test_an_upload_staging_file_is_left_out_with_one_rule(self) -> None:
+        sql = (PSQL / "166_mirror_pending.sql").read_text(encoding="utf-8")
+        rule = re.search(r"FUNCTION vh_mirror_upload_staging\(name TEXT\).*?\$\$(.*?)\$\$", sql, re.DOTALL)
+        self.assertIsNotNone(rule)
+        self.assertIn("starts_with(name, '.upload-http-')", rule.group(1))
+        self.assertIn("right(name, 5) = '.part'", rule.group(1))
+        cpp = (CORE / "src" / "fs" / "Filesystem.cpp").read_text(encoding="utf-8")
+        self.assertIn('kHttpUploadTempPrefix = ".upload-http-"', cpp)
+        self.assertRegex(cpp, r"isUploadStagingName\(const std::string_view name\) noexcept \{\s*return "
+                              r"name\.starts_with\(kHttpUploadTempPrefix\) && name\.ends_with\(\"\.part\"\);")
+        for name in ("vh_mirror_entry_state", "vh_mirror_tree_states", "vh_mirror_log_state", "vh_mirror_track_trash"):
+            body = re.search(r"CREATE OR REPLACE FUNCTION " + name + r"\(.*?\n\$\$ LANGUAGE", sql, re.DOTALL)
+            self.assertIsNotNone(body, f"166 replaces {name}")
+            self.assertIn("vh_mirror_upload_staging(", body.group(0), f"{name} leaves staging files out")
+        upgrade = (CORE / "tests" / "unit" / "test_sql_deployer_history.cpp").read_text(encoding="utf-8")
+        self.assertIn("MirrorPendingMigration166IsAdditiveAndIdempotent", upgrade)
+        self.assertIn("vh_mirror_upload_staging", upgrade)
 
     def test_the_db_suite_drives_each_path(self) -> None:
         text = DB_TEST.read_text(encoding="utf-8")

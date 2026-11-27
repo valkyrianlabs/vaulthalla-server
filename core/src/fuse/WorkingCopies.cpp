@@ -375,8 +375,13 @@ void WorkingCopies::seal(WorkingCopy& copy) const {
     // and submitted when the link returns. In any other read-only state nothing is sealed over the core's content: the
     // seal is refused and the copy is kept unsaved like any failed seal (the background retry holds it while the vault
     // is read-only).
+    // An HTTP upload's staging file is this server's scratch there (vh::fs::isUploadStagingName): sealed past the
+    // backstop with no pending row, never submitted; its commit's write is the change.
     std::optional<vh::mirror::submit::Local> pending;
-    if (entry->vault_id) {
+    std::optional<vh::mirror::submit::Scratch> scratch;
+    if (entry->vault_id && vh::fs::isUploadStagingName(entry->name)) {
+        scratch.emplace(static_cast<uint32_t>(*entry->vault_id));
+    } else if (entry->vault_id) {
         const auto vaultId = static_cast<uint32_t>(*entry->vault_id);
         const auto state = vh::mirror::access::state(vaultId);
         const bool takenAsPending =

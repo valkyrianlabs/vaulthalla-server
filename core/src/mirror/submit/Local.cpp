@@ -119,6 +119,11 @@ void submitLocalPop(const uint32_t vaultId) {
 
 }
 
+Scratch::Scratch(const uint32_t vaultId) {
+    if (vaultId == 0 || !vh::mirror::access::held(vaultId)) return;
+    settings_.emplace(mq::Pending::scratchSettings());
+}
+
 Local::Suppress::Suppress(const uint32_t vaultId) : vault_(vaultId) { submitLocalRunning().push_back(vaultId); }
 
 Local::Suppress::~Suppress() { submitLocalPop(vault_); }

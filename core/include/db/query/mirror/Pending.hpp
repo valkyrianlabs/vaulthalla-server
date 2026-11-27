@@ -170,6 +170,8 @@ public:
     // ---- the transaction-local settings (db::SessionSettings) of a change applied here, and of one executed on the
     // core: the backstop's switch and the request's id; the origin the log records and the acting account.
     [[nodiscard]] static std::vector<std::pair<std::string, std::string>> localSettings(const std::string& requestId);
+    // This server's own scratch on a mirror (an upload's staging file): past the backstop, no request.
+    [[nodiscard]] static std::vector<std::pair<std::string, std::string>> scratchSettings();
     [[nodiscard]] static std::vector<std::pair<std::string, std::string>> originSettings(const std::string& requestId,
                                                                                          uint32_t actorId);
 

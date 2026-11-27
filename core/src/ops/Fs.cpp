@@ -361,7 +361,10 @@ void remove(const Actor& actor, const uint32_t vaultId, const std::filesystem::p
     require(actor, engine, path, FsAction::Delete,
             "Permission denied: User does not have delete permission for this path in the vault");
     vh::mirror::access::requireWritable(engine->vault->id, "fs.entry.delete");  // mirror gate
-    vh::mirror::submit::Local pending(actor, vaultId, "remove");
+    // An upload's staging file is this server's scratch on a mirror (vh::fs::isUploadStagingName): never a change.
+    const bool staging = vh::fs::isUploadStagingName(path.filename().string());
+    const vh::mirror::submit::Scratch scratch(staging ? vaultId : 0);
+    vh::mirror::submit::Local pending(actor, staging ? 0 : vaultId, "remove");
 
     const auto removedId = entryIdAt(engine, path);
     pending.on(path, true);
@@ -409,7 +412,10 @@ void setAttributes(const Actor& actor, const uint32_t vaultId, const std::filesy
     require(actor, engine, path, FsAction::Write,
             "Permission denied: User does not have write permission for this path in the vault");
     vh::mirror::access::requireWritable(engine->vault->id, "a setattr");  // mirror gate
-    vh::mirror::submit::Local pending(actor, vaultId, "setattr");
+    // An upload's staging file is this server's scratch on a mirror (vh::fs::isUploadStagingName): never a change.
+    const bool staging = vh::fs::isUploadStagingName(path.filename().string());
+    const vh::mirror::submit::Scratch scratch(staging ? vaultId : 0);
+    vh::mirror::submit::Local pending(actor, staging ? 0 : vaultId, "setattr");
 
     const auto& cache = vh::runtime::Deps::get().fsCache;
     const auto entry = cache->getEntry(engine->vaultPathToFusePath(path));

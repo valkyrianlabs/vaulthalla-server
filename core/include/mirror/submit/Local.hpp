@@ -1,5 +1,6 @@
 #pragma once
 
+#include "db/SessionSettings.hpp"
 #include "db/query/mirror/Pending.hpp"
 #include "fs/Fwd.hpp"
 #include "ops/Actor.hpp"
@@ -46,6 +47,22 @@ namespace vh::mirror::submit {
 // "name (conflict <8 hex of the uid>).ext" (the extension of a file kept last; none for a folder or a dot-file).
 [[nodiscard]] std::string conflictName(const std::string& name, const std::string& uid, bool directory);
 
+
+// This server's own scratch in a vault it mirrors (an HTTP upload's staging file: vh::fs::isUploadStagingName): written
+// past the gate's database backstop the way a pending change is, with no pending or dirty row, never submitted (the
+// replication log never records such a file either). Active in every state of a vault held here: an upload is refused
+// before anything is staged unless the copy is writable, and one refused at its commit (the copy paused, its link down)
+// must still discard its staging file. Inert for a vault not held here.
+class Scratch {
+public:
+    explicit Scratch(uint32_t vaultId);
+    Scratch(const Scratch&) = delete;
+    Scratch& operator=(const Scratch&) = delete;
+    [[nodiscard]] bool active() const noexcept { return settings_.has_value(); }
+
+private:
+    std::optional<vh::db::SessionSettings::Scope> settings_;
+};
 
 class Local {
 public:

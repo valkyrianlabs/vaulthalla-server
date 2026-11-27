@@ -9,6 +9,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <utility>
 #include <pqxx/pqxx>
@@ -129,6 +130,11 @@ struct FuseCreateSymlinkContext {
     fuse::resolver::Resolved resolved{};
     std::string target{};
 };
+
+// An HTTP upload's staging file (".upload-http-<id>.part": protocols/http/upload/Staging.hpp, through the mount on
+// Linux): the upload's bytes until its commit writes the real file. Never content: snapshots, archives and copies skip
+// it, the replication log never records it, and on a mirror it is this server's own scratch (mirror::submit::Scratch).
+[[nodiscard]] bool isUploadStagingName(std::string_view name) noexcept;
 
 class Filesystem {
 public:
