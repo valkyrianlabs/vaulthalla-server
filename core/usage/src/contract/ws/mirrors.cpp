@@ -290,11 +290,16 @@ std::vector<WsCommandUsage> mirrorCommands() {
         .description = "A planned switch of the core role between the two servers of a mirrored vault, asked on "
                        "either server: the core stops taking changes (the vault is read-only on both servers, reason "
                        "mirror_switching), numbers its last change, waits for the mirror to apply it with the same "
-                       "digest and nothing pending, then both record the next term with the roles swapped. Anything "
+                       "digest and nothing pending, then both record the next term with the roles swapped. The old "
+                       "core keeps the vault only through the new core's role for it; with none the switch is "
+                       "abandoned (mirror_switch_no_role) unless accept_no_access. Anything "
                        "that stops it before the core decides (a timeout, a refusal, a dropped link) changes nothing. "
                        "Local vaults only. Waits for the outcome: switched, abandoned (with the reason) or running. "
                        "Super admins of this server; audited mirror.switch.",
-        .payload = {mcVaultIdField()},
+        .payload = {mcVaultIdField(),
+                    boolean("accept_no_access").opt().desc("Go ahead even though the old core would hold no role on the "
+                                                           "vault on its new core (refused otherwise, "
+                                                           "mirror_switch_no_role).")},
         .response = {uinteger("vault_id"), str("switch_id"),
                      str("outcome").oneOf({"switched", "abandoned", "running"}),
                      str("role").nullable().desc("This server's role for the vault now."),
@@ -308,8 +313,13 @@ std::vector<WsCommandUsage> mirrorCommands() {
                      object("asked_by", "", {str("node"), uinteger("id"), str("name")}).nullable(),
                      str("reason").nullable().desc("abandoned: why (mirror_switch_timeout, a refusal's code, ...)."),
                      object("detail").desc("What the other server last said, or why it ended."),
-                     uinteger("deadline"), uinteger("created_at"), integer("ended_at").nullable()},
-        .refusal_codes = mcMirrorRefusals({"mirror_not_live", "mirror_first_copy", "mirror_switch_running",
+                     uinteger("deadline"), uinteger("created_at"), integer("ended_at").nullable(),
+                     mcRoleObject("peer_role", "The role the old core holds on the vault on its new core (the new "
+                                               "core's policy for it); null: none."),
+                     str("peer_access").oneOf({"read-only", "read-write", "none"})
+                         .desc("What that role allows, in a word.")},
+        .refusal_codes = mcMirrorRefusals({"mirror_switch_no_role", "mirror_not_live", "mirror_first_copy",
+                                           "mirror_switch_running",
                                            "mirror_submissions_queued", "mirror_has_remote", "mirror_pending_changes",
                                            "mirror_contents_missing", "mirror_core_unreachable", "mirror_core_gone",
                                            "mirror_switch_refused", "mirror_orphaned", "peer_link_down"}),

@@ -150,7 +150,12 @@ json Mirrors::resync(const json& payload, const std::shared_ptr<Session>& sessio
 }
 
 json Mirrors::switchRole(const json& payload, const std::shared_ptr<Session>& session) {
-    return mirrors::switchRole(mirrorActorOf(session), mirrorRequiredId(payload, "vault_id"));
+    bool acceptNoAccess = false;
+    if (payload.is_object() && payload.contains("accept_no_access") && !payload.at("accept_no_access").is_null()) {
+        if (!payload.at("accept_no_access").is_boolean()) throw ops::Invalid("accept_no_access must be a boolean");
+        acceptNoAccess = payload.at("accept_no_access").get<bool>();
+    }
+    return mirrors::switchRole(mirrorActorOf(session), mirrorRequiredId(payload, "vault_id"), acceptNoAccess);
 }
 
 json Mirrors::offer(const json& payload, const std::shared_ptr<Session>& session) {

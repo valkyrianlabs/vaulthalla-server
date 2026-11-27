@@ -2610,6 +2610,7 @@ TEST_F(SqlDeployerHistoryDb, MirrorSwitchMigration168IsAdditiveAndIdempotent) {
         EXPECT_TRUE(row["unscrubbed"].as<bool>());
         // The planned switch: its table, the state it holds a vault in, the freeze in the triggers.
         EXPECT_TRUE(columnExists(txn, "mirror_switch", "switch_id"));
+        EXPECT_TRUE(columnExists(txn, "mirror_switch", "accept_no_access"));
         EXPECT_NO_THROW(txn.exec("SAVEPOINT s168; UPDATE mirror_vault SET state = 'switching' WHERE vault_id = " +
                                  std::to_string(vault) + "; ROLLBACK TO SAVEPOINT s168"));
         EXPECT_NE(txn.exec("SELECT prosrc FROM pg_proc WHERE proname = 'vh_mirror_core_term'")

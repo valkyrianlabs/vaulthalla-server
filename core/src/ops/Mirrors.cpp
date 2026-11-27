@@ -373,11 +373,11 @@ nlohmann::json resync(const Actor& actor, const uint32_t vaultId) {
 
 // ---- the planned switch (wave 5 piece B) ----------------------------------------------------------------------------
 
-nlohmann::json switchRole(const Actor& actor, const uint32_t vaultId) {
+nlohmann::json switchRole(const Actor& actor, const uint32_t vaultId, const bool acceptNoAccess) {
     ops_mirrors_detail::requireSuperAdmin(actor, "switch a mirrored vault's core");
     (void)ops_mirrors_detail::liveVault(vaultId);
     return vh::mirror::switching::request(vaultId, actor->id, actor->name(), *vh::mirror::follow::linkTransport(),
-                                          vh::mirror::switching::timeout() + std::chrono::seconds(10));
+                                          vh::mirror::switching::timeout() + std::chrono::seconds(10), acceptNoAccess);
 }
 
 // ---- held changes ------------------------------------------------------------------------------------------------------

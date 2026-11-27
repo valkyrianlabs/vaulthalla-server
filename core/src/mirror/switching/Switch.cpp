@@ -9,6 +9,7 @@
 #include "mirror/start/Start.hpp"
 #include "mirror/submit/Local.hpp"
 #include "ops/Error.hpp"
+#include "rbac/permission/vault/Filesystem.hpp"
 
 #include <fmt/format.h>
 
@@ -105,6 +106,16 @@ std::string switchRoleName(const json& role) {
     return role.is_object() ? role.value("role_name", std::string{}) : std::string{};
 }
 
+// The role this server gives the linked server on the vault (its policy: the per-vault assignment or the link's
+// default; null for none or "no access").
+json switchPeerRole(const uint32_t peerId, const uint32_t vaultId) {
+    try {
+        return vh::mirror::start::grantFor(peerId, vaultId);
+    } catch (const std::exception&) {
+        return nullptr;
+    }
+}
+
 std::string switchPeerNode(const uint32_t peerId) {
     const auto peer = vh::db::query::peer::Peers::byId(peerId);
     return peer ? peer->node_id : std::string{};
@@ -173,12 +184,13 @@ bool switchTell(const mq::Switch& sw, vh::mirror::follow::Transport& transport) 
     }
     if (sw.phase == "switched") {
         const auto peerRole = a->data.contains("peer_role") ? a->data["peer_role"] : json(nullptr);
-        mq::Switches::noteDetail(sw.id, {{"peer_role", peerRole}, {"new_term", a->data.value("term", sw.term + 1)}});
+        mq::Switches::noteDetail(sw.id, {{"peer_role", peerRole}, {"new_term", a->data.value("term", sw.term + 1)},
+                                         {"accepted_no_access", sw.accept_no_access && !peerRole.is_object()}});
         switchAudit(sw, "switched",
                     fmt::format("[mirror] vault {}: linked server {} is its core now (term {}); this server is its mirror "
                                 "and follows it",
                                 sw.vault_id, sw.peer_id, sw.term + 1),
-                    {{"peer_role", switchRoleName(peerRole)}});
+                    {{"peer_role", switchRoleName(peerRole)}, {"peer_access", accessWord(peerRole)}});
         vh::mirror::follow::Follower::instance()->wake(sw.vault_id);
     }
     return true;
@@ -186,8 +198,8 @@ bool switchTell(const mq::Switch& sw, vh::mirror::follow::Transport& transport) 
 
 // The freeze and what follows it at once (Switch.hpp begin).
 mq::Switch switchBegin(const uint32_t vaultId, const mq::SwitchAsked& asked,
-                       const std::optional<std::string>& switchId) {
-    auto sw = mq::Switches::freeze(vaultId, asked, timeout(), switchId);
+                       const std::optional<std::string>& switchId, const bool acceptNoAccess) {
+    auto sw = mq::Switches::freeze(vaultId, asked, timeout(), switchId, acceptNoAccess);
     // Every writer that may have changed the vault before the freeze was visible to it: waited for before the
     // position is taken (each commits, and the sequencer numbers it, or rolls back).
     const auto writers = mq::Switches::writersNow();
@@ -216,12 +228,13 @@ bool following(const uint32_t vaultId) { return mq::Switches::following(vaultId)
 
 // ---- the core ----------------------------------------------------------------------------------------------------------
 
-mq::Switch begin(const uint32_t vaultId, const mq::SwitchAsked& asked, vh::mirror::follow::Transport& transport) {
+mq::Switch begin(const uint32_t vaultId, const mq::SwitchAsked& asked, vh::mirror::follow::Transport& transport,
+                 const bool acceptNoAccess) {
     const auto mv = mq::MirrorVaults::get(vaultId);
     if (!mv || mv->role != "core") throw vh::ops::NotFound("this server is not the vault's core");
     if (!transport.connected(mv->peer_id))
         throw vh::ops::Refused("peer_link_down", "the link to the vault's mirror is down; a switch needs it up");
-    return switchBegin(vaultId, asked, std::nullopt);
+    return switchBegin(vaultId, asked, std::nullopt, acceptNoAccess);
 }
 
 json serveRequest(const uint32_t callerPeerId, const json& payload) {
@@ -231,7 +244,9 @@ json serveRequest(const uint32_t callerPeerId, const json& payload) {
     auto asked = switchAskedFrom(payload, "mirror", switchPeerNode(callerPeerId));
     asked.on = "mirror";
     if (asked.by) asked.by->node = switchPeerNode(callerPeerId);   // the mirror's own person: its node, never a field
-    const auto sw = switchBegin(mv->vault_id, asked, std::nullopt);
+    const bool acceptNoAccess = payload.contains("accept_no_access") && payload["accept_no_access"].is_boolean() &&
+                                payload["accept_no_access"].get<bool>();
+    const auto sw = switchBegin(mv->vault_id, asked, std::nullopt, acceptNoAccess);
     return {{"switch_id", sw.switch_id}, {"term", sw.term}};
 }
 
@@ -278,6 +293,16 @@ bool advance(const uint64_t id, vh::mirror::follow::Transport& transport) {
                                      {{"why", a->error}, {"by", "the mirror"}});
             mq::Switches::noteDetail(id, a->data);
             if (!a->data.value("ready", false)) return false;
+            // The old core keeps the vault only through the new core's policy for it: none, and nobody here could read
+            // the vault after the switch. Not without the person's word.
+            const auto peerRole = a->data.contains("peer_role") ? a->data["peer_role"] : json(nullptr);
+            if (!peerRole.is_object() && !sw->accept_no_access)
+                return switchAbandon(
+                    *sw, "mirror_switch_no_role",
+                    {{"why", "after the switch this server would hold no role on the vault: its people could not read it "
+                             "here; set this server's role on the other server first (vh peer policy set <this server> "
+                             "<role> there), or switch with --accept-no-access"},
+                     {"peer_role", nullptr}});
             // The decision, durable before anything is told.
             if (const auto why = mq::Switches::commitCore(id); !why.empty())
                 return switchAbandon(*sw, "mirror_switch_moved", {{"why", why}});
@@ -318,12 +343,14 @@ json servePrepare(const uint32_t callerPeerId, const json& payload) {
     const auto seq = switchCount(payload, "seq");
     const auto digest = switchDigestOf(payload);
     const auto vaultId = mv->vault_id;
+    // The role the core will hold here once this server is its core (this server's policy for it).
+    const auto peerRole = switchPeerRole(callerPeerId, mv->vault_id);
     const auto waiting = [&](const std::string& why) {
         const auto now = mq::MirrorVaults::get(vaultId);
         return json{{"ready", false}, {"waiting", why},
                     {"at", now ? switchPosition(now->term, now->last_seq) : json(nullptr)},
                     {"digest", now ? json(now->digest.hex()) : json(nullptr)},
-                    {"entries", now ? json(now->digest.entries) : json(nullptr)}};
+                    {"entries", now ? json(now->digest.entries) : json(nullptr)}, {"peer_role", peerRole}};
     };
 
     // Under the vault's local-change lock (never waited for on a link thread): a change being made here is either done
@@ -337,8 +364,9 @@ json servePrepare(const uint32_t callerPeerId, const json& payload) {
     } catch (const vh::ops::Conflict&) {
         return waiting("busy");
     }
-    if (sw.phase == "prepared") return {{"ready", true}, {"at", switchPosition(term, seq)}, {"digest", digest.hex()},
-                                        {"entries", digest.entries}};
+    if (sw.phase == "prepared")
+        return {{"ready", true}, {"at", switchPosition(term, seq)}, {"digest", digest.hex()}, {"entries", digest.entries},
+                {"peer_role", peerRole}};
 
     const auto refuse = [&](const std::string& code, const std::string& text) {
         (void)mq::Switches::abandonMirror(sw.id, code, {{"why", text}});
@@ -371,7 +399,8 @@ json servePrepare(const uint32_t callerPeerId, const json& payload) {
     vh::log::Registry::sync()->info("[MirrorSwitch] Vault {}: prepared to take the core role at ({}, {}); waiting for "
                                     "linked server {}'s decision",
                                     vaultId, term, seq, callerPeerId);
-    return {{"ready", true}, {"at", switchPosition(term, seq)}, {"digest", digest.hex()}, {"entries", digest.entries}};
+    return {{"ready", true}, {"at", switchPosition(term, seq)}, {"digest", digest.hex()}, {"entries", digest.entries},
+            {"peer_role", peerRole}};
 }
 
 json serveCommit(const uint32_t callerPeerId, const json& payload) {
@@ -402,19 +431,19 @@ json serveCommit(const uint32_t callerPeerId, const json& payload) {
 
     // Told again after it took the role: the same answer.
     if (mv->role == "core" && sw && sw->phase == "switched")
-        return {{"outcome", "switched"}, {"term", mv->term},
-                {"peer_role", vh::mirror::start::grantFor(callerPeerId, mv->vault_id)}};
+        return {{"outcome", "switched"}, {"term", mv->term}, {"peer_role", switchPeerRole(callerPeerId, mv->vault_id)}};
     if (mv->role != "mirror") switchNotFound();
     if (!sw) throw vh::ops::Refused("mirror_not_prepared", "this server never prepared that switch");
     if (const auto why = mq::Switches::becomeCore(sw->id); !why.empty())
         throw vh::ops::Refused("mirror_not_prepared", why);
     const auto now = mq::MirrorVaults::get(mv->vault_id);
     const auto term = now ? now->term : sw->term + 1;
-    const auto peerRole = vh::mirror::start::grantFor(callerPeerId, mv->vault_id);
+    const auto peerRole = switchPeerRole(callerPeerId, mv->vault_id);
+    mq::Switches::noteDetail(sw->id, {{"peer_role", peerRole}, {"new_term", term}});
     switchAudit(mq::Switches::get(sw->id).value_or(*sw), "switched",
                 fmt::format("[mirror] vault {}: this server is its core now (term {}); linked server {} is its mirror",
                             mv->vault_id, term, callerPeerId),
-                {{"peer_role", switchRoleName(peerRole)}});
+                {{"peer_role", switchRoleName(peerRole)}, {"peer_access", accessWord(peerRole)}});
     // The grant goes to the new mirror, and the old core's role here is the ceiling of what it may submit.
     vh::mirror::start::Service::instance()->wake();
     return {{"outcome", "switched"}, {"term", term}, {"peer_role", peerRole}};
@@ -423,7 +452,7 @@ json serveCommit(const uint32_t callerPeerId, const json& payload) {
 // ---- a person's request ------------------------------------------------------------------------------------------------
 
 json request(const uint32_t vaultId, const uint32_t actorId, const std::string& actorName,
-             vh::mirror::follow::Transport& transport, const std::chrono::milliseconds wait) {
+             vh::mirror::follow::Transport& transport, const std::chrono::milliseconds wait, const bool acceptNoAccess) {
     const auto mv = mq::MirrorVaults::get(vaultId);
     if (!mv) throw vh::ops::NotFound("vault " + std::to_string(vaultId) + " is not mirrored");
     if (mv->role == "orphaned")
@@ -433,7 +462,7 @@ json request(const uint32_t vaultId, const uint32_t actorId, const std::string& 
                                 .name = actorName};
     mq::Switch sw;
     if (mv->role == "core") {
-        sw = begin(vaultId, asked, transport);
+        sw = begin(vaultId, asked, transport, acceptNoAccess);
     } else {
         if (mv->state != "live")
             throw vh::ops::Refused("mirror_not_live", "the copy is " + mv->state + " here; a switch needs it live");
@@ -450,12 +479,20 @@ json request(const uint32_t vaultId, const uint32_t actorId, const std::string& 
                                    fmt::format("the contents of {} file(s) have not arrived here yet; switch once they "
                                                "have",
                                                obstacles.contents));
+        // Asked here, the role the core would hold here afterwards is known here: none, and refused before the core is
+        // asked (the core checks it again with the mirror's prepare).
+        if (!acceptNoAccess && !switchPeerRole(mv->peer_id, vaultId).is_object())
+            throw vh::ops::Refused("mirror_switch_no_role",
+                                   "after the switch the other server would hold no role on the vault here: its people "
+                                   "could not read it there; give it one first (vh peer policy set <server> <role>), or "
+                                   "switch with --accept-no-access");
         if (!transport.connected(mv->peer_id))
             throw vh::ops::Refused("peer_link_down", "the link to the vault's core is down; a switch needs it up");
         const auto uid = mq::MirrorVaults::vaultUidOf(vaultId);
         if (!uid) throw vh::ops::NotFound("no such vault");
         const auto a = transport.request(mv->peer_id, "peer.mirror.switch.request",
-                                         {{"vault_uid", *uid}, {"by", {{"id", actorId}, {"name", actorName}}}});
+                                         {{"vault_uid", *uid}, {"by", {{"id", actorId}, {"name", actorName}}},
+                                          {"accept_no_access", acceptNoAccess}});
         if (!a) throw vh::ops::Refused("mirror_core_unreachable", "the vault's core did not answer; try again");
         if (!a->ok) {
             if (a->code == "not_found")
@@ -466,7 +503,7 @@ json request(const uint32_t vaultId, const uint32_t actorId, const std::string& 
         const auto switchId = a->data.value("switch_id", std::string{});
         if (switchId.empty()) throw vh::ops::Refused("mirror_switch_refused", "the core named no switch");
         sw = mq::Switches::requested(vaultId, mv->peer_id, switchId, mv->term, asked,
-                                     timeout() + std::chrono::seconds(15));
+                                     timeout() + std::chrono::seconds(15), acceptNoAccess);
         switchAudit(sw, "asked",
                     fmt::format("[mirror] {} asked linked server {} to hand vault {}'s core role to this server",
                                 actorName.empty() ? std::string("someone") : actorName, mv->peer_id, vaultId));
@@ -479,13 +516,37 @@ json request(const uint32_t vaultId, const uint32_t actorId, const std::string& 
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         now = mq::Switches::bySwitchId(sw.switch_id, sw.side).value_or(now);
     }
+    return outcome(vaultId, now.switch_id, now.side);
+}
+
+json outcome(const uint32_t vaultId, const std::string& switchId, const std::string& side) {
+    const auto found = mq::Switches::bySwitchId(switchId, side);
+    if (!found) throw vh::ops::NotFound("no such switch here");
+    const auto& now = *found;
     const auto row = mq::MirrorVaults::get(vaultId);
     json out = toJson(now);
     out["vault_id"] = vaultId;
     out["outcome"] = now.open() ? std::string("running") : now.phase;
     out["role"] = row ? json(row->role) : json(nullptr);
     out["role_term"] = row ? json(row->term) : json(nullptr);
+    // The old core's role on the vault on the new core (from the prepare's answer, the commit's or this server's own
+    // policy), and what it allows.
+    const auto peerRole = now.detail.contains("peer_role") ? now.detail["peer_role"] : json(nullptr);
+    out["peer_role"] = peerRole.is_object() ? peerRole : json(nullptr);
+    out["peer_access"] = accessWord(peerRole);
     return out;
+}
+
+std::string accessWord(const json& role) {
+    if (!role.is_object() || !role.contains("files") || !role["files"].is_number_unsigned()) return "none";
+    namespace pv = vh::rbac::permission::vault;
+    const pv::fs::Files files(static_cast<pv::fs::Files::Mask>(role["files"].get<uint64_t>()));
+    const pv::fs::Directories dirs(static_cast<pv::fs::Directories::Mask>(role.value("directories", uint64_t{0})));
+    using F = pv::fs::FilePermissions;
+    for (const auto p : {F::Upload, F::Overwrite, F::Rename, F::Delete, F::Move})
+        if (files.has(p)) return "read-write";
+    if (files.raw() == 0 && dirs.raw() == 0) return "none";
+    return "read-only";
 }
 
 json toJson(const mq::Switch& sw) {

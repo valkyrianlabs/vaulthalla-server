@@ -1212,10 +1212,16 @@ the hand-off:
   people by its node id, which the old core maps to its own accounts); the keep and accept settings are per link and
   stay; the start's offer changes side on both servers (so a later cancel is told from the new core). **The old core's
   role on the new core** is whatever the new core's own policy gives that linked server (its per-vault assignment or
-  the link's default, `PeerVault::role`): nothing is carried across, since roles are never matched between servers;
-  the commit answer and the audit name it (`peer_role`, null for none), and the new core's start service sends it to
-  the old core as its grant. A server that switched with no policy for its peer leaves the old core's people without
-  access until the new core's admin sets one (`vh peer policy set`, or `vh vault role assign ... --peer` there).
+  the link's default, `PeerVault::role`): nothing is carried across, since roles are never matched between servers.
+  The mirror's prepare answers it (`peer_role`, the document `grantFor` builds; null for none or "no access"), the
+  core keeps it with the switch, and the new core's start service sends it to the old core as its grant. **A switch
+  never silently takes the old core's access away** (lead's review): with no role the core abandons the switch before
+  it decides (`mirror_switch_no_role`, with what to do: set the linked server's role on the other server first, `vh
+  peer policy set`, or switch with `--accept-no-access`); asked on the mirror, the mirror refuses it itself before
+  asking. `accept_no_access` (ws, `--accept-no-access`, carried in `peer.mirror.switch.request` and kept on the switch)
+  lets it go ahead, and the answer and the audit say the old core holds no role. The answer of every switch names the
+  role and what it allows in a word (`peer_role`, `peer_access`: read-only, read-write or none) and `vh mirror switch`
+  prints it.
   Pending contents: none can exist on the new core (refused). Piece A's versioning setting: not on this branch.
 - **Held changes** stay with the server that holds them: still listed (and discardable) on a server that became the
   core; a retry there is refused (it is retried from a mirror).

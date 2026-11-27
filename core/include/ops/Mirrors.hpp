@@ -113,7 +113,9 @@ struct Mirrored {
 // A planned switch of the core role (wave 5 piece B; mirror::switching::request), asked on either server: super admins
 // of this server. Waits for the outcome (bounded: the switch's deadline and a margin) and answers it: switched,
 // abandoned (nothing changed, with the reason) or running. Audited mirror.switch on both servers.
-[[nodiscard]] nlohmann::json switchRole(const Actor& actor, uint32_t vaultId);
+// `acceptNoAccess`: go ahead when the old core would hold no role on the vault on the new core (refused otherwise,
+// mirror_switch_no_role). The answer names that role and what it allows (peer_role, peer_access).
+[[nodiscard]] nlohmann::json switchRole(const Actor& actor, uint32_t vaultId, bool acceptNoAccess = false);
 
 [[nodiscard]] nlohmann::json toJson(const Offer& offer);
 [[nodiscard]] nlohmann::json toJson(const Mirrored& m);

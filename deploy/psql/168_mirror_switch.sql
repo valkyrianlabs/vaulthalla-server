@@ -15,8 +15,9 @@
 --   mirror_switch      one row per planned switch on each server that took part (the protocol's state, then its
 --                      record): the shared switch_id, this server's side when it began, the phase, the term it
 --                      leaves, the core's last numbered position and digest under the freeze, the writers the freeze
---                      waited for, whether the core's decision is still to be told to the mirror, who asked and
---                      where, why it was abandoned, its deadline. At most one open switch per vault.
+--                      waited for, whether the core's decision is still to be told to the mirror, whether the person
+--                      accepted that the old core may hold no role on the vault afterwards, who asked and where, why
+--                      it was abandoned, its deadline. At most one open switch per vault.
 --
 -- The backstop of the freeze: vh_mirror_core_term (every entry trigger of a core vault asks it for the term) and the
 -- vault-settings trigger refuse a change of a core vault whose row is switching, so nothing commits on the core after
@@ -70,6 +71,8 @@ CREATE TABLE IF NOT EXISTS mirror_switch
     entries       BIGINT,
     writers       TEXT[],
     notify        BOOLEAN     NOT NULL DEFAULT FALSE,
+    -- the person accepted that the old core may hold no role on the vault once the other server is its core
+    accept_no_access BOOLEAN  NOT NULL DEFAULT FALSE,
     asked_on      TEXT        NOT NULL CHECK (asked_on IN ('core', 'mirror')),
     asked_by_node TEXT        CHECK (asked_by_node IS NULL OR length(asked_by_node) BETWEEN 1 AND 64),
     asked_by_id   INTEGER,
@@ -83,6 +86,8 @@ CREATE TABLE IF NOT EXISTS mirror_switch
     CHECK ((ended_at IS NULL) = (phase IN ('requested', 'draining', 'preparing', 'prepared'))),
     CHECK (NOT notify OR side = 'core')
 );
+
+ALTER TABLE mirror_switch ADD COLUMN IF NOT EXISTS accept_no_access BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE UNIQUE INDEX IF NOT EXISTS mirror_switch_uid_key ON mirror_switch (switch_id, side);
 CREATE UNIQUE INDEX IF NOT EXISTS mirror_switch_open_key ON mirror_switch (vault_id) WHERE ended_at IS NULL;

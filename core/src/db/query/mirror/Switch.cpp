@@ -17,7 +17,7 @@ namespace {
 
 constexpr const char* kSwitchColumns = R"SQL(
     id, switch_id::text AS switch_id, vault_id, peer_id, side, phase, term, seq, encode(digest, 'hex') AS digest,
-    entries, COALESCE(array_to_json(writers)::text, '[]') AS writers, notify, asked_on, asked_by_node, asked_by_id,
+    entries, COALESCE(array_to_json(writers)::text, '[]') AS writers, notify, accept_no_access, asked_on, asked_by_node, asked_by_id,
     asked_by_name, reason, detail::text AS detail,
     EXTRACT(EPOCH FROM deadline)::BIGINT AS deadline, EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at,
     EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at, EXTRACT(EPOCH FROM ended_at)::BIGINT AS ended_at
@@ -43,6 +43,7 @@ Switch switchFrom(const pqxx::row_ref row) {
     for (const auto& w : nlohmann::json::parse(row["writers"].as<std::string>()))
         if (w.is_string()) s.writers.push_back(w.get<std::string>());
     s.notify = row["notify"].as<bool>();
+    s.accept_no_access = row["accept_no_access"].as<bool>();
     s.asked_on = row["asked_on"].as<std::string>();
     if (!row["asked_by_node"].is_null() && !row["asked_by_id"].is_null())
         s.asked_by = Account{.node = row["asked_by_node"].as<std::string>(), .id = row["asked_by_id"].as<uint32_t>()};
@@ -188,7 +189,7 @@ std::vector<Switch> Switches::history(const uint32_t vaultId, const std::size_t 
 // ---- the core ----------------------------------------------------------------------------------------------------------
 
 Switch Switches::freeze(const uint32_t vaultId, const SwitchAsked& asked, const std::chrono::seconds timeout,
-                        const std::optional<std::string>& switchId) {
+                        const std::optional<std::string>& switchId, const bool acceptNoAccess) {
     auto out = Transactions::exec("mirror::Switches::freeze", [&](pqxx::work& txn) {
         switchLockRow(txn, vaultId, "2s");
         const auto mv = MirrorVaults::get(txn, vaultId, false);
@@ -210,11 +211,11 @@ Switch Switches::freeze(const uint32_t vaultId, const SwitchAsked& asked, const 
                                    "changes the mirror made are being executed here; switch once they are confirmed");
         const auto a = switchAskedColumns(asked);
         const pqxx::params params{switchId.value_or(""), vaultId, mv->peer_id, static_cast<int64_t>(mv->term),
-                                  static_cast<int64_t>(timeout.count()), a.on, a.node, a.id, a.name};
+                                  static_cast<int64_t>(timeout.count()), a.on, a.node, a.id, a.name, acceptNoAccess};
         const auto id = txn.exec("INSERT INTO mirror_switch (switch_id, vault_id, peer_id, side, phase, term, deadline, "
-                                 "  asked_on, asked_by_node, asked_by_id, asked_by_name) "
+                                 "  asked_on, asked_by_node, asked_by_id, asked_by_name, accept_no_access) "
                                  "VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, $3, 'core', 'draining', "
-                                 "  $4, CURRENT_TIMESTAMP + make_interval(secs => $5), $6, $7, $8, $9) RETURNING id",
+                                 "  $4, CURRENT_TIMESTAMP + make_interval(secs => $5), $6, $7, $8, $9, $10) RETURNING id",
                                  params)
                             .one_field()
                             .as<int64_t>();
@@ -363,15 +364,16 @@ void Switches::noteDetail(const uint64_t id, const nlohmann::json& detail) {
 // ---- the mirror --------------------------------------------------------------------------------------------------------
 
 Switch Switches::requested(const uint32_t vaultId, const uint32_t peerId, const std::string& switchId,
-                           const uint64_t term, const SwitchAsked& asked, const std::chrono::seconds timeout) {
+                           const uint64_t term, const SwitchAsked& asked, const std::chrono::seconds timeout,
+                           const bool acceptNoAccess) {
     return Transactions::exec("mirror::Switches::requested", [&](pqxx::work& txn) {
         const auto a = switchAskedColumns(asked);
         const pqxx::params params{switchId, vaultId, peerId, static_cast<int64_t>(term),
-                                  static_cast<int64_t>(timeout.count()), a.on, a.node, a.id, a.name};
+                                  static_cast<int64_t>(timeout.count()), a.on, a.node, a.id, a.name, acceptNoAccess};
         txn.exec("INSERT INTO mirror_switch (switch_id, vault_id, peer_id, side, phase, term, deadline, asked_on, "
-                 "  asked_by_node, asked_by_id, asked_by_name) "
+                 "  asked_by_node, asked_by_id, asked_by_name, accept_no_access) "
                  "SELECT $1::uuid, $2, $3, 'mirror', 'requested', $4, CURRENT_TIMESTAMP + make_interval(secs => $5), "
-                 "  $6, $7, $8, $9 "
+                 "  $6, $7, $8, $9, $10 "
                  "WHERE NOT EXISTS (SELECT 1 FROM mirror_switch WHERE vault_id = $2 AND ended_at IS NULL) "
                  "ON CONFLICT (switch_id, side) DO NOTHING",
                  params);

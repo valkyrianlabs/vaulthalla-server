@@ -496,7 +496,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"mirror_pending_changes", {"mirror.switch", "peer.mirror.switch.prepare"}},
             {"mirror_contents_missing", {"mirror.switch", "peer.mirror.switch.prepare"}},
             {"mirror_first_copy", {"mirror.switch", "peer.mirror.switch.prepare"}},
-            {"mirror_switch_refused", {"mirror.switch"}}, {"mirror_orphaned", {"mirror.switch"}},
+            {"mirror_switch_refused", {"mirror.switch"}}, {"mirror_switch_no_role", {"mirror.switch"}}, {"mirror_orphaned", {"mirror.switch"}},
             {"mirror_term_mismatch", {"peer.mirror.switch.prepare"}},
             {"mirror_switch_ended", {"peer.mirror.switch.prepare"}}, {"mirror_ahead", {"peer.mirror.switch.prepare"}},
             {"mirror_digest_mismatch", {"peer.mirror.switch.prepare"}},

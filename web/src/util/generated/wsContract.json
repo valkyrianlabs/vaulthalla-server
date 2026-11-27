@@ -42107,7 +42107,7 @@
       "client_timeout_ms": 60000,
       "command": "mirror.switch",
       "confirmations": [],
-      "description": "A planned switch of the core role between the two servers of a mirrored vault, asked on either server: the core stops taking changes (the vault is read-only on both servers, reason mirror_switching), numbers its last change, waits for the mirror to apply it with the same digest and nothing pending, then both record the next term with the roles swapped. Anything that stops it before the core decides (a timeout, a refusal, a dropped link) changes nothing. Local vaults only. Waits for the outcome: switched, abandoned (with the reason) or running. Super admins of this server; audited mirror.switch.",
+      "description": "A planned switch of the core role between the two servers of a mirrored vault, asked on either server: the core stops taking changes (the vault is read-only on both servers, reason mirror_switching), numbers its last change, waits for the mirror to apply it with the same digest and nothing pending, then both record the next term with the roles swapped. The old core keeps the vault only through the new core's role for it; with none the switch is abandoned (mirror_switch_no_role) unless accept_no_access. Anything that stops it before the core decides (a timeout, a refusal, a dropped link) changes nothing. Local vaults only. Waits for the outcome: switched, abandoned (with the reason) or running. Super admins of this server; audited mirror.switch.",
       "effect": "write",
       "input": "payload",
       "operation": null,
@@ -42128,6 +42128,14 @@
           "types": [
             "integer"
           ]
+        },
+        {
+          "description": "Go ahead even though the old core would hold no role on the vault on its new core (refused otherwise, mirror_switch_no_role).",
+          "name": "accept_no_access",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
         }
       ],
       "refusal_codes": [
@@ -42138,6 +42146,7 @@
         "unauthorized",
         "peers_experimental",
         "peer_forbidden",
+        "mirror_switch_no_role",
         "mirror_not_live",
         "mirror_first_copy",
         "mirror_switch_running",
@@ -42159,6 +42168,7 @@
         "unauthorized",
         "peers_experimental",
         "peer_forbidden",
+        "mirror_switch_no_role",
         "mirror_not_live",
         "mirror_first_copy",
         "mirror_switch_running",
@@ -42368,6 +42378,70 @@
           "types": [
             "integer",
             "null"
+          ]
+        },
+        {
+          "description": "The role the old core holds on the vault on its new core (the new core's policy for it); null: none.",
+          "fields": [
+            {
+              "description": "1-50 characters: the role's name on the core, never matched to a role here.",
+              "name": "role_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "directories",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "sync",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "roles",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "peer_role",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "What that role allows, in a word.",
+          "enum": [
+            "read-only",
+            "read-write",
+            "none"
+          ],
+          "name": "peer_access",
+          "required": true,
+          "types": [
+            "string"
           ]
         }
       ],
@@ -46567,6 +46641,56 @@
             "integer",
             "null"
           ]
+        },
+        {
+          "description": "The role the core will hold on the vault here once this server is its core (this server's policy for it); null: none, and the core abandons the switch (mirror_switch_no_role) unless the person accepted that.",
+          "fields": [
+            {
+              "name": "role_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "directories",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "sync",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "roles",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "peer_role",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
         }
       ],
       "response_model": null,
@@ -46633,6 +46757,14 @@
           "required": true,
           "types": [
             "object"
+          ]
+        },
+        {
+          "description": "The person accepted that the core may hold no role on the vault on the mirror afterwards.",
+          "name": "accept_no_access",
+          "required": false,
+          "types": [
+            "boolean"
           ]
         }
       ],
@@ -69020,5 +69152,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "50d64a588a9ecb47358c0bee675d9c50676fc2b4d9cbf50523797915f0c57277"
+  "ws_hash": "f1da94f09faa9f30dff3d140cc060a930ab847a127b98699c4667b82ddaea0a8"
 }

@@ -46,12 +46,29 @@ inline constexpr std::chrono::seconds kTellEvery{5};
 // outcome. {vault_id, switch_id, outcome: switched | abandoned | running, role, term, reason, detail, told, peer_role}.
 // ops::Refused: mirror_not_live, mirror_switch_running, mirror_submissions_queued, mirror_has_remote,
 // mirror_pending_changes, mirror_core_unreachable, peer_link_down, mirror_orphaned, and the core's refusals.
+//
+// The old core keeps a role on the vault only through the new core's own policy for it (nothing is carried across:
+// roles are never matched between servers). The mirror's prepare answers that role (`peer_role`); with none (no
+// per-vault assignment, no link default, or "no access") the switch is abandoned before the core decides
+// (mirror_switch_no_role), unless `acceptNoAccess`: then it goes ahead and the answer and the audit say the old core
+// holds no role. The answer carries `peer_role` and `peer_access` (read-only | read-write | none).
 [[nodiscard]] nlohmann::json request(uint32_t vaultId, uint32_t actorId, const std::string& actorName,
-                                     vh::mirror::follow::Transport& transport, std::chrono::milliseconds wait);
+                                     vh::mirror::follow::Transport& transport, std::chrono::milliseconds wait,
+                                     bool acceptNoAccess = false);
+
+// The answer request() gives for a switch of `vaultId` here, as it stands now: the switch, its outcome (switched |
+// abandoned | running), this server's role and term for the vault now, and the old core's role on the new core
+// (peer_role, peer_access).
+[[nodiscard]] nlohmann::json outcome(uint32_t vaultId, const std::string& switchId, const std::string& side);
+
+// What a role document (mirror::start::grantFor's form, null for none) allows, in a word: read-only, read-write or
+// none.
+[[nodiscard]] std::string accessWord(const nlohmann::json& role);
 
 // The core's freeze, for a person here or the mirror's request (`asked`): the switch, draining. Refusals as above.
 [[nodiscard]] vh::db::query::mirror::Switch begin(uint32_t vaultId, const vh::db::query::mirror::SwitchAsked& asked,
-                                                  vh::mirror::follow::Transport& transport);
+                                                  vh::mirror::follow::Transport& transport,
+                                                  bool acceptNoAccess = false);
 
 // ---- the follower's pass
 
@@ -67,11 +84,12 @@ bool advance(uint64_t switchId, vh::mirror::follow::Transport& transport);
 
 // ---- the wire (peer sessions only; the caller must be the vault's linked server with the other role, else not_found)
 
-// peer.mirror.switch.request {vault_uid, by: {id, name}} (mirror -> core): a super admin of the mirror asked; the core
+// peer.mirror.switch.request {vault_uid, by: {id, name}, accept_no_access?} (mirror -> core): a super admin of the mirror asked; the core
 // begins (begin) and answers {switch_id, term} at once.
 [[nodiscard]] nlohmann::json serveRequest(uint32_t callerPeerId, const nlohmann::json& payload);
 // peer.mirror.switch.prepare {vault_uid, switch_id, term, seq, digest, entries, by?} (core -> mirror): {ready, at:
-// {term, seq}, digest, entries, waiting?}. Refusals end the switch on the core.
+// {term, seq}, digest, entries, waiting?, peer_role}. peer_role: the role the core will hold on the vault here once
+// this server is its core (null: none). Refusals end the switch on the core.
 [[nodiscard]] nlohmann::json servePrepare(uint32_t callerPeerId, const nlohmann::json& payload);
 // peer.mirror.switch.commit {vault_uid, switch_id, outcome: switched | abandoned, reason?} (core -> mirror): the
 // decision. {outcome, term, peer_role}. Asked again, it answers the same.

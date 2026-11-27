@@ -739,7 +739,8 @@ through on a Live mirror.
   sequencer numbers what they logged (`drained`: seq and digest). `peer.mirror.switch.prepare` freezes the mirror under
   `submit::vaultMutex` (try-lock; `Local` re-judges the gate under it), the follower catches up while the mirror's
   switch is `preparing`, and it answers ready (`prepared`) at the position with the digest and no pending, dirty or
-  missing contents. `commitCore` (conditional, one transaction) makes the core the mirror in term + 1 at (term + 1, 0)
+  missing contents, answering the role the old core will hold there (`peer_role`: none abandons with
+  `mirror_switch_no_role` unless `accept_no_access`). `commitCore` (conditional, one transaction) makes the core the mirror in term + 1 at (term + 1, 0)
   still `switching`, drops its log, baseline and submissions and flips the start offer's side; `peer.mirror.switch.commit`
   is told until answered (`becomeCore`: core in term + 1, baseline (term + 1, 0) at the digest, grant cleared), then
   the old core goes live. A deadline (30 s), a refusal or a vault that stopped abandons it (`abandonCore`, told too).

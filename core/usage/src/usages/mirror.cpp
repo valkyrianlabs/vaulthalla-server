@@ -194,11 +194,18 @@ std::shared_ptr<CommandUsage> switchCore(const std::weak_ptr<CommandUsage>& pare
     cmd->description = "Move a mirrored vault's core role to the other server by agreement, asked on either server: "
                        "the core stops taking changes (the vault is read-only on both servers for moments), the mirror "
                        "applies its last change with the same digest and nothing pending, then the roles swap in the "
-                       "next term. A switch that does not complete in time, or is refused, changes nothing and says "
-                       "why. Local vaults only. Super admins only; audited.";
+                       "next term. The old core keeps the vault only through the new core's role for it (its link "
+                       "policy or a per-vault role there): with none, the switch is refused unless --accept-no-access. "
+                       "A switch that does not complete in time, or is refused, changes nothing and says why. Local "
+                       "vaults only. Super admins only; audited.";
     cmd->positionals = {vaultPos};
-    cmd->optional_flags = {jsonFlag};
-    cmd->examples = {{"vh mirror switch 4", "Swap vault 4's core and mirror."}};
+    cmd->optional_flags = {Flag::WithAliases("accept_no_access", "Go ahead even though the old core would hold no role "
+                                                                 "on the vault on its new core (its people could not "
+                                                                 "read it there until one is set)",
+                                             {"accept-no-access"}),
+                           jsonFlag};
+    cmd->examples = {{"vh mirror switch 4", "Swap vault 4's core and mirror; prints the role the old core keeps."},
+                     {"vh mirror switch 4 --accept-no-access", "Swap them even though the old core keeps no role."}};
     return cmd;
 }
 

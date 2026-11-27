@@ -23,7 +23,10 @@
 #include "db/query/rbac/role/Admin.hpp"
 #include "device/Peer.hpp"
 #include "mirror/switching/Switch.hpp"
+#include "ops/PeerPolicy.hpp"
 #include "protocols/ws/Session.hpp"
+
+#include <algorithm>
 
 namespace vh::test_mirror_switch {
 
@@ -51,6 +54,14 @@ protected:
         // One database holds every test's servers: a switch an earlier test left active is no pass's business here.
         sql("UPDATE mirror_switch SET notify = FALSE, phase = CASE WHEN ended_at IS NULL THEN 'abandoned' ELSE phase END, "
             "  ended_at = COALESCE(ended_at, CURRENT_TIMESTAMP) WHERE ended_at IS NULL OR notify");
+        // The mirror's role for the core once it is the core (its link default for that server): read-write.
+        policy("power_user");
+    }
+
+    // The mirror's link default for its core (corePeer): the role the old core holds after a switch. nullopt: none.
+    static void policy(const std::optional<std::string>& role) {
+        (void)ops::peer_policy::set(superUser, std::to_string(corePeer),
+                                    role ? std::optional<ops::roles::Ref>(ops::roles::Ref{*role}) : std::nullopt);
     }
 
     static void node(const std::string& id) { sql("UPDATE device_node SET node_id = '" + id + "' WHERE singleton"); }
@@ -632,6 +643,98 @@ TEST_F(MirrorSwitchDbTest, TheWireAnswersNotFoundToAServerThatIsNotTheVaultsOthe
         return 0;
     });
     drive(s, begun.id, wire);
+}
+
+// ---- the old core's role on the new core -------------------------------------------------------------------------------
+
+TEST_F(MirrorSwitchDbTest, ASwitchThatWouldLeaveTheOldCoreNoRoleIsRefusedUnlessThePersonAcceptsIt) {
+    {
+        SCOPED_TRACE("no policy for the old core on the mirror, asked on the core");
+        auto s = settledPair();
+        Wire follow(s);
+        SwitchWire wire(s, follow);
+        policy(std::nullopt);
+        const auto at = mirrorRow(s).position();
+        const auto digest = mirrorRow(s).digest;
+        const auto begun = beginOnCore(s, wire);
+        drive(s, begun.id, wire);
+        const auto answer = onCore(s, [&] { return sw::outcome(s.coreId, begun.switch_id, "core"); });
+        EXPECT_EQ(answer.value("outcome", ""), "abandoned");
+        EXPECT_EQ(answer.value("reason", ""), "mirror_switch_no_role");
+        EXPECT_NE(answer.at("detail").value("why", "").find("--accept-no-access"), std::string::npos)
+            << answer.dump();
+        EXPECT_EQ(answer.value("peer_access", ""), "none");
+        expectNothingChanged(s, at, digest, "refused for no role");
+        EXPECT_EQ(mq::Switches::bySwitchId(begun.switch_id, "mirror")->phase, "abandoned");
+
+        // Asked on the mirror: refused there before the core is asked.
+        EXPECT_EQ(refusalOf([&] {
+                      (void)sw::request(s.mirrorId, superUser->id, "admin", wire, std::chrono::milliseconds(0));
+                  }),
+                  "mirror_switch_no_role");
+        EXPECT_EQ(std::count(wire.sent.begin(), wire.sent.end(), "peer.mirror.switch.request"), 0);
+        expectNothingChanged(s, at, digest, "refused on the mirror");
+
+        // With the person's word it goes ahead, and the answer says the old core holds no role.
+        const auto accepted = onCore(s, [&] {
+            return sw::begin(s.coreId, {.on = "core", .by = mq::Account{.node = coreNode, .id = superUser->id},
+                                        .name = "admin"},
+                             wire, true);
+        });
+        drive(s, accepted.id, wire);
+        expectSwitched(s, digest, "accepted with no role");
+        const auto done = onCore(s, [&] { return sw::outcome(s.coreId, accepted.switch_id, "core"); });
+        EXPECT_EQ(done.value("outcome", ""), "switched");
+        EXPECT_TRUE(done.at("peer_role").is_null());
+        EXPECT_EQ(done.value("peer_access", ""), "none");
+        EXPECT_TRUE(done.at("detail").value("accepted_no_access", false));
+    }
+    {
+        SCOPED_TRACE("no policy, asked on the mirror with the person's word");
+        auto s = settledPair();
+        Wire follow(s);
+        SwitchWire wire(s, follow);
+        policy(std::nullopt);
+        const auto digest = mirrorRow(s).digest;
+        const auto asked = sw::request(s.mirrorId, superUser->id, "admin", wire, std::chrono::milliseconds(0), true);
+        const auto onTheCore = onCore(s, [&] { return mq::Switches::bySwitchId(asked.value("switch_id", ""), "core"); });
+        ASSERT_TRUE(onTheCore);
+        EXPECT_TRUE(onTheCore->accept_no_access) << "carried in peer.mirror.switch.request";
+        drive(s, onTheCore->id, wire);
+        expectSwitched(s, digest, "accepted, asked on the mirror");
+        EXPECT_EQ(sw::outcome(s.mirrorId, asked.value("switch_id", ""), "mirror").value("peer_access", ""), "none");
+    }
+    {
+        SCOPED_TRACE("a link default: the answer names it");
+        policy("power_user");
+        auto s = settledPair();
+        Wire follow(s);
+        SwitchWire wire(s, follow);
+        const auto begun = beginOnCore(s, wire);
+        drive(s, begun.id, wire);
+        const auto answer = onCore(s, [&] { return sw::outcome(s.coreId, begun.switch_id, "core"); });
+        EXPECT_EQ(answer.value("outcome", ""), "switched");
+        EXPECT_EQ(answer.at("peer_role").value("role_name", ""), "power_user");
+        EXPECT_EQ(answer.value("peer_access", ""), "read-write");
+    }
+    {
+        SCOPED_TRACE("a per-vault role (set while the mirror was a core), no link default: the answer names it");
+        auto s = settledPair();
+        Wire follow(s);
+        SwitchWire wire(s, follow);
+        policy(std::nullopt);
+        sql("INSERT INTO vault_role_assignments (vault_id, subject_type, subject_id, role_id) SELECT " +
+            std::to_string(s.mirrorId) + ", 'peer', " + std::to_string(corePeer) +
+            ", id FROM vault_role WHERE name = 'reader'");
+        const auto begun = beginOnCore(s, wire);
+        drive(s, begun.id, wire);
+        const auto answer = onCore(s, [&] { return sw::outcome(s.coreId, begun.switch_id, "core"); });
+        EXPECT_EQ(answer.value("outcome", ""), "switched") << answer.dump();
+        EXPECT_EQ(answer.at("peer_role").value("role_name", ""), "reader");
+        EXPECT_EQ(answer.value("peer_access", ""), "read-only");
+        const auto mine = sw::outcome(s.mirrorId, begun.switch_id, "mirror");
+        EXPECT_EQ(mine.at("peer_role").value("role_name", ""), "reader") << "the new core says the same";
+    }
 }
 
 // ---- who may ------------------------------------------------------------------------------------------------------------

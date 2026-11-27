@@ -810,12 +810,15 @@ def _planned_switch(a: Node, va: int, b: Node, vb: int, node_a: str, node_b: str
                  bool(ok) and contents_here(b, vb), json.dumps(ok)[:300])
     term = _mv(a, va)["term"]
 
-    code, out = a.vh_json("mirror", "switch", str(va), check=False)
+    cp = a.vh("mirror", "switch", str(va), check=False)
+    printed = cp.stdout + cp.stderr
     report.check("7p: `vh mirror switch` on A switches: A is the mirror, B the core, both in the next term",
-                 code == 0 and out.get("outcome") == "switched" and out.get("role") == "mirror"
-                 and _mv(a, va).get("role") == "mirror" and _mv(b, vb).get("role") == "core"
-                 and _mv(a, va).get("term") == term + 1 and _mv(b, vb).get("term") == term + 1,
-                 json.dumps({"out": out, "a": _mv(a, va), "b": _mv(b, vb)})[:600])
+                 cp.returncode == 0 and "switched" in printed and _mv(a, va).get("role") == "mirror"
+                 and _mv(b, vb).get("role") == "core" and _mv(a, va).get("term") == term + 1
+                 and _mv(b, vb).get("term") == term + 1,
+                 json.dumps({"out": printed[-400:], "a": _mv(a, va), "b": _mv(b, vb)})[:600])
+    report.check("7p: it prints the role A keeps on its new core (B's policy for A: power_user, read-write)",
+                 "role 'power_user'" in printed and "(read-write)" in printed, printed[-400:])
     report.check("7p: both servers recorded it (mirror_switch switched) and audited it",
                  _sql(a, f"SELECT phase FROM mirror_switch WHERE vault_id = {va} ORDER BY id DESC LIMIT 1") == "switched"
                  and _sql(b, f"SELECT phase FROM mirror_switch WHERE vault_id = {vb} ORDER BY id DESC LIMIT 1")
@@ -827,6 +830,8 @@ def _planned_switch(a: Node, va: int, b: Node, vb: int, node_a: str, node_b: str
         or None, timeout=60)
     report.check("7p: A is a live mirror holding B's grant for it (B's policy: power_user)", bool(granted),
                  json.dumps({"a": _mv(a, va), "info": _mirror_info(a, va)})[:500])
+    report.check("7p: A's super admin still reads the vault on A, within that role",
+                 _plain(a, "whole/docs/before_switch_b.txt") == _plain(b, "whole/docs/before_switch_b.txt") != "")
 
     b.sh("printf 'written on B, the core now\\n' > MNT/whole/docs/after_switch_b.txt")
     a.sh("printf 'written on A, the mirror now\\n' > MNT/whole/docs/after_switch_a.txt")

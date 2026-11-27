@@ -154,7 +154,9 @@ std::vector<WsCommandUsage> mirrorFollowCommands() {
                     object("by", "", {uinteger("id").desc("The person's account id on the mirror."),
                                       str("name").opt().desc("Their display name (attribution only).")})
                         .gen(gen::ref("mirror.person", {"id", "name"}))
-                        .desc("Who asked.")},
+                        .desc("Who asked."),
+                    boolean("accept_no_access").opt().desc("The person accepted that the core may hold no role on the "
+                                                           "vault on the mirror afterwards.")},
         .response = {switchId(), uinteger("term").desc("The term the switch leaves.")},
         .refusal_codes = [] {
             auto r = mfRefusals();
@@ -184,7 +186,13 @@ std::vector<WsCommandUsage> mirrorFollowCommands() {
                      str("waiting").oneOf({"busy", "applying"}).opt()
                          .desc("Not ready yet: a change here holds the vault (busy), or the mirror is applying."),
                      mfPosition("at").nullable().desc("Where the mirror stands."),
-                     str("digest").nullable(), integer("entries").nullable()},
+                     str("digest").nullable(), integer("entries").nullable(),
+                     object("peer_role", "", {str("role_name"), uinteger("files"), uinteger("directories"),
+                                              uinteger("sync"), uinteger("roles")})
+                         .nullable().opt()
+                         .desc("The role the core will hold on the vault here once this server is its core (this "
+                               "server's policy for it); null: none, and the core abandons the switch "
+                               "(mirror_switch_no_role) unless the person accepted that.")},
         .refusal_codes = [] {
             auto r = mfRefusals();
             for (const auto* c : {"peer_revoked", "mirror_not_live", "mirror_first_copy", "mirror_term_mismatch",

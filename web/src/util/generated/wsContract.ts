@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '50d64a588a9ecb47358c0bee675d9c50676fc2b4d9cbf50523797915f0c57277'
+export const WS_CONTRACT_HASH = 'f1da94f09faa9f30dff3d140cc060a930ab847a127b98699c4667b82ddaea0a8'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
@@ -5930,12 +5930,14 @@ export interface WsContract {
    * A planned switch of the core role between the two servers of a mirrored vault, asked on either server:
    * the core stops taking changes (the vault is read-only on both servers, reason mirror_switching), numbers
    * its last change, waits for the mirror to apply it with the same digest and nothing pending, then both
-   * record the next term with the roles swapped. Anything that stops it before the core decides (a timeout, a
-   * refusal, a dropped link) changes nothing. Local vaults only. Waits for the outcome: switched, abandoned
-   * (with the reason) or running. Super admins of this server; audited mirror.switch.
+   * record the next term with the roles swapped. The old core keeps the vault only through the new core's
+   * role for it; with none the switch is abandoned (mirror_switch_no_role) unless accept_no_access. Anything
+   * that stops it before the core decides (a timeout, a refusal, a dropped link) changes nothing. Local
+   * vaults only. Waits for the outcome: switched, abandoned (with the reason) or running. Super admins of
+   * this server; audited mirror.switch.
    */
   'mirror.switch': {
-    payload: { vault_id: number }
+    payload: { vault_id: number; accept_no_access?: boolean }
     response: {
       vault_id: number
       switch_id: string
@@ -5956,6 +5958,8 @@ export interface WsContract {
       deadline: number
       created_at: number
       ended_at: number | null
+      peer_role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+      peer_access: 'read-only' | 'read-write' | 'none'
     }
   }
   /**
@@ -6386,6 +6390,7 @@ export interface WsContract {
       at: { term: number; seq: number } | null
       digest: string | null
       entries: number | null
+      peer_role?: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
     }
   }
   /**
@@ -6394,7 +6399,7 @@ export interface WsContract {
    * id; the decision comes later as peer.mirror.switch.commit. The caller must be the vault's mirror.
    */
   'peer.mirror.switch.request': {
-    payload: { vault_uid: string; by: { id: number; name?: string } }
+    payload: { vault_uid: string; by: { id: number; name?: string }; accept_no_access?: boolean }
     response: { switch_id: string; term: number }
   }
   /**

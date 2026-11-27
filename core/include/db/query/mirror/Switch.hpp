@@ -31,6 +31,7 @@ struct Switch {
     std::optional<vh::mirror::Digest> digest{};    // the core's digest there
     std::vector<std::string> writers{};            // core: the writers the freeze waits for
     bool notify{false};        // core: the decision is not yet told to the mirror
+    bool accept_no_access{false};   // the old core may hold no role on the vault afterwards (the person said so)
     std::string asked_on{};    // core | mirror
     std::optional<Account> asked_by{};
     std::string asked_by_name{};
@@ -71,7 +72,7 @@ public:
     // mirror_switch_running (one is open), mirror_submissions_queued (the mirror's changes are being executed here);
     // ops::NotFound without a core row.
     static Switch freeze(uint32_t vaultId, const SwitchAsked& asked, std::chrono::seconds timeout,
-                         const std::optional<std::string>& switchId = std::nullopt);
+                         const std::optional<std::string>& switchId = std::nullopt, bool acceptNoAccess = false);
     // The writers of the vault tables running now (their virtual transaction ids: fs_entry, files, directories,
     // symlinks, files_trashed, vault, sync, fsync, rsync, vault_recovery_policy, vault_keys), read after the freeze
     // committed: every one that may have changed the vault without seeing it. Recorded on the switch.
@@ -107,7 +108,7 @@ public:
     // This server asked its core for a switch and the core began one: recorded (phase requested) unless the core's
     // prepare arrived first. The vault's row is not frozen by this: the prepare freezes it.
     static Switch requested(uint32_t vaultId, uint32_t peerId, const std::string& switchId, uint64_t term,
-                            const SwitchAsked& asked, std::chrono::seconds timeout);
+                            const SwitchAsked& asked, std::chrono::seconds timeout, bool acceptNoAccess = false);
     // A requested switch the core never prepared, past its deadline: ended `abandoned` here. How many.
     static std::size_t expireRequested();
 
