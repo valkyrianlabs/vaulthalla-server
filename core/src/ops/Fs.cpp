@@ -70,7 +70,10 @@ void require(const Actor& actor, const EnginePtr& engine, const std::filesystem:
     requireActor(actor);
     if (!engine || !engine->vault) throw std::runtime_error("Internal server error: Storage engine not available");
     if (allowedAt(actor, engine, path, action)) return;
-    if (!vh::fs::Filesystem::exists(engine->vaultPathToFusePath(path))) {
+    // Only an action on an existing entry can be refused because the entry is missing; creating one (Write, Touch,
+    // Link) where nothing is yet is refused for what the caller may do there.
+    const bool creates = action == FsAction::Write || action == FsAction::Touch || action == FsAction::Link;
+    if (!creates && !vh::fs::Filesystem::exists(engine->vaultPathToFusePath(path))) {
         auto ancestor = path.lexically_normal().parent_path();
         while (!ancestor.empty() && ancestor != ancestor.root_path() &&
                !vh::fs::Filesystem::exists(engine->vaultPathToFusePath(ancestor)))
@@ -383,9 +386,14 @@ std::shared_ptr<vh::fs::model::File> commitSealed(const Actor& actor, const Seal
 
     const auto engine = engineFor(commit.vault_id);
     const bool replace = commit.base.has_value();
-    require(actor, engine, path, replace ? FsAction::Overwrite : FsAction::Write,
-            replace ? "Permission denied: User does not have overwrite permission for this path in the vault"
-                    : "Permission denied: User does not have upload permission for this path in the vault");
+    try {
+        require(actor, engine, path, replace ? FsAction::Overwrite : FsAction::Write,
+                replace ? "Permission denied: User does not have overwrite permission for this path in the vault"
+                        : "Permission denied: User does not have upload permission for this path in the vault");
+    } catch (const NotFound&) {
+        // A replacement of a file that is gone, to a caller who may know it is: the base moved on (as below).
+        throw ContentConflict("The file no longer exists: " + path.string());
+    }
     vh::mirror::access::requireWritable(engine->vault->id, "fs.commit");  // mirror gate
 
     const auto parent = parentFolder(path);

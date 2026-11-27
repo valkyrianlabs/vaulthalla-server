@@ -441,6 +441,13 @@ def _whole_mirror(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, re
                          f"{b.inst.mount}/whole/other/unread.txt"], capture_output=True, text=True)
     report.check("7f: after A's `peer policy set none`, B's super admin is refused", cp.returncode != 0,
                  (cp.stdout + cp.stderr)[-200:])
+    listing = subprocess.run(["runuser", "-u", b.admin, "--", "timeout", "30", "ls", "-1", str(b.inst.mount)],
+                             capture_output=True, text=True)
+    root = subprocess.run(["runuser", "-u", b.admin, "--", "timeout", "30", "stat", f"{b.inst.mount}/whole"],
+                          capture_output=True, text=True)
+    report.check("7f: and the mount shows B's super admin no such vault (no root shortcut for a copy: wave 4)",
+                 "whole" not in listing.stdout.split() and root.returncode != 0,
+                 f"ls: {listing.stdout[-200:]} stat: {(root.stdout + root.stderr)[-200:]}")
     a.vh("peer", "policy", "set", node_b, "reader")
 
     # ---- 7h. Strict mode on B (wave 4 piece A): a copy of A's vault is read-only on B whatever A grants it. With a

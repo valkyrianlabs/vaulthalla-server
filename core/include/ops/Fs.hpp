@@ -37,10 +37,11 @@ struct ContentConflict final : Conflict {
 };
 
 // Whether `actor` may do `action` at `path`, telling a missing entry from a refusal without an existence oracle
-// (design decision, wave 4; piece B's "changed meanwhile" needs it): Missing only when nothing is at `path` and the
-// actor may list the nearest folder that exists (they could see it is missing there anyway); Denied for a refusal, and
-// for a missing entry under a folder the actor may not list. Every op below refuses the same way: NotFound for Missing,
-// Denied for Denied. NotFound (thrown) without an engine for the vault.
+// (design decision, wave 4; piece B's "changed meanwhile" needs it): Missing only for an action on an existing entry
+// (not Write, Touch or Link, which create one) when nothing is at `path` and the actor may list the nearest folder that
+// exists (they could see it is missing there anyway); Denied for a refusal, and for a missing entry under a folder the
+// actor may not list. Every op below refuses the same way: NotFound for Missing (commitSealed's replacement:
+// ContentConflict, the base is gone), Denied for Denied. NotFound (thrown) without an engine for the vault.
 enum class Access { Allowed, Denied, Missing };
 [[nodiscard]] Access check(const Actor& actor, uint32_t vaultId, const std::filesystem::path& path,
                            vh::rbac::permission::vault::FilesystemAction action);

@@ -883,10 +883,12 @@ Carried fixes (each with a test that failed before it):
   file with `EEXIST` (it returned it silently), so `vh fs put` reports "created by someone else meanwhile" instead of
   "stored"; the provider restore and share uploads map it to their conflict.
 - **Missing is told from no permission:** `ops::fs::check(actor, vault, path, action)` answers `Allowed`, `Denied` or
-  `Missing`; `Missing` only when nothing is at the path and the actor may List the nearest folder that exists (they
+  `Missing`; `Missing` only for an action on an existing entry (a create's Write, Touch or Link is judged where the
+  entry would go, as before), when nothing is at the path and the actor may List the nearest folder that exists (they
   could see it is missing there anyway), `Denied` otherwise (no existence oracle; the HTTP lanes' rule). Every
-  `ops::fs` operation refuses the same way: `NotFound` for a missing entry the caller may know is missing, `Denied`
-  otherwise. Piece B's "changed meanwhile" uses it.
+  `ops::fs` operation refuses the same way: `NotFound` for a missing entry the caller may know is missing (a sealed
+  commit's replacement: `ContentConflict`, its base is gone, as a super admin already got), `Denied` otherwise. Piece
+  B's "changed meanwhile" uses it.
 - **`ShellServerTest`'s race:** the CLI socket's path appeared at `bind()`, before `listen()` and before the server
   recorded the inode it owns: a connect in that window was refused, and a stop in it left the path behind. The socket
   now listens under a private name and is renamed onto the path once its inode is recorded, and the run loop closes
