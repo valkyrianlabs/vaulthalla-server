@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <map>
+#include <optional>
 #include <set>
 #include <utility>
 #include <string>
@@ -61,7 +62,7 @@ uint64_t numberBatch(const uint32_t vaultId, Sequenced::Vault& out) {
     return Transactions::exec("mirror::Log::sequence", [&](pqxx::work& txn) -> uint64_t {
         // The row lock serialises sequencers of the vault; each statement below reads after it (READ COMMITTED).
         const auto mv = txn.exec("SELECT term, last_seq, encode(digest, 'hex') AS digest, digest_entries FROM mirror_vault "
-                                 "WHERE vault_id = $1 AND role = 'core' FOR NO KEY UPDATE",
+                                 "WHERE vault_id = $1 AND role = 'core' AND state <> 'starting' FOR NO KEY UPDATE",
                                  pqxx::params{vaultId});
         if (mv.empty()) return 0;
         const auto term = mv[0]["term"].as<uint64_t>();
@@ -86,54 +87,66 @@ uint64_t numberBatch(const uint32_t vaultId, Sequenced::Vault& out) {
             lastIdOf[row["txid"].as<uint64_t>()] = row["last_id"].as<int64_t>();
         }
         txids += '}';
-        std::vector<std::pair<int64_t, std::pair<int64_t, uint64_t>>> pendingRows;   // (last_id, (id, txid))
-        for (const auto row : txn.exec("SELECT id, txid FROM vault_replication_log "
+        struct PendingRow {
+            int64_t last_id{};   // its group's last row: the group's place in commit order
+            int64_t id{};
+            uint64_t txid{};
+            std::optional<vh::mirror::Hash> entry_hash{}, prev_hash{};
+        };
+        std::vector<PendingRow> pendingRows;
+        for (const auto row : txn.exec("SELECT id, txid, encode(entry_hash, 'hex') AS entry_hash, "
+                                       "       encode(prev_hash, 'hex') AS prev_hash FROM vault_replication_log "
                                        "WHERE vault_id = $1 AND txid = ANY($2::bigint[]) AND term = $3 AND seq IS NULL",
                                        pqxx::params{vaultId, txids, static_cast<int64_t>(term)})) {
             const auto t = row["txid"].as<uint64_t>();
-            pendingRows.push_back({lastIdOf[t], {row["id"].as<int64_t>(), t}});
+            pendingRows.push_back({.last_id = lastIdOf[t], .id = row["id"].as<int64_t>(), .txid = t,
+                                   .entry_hash = optionalHash(row, "entry_hash"), .prev_hash = optionalHash(row, "prev_hash")});
         }
-        std::ranges::sort(pendingRows);
-        std::string ids = "{", seqs = "{";
+        std::ranges::sort(pendingRows, {}, [](const PendingRow& r) { return std::pair(r.last_id, r.id); });
+        // Numbers, and on each group's last row the digest once the group is applied (MirrorVaults::digestAt).
+        std::string ids = "{", seqs = "{", digests = "{", entries = "{";
         uint64_t next = base;
-        std::optional<uint64_t> txid;
-        for (const auto& pending : pendingRows) {
-            const auto& row = pending.second;
-            const auto t = row.second;
+        uint64_t numberedGroups = 0;
+        for (std::size_t i = 0; i < pendingRows.size(); ++i) {
+            const auto& row = pendingRows[i];
             // Whole groups only: stop at a group boundary once the batch is full.
-            if (txid && *txid != t && next - base >= Log::kSequenceBatch) break;
-            txid = t;
+            if (i > 0 && pendingRows[i - 1].txid != row.txid && next - base >= Log::kSequenceBatch) break;
+            if (row.entry_hash) digest.add(*row.entry_hash);
+            if (row.prev_hash) digest.remove(*row.prev_hash);
+            const bool lastOfGroup = i + 1 == pendingRows.size() || pendingRows[i + 1].txid != row.txid;
             if (next > base) {
                 ids += ',';
                 seqs += ',';
+                digests += ',';
+                entries += ',';
             }
-            ids += std::to_string(row.first);
+            ids += std::to_string(row.id);
             seqs += std::to_string(++next);
+            digests += lastOfGroup ? digest.hex() : std::string("NULL");
+            entries += lastOfGroup ? std::to_string(digest.entries) : std::string("NULL");
+            if (lastOfGroup) ++numberedGroups;
         }
         if (next == base) return 0;
         ids += '}';
         seqs += '}';
-        const auto res = txn.exec(
-            "UPDATE vault_replication_log l SET seq = n.seq "
-            "FROM unnest($1::bigint[], $2::bigint[]) AS n(id, seq) WHERE l.id = n.id "
-            "RETURNING l.txid, encode(l.entry_hash, 'hex') AS entry_hash, encode(l.prev_hash, 'hex') AS prev_hash",
-            pqxx::params{ids, seqs});
-        if (res.empty()) return 0;
+        digests += '}';
+        entries += '}';
+        const auto updated = txn.exec(
+            "UPDATE vault_replication_log l SET seq = n.seq, digest_after = decode(n.digest, 'hex'), "
+            "  entries_after = n.entries "
+            "FROM unnest($1::bigint[], $2::bigint[], $3::text[], $4::bigint[]) AS n(id, seq, digest, entries) "
+            "WHERE l.id = n.id",
+            pqxx::params{ids, seqs, digests, entries}).affected_rows();
+        if (updated == 0) return 0;
 
-        std::set<uint64_t> numberedGroups;
-        for (const auto row : res) {
-            numberedGroups.insert(row["txid"].as<uint64_t>());
-            if (const auto h = optionalHash(row, "entry_hash")) digest.add(*h);
-            if (const auto h = optionalHash(row, "prev_hash")) digest.remove(*h);
-        }
-        const auto last = base + static_cast<uint64_t>(res.size());
+        const auto last = base + static_cast<uint64_t>(updated);
         txn.exec("UPDATE mirror_vault SET last_seq = $2, digest = decode($3, 'hex'), digest_entries = $4, "
                  "  numbered_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE vault_id = $1",
                  pqxx::params{vaultId, static_cast<int64_t>(last), digest.hex(), digest.entries});
         out.last = {term, last};
-        out.groups += numberedGroups.size();
-        out.rows += res.size();
-        return res.size();
+        out.groups += numberedGroups;
+        out.rows += updated;
+        return updated;
     });
 }
 
@@ -176,7 +189,7 @@ Sequenced Log::sequence() {
     const auto vaults = Transactions::read("mirror::Log::pendingVaults", [](pqxx::transaction_base& txn) {
         std::vector<uint32_t> ids;
         for (const auto row : txn.exec("SELECT DISTINCT l.vault_id FROM vault_replication_log l "
-                                       "JOIN mirror_vault m ON m.vault_id = l.vault_id AND m.role = 'core' "
+                                       "JOIN mirror_vault m ON m.vault_id = l.vault_id AND m.role = 'core' AND m.state <> 'starting' "
                                        "WHERE l.seq IS NULL AND l.term = m.term ORDER BY 1"))
             ids.push_back(row[0].as<uint32_t>());
         return ids;
@@ -195,7 +208,7 @@ Page Log::groupsAfter(const uint32_t vaultId, const Position after, const std::s
     return Transactions::exec("mirror::Log::groupsAfter", [&](pqxx::work& txn) {
         Page page{.last = after};
         const auto mv = txn.exec("SELECT term, last_seq, pruned_term, pruned_seq FROM mirror_vault "
-                                 "WHERE vault_id = $1 AND role = 'core'",
+                                 "WHERE vault_id = $1 AND role = 'core' AND state <> 'starting'",
                                  pqxx::params{vaultId});
         if (mv.empty()) {
             page.expired = true;
@@ -341,21 +354,53 @@ Pruned Log::prune(const std::chrono::seconds maxAge, const uint64_t maxRows) {
         for (const auto id : vaultsOf(txn, "mirror_entry_hash", "")) vaults.insert(id);
         for (const auto vaultId : vaults) {
             if (std::ranges::binary_search(cores, vaultId)) continue;
-            if (!txn.exec("SELECT 1 FROM mirror_vault WHERE vault_id = $1 AND role = 'core'", pqxx::params{vaultId})
-                     .empty())
+            const auto role = txn.exec("SELECT role FROM mirror_vault WHERE vault_id = $1", pqxx::params{vaultId});
+            if (!role.empty() && role[0][0].as<std::string>() == "core")
                 continue;   // became a core after the list above was read
             removed += txn.exec("DELETE FROM vault_replication_log WHERE vault_id = $1", pqxx::params{vaultId})
                            .affected_rows();
-            removed += txn.exec("DELETE FROM mirror_entry_hash WHERE vault_id = $1", pqxx::params{vaultId})
-                           .affected_rows();
+            // A mirror keeps the entry hashes of what it applied (its compare-and-set and digest; mirror::apply).
+            if (role.empty())
+                removed += txn.exec("DELETE FROM mirror_entry_hash WHERE vault_id = $1", pqxx::params{vaultId})
+                               .affected_rows();
         }
         return removed;
     });
     return out;
 }
 
+std::vector<Row> Log::groupRows(const uint32_t vaultId, const uint64_t term, const uint64_t txid, const uint64_t afterSeq,
+                                const std::size_t limit) {
+    const auto rows = static_cast<int64_t>(std::clamp<std::size_t>(limit, 1, kMaxPageRows));
+    return Transactions::exec("mirror::Log::groupRows", [&](pqxx::work& txn) {
+        std::vector<Row> out;
+        for (const auto row : txn.exec(std::string("SELECT ") + kLogColumns + " FROM vault_replication_log "
+                                       "WHERE vault_id = $1 AND term = $2 AND txid = $3 AND seq IS NOT NULL AND seq > $4 "
+                                       "ORDER BY seq LIMIT $5",
+                                       pqxx::params{vaultId, static_cast<int64_t>(term), static_cast<int64_t>(txid),
+                                                    static_cast<int64_t>(afterSeq), rows}))
+            out.push_back(logRowFrom(row));
+        return out;
+    });
+}
+
+std::optional<std::pair<uint64_t, uint64_t>> Log::groupSpan(const uint32_t vaultId, const uint64_t term,
+                                                            const uint64_t txid) {
+    return Transactions::exec("mirror::Log::groupSpan", [&](pqxx::work& txn) -> std::optional<std::pair<uint64_t, uint64_t>> {
+        const auto r = txn.exec("SELECT min(seq), max(seq) FROM vault_replication_log "
+                                "WHERE vault_id = $1 AND term = $2 AND txid = $3 AND seq IS NOT NULL",
+                                pqxx::params{vaultId, static_cast<int64_t>(term), static_cast<int64_t>(txid)});
+        if (r.empty() || r[0][0].is_null()) return std::nullopt;
+        return std::make_pair(r[0][0].as<uint64_t>(), r[0][1].as<uint64_t>());
+    });
+}
+
 void Log::markMirrorApply(pqxx::work& txn) {
     txn.exec("SELECT set_config('vh.mirror_apply', 'on', true)");
+}
+
+void Log::markMirrorLocal(pqxx::work& txn) {
+    txn.exec("SELECT set_config('vh.mirror_local', 'on', true)");
 }
 
 vh::mirror::Digest Digests::recompute(const uint32_t vaultId) {

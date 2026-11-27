@@ -260,9 +260,25 @@ void Service::runLoop() {
         log::Registry::fuse()->warn("[FUSE] Could not clear stale working copies: {}", e.what());
     }
 
-    if (fuse_session_mount(session_, opts.mountpoint) != 0) {
-        log::Registry::fuse()->error("[FUSE] Failed to mount FUSE filesystem at {}", opts.mountpoint);
+    // The mount goes through fusermount3 started with posix_spawn (platform/Mount.hpp mountWithHelper), never
+    // libfuse's own fork: this process has many threads by now, and a forked copy of it may run nothing that isn't
+    // async-signal-safe (libfuse's child calls setenv). The helper gets the options libfuse would give it.
+    std::string helperOptions = "rw,nosuid,nodev";
+    {
+        const auto options = platform::mount::fuseOptions(configuredMountMode());
+        for (std::size_t i = 0; i + 1 < options.size(); ++i)
+            if (options[i] == "-o") helperOptions += "," + options[i + 1];
+        helperOptions += ",subtype=" + argsStr.front();
+    }
+    helper_ = platform::mount::mountWithHelper(opts.mountpoint, helperOptions);
+    const std::string fuseFd = helper_.fuse_fd >= 0 ? "/dev/fd/" + std::to_string(helper_.fuse_fd) : std::string();
+    if (helper_.fuse_fd < 0 || fuse_session_mount(session_, fuseFd.c_str()) != 0) {
+        log::Registry::fuse()->error("[FUSE] Failed to mount FUSE filesystem at {}{}", opts.mountpoint,
+                                     helper_.error.empty() ? std::string() : ": " + helper_.error);
+        if (helper_.fuse_fd >= 0) ::close(helper_.fuse_fd);  // the session only owns it once mounted
         fuse_session_destroy(session_);
+        session_ = nullptr;
+        platform::mount::releaseHelper(helper_);
         free(opts.mountpoint);
         fuse_opt_free_args(&args);
         return;
@@ -315,6 +331,8 @@ void Service::runLoop() {
     }
     fuse_session_destroy(session_);
     session_ = nullptr;
+    // The helper unmounts (if anything is left there) and exits once its socket closes.
+    platform::mount::releaseHelper(helper_);
 
     free(opts.mountpoint);
     fuse_opt_free_args(&args);

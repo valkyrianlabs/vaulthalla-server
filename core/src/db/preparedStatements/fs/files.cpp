@@ -244,22 +244,30 @@ void vh::db::Connection::initPreparedFiles() const {
                    "JOIN fs_entry fs ON f.fs_entry_id = fs.id "
                    "WHERE fs.vault_id = $1 AND fs.path = $2");
 
+    // One lock order for an entry's rows, fs_entry before its type row (design/peers/mirror.md "As built: following the
+    // core", the trigger deadlock): the entry's row is locked first (the InitPlan runs before the files row is read
+    // for update), as every other writer of a files row does by updating fs_entry first. The replication log's type
+    // trigger takes the same lock; taken after the files row, it could cross with a writer of fs_entry then files.
     conn_->prepare("set_file_encryption_iv_and_version",
                    R"(UPDATE files f
        SET encryption_iv = $3, encrypted_with_key_version = $4
-       FROM fs_entry fs
-       WHERE f.fs_entry_id = fs.id
-         AND fs.vault_id = $1
-         AND fs.path = $2)");
+       WHERE f.fs_entry_id = (SELECT fs.id FROM fs_entry fs WHERE fs.vault_id = $1 AND fs.path = $2
+                              FOR NO KEY UPDATE))");
 
     // Key rotation commits a file's new IV only if the row still describes the ciphertext that was re-encrypted.
     conn_->prepare("compare_and_set_file_encryption_iv_and_version",
                    R"(UPDATE files f
        SET encryption_iv = $3, encrypted_with_key_version = $4
-       FROM fs_entry fs
-       WHERE f.fs_entry_id = fs.id
-         AND fs.vault_id = $1
-         AND fs.path = $2
+       WHERE f.fs_entry_id = (SELECT fs.id FROM fs_entry fs WHERE fs.vault_id = $1 AND fs.path = $2
+                              FOR NO KEY UPDATE)
+         AND f.encryption_iv IS NOT DISTINCT FROM $5
+         AND f.encrypted_with_key_version IS NOT DISTINCT FROM $6)");
+    // The same, with the new generation's sealed-bytes hash (a key rotation: a mirror checks fetched bytes against it).
+    conn_->prepare("compare_and_set_file_encryption_iv_version_and_hash",
+                   R"(UPDATE files f
+       SET encryption_iv = $3, encrypted_with_key_version = $4, content_hash = $7
+       WHERE f.fs_entry_id = (SELECT fs.id FROM fs_entry fs WHERE fs.vault_id = $1 AND fs.path = $2
+                              FOR NO KEY UPDATE)
          AND f.encryption_iv IS NOT DISTINCT FROM $5
          AND f.encrypted_with_key_version IS NOT DISTINCT FROM $6)");
 

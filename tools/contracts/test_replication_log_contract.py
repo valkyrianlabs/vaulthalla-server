@@ -12,7 +12,11 @@ copy, trash, purge, restore, sync, recovery, key rotation and psql by hand all r
     core/tests/unit/test_replication_log.cpp (MirrorReplicationLogDbTest) drives each kind;
   * nothing bypasses row triggers on these tables, and nothing but db::query::mirror writes the log, the entry hashes
     or mirror_vault, or sets the transaction-local vh.mirror_apply switch that silences the triggers;
-  * the canonical field list of the entry hash is the same in the migration and in core/include/mirror/Hash.hpp.
+  * the canonical field list of the entry hash is the same in the migration and in core/include/mirror/Hash.hpp;
+  * an HTTP upload's staging file (`.upload-http-*.part`, staged through the FUSE mount) is the one file that is not
+    content: migration 166 leaves it out of the state documents, the tree and the trash (the four functions it
+    replaces, one SQL rule), with the same rule as vh::fs::isUploadStagingName in C++, and its own upgrade test
+    (SqlDeployerHistoryDb.MirrorPendingMigration166IsAdditiveAndIdempotent) proves the replacement.
 
 Run by module: python3 -m unittest tools.contracts.test_replication_log_contract
 """
@@ -40,7 +44,9 @@ LOG_TABLES = ("vault_replication_log", "mirror_entry_hash", "mirror_vault")
 TRASH_WRITE_RE = re.compile(r"\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+files_trashed\b")
 LOG_WRITE_RE = re.compile(r"\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+(" + "|".join(LOG_TABLES)
                           + r")\b", re.IGNORECASE)
-APPLY_SWITCH_RE = re.compile(r"vh\.mirror_apply")
+APPLY_SWITCH_RE = re.compile(r"vh\.mirror_(?:apply|local)")
+GATE_MIGRATION = PSQL / "165_mirror_gate.sql"
+GATE_TABLES = ("fs_entry", "files", "directories", "symlinks", "files_trashed")
 BYPASS_RE = re.compile(r"session_replication_role|DISABLE\s+TRIGGER|TRUNCATE\s+(?:TABLE\s+)?(?:files_trashed|vault_keys"
                        r"|vault_replication_log|mirror_entry_hash)\b", re.IGNORECASE)
 
@@ -55,6 +61,9 @@ TRASH_WRITERS: dict[str, dict[str, int]] = {
     "core/src/db/query/sync/ManifestApply.cpp": {"INSERT INTO": 1},
     # The applier's restore (the trash row ends with the live file back under its uid): `restore`.
     "core/src/sync/vault_manifest/Applier.cpp": {"UPDATE": 1},
+    # The mirror's log applier (db::query::mirror::ApplyRows): the core's trash rows (insert), their changes (update)
+    # and their end (purge or restore: update). On the mirror only, under the apply switch: nothing logged.
+    "core/src/db/query/mirror/Apply.cpp": {"INSERT INTO": 1, "UPDATE": 2},
     # `vh vault recover`: the restored vault's trash, written before it could be mirrored.
     "core/src/db/query/vault/Recover.cpp": {"INSERT INTO": 1},
 }
@@ -71,7 +80,14 @@ ENTRY_WRITERS_LOG: dict[str, str] = {
     "core/src/db/query/sync/ManifestApply.cpp": "upsert / move for another writer's entries, restore with the trash "
                                                 "row's end",
     "core/src/db/query/vault/Recover.cpp": "nothing: the restored vault is new, and not mirrored",
+    "core/src/db/query/mirror/Apply.cpp": "nothing: the mirror's applier writes under the apply switch, and a vault "
+                                          "whose role here is mirror is never logged",
     "core/src/db/query/vault/Deletion.cpp": "nothing: the vault root, inodes, a soft-deleted vault",
+    "core/src/db/query/mirror/Start.cpp": "nothing: the mirror's new vault and its root; never a core vault",
+    "core/src/db/query/fs/Entry.cpp": "upsert (a setattr: mode, owner, group, modification time; ops::fs::setAttributes, "
+                                      "with vh.actor)",
+    "core/src/db/query/mirror/Copy.cpp": "upsert (detach a copy: the new local vault's entries take their source's mode "
+                                         "and modification time, with vh.actor; never a held vault)",
 }
 
 
@@ -136,8 +152,22 @@ class ReplicationLogContractTests(unittest.TestCase):
             for match in LOG_WRITE_RE.finditer(text):
                 offenders.append(f"{r}: {match.group(0)}")
             for match in APPLY_SWITCH_RE.finditer(text):
-                offenders.append(f"{r}: {match.group(0)} (use db::query::mirror::Log::markMirrorApply)")
+                offenders.append(f"{r}: {match.group(0)} (use db::query::mirror::Log::markMirrorApply / markMirrorLocal)")
         self.assertEqual(offenders, [])
+
+    def test_the_backstop_guards_every_entry_table(self) -> None:
+        """Migration 165: a held copy's entry tables refuse a change outside the follower's or a pending change's flag."""
+        sql = GATE_MIGRATION.read_text(encoding="utf-8")
+        on: dict[str, set[str]] = {}
+        for match in re.finditer(r"CREATE TRIGGER vh_mirror_gate\w* BEFORE ([A-Z ]+?) ON (\w+)", sql):
+            on.setdefault(match.group(2), set()).update(e.strip() for e in match.group(1).split(" OR "))
+        self.assertEqual(set(on), set(GATE_TABLES))
+        for table in GATE_TABLES:
+            self.assertTrue({"INSERT", "DELETE"} <= on[table], f"{table}: creates and removals are refused")
+        for table in ("fs_entry", "files", "symlinks", "files_trashed"):
+            self.assertIn("UPDATE", on[table], f"{table}: a replicated change in place is refused")
+        self.assertIn("vh.mirror_apply", sql)
+        self.assertIn("vh.mirror_local", sql)
 
     def test_nothing_bypasses_the_triggers(self) -> None:
         offenders = []
@@ -161,6 +191,24 @@ class ReplicationLogContractTests(unittest.TestCase):
         self.assertIsNotNone(cpp)
         self.assertEqual(re.findall(r'"([\w.]+)"', cpp.group(1)), sql_fields)
         self.assertIn(f"std::array<std::string_view, {len(sql_fields)}>", header)
+
+    def test_an_upload_staging_file_is_left_out_with_one_rule(self) -> None:
+        sql = (PSQL / "166_mirror_pending.sql").read_text(encoding="utf-8")
+        rule = re.search(r"FUNCTION vh_mirror_upload_staging\(name TEXT\).*?\$\$(.*?)\$\$", sql, re.DOTALL)
+        self.assertIsNotNone(rule)
+        self.assertIn("starts_with(name, '.upload-http-')", rule.group(1))
+        self.assertIn("right(name, 5) = '.part'", rule.group(1))
+        cpp = (CORE / "src" / "fs" / "Filesystem.cpp").read_text(encoding="utf-8")
+        self.assertIn('kHttpUploadTempPrefix = ".upload-http-"', cpp)
+        self.assertRegex(cpp, r"isUploadStagingName\(const std::string_view name\) noexcept \{\s*return "
+                              r"name\.starts_with\(kHttpUploadTempPrefix\) && name\.ends_with\(\"\.part\"\);")
+        for name in ("vh_mirror_entry_state", "vh_mirror_tree_states", "vh_mirror_log_state", "vh_mirror_track_trash"):
+            body = re.search(r"CREATE OR REPLACE FUNCTION " + name + r"\(.*?\n\$\$ LANGUAGE", sql, re.DOTALL)
+            self.assertIsNotNone(body, f"166 replaces {name}")
+            self.assertIn("vh_mirror_upload_staging(", body.group(0), f"{name} leaves staging files out")
+        upgrade = (CORE / "tests" / "unit" / "test_sql_deployer_history.cpp").read_text(encoding="utf-8")
+        self.assertIn("MirrorPendingMigration166IsAdditiveAndIdempotent", upgrade)
+        self.assertIn("vh_mirror_upload_staging", upgrade)
 
     def test_the_db_suite_drives_each_path(self) -> None:
         text = DB_TEST.read_text(encoding="utf-8")

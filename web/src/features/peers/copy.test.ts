@@ -5,19 +5,14 @@ import { allCopy, COMPARED_BY, PEERS_COPY } from './copy.ts'
 
 const everything = () => [...allCopy(), ...Object.values(COMPARED_BY), ...Object.values(ATTEMPT_TEXT).map(t => t.label)]
 
-test('nothing says or implies that the link carries vaults today', () => {
-  // The one sentence about what a link is for puts mirroring in a later release and says it carries nothing else now.
-  assert.match(PEERS_COPY.purpose, /later release/)
+test('only the purpose sentence says what the link carries', () => {
+  // The one sentence about what a link is for names mirrored vaults and says it carries nothing else.
+  assert.match(PEERS_COPY.purpose, /mirrored vaults/)
   assert.match(PEERS_COPY.purpose, /carries nothing else/)
   for (const text of everything()) {
     if (text === PEERS_COPY.purpose) continue
     assert.doesNotMatch(text, /mirror|sync|replicat|backup|copies|copied/i, text)
   }
-})
-
-test('the page is marked experimental and the unavailable state names nothing to switch on', () => {
-  assert.equal(PEERS_COPY.experimental, 'Experimental')
-  for (const text of [PEERS_COPY.unavailableTitle, PEERS_COPY.unavailableBody]) assert.doesNotMatch(text, /experimental|config|peers\./i)
 })
 
 test('unlinking says what it does and does not do', () => {

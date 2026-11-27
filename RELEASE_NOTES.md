@@ -1,5 +1,255 @@
 # Vaulthalla release notes
 
+<!-- vl-release:entry version=1.27.1 -->
+## 1.27.1 — Linked servers and mirrored vaults
+
+_Released 2026-11-27_
+
+### Folders and files
+
+- **Permanent ids for every folder and symlink.** Every folder, symlink and snapshot of every vault, local or cloud,
+  now has a permanent id from the moment it is created (mirrored vaults name every entry by it). The upgrade gives
+  one to every existing folder, symlink and snapshot in the same transaction as the schema change and changes nothing
+  else: no account, file or folder is modified, no change-journal entry is written, and every id an encrypted bucket
+  vault already published in its manifest stays as it is. There is nothing to do before or after upgrading.
+- **`chmod`, `chown` and `touch` through the mount are recorded.** They used to change only the file on disk and were
+  lost on the next refresh; they are now stored with the file, a mode change never moves its modification time, and a
+  change of owner or group needs a super admin.
+- **`vh fs put` no longer reports a file as stored when someone else created it first**; it says the path was created
+  meanwhile. A missing file is now reported as missing (`not_found`) to someone who may see the folder it would be in,
+  and as a permission refusal to anyone else.
+
+### Linked servers and mirrored vaults
+
+Two Vaulthalla servers can now be linked with each other, and a vault on one of them can be **mirrored** to the
+other: one server stays the vault's **core**, the other holds a full, encrypted copy that follows every change, can
+be worked in while the link is up, can take over when the core is gone, and can always be walked away with. It is
+on with no setting to change, and a server that links nothing does nothing for it: no connection is made, no
+background work runs, and the upgrade changes no existing vault, file or account.
+
+**Try it** (as a super admin on both servers):
+
+1. On the server that has the vault (the **core**), let the other server reach its device listener and open a
+   10-minute pairing window:
+
+   ```sh
+   vh device remote enable
+   vh peer pair
+   ```
+
+2. On the other server (the **mirror**), dial it. It prints a six-digit code:
+
+   ```sh
+   vh device remote enable
+   vh peer link core.example.net        # host, or host:port (36972 by default)
+   ```
+
+3. Back on the core, `vh peer pair` shows three codes: pick the one the mirror printed (or approve later with
+   `vh peer pending` and `vh peer approve <request> --code <code>`). A wrong pick declines the request. Both servers
+   now list each other with `vh peer list`.
+4. On the core, give the linked server a vault role: what its people may do in the vaults it mirrors from here
+   (`reader` to only read, `contributor` to also change files):
+
+   ```sh
+   vh peer policy set <server> contributor
+   ```
+
+5. On the core, offer a vault (its number from `vh vault list`):
+
+   ```sh
+   vh mirror add <vault> --to <server>
+   ```
+
+6. On the mirror, accept the offer:
+
+   ```sh
+   vh mirror pending
+   vh mirror accept <offer>
+   ```
+
+7. Watch it on either server: `vh mirror list` shows each mirrored vault, this server's role and its state, and
+   `vh mirror info <vault>` shows one in detail, the first copy's progress included. Once the first copy has
+   finished, the mirror's super admins work in the vault within the role you gave, and changes made on either server
+   reach the other.
+
+`<server>` is a linked server's number from `vh peer list`, its name or its node id. The web console has the same in
+System › Linked servers (super admins only), with a Mirrored vaults tab.
+
+- **Linking two servers.** `vh peer pair` on one server opens a 10-minute window (one at a time, shared with device
+  pairing); `vh peer link <address>` on the other dials it on its device port (36972 by default; `vh device remote
+  enable` opens the listener beyond this host) and shows a six-digit code, which a super admin picks among three on
+  the first server. `--fingerprint <key>` on either side refuses any other server key. Each server pins the other's
+  key (no certificate authority, no trust store), either side dials, the link comes back by itself after a restart or
+  a network loss, and `vh peer list` and `vh peer info <server>` show its health. `vh peer rename` names it.
+- **Unlinking.** `vh peer unlink <server>` refuses the other server's key from then on and closes the link; the other
+  server is told and unlinks too. Every mirror between them ends, and each server keeps the copies it holds as
+  orphaned copies (read-only, see "Leaving a mirror").
+- **What a linked server may do with your vaults.** A linked server is never a user: on the core, its access to a
+  vault is a vault role, the default for its link (`vh peer policy set <server> <role>`, `vh peer policy show
+  <server>`) or one for a single vault (`vh vault role assign <vault> <role> --peer <server>`; `implicit_deny` means
+  no access to that vault whatever the default says; `vh vault role remove ... --peer` goes back to the default).
+  It is sent to the mirror with the vault and every time it changes, and it is the limit on what the mirror's people
+  may change there. Whoever may assign vault roles on a vault may set it (for the link's default, on every vault);
+  `vh vault role list` shows a linked server's role by name.
+- **Identity rotation keeps links.** `vh secret device-identity rotate` tells connected linked servers of the new key
+  first (signed by the old one), and they keep their links; servers that weren't connected are unlinked and must be
+  linked again. `--revoke-peers` is the emergency rotation: it tells no one and drops every link.
+- **Who may.** Super admins, on the server's `vh`, in the web console (making a link asks you to confirm it's you) or
+  from a fully trusted Vaulthalla Desktop connected directly. Agents, devices with limited access and connections
+  through Vaulthalla Cloud can't. A linked server's key can never be paired as a device, and a device's key can never
+  link. Every change is audited with the linked server named.
+- **In the web console**, super admins get System › **Linked servers**: each link's health (connected since when,
+  which side dialled, round trip, the other server's version), who compared the code (a person, or Vaulthalla
+  Desktop when it brokered the link), rename and unlink; **Accept a link** opens the window, shows this server's key
+  and addresses and approves the server whose code you pick; **Link a server** dials another by address and port,
+  optionally pinned to its key, and shows the code to pick there.
+
+- **Mirroring a vault.** `vh mirror add <vault> --to <server>` on the core offers it. Before anything is offered the
+  vault is checked, and each problem is refused with its own reason and what to do: it is mirrored or being mirrored
+  already, replicated through its bucket (`vh vault join`), a remote attach, detach, layout migration, key rotation
+  or key salvage is running, it is scheduled for deletion, it still holds files in a legacy format, a key version is
+  missing or not attested by this server, a trashed file from before permanent ids is in its trash, or some files are
+  only in its bucket (download them first). On the other server the offer waits for a super admin (`vh mirror
+  pending`, `vh mirror accept <offer>`, `vh mirror decline <offer>`), or is accepted at once when that link is set to
+  accept every vault from the core (`vh mirror accept-all <server> on`; off by default). The mirror refuses a vault
+  whose uid or name it already has, or that would not fit on its disk. Unanswered offers expire after 7 days.
+- **Mirroring every vault.** `vh mirror mirror-all <server> on` on the core (off by default) offers that server each
+  vault not mirrored yet and each new vault as it is created. An offer it declined, or that ended, is not made again
+  until the setting is turned off and on again, and a vault whose checks refuse it is tried again later. With the
+  other server's `accept-all` on, mirroring needs nobody on either side.
+- **Keys go over the link, proven.** Once an offer is accepted, the core sends every key version the vault needs,
+  each wrapped to the mirror's own key, with the core's attestation. The mirror checks each one against the
+  attestation key it pinned when the servers were linked; if a single version can't be proven, the whole start is
+  refused and nothing is written. Proven keys are sealed under the mirror's own vault master, with where they came
+  from recorded, and never appear in a log, an audit entry or an error.
+- **The first copy, then every change.** The mirror creates the vault with the core's vault id, owned by the core's
+  owner (shown as an account of the other server), copies its tree and then follows every change in the order it
+  was made, checking after each step that its copy matches the core's exactly; a copy that no longer matches stops,
+  with the reason. File contents travel as the encrypted bytes the core stores, never decrypted or re-encrypted on
+  the way, and are checked against the size, hash and key the mirror expects before they are put in place. Contents
+  that have not arrived yet are fetched in the background; opening such a file waits for it briefly and then says
+  why it can't be read (the link is down, it is still on its way, it failed), never showing empty or wrong contents.
+- **Who uses the mirror.** Nobody on the mirror can use the vault until the core says what it grants; after that the
+  mirror's super admins get exactly that role, and no local role, group, admin role, vault policy or ownership gives
+  access to it there. Its access list is shown read-only, marked as the other server's.
+- **Working in the mirror.** While the link is up, a person allowed to change the vault can work in it on the mirror
+  through the mount, the web console, uploads, `vh fs put`, shares and the S3 gateway: creating folders and files,
+  writing, renaming, moving, deleting, and changing a file's mode or time. They see the change at once; the core
+  checks it, carries it out as that person and sends it back, and both copies stay identical. When the core refuses
+  (the name was taken there meanwhile, the file changed there, or the change is not allowed), nothing is lost: it
+  becomes a copy named "name (conflict ...)" or a **held change** with the reason (`vh mirror held`, `vh mirror retry
+  <id>`, `vh mirror discard <id>`, `vh mirror save <id> <dest>` to download your version). A file open for writing
+  when the link drops is kept and sent when the link returns. A copy made on the mirror appears when the core has
+  made it; owners and symlinks are changed on the core only.
+- **When a mirror is read-only.** While the link is down, during the first copy, while a copy is stopped, paused or
+  switching, and for an orphaned copy, nothing can change the vault on the mirror, by anyone, through any way in: the
+  mount answers "Read-only file system", the console and `vh` refuse with `read_only` and the reason, uploads and
+  text saves answer 503 with `Retry-After`, `vh fs put` exits with code 69, and share uploads, the S3 gateway (503
+  `ServiceUnavailable`), restores, the vault's settings and attaching a remote refuse. Changes from the core keep
+  arriving. The vault's settings, keys and remote are always the core's, and changed there. Background work (format
+  conversion, local versioning and its retention, key rotation, the trash purge) leaves a mirror's copy alone.
+- **Key rotation on a mirrored vault.** `vh vault keys rotate` works on the core while the vault is mirrored: the
+  core first sends the new key version to the mirror, proven the same way, and rotates only once the mirror has it;
+  if the mirror is not live, its link is down or it refuses the key, nothing is rotated and the refusal says what to
+  do. The mirror switches to the new version when the core's changes say so and fetches the re-sealed files like any
+  other change; the old version stays on both servers, so files still sealed under it stay readable until their new
+  bytes arrive. Rotating on the mirror's side, and key salvage on a mirrored vault, are refused.
+- **Status.** `vh mirror list` and `vh mirror info <vault>` (and ws `mirror.list`, `mirror.get`) show each mirrored
+  vault, this server's role, the linked server, the grant, the state with its reason, the first copy's progress,
+  whether the link is up, the changes not confirmed yet, when the last position was acknowledged, and the settings
+  that apply (a mirror's versions, and this server's accept-all, keep-removed and mirror-all for that server).
+  Everything is audited (`mirror.offer`, `mirror.accept`, `mirror.keys`, `mirror.start`, `mirror.cancel` and the
+  rest), never with key material.
+
+- **Starting a stopped copy over.** A copy that stopped following its core (it no longer matched, fell too far
+  behind, or was stopped) is brought back with `vh mirror resync <vault>` on the server that holds it, without making
+  it again: files whose bytes it already holds are not downloaded again. Nothing a person wrote there is lost:
+  changes that were waiting, its own version of a file the core replaced, and anything the core does not have are
+  kept as held changes for a super admin to look at, retry or discard. Both servers also check each mirrored vault
+  once a day and stop it, with the reason, if its files no longer match what was recorded.
+- **Moving the core by agreement.** `vh mirror switch <vault>`, asked on either server by a super admin there, swaps
+  the two servers' roles. For a few moments the vault is read-only on both (writes say why), the copy catches up with
+  the last change, and then the other server is the core. If anything gets in the way (changes made on the copy not
+  confirmed yet, files whose contents have not arrived, the link dropping, either server stopping) the switch is
+  abandoned, nothing changes, and the command says why. The server that hands the role over keeps the vault only
+  through the role the new core gives it; with none the switch is refused (so its people would not lose the vault)
+  unless you add `--accept-no-access`, and the command says which role it keeps. Vaults with a cloud remote can't be
+  switched.
+- **Taking over when the core is gone.** If a vault's core stops for good, a super admin on the mirror (or someone
+  given the new admin permission "Take over as core", `admin.mirror.takeover`) makes that server the core:
+  `vh mirror takeover <vault> --confirm <vault name>`. Changes made on the copy that were still waiting become
+  ordinary changes there; changes the old core had refused stay listed as held changes. It warns that the old core
+  may hold changes this server never received, and is refused while the old core still answers (use `vh mirror
+  switch` then). It is also the way out of a switch whose other server never came back, which `vh mirror info`
+  explains, and it works while the old core was deleting the vault (the copy is then kept).
+- **The old core comes back.** A server that was taken over stops taking changes to the vault at once. If it made no
+  changes since, it becomes the new core's mirror by itself. If it did, it keeps them and stays read-only, and
+  `vh mirror info` on both servers says how many changes the new core never received; `vh mirror resync` on the old
+  one brings it back, keeping those changes as held changes. If both servers took over while cut off, both stay
+  read-only until you pick the one to keep. Detaching either server's copy ends a take over cleanly
+  on both.
+
+- **Ending a mirror.** `vh mirror cancel <vault>` ends it from either side at any step of a start; on the core it ends
+  at once, and the other server is told (when it is reachable again, if it isn't now). By default the other server
+  **keeps its copy** as an orphaned copy (read-only); `--remove-copy` asks it to remove the copy, which it does unless
+  its link is set to keep the vaults this server removes (`vh mirror keep-removed <server> on`, off by default). A
+  copy that was never completed is removed either way. A super admin removes an orphaned copy with `vh mirror cancel
+  <vault>`; a live mirror is left with `vh mirror detach` instead.
+- **Leaving a mirror with its files.** The server holding a copy can always walk away with it as an ordinary vault of
+  its own: `vh mirror detach <vault> [--owner <user>]`, whatever state the copy is in (live, stopped, out of step,
+  behind, or orphaned) and whether the core is reachable or not; nothing is asked of the core, which is told when it
+  is next reachable and ends the mirror on its side. `--dry-run` (with `--json` to export) shows first what you would
+  get: where the copy left the core's history, whether it was confirmed identical there, the changes made here not
+  yet confirmed (they become ordinary changes), and every file whose contents never arrived. Those files stay listed,
+  marked missing: opening one says so and never shows empty or wrong contents. Nothing is deleted on either server and
+  no bucket is touched. The detached vault keeps the original's id and keys, so the two servers won't mirror it with
+  each other again; `vh mirror list` lists it as detached, with a re-key recommended.
+- **Detaching a copy instead.** `vh mirror detach <vault> --copy [--name <name>] [--owner <user>]` writes a new,
+  separate vault from the copy and leaves the copy as it is (it keeps following its core, or stays read-only). The
+  new vault has its own id and its own key, every folder, file and symlink with their modes and modification times,
+  and none of the trash, versions, shares or access rules. It runs in the background (`--copy --status` shows how far
+  it is, `--copy --cancel` stops it), needs room for a second copy (refused up front otherwise), lists exactly the
+  files whose contents never arrived (they are left out), and ends with a complete vault or none.
+- **Who may detach:** a super admin, or the new admin permission "Detach mirrored vaults" (`admin.mirror.detach`);
+  both detaches are audited.
+- **Deleting a mirrored vault.** On the core, `vh vault delete` asks what happens to the linked server's copy
+  (`--mirror-copy remove` or `leave`, no default) and deletes the vault as usual. The mirror is kept, read-only, for
+  the restore window (it says why and until when); restoring the vault lets it follow again, and only the purge ends
+  it with your choice, which you can change until then. The other server still keeps its copy if it keeps the vaults
+  this server removes. A copy held for another server is never deleted as a vault: detach it, or remove an orphaned
+  one with `vh mirror cancel`.
+- **Versions on the mirror, opt-in.** A mirror can keep versions of what its core replaces or deletes (`vh mirror
+  versions <vault> on [--keep-last N] [--max-age-days D] [--quota-bytes B]`; off by default; 10 versions per file for
+  30 days unless you say otherwise), a safeguard against an unintended deletion over there. They are the mirror's
+  own, listed with `vh recovery list`, and restoring one is a change made on the mirror like any other.
+
+- **Mirrored vaults in the web console.** Beside Linked servers, super admins get a **Mirrored vaults** tab with what
+  `vh mirror` offers: every vault mirrored with another server, whether this server is its core or holds a copy, the
+  state with its reason in plain words (live, first copy with its progress, read-only because the link is down,
+  paused, diverged, expired, the core deleting it and when, switching, the old core replaced, both servers having
+  taken over) and the changes held here; **Mirror a vault** (it asks you to confirm it's you, since the vault's keys
+  go to the other server), the offers other servers make (accept or decline) and each linked server's settings
+  (accept every vault it offers, keep the vaults it removes). A vault's page says what to do next, shows the
+  server's own advice when it has some, and offers only the actions that fit: switch the core (and what the old core
+  keeps), resync, take over as core (with what happens, the warning about changes the old core may hold, the vault's
+  name typed and a confirmation that it's you), detach (with what it gives first: the files whose contents never
+  arrived, the new owner, the vault's name typed), detach a copy (its progress, cancel and the files left out),
+  versions kept on the mirror, ending a mirror or removing an orphaned copy, and the held changes (retry, discard,
+  save the person's version).
+- **Deleting a mirrored vault in the console** asks what happens to the copy on the other server, and explains that
+  a copy held here can't be deleted as a vault.
+
+- **Upgrading.** Migrations 157 and 160 to 170 add the tables, columns and database triggers linked servers and
+  mirrored vaults use, and change no existing row: on a server that links nothing they stay empty (158 and 159 give
+  every folder and symlink its permanent id, under "Folders and files"). Every change to a mirrored
+  vault is recorded, on its core, in the order it was made; on other vaults a file operation costs one extra lookup
+  (under 0.1 ms per write on the test machine), and web uploads' temporary staging files (`.upload-http-*.part`) are
+  never recorded. A file's key rotation now takes its locks in a fixed order (no behaviour change). There is nothing
+  to do before or after upgrading.
+- Account names and emails stay unique among the accounts that sign in on this server. The accounts a linked server's
+  people appear as (the owner of a vault it mirrors here, the author of a change) may share a name with a local one,
+  and can never sign in, hold an admin role or a global vault policy here.
+
 <!-- vl-release:entry version=1.26.2 -->
 ## 1.26.2 — Faster Vaulthalla upgrades on macOS
 

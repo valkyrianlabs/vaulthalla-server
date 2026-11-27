@@ -70,6 +70,9 @@ struct RetainOptions {
     // for content that never came from this side (download, conflict) and for deletes the vault's sync policy does
     // not propagate upstream.
     bool upstream{true};
+    // A vault held here as another server's copy keeps no versions of its own, except the ones its mirror setting asks
+    // for (mirror::versions, wave 5): this policy, in place of the vault's own, past the held-copy skip.
+    std::optional<LocalVersioningPolicy> held_copy_policy{};
 };
 
 // `prior` is the files row as it is before the change (IV, key version, sizes, hash, path, id); its sealed bytes are

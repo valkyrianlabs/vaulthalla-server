@@ -9,6 +9,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <utility>
 #include <pqxx/pqxx>
@@ -130,6 +131,11 @@ struct FuseCreateSymlinkContext {
     std::string target{};
 };
 
+// An HTTP upload's staging file (".upload-http-<id>.part": protocols/http/upload/Staging.hpp, through the mount on
+// Linux): the upload's bytes until its commit writes the real file. Never content: snapshots, archives and copies skip
+// it, the replication log never records it, and on a mirror it is this server's own scratch (mirror::submit::Scratch).
+[[nodiscard]] bool isUploadStagingName(std::string_view name) noexcept;
+
 class Filesystem {
 public:
     static void init(const std::shared_ptr<storage::Manager>& manager);
@@ -186,6 +192,17 @@ private:
     inline static std::shared_ptr<storage::Manager> storageManager_ = nullptr;
 
     static int handleRename(const RenameContext& ctx);
+    // The bodies of the mutators above. On a vault held here as a Live mirror, each public mutator runs its body as a
+    // pending change (mirror::submit::Local: applied here at once, submitted to the vault's core), unless a caller
+    // above it (ops::fs) already does.
+    static int mkdirImpl(const MkdirContext& ctx);
+    static int copyImpl(const CopyContext& ctx);
+    static int renameImpl(const std::filesystem::path& oldPath, const std::filesystem::path& newPath,
+                          const std::shared_ptr<identities::User>& user, std::shared_ptr<storage::Engine> engine,
+                          RenameMode mode);
+    static void removeImpl(const std::filesystem::path& path, unsigned int userId);
+    static std::shared_ptr<model::File> createFileImpl(const NewFileContext& ctx);
+    static std::pair<int, std::shared_ptr<model::Entry>> createFileImpl(const FuseCreateFileContext& ctx);
 
     static bool canFastPath(const std::shared_ptr<model::Entry>& entry, const std::shared_ptr<storage::Engine>& engine);
 };

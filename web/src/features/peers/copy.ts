@@ -1,16 +1,13 @@
 // Every sentence of the Linked servers page (design/peers/link.md), in one place so copy.test.ts can hold it to what a
-// link is today: an authenticated connection between two servers that carries nothing but its own health checks.
-// Nothing here may say or imply that vaults are mirrored or synced; PURPOSE is the one sentence that names what the link
-// is for, and it says "a later release". Pure (no React).
+// link is: an authenticated connection between two servers. PURPOSE is the one sentence that names what it carries
+// (mirrored vaults, whose own words are in features/mirrors/copy.ts); nothing else here says or implies that vaults
+// are synced or backed up. Pure (no React).
 
 export const PEERS_COPY = {
   title: 'Linked servers',
-  experimental: 'Experimental',
   description:
     'Other Vaulthalla servers this one keeps a pinned, mutually authenticated connection with. Linking two servers takes a super admin on each.',
-  purpose: 'A link is the trusted connection that vault mirroring will use in a later release; today it carries nothing else.',
-  unavailableTitle: 'Linked servers aren’t available on this server',
-  unavailableBody: 'This server doesn’t offer linking with other servers.',
+  purpose: 'A link is the trusted connection mirrored vaults travel over; it carries nothing else.',
   denied: 'Only super admins can see and link servers.',
 
   acceptAction: 'Accept a link',

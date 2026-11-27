@@ -2,6 +2,9 @@
 
 #include "mirror/Hash.hpp"
 
+#include <nlohmann/json.hpp>
+#include <pqxx/transaction>
+
 #include <compare>
 #include <cstdint>
 #include <ctime>
@@ -50,21 +53,55 @@ struct MirrorVault {
     std::optional<std::time_t> acked_at{};
     std::optional<Grant> grant{};      // mirror, orphaned: what the core granted this server; never on a core row
 
+    // Migration 164 (design/peers/mirror.md "As built: following the core").
+    // Core: where the baseline was taken, its digest and how many entries it serves (until the mirror acknowledges);
+    // mirror: what the core said of its baseline in its first tree answer.
+    std::optional<Position> baseline{};
+    std::optional<vh::mirror::Digest> baseline_digest{};
+    uint64_t baseline_rows{};
+    uint64_t copy_cursor{};            // mirror: the last baseline entry applied
+    bool copy_finished{false};         // mirror: the first copy is complete and matched the baseline's digest
+    // Why the state is diverged, expired or stopped: a code and its details (no key material ever).
+    std::optional<std::string> stop_reason{};
+    nlohmann::json stop_detail{};
+    std::optional<std::time_t> stopped_at{};
+
     [[nodiscard]] Position position() const { return {term, last_seq}; }
+
+    // Migration 168 (design/peers/mirror.md "As built: moving the core and resync"). Mirror: when a person here last
+    // started the copy over from the core's tree, who, how many times; core: when its mirror last asked. Both: the
+    // last scrub.
+    std::optional<std::time_t> resync_at{};
+    std::optional<uint32_t> resync_by{};
+    uint32_t resync_count{};
+    std::optional<std::time_t> scrubbed_at{};
+};
+
+// What the core answers an acknowledgement (peer.mirror.ack).
+struct AckOutcome {
+    bool known{false};       // the position is one the core can say its digest at (the baseline or a group's end)
+    bool match{false};       // the mirror's digest there is the core's
+    bool recorded{false};    // the acknowledgement moved (retention may now pass it)
+    vh::mirror::Digest core_digest{};
 };
 
 class MirrorVaults {
 public:
     [[nodiscard]] static std::optional<MirrorVault> get(uint32_t vaultId);
+    // In the caller's transaction; `forUpdate` locks the row.
+    [[nodiscard]] static std::optional<MirrorVault> get(pqxx::work& txn, uint32_t vaultId, bool forUpdate);
     [[nodiscard]] static std::vector<MirrorVault> list();
 
     // Makes this server the core of `vaultId` for the linked server `peerId`, at `term`: the log records the vault's
-    // changes from this transaction's commit on, and the digest starts as the tree's. Holds a SHARE lock on the entry
-    // tables while it reads the tree (every writer waits, briefly: the time to hash the vault's entries), so that no
-    // change is half in the baseline and half missing from the log; it waits for no more than kLockWait at a time for
-    // writers already running (and retries), so it never sits in a deadlock with one. Makes sure this server has its
-    // node id (device_node), which names its local accounts. ops::NotFound without the vault or a live peer;
-    // ops::Conflict when the vault is mirrored already.
+    // changes from the baseline's commit on, the digest starts as the tree's, and the tree as of that moment is kept
+    // (mirror_baseline) for the mirror's first copy. Per vault (migration 164): a committed `starting` row first makes
+    // every new writer of this vault wait in its trigger; the writers of the entry tables already running when it
+    // committed are waited for (each a bounded wait, kLockWaitMs at a time, at most kLockAttempts); then, under the
+    // row's lock, the tree is read, hashed and kept, and the row goes live. Writers of other vaults never wait; writers
+    // of this one wait as long as the baseline takes. No change is half in the baseline and half missing from the log.
+    // Makes sure this server has its node id (device_node), which names its local accounts. ops::NotFound without the
+    // vault or a live peer; ops::Conflict when the vault is mirrored already (or another start of it is running, or its
+    // writers did not finish within the bound: try again).
     static constexpr int kLockWaitMs = 200;
     static constexpr int kLockAttempts = 50;
     static MirrorVault startCore(uint32_t vaultId, uint32_t peerId, uint64_t term = 1);
@@ -82,15 +119,49 @@ public:
     // Forgets the grant (nobody here has access). False when there was none.
     static bool clearGrant(uint32_t vaultId);
 
-    // Ends the vault's mirror record on this server and drops its log and entry hashes. False when there was none.
+    // Ends the vault's mirror record on this server and drops its log, entry hashes and baseline. False when there was
+    // none.
     static bool remove(uint32_t vaultId);
+    // The same in the caller's transaction (wave 5, detach); the caller republishes once it commits.
+    static bool remove(pqxx::work& txn, uint32_t vaultId);
 
     // Core: the mirror acknowledged every row up to `at`. Never moves backwards, never past what was numbered.
     // False (nothing changed) otherwise or when this server is not the vault's core.
     static bool acknowledge(uint32_t vaultId, Position at);
 
-    // live | paused | diverged. False without a row.
+    // live | paused | diverged | expired | stopped. False without a row. `live` clears a recorded stop.
     static bool setState(uint32_t vaultId, const std::string& state);
+
+    // ---- following (migration 164; design/peers/mirror.md "As built: following the core")
+
+    // The vault whose uid is `vaultUuid` (uuid text), with its mirror row; nullopt when no live vault has that uid or it
+    // is not mirrored here.
+    [[nodiscard]] static std::optional<MirrorVault> byVaultUid(const std::string& vaultUuid);
+    // The vault's uid (uuid text), nullopt without a live vault.
+    [[nodiscard]] static std::optional<std::string> vaultUidOf(uint32_t vaultId);
+
+    // Stops the vault: `state` is diverged, expired or stopped, with a reason code and its details (bounded; never
+    // key material). False without a row.
+    static bool stop(uint32_t vaultId, const std::string& state, const std::string& reason,
+                     const nlohmann::json& detail = nlohmann::json::object());
+
+    // Core: the vault's digest at `at` (the baseline's position, or the end of a numbered group still in the log);
+    // nullopt for any other position.
+    [[nodiscard]] static std::optional<vh::mirror::Digest> digestAt(uint32_t vaultId, Position at);
+
+    // Core: peer.mirror.ack. Compares `theirs` with the core's digest at `at`; equal: the acknowledgement is recorded
+    // (acknowledge) and the baseline is dropped (the first copy is done); different: the vault stops as diverged
+    // (mirror_digest_mismatch) and nothing is recorded. A position below what was acknowledged already is answered as
+    // known and matching when it was (a repeated acknowledgement), without comparing.
+    static AckOutcome acknowledgeChecked(uint32_t vaultId, Position at, const vh::mirror::Digest& theirs);
+
+    // Mirror: what it last acknowledged to the core (never backwards).
+    static bool recordAcknowledged(uint32_t vaultId, Position at);
+
+    // The core ended a finished mirror and this server keeps its copy (wave 3, the ending rule): the `mirror` row
+    // becomes `orphaned`; the last recorded grant and the pending-contents rows stay (rbac::mirrored resolves an
+    // orphaned copy like a mirror). False when the vault has no `mirror` row here.
+    static bool orphan(uint32_t vaultId);
 };
 
 }

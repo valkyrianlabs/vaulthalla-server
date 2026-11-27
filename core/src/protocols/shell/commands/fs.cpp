@@ -10,6 +10,7 @@
 #include "protocols/http/Access.hpp"
 #include "CommandUsage.hpp"
 #include "config/Registry.hpp"
+#include "db/query/mirror/Contents.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/Entry.hpp"
@@ -19,6 +20,8 @@
 #include "log/Registry.hpp"
 #include "crypto/ScratchFile.hpp"
 #include "log/Redact.hpp"
+#include "mirror/access/Access.hpp"
+#include "ops/Error.hpp"
 #include "rbac/fs/Visibility.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
 #include "runtime/Deps.hpp"
@@ -92,6 +95,11 @@ CommandResult fail(const int code, const std::string& prefix, const std::string&
     return {code, "", prefix + ": " + msg};
 }
 
+// The vault is read-only here (the server mirror's gate): its own exit code, the reason code and the sentence.
+CommandResult readOnlyFailure(const std::string& prefix, const ::vh::ops::ReadOnly& e) {
+    return fail(tx::exitcode::kReadOnly, prefix, "read-only (" + e.reason + "): " + e.what() + "; nothing was stored");
+}
+
 // The access layer's typed failures as exit codes. Forbidden covers a missing path under a subtree the caller can't
 // read (no existence oracle), exactly as the HTTP lane answers 403 there.
 CommandResult accessFailure(const std::string& prefix) {
@@ -105,6 +113,8 @@ CommandResult accessFailure(const std::string& prefix) {
         return fail(tx::exitcode::kNoInput, prefix, "no such file or directory");
     } catch (const http::access::BadRequest& e) {
         return fail(tx::exitcode::kUsage, prefix, e.what());
+    } catch (const ::vh::ops::ReadOnly& e) {
+        return readOnlyFailure(prefix, e);
     }
 }
 
@@ -205,8 +215,13 @@ CommandResult handleLs(const CommandCall& call) {
         {.header = "MODIFIED"},
         {.header = "NAME", .ellipsize_middle = true},
     });
+    // A detached vault's files whose contents never arrived say so (opening one fails).
+    const auto missing = ::vh::db::query::mirror::PendingContents::missingFileIds(ref->vault->id);
+    const auto isMissing = [&](const std::shared_ptr<fs::model::Entry>& e) {
+        return !e->isDirectory() && !e->isSymlink() && missing.contains(e->id);
+    };
     for (const auto& e : entries)
-        table.add_row({e->isDirectory() ? "dir" : e->isSymlink() ? "link" : "file",
+        table.add_row({e->isDirectory() ? "dir" : e->isSymlink() ? "link" : isMissing(e) ? "missing" : "file",
                        e->isDirectory() ? "-" : humanSize(e->size_bytes), utc(e->updated_at),
                        e->name + (e->isDirectory() ? "/" : "")});
     return {0, entries.empty() ? std::string{} : table.render(), ""};
@@ -396,6 +411,11 @@ CommandResult handlePut(const CommandCall& call) {
         if (Clock::now() - started > kMaxTransferDuration) return fail(tx::exitcode::kTempFail, prefix, "transfer took too long");
     }
 
+    // The vault became read-only during the transfer (a copy of another server's vault whose link went down): the
+    // staged bytes are discarded, as an interrupted upload's are.
+    if (const auto why = ::vh::mirror::access::refusalReason(ref->vault->id))
+        return readOnlyFailure(prefix, ::vh::mirror::access::MirrorReadOnly(ref->vault->id, *why, "vh fs put"));
+
     // Authorization is evaluated again with the user as it is now: a role revoked mid-upload commits nothing.
     const auto user = currentUser(call);
     if (!user || !stillAllowed(call, engine, vaultPath, commitAction))
@@ -415,6 +435,8 @@ CommandResult handlePut(const CommandCall& call) {
                                                         .expected_source_id = expectedSource});
         if (!stored) return fail(1, prefix, "the file could not be stored");
         storedId = stored->id;
+    } catch (const ::vh::ops::ReadOnly& e) {
+        return readOnlyFailure(prefix, e);
     } catch (const fs::ContentConflict& e) {
         return fail(1, prefix, std::string("the file changed while uploading (") + e.what() + "); nothing was stored");
     } catch (const std::filesystem::filesystem_error& e) {

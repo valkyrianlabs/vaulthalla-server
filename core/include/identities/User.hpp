@@ -23,6 +23,7 @@ namespace vh::rbac::permission::admin {
     struct Stats;
     struct Upstream;
     struct Cloud;
+    struct Mirror;
     struct Vaults;
     struct VaultGlobals;
 
@@ -176,6 +177,7 @@ namespace vh::identities {
         [[nodiscard]] rbac::permission::admin::Stats statsPerms() const;
         [[nodiscard]] rbac::permission::admin::Upstream upstreamPerms() const;
         [[nodiscard]] rbac::permission::admin::Cloud cloudPerms() const;
+        [[nodiscard]] rbac::permission::admin::Mirror mirrorPerms() const;
 
         // Replaces a detached object's state (tests). Throws for a canonical object: those change only through
         // identities::Manager.

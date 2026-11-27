@@ -64,7 +64,7 @@ bool fileAuthenticatesWith(const vault::EncryptionManager& em, const std::filesy
     }
 }
 
-// FUSE opens decrypt with the cached row: give it the committed IV and version.
+// FUSE opens decrypt with the cached row: give it the committed IV, version and sealed-bytes hash.
 void refreshCachedEncryption(const FileSP& file) {
     if (!file || !file->inode) return;
     const auto& cache = runtime::Deps::get().fsCache;
@@ -73,6 +73,8 @@ void refreshCachedEncryption(const FileSP& file) {
     if (!cached || cached == file || cached->path != file->path) return;
     cached->encryption_iv = file->encryption_iv;
     cached->encrypted_with_key_version = file->encrypted_with_key_version;
+    // The re-sealed bytes' hash the row now records (a stale one would read as a local change against the baseline).
+    cached->content_hash = file->content_hash;
 }
 
 std::optional<Remote> remoteFor(const std::shared_ptr<storage::Engine>& engine) {
@@ -152,8 +154,11 @@ Deps runtimeDeps(const std::shared_ptr<storage::Engine>& engine) {
         return fileAuthenticatesWith(*em, path, state);
     };
 
-    deps.catalog.commit = [](const fs::model::File& file, const EncryptionState& expected) {
-        return db::query::fs::File::compareAndSetEncryptionIVAndVersion(file, expected.iv_b64, expected.key_version);
+    deps.catalog.commit = [](const fs::model::File& file, const EncryptionState& expected, const bool published) {
+        // The rotated copy's sealed-bytes hash (rotateLocalCopy sets it) goes in the same update, with the sync
+        // baseline and (when this rotation uploaded it) the remote index moved along.
+        return db::query::fs::File::compareAndSetEncryptionIVAndVersion(file, expected.iv_b64, expected.key_version,
+                                                                         file.content_hash, published);
     };
     deps.catalog.committed = [](const FileSP& file) { refreshCachedEncryption(file); };
     deps.catalog.lock = [](const FileSP& file) { return std::unique_lock(fs::Filesystem::contentWriteMutex(file->id)); };
@@ -224,8 +229,8 @@ void reconcileRemoteIndex(const std::shared_ptr<storage::Engine>& engine, const 
         const auto& row = it->second;
         // Not rotated yet: the pass is incomplete anyway and comes back here.
         if (row->encryption_iv.empty() || row->encrypted_with_key_version != keyVersion) continue;
-        // Rotation keeps the content hash; a different one means the content changed, which a regular sync upload
-        // (and its own index update) owns.
+        // A rotation that uploaded moved this entry's hash with the row's (File::compareAndSetEncryptionIVAndVersion);
+        // a different one means the content changed, which a regular sync upload (and its own index update) owns.
         if (!row->content_hash || !object->content_hash || *row->content_hash != *object->content_hash) {
             ++unmatched;
             continue;

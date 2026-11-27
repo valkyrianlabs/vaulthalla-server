@@ -2,13 +2,13 @@
 
 #include "audit/Trail.hpp"
 #include "concurrency/Backoff.hpp"
-#include "config/Registry.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "device/Crypto.hpp"
 #include "device/ServerIdentity.hpp"
 #include "fs/ops/file.hpp"
 #include "log/Registry.hpp"
+#include "mirror/access/Access.hpp"
 #include "ops/Error.hpp"
 #include "peer/Crypto.hpp"
 #include "peer/Keys.hpp"
@@ -59,8 +59,6 @@ constexpr auto kAttemptLifetime = std::chrono::minutes(11);
 constexpr unsigned kIoThreads = 2;
 
 std::time_t wallNow() { return std::time(nullptr); }
-
-bool experimental() { return config::Registry::get().peers.experimental; }
 
 std::string errorText(const json& answer) {
     if (const auto e = answer.find("error"); e != answer.end() && e->is_string()) return e->get<std::string>();
@@ -349,16 +347,8 @@ void LinkService::wake() {
 void LinkService::tickForTesting() { tick(); }
 
 void LinkService::tick() {
-    if (!experimental()) {
-        // The switch is off: nothing dials, and no link stays up.
-        bool any = false;
-        {
-            std::scoped_lock lock(mutex_);
-            any = !connections_.empty();
-        }
-        if (any) (void)disconnectAll();
-        return;
-    }
+    // A server that has linked nothing: nothing to load, dial or ping (Peers::anyRecorded asks at most every 10 s).
+    if (!db::query::peer::Peers::anyRecorded()) return;
     const auto now = SteadyClock::now();
     bool reload = false;
     {
@@ -715,6 +705,8 @@ bool LinkService::adopt(const std::shared_ptr<Connection>& conn) {
         }
     }
     if (loser) loser->session->closeAfterReply();
+    // The write gate of the vaults this server holds as that server's copies (mirror::access): the link is up.
+    if (kept) vh::mirror::access::linkChanged(conn->principal->peer_id, true);
     if (up) auditConnection(conn->principal->peer_id, conn->principal->node_id, true, conn->principal->address);
     return kept;
 }
@@ -733,6 +725,7 @@ void LinkService::connectionClosed(const std::shared_ptr<Connection>& conn) {
             }
     }
     conn->rpc->failAll();
+    if (down) vh::mirror::access::linkChanged(conn->principal->peer_id, false);
     if (down) auditConnection(conn->principal->peer_id, conn->principal->node_id, false, conn->principal->address);
 }
 
@@ -876,6 +869,47 @@ Health LinkService::health(const uint32_t peerId) const {
     return h;
 }
 
+bool LinkService::connected(const uint32_t peerId) const {
+    std::scoped_lock lock(mutex_);
+    const auto it = peers_.find(peerId);
+    return it != peers_.end() && it->second.active && !it->second.active->closed && it->second.active->hello;
+}
+
+std::optional<LinkService::Answer> LinkService::request(const uint32_t peerId, const std::string& command,
+                                                        json payload, const std::chrono::milliseconds timeout) {
+    std::shared_ptr<Connection> conn;
+    {
+        std::scoped_lock lock(mutex_);
+        const auto it = peers_.find(peerId);
+        if (it == peers_.end() || !it->second.active || it->second.active->closed || !it->second.active->hello)
+            return std::nullopt;
+        conn = it->second.active;
+    }
+    const auto answer = callAndWait(*conn->rpc, *conn->session, command, std::move(payload), timeout);
+    if (!answer) return std::nullopt;
+    Answer out;
+    out.ok = answeredOk(answer);
+    out.data = dataOf(*answer);
+    if (!out.ok) {
+        out.code = errorCode(*answer);
+        out.error = errorText(*answer);
+    }
+    return out;
+}
+
+bool LinkService::notify(const uint32_t peerId, const std::string& command, json payload) {
+    std::shared_ptr<Connection> conn;
+    {
+        std::scoped_lock lock(mutex_);
+        const auto it = peers_.find(peerId);
+        if (it == peers_.end() || !it->second.active || it->second.active->closed || !it->second.active->hello)
+            return false;
+        conn = it->second.active;
+    }
+    (void)conn->rpc->call(*conn->session, command, std::move(payload), kRequestTimeout, [](std::optional<json>) {});
+    return true;
+}
+
 std::size_t LinkService::disconnect(const uint32_t peerId, const bool notifyUnlinked,
                                     const protocols::ws::Session* spare) {
     std::vector<std::shared_ptr<Connection>> mine;
@@ -903,6 +937,19 @@ std::size_t LinkService::disconnect(const uint32_t peerId, const bool notifyUnli
         }
     }
     return mine.size();
+}
+
+std::optional<json> LinkService::requestFrame(const uint32_t peerId, const std::string& command, json payload,
+                                         const std::chrono::milliseconds timeout) {
+    std::shared_ptr<Connection> conn;
+    {
+        std::scoped_lock lock(mutex_);
+        if (const auto it = peers_.find(peerId); it != peers_.end() && it->second.active && !it->second.active->closed &&
+                                                 it->second.active->hello)
+            conn = it->second.active;
+    }
+    if (!conn) return std::nullopt;
+    return callAndWait(*conn->rpc, *conn->session, command, std::move(payload), timeout);
 }
 
 std::size_t LinkService::disconnectAll() {

@@ -120,6 +120,9 @@ const std::vector<Exclusion>& exclusions() {
         // Linked servers (design/peers/link.md): which servers this one trusts, and may receive vault keys from, is a
         // person's decision; an agent can't see, make or end a link.
         {{"peer"}, "which servers this one is linked with (and may exchange vault keys with) is decided by a human"},
+        // Mirrored vaults (design/peers/mirror.md): which server holds a copy of a vault, and its keys, is a person's
+        // decision; an agent can't start, accept, cancel or see a mirror.
+        {{"mirror"}, "which servers hold a copy of a vault (and its keys) is decided by a human"},
     };
     return list;
 }

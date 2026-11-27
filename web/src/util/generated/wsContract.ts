@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'e283cc7a235c9306b371afa1c93fa0144bd9ff118343b7a0bc8c139e4bc0a356'
+export const WS_CONTRACT_HASH = '2d929ea0319172a28adf80a6156ada78111213be91e7140752130dfb8cd5a876'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '1dcc4ec0758290448af3adf97d902575a84103eac755dde8c309456d621d38e1'
+export const WS_MODELS_HASH = '22ee63a7649f4d3e730bfe38c9e071777204f292e084265c7a867a3729b941e6'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -33,7 +33,6 @@ export const WS_CAPABILITIES: readonly string[] = [
   'fs.entry.content_version',
   'fs.entry.metadata_version',
   'fs.entry.stable_id',
-  'health.findings',
   'http.upload.content',
   'http.upload.resumable',
   'ws.envelope.optional_payload',
@@ -498,8 +497,6 @@ export interface WsModels {
     overall_status: string
     warning_count: number
     error_count: number
-    unattended_warning_count: number
-    unattended_error_count: number
     checked_at: number
     attention: {
       code: string
@@ -509,7 +506,6 @@ export interface WsModels {
       message: string
       href: string | null
       metric_key: string | null
-      state: 'active' | 'acknowledged' | 'silenced'
     }[]
     sections: WsModels['DashboardSectionSummary'][]
     cards: WsModels['DashboardCardSummary'][]
@@ -554,14 +550,7 @@ export interface WsModels {
   /**
    * The overview's overall severity only (core/src/stats/model/DashboardOverview.cpp dashboardSeverityJson).
    */
-  'DashboardSeverity': {
-    overall_status: string
-    error_count: number
-    warning_count: number
-    unattended_error_count: number
-    unattended_warning_count: number
-    checked_at: number
-  }
+  'DashboardSeverity': { overall_status: string; error_count: number; warning_count: number; checked_at: number }
   /**
    * database.* (Config.cpp to_json(DatabaseConfig)); the password is never part of it.
    */
@@ -734,6 +723,7 @@ export interface WsModels {
     file_count?: number
     subdirectory_count?: number
     target?: string
+    contents_missing?: boolean
   }
   /**
    * The listed directory or looked-up entry itself (`entry` of fs.dir.list / fs.metadata):
@@ -814,79 +804,6 @@ export interface WsModels {
    * A group membership (identities::to_json(GroupMember), core/src/identities/Group.cpp).
    */
   'GroupMember': { user: WsModels['PublicUser'] | null; joined_at: string }
-  /**
-   * An active health finding with its state (core/src/health/Findings.cpp to_json).
-   */
-  'HealthFinding': {
-    class: string
-    subject: string
-    card_id: string
-    severity: 'warning' | 'error'
-    title: string
-    class_title: string
-    message: string
-    href: string | null
-    metric_key: string | null
-    notifies: boolean
-    state: 'active' | 'acknowledged' | 'silenced'
-    mark: WsModels['HealthFindingMark'] | null
-    remedies: WsModels['HealthRemedy'][]
-  }
-  /**
-   * A class of health finding (core/src/health/Catalog.cpp to_json).
-   */
-  'HealthFindingClass': {
-    class: string
-    card_id: string
-    title: string
-    max_severity: 'warning' | 'error'
-    notifies: boolean
-    remedies: WsModels['HealthRemedy'][]
-  }
-  /**
-   * What an operator said about a finding class (core/src/health/Findings.cpp to_json; health_finding_state).
-   */
-  'HealthFindingMark': {
-    class: string
-    subject: string
-    state: 'acknowledged' | 'silenced'
-    severity: 'warning' | 'error'
-    set_by: number | null
-    set_by_name: string
-    set_at: number
-    expires_at: number | null
-    note: string | null
-  }
-  /**
-   * The health answer (ops::health::list): the dashboard's status and counts as they are, the counts without
-   * acknowledged and silenced findings, the findings and the silences that are set for classes not active
-   * now.
-   */
-  'HealthFindings': {
-    overall_status: string
-    error_count: number
-    warning_count: number
-    unattended_error_count: number
-    unattended_warning_count: number
-    checked_at: number
-    findings: WsModels['HealthFinding'][]
-    silences: WsModels['HealthFindingMark'][]
-    can_manage: boolean
-    catalog?: WsModels['HealthFindingClass'][]
-  }
-  /**
-   * Something a person can do about a finding (core/src/health/Catalog.cpp to_json). It only names a place or
-   * an existing command: running it goes through that command's own permission check and confirmation.
-   */
-  'HealthRemedy': {
-    id: string
-    label: string
-    kind: 'open' | 'command'
-    href: string | null
-    command: string | null
-    payload: object | null
-    effect: 'read' | 'write' | 'destructive' | null
-  }
   /**
    * http_preview_server.* (Config.cpp to_json(HttpPreviewConfig)).
    */
@@ -989,6 +906,29 @@ export interface WsModels {
     transports?: string[]
     aaguid?: string | null
     allowed?: boolean
+  }
+  /**
+   * A mirrored vault's first copy (ops::mirrors::toJson(Status)): on the mirror, how far it got; on the core,
+   * whether its mirror acknowledged it (the core can't tell how many entries arrived).
+   */
+  'MirrorFirstCopy': { finished: boolean; entries_copied: number | null; entries_total: number | null }
+  /**
+   * The settings that apply to a mirrored vault's row (ops::mirrors::toJson(Status)): on a mirror, the
+   * versions it keeps of what its core replaces or deletes; for the row's linked server, this server's link
+   * settings.
+   */
+  'MirrorSettings': {
+    versions: {
+      enabled: boolean
+      keep_last: number | null
+      max_age_days: number | null
+      quota_bytes: number | null
+      set_by: number | null
+      set_at: number | null
+    } | null
+    accept_all: boolean
+    keep_removed: boolean
+    mirror_all: boolean
   }
   /**
    * Filesystem operation queue and share upload figures, one vault or the system
@@ -5538,50 +5478,6 @@ export interface WsContract {
     response: { groups: WsModels['Group'][] }
   }
   /**
-   * "I have seen this occurrence": marks an active finding acknowledged. The mark ends when the finding
-   * clears or its severity rises. Refused (conflict) when the class is not active or is silenced. Needs
-   * admin.stats.manage; recorded in the audit trail. Never available to agents or scoped devices.
-   */
-  'health.finding.acknowledge': {
-    payload: { class: string; subject?: string; note?: string | null }
-    response: { health: WsModels['HealthFindings'] }
-  }
-  /**
-   * "Do not tell me about this class": silences a finding class, active or not, for a time or until it is
-   * turned back on. A silence does not cover a severity above the one it was set for. Needs
-   * admin.stats.manage; recorded in the audit trail. Never available to agents or scoped devices.
-   */
-  'health.finding.silence': {
-    payload: {
-      class: string
-      subject?: string
-      for_seconds?: number | null
-      until?: number | null
-      severity?: 'warning' | 'error' | null
-      note?: string | null
-    }
-    response: { health: WsModels['HealthFindings'] }
-  }
-  /**
-   * Turns a finding class back on: removes its silence or acknowledgement. Refused (not_found) when it has
-   * neither. Needs admin.stats.manage; recorded in the audit trail. Never available to agents or scoped
-   * devices.
-   */
-  'health.finding.unsilence': {
-    payload: { class: string; subject?: string }
-    response: { health: WsModels['HealthFindings'] }
-  }
-  /**
-   * The health findings that are active now, each with what an operator said about it (active, acknowledged,
-   * silenced), whether it is worth a notification, and its remedies; the silences whose class is not active;
-   * and the counts with and without acknowledged and silenced findings. Severity is never changed by a mark.
-   * Needs admin.stats.view.
-   */
-  'health.findings.list': {
-    payload: { include_catalog?: boolean }
-    response: { health: WsModels['HealthFindings'] }
-  }
-  /**
    * The contract this daemon was built from: contract_version, contract_hash (the whole document vh_usage
    * --json publishes), ws_hash (the ws command book, what the web console is generated from) and models_hash
    * (the model shapes the book refers to). Read-only, no secrets; needs a signed-in session (no build
@@ -5608,6 +5504,869 @@ export interface WsContract {
       capabilities: string[]
       commands: string[]
       contract: { contract_version: number; contract_hash: string; ws_hash: string; models_hash: string }
+    }
+  }
+  /**
+   * Accept an offer (super admins): checked again (mirror_vault_exists, mirror_name_taken, mirror_no_space,
+   * history_not_supported), then the core is told and sends the keys.
+   */
+  'mirror.accept': {
+    payload: { offer: number | string }
+    response: {
+      offer: {
+        id: number
+        offer_uid: string
+        side: 'core' | 'mirror'
+        peer_id: number
+        vault_uid: string
+        vault_id: number | null
+        core_vault_id: number
+        term: number
+        name: string
+        description: string
+        quota: number
+        size_bytes: number
+        file_count: number
+        history: boolean
+        owner: { node: string; id: number; name: string }
+        role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned' | 'detached'
+        step: string
+        told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | 'detached' | null
+        reason: string | null
+        detail: string | null
+        attempts: number
+        last_error: string | null
+        created_at: number
+        updated_at: number
+        expires_at: number
+        finished_at: number | null
+      }
+    }
+  }
+  /**
+   * Whether this server accepts every vault a linked server offers without asking (default off). Super
+   * admins; audited mirror.accept_all.set.
+   */
+  'mirror.accept_all.set': {
+    payload: { peer: string; enabled: boolean }
+    response: {
+      peer: { id: number; node_id: string; name: string }
+      enabled: boolean
+      set_by: number | null
+      set_at: number | null
+    }
+  }
+  /**
+   * Start mirroring one of this server's vaults to a linked server (this server stays its core). Every
+   * precondition refuses with its own code: mirror_already, mirror_start_running, vault_replicated,
+   * vault_attach_running, vault_detach_running, layout_migration_running, key_rotation_running,
+   * key_salvage_running, vault_pending_deletion, vault_unavailable, legacy_content, key_version_missing,
+   * key_version_unattested, trashed_without_uid, contents_not_held, peer_not_linked, peer_link_down. Then the
+   * offer goes to the linked server. A super admin, or someone with the vault's admin Edit and
+   * vault.roles.assign on it.
+   */
+  'mirror.add': {
+    payload: { vault_id: number; peer: string }
+    response: {
+      offer: {
+        id: number
+        offer_uid: string
+        side: 'core' | 'mirror'
+        peer_id: number
+        vault_uid: string
+        vault_id: number | null
+        core_vault_id: number
+        term: number
+        name: string
+        description: string
+        quota: number
+        size_bytes: number
+        file_count: number
+        history: boolean
+        owner: { node: string; id: number; name: string }
+        role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned' | 'detached'
+        step: string
+        told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | 'detached' | null
+        reason: string | null
+        detail: string | null
+        attempts: number
+        last_error: string | null
+        created_at: number
+        updated_at: number
+        expires_at: number
+        finished_at: number | null
+      }
+    }
+  }
+  /**
+   * End a vault's mirror at any step. On the core: the core row and the log go at once and the mirror is told
+   * (queued while the link is down; dropped if the servers are unlinked first), with remove_copy. On the
+   * mirror (super admins): a start that has not completed is removed here and the core is told; a completed
+   * one is refused (mirror_detach_required); an orphaned copy is removed. Name the vault, or the offer when
+   * its vault doesn't exist here yet.
+   */
+  'mirror.cancel': {
+    payload: { vault_id?: number; offer?: number | string; remove_copy?: boolean }
+    response: {
+      side: 'core' | 'mirror'
+      vault_id: number | null
+      removed: boolean
+      remove_copy: boolean
+      offer: {
+        id: number
+        offer_uid: string
+        side: 'core' | 'mirror'
+        peer_id: number
+        vault_uid: string
+        vault_id: number | null
+        core_vault_id: number
+        term: number
+        name: string
+        description: string
+        quota: number
+        size_bytes: number
+        file_count: number
+        history: boolean
+        owner: { node: string; id: number; name: string }
+        role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned' | 'detached'
+        step: string
+        told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | 'detached' | null
+        reason: string | null
+        detail: string | null
+        attempts: number
+        last_error: string | null
+        created_at: number
+        updated_at: number
+        expires_at: number
+        finished_at: number | null
+      } | null
+    }
+  }
+  /**
+   * Decline an offer (super admins); the core is told.
+   */
+  'mirror.decline': {
+    payload: { offer: number | string }
+    response: {
+      offer: {
+        id: number
+        offer_uid: string
+        side: 'core' | 'mirror'
+        peer_id: number
+        vault_uid: string
+        vault_id: number | null
+        core_vault_id: number
+        term: number
+        name: string
+        description: string
+        quota: number
+        size_bytes: number
+        file_count: number
+        history: boolean
+        owner: { node: string; id: number; name: string }
+        role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned' | 'detached'
+        step: string
+        told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | 'detached' | null
+        reason: string | null
+        detail: string | null
+        attempts: number
+        last_error: string | null
+        created_at: number
+        updated_at: number
+        expires_at: number
+        finished_at: number | null
+      }
+    }
+  }
+  /**
+   * Leave a mirror with its files: the held copy (live, stopped, diverged, expired or orphaned; the link up,
+   * down or gone) becomes a standalone vault here, owned by `owner` (default: the caller), without asking the
+   * core, which is told when it is reachable. One transaction: the mirror record goes (no gate, no backstop),
+   * pending changes become ordinary local changes, held changes stay listed, files whose contents never
+   * arrived stay marked missing, the linked server's role goes. Nothing is deleted on either server; no
+   * bucket is touched. The vault keeps the original's uid and keys until the re-key pass. No step-up; the
+   * console asks for the vault's name (confirm_name). Super admins, or holders of admin.mirror.detach;
+   * audited mirror.detach.
+   */
+  'mirror.detach': {
+    payload: { vault_id: number; owner?: string | null; confirm_name?: string | null }
+    response: {
+      detached: {
+        vault_id: number
+        owner_id: number
+        missing: number
+        pending_kept: number
+        pending_held: number
+        core_told: 'when_reachable' | 'no'
+        record: {
+          id: number
+          side: 'mirror' | 'core'
+          vault_id: number
+          peer_id: number
+          fork: { term: number; seq: number }
+          digest_matched: boolean | null
+          was_state: string | null
+          missing: number
+          owner_id: number | null
+          detached_by: number | null
+          detached_at: number
+          rekeyed_at: number | null
+          rekey_recommended: boolean
+        }
+        before: {
+          vault_id: number
+          vault_name: string
+          role: 'mirror' | 'orphaned'
+          state: string
+          stop_reason: string | null
+          peer: { id: number; node_id: string; name: string; revoked: boolean } | null
+          link_up: boolean
+          first_copy: { finished: boolean; entries_copied: number; entries_total: number }
+          applied: { term: number; seq: number }
+          confirmed: { term: number; seq: number } | null
+          digest_matched: boolean | null
+          pending_changes: number
+          held_changes: number
+          missing_count: number
+          missing: {
+            file_id: number
+            uid: string
+            path: string
+            size_bytes: number
+            state: 'waiting' | 'failed' | 'missing'
+            last_error: string | null
+          }[]
+          owner_id: number
+        }
+      }
+    }
+  }
+  /**
+   * Detach a copy: write a new, separate local vault from a vault held here as another server's copy (a
+   * mirror in any state, or orphaned; the link up, down or gone; nothing is asked of the core), which stays
+   * exactly as it is. The new vault gets a new uid, new entry uids and its own new key, is owned by `owner`
+   * (default: the caller) with the owner's ordinary access, and holds every folder, file and symlink with its
+   * name, place, mode and modification time; not the trash, versions, shares or access rules. Files whose
+   * contents never arrived here are left out and listed. A background job: mirror.detach.copy.get shows its
+   * progress; while it runs the new vault is read-only to everything else (mirror_copy_writing); a failure or
+   * a cancel removes it. Refused when the volume's free space or the quota the new vault takes (the held
+   * vault's) can't hold the copy (mirror_copy_no_space). Super admins, or holders of admin.mirror.detach;
+   * audited mirror.detach.copy.
+   */
+  'mirror.detach.copy': {
+    payload: { vault_id: number; name?: string | null; owner?: string | null }
+    response: {
+      copy: {
+        id: number
+        source_vault_id: number | null
+        vault_id: number | null
+        name: string
+        owner_id: number
+        state: 'running' | 'finished' | 'failed' | 'cancelled'
+        entries_total: number
+        entries_done: number
+        bytes_total: number
+        bytes_done: number
+        skipped_count: number
+        skipped: { path: string; size_bytes: number; reason: 'contents_missing' | 'removed' | 'unreadable' }[]
+        error: string | null
+        requested_by: number | null
+        cancel_requested: boolean
+        attempts: number
+        created_at: number
+        updated_at: number
+        finished_at: number | null
+      }
+    }
+  }
+  /**
+   * Stop the running copy of a held vault: it removes its partial vault and ends cancelled (a complete vault
+   * or none). Super admins, or holders of admin.mirror.detach; audited mirror.detach.copy.cancel.
+   */
+  'mirror.detach.copy.cancel': {
+    payload: { vault_id: number }
+    response: {
+      copy: {
+        id: number
+        source_vault_id: number | null
+        vault_id: number | null
+        name: string
+        owner_id: number
+        state: 'running' | 'finished' | 'failed' | 'cancelled'
+        entries_total: number
+        entries_done: number
+        bytes_total: number
+        bytes_done: number
+        skipped_count: number
+        skipped: { path: string; size_bytes: number; reason: 'contents_missing' | 'removed' | 'unreadable' }[]
+        error: string | null
+        requested_by: number | null
+        cancel_requested: boolean
+        attempts: number
+        created_at: number
+        updated_at: number
+        finished_at: number | null
+      }
+    }
+  }
+  /**
+   * The newest copy of a held vault (mirror.detach.copy): its state and progress (entries and bytes done of
+   * the totals), the files it left out, its error; null when none was written here. Super admins, or holders
+   * of admin.mirror.detach.
+   */
+  'mirror.detach.copy.get': {
+    payload: { vault_id: number }
+    response: {
+      copy: {
+        id: number
+        source_vault_id: number | null
+        vault_id: number | null
+        name: string
+        owner_id: number
+        state: 'running' | 'finished' | 'failed' | 'cancelled'
+        entries_total: number
+        entries_done: number
+        bytes_total: number
+        bytes_done: number
+        skipped_count: number
+        skipped: { path: string; size_bytes: number; reason: 'contents_missing' | 'removed' | 'unreadable' }[]
+        error: string | null
+        requested_by: number | null
+        cancel_requested: boolean
+        attempts: number
+        created_at: number
+        updated_at: number
+        finished_at: number | null
+      } | null
+    }
+  }
+  /**
+   * What detaching a vault this server holds as another server's copy would give, before anything happens:
+   * the fork point, whether the digest matched there, the pending and held changes, and every file whose
+   * contents are not here (the list to export). Changes nothing. Super admins, or holders of
+   * admin.mirror.detach.
+   */
+  'mirror.detach.preview': {
+    payload: { vault_id: number }
+    response: {
+      preview: {
+        vault_id: number
+        vault_name: string
+        role: 'mirror' | 'orphaned'
+        state: string
+        stop_reason: string | null
+        peer: { id: number; node_id: string; name: string; revoked: boolean } | null
+        link_up: boolean
+        first_copy: { finished: boolean; entries_copied: number; entries_total: number }
+        applied: { term: number; seq: number }
+        confirmed: { term: number; seq: number } | null
+        digest_matched: boolean | null
+        pending_changes: number
+        held_changes: number
+        missing_count: number
+        missing: {
+          file_id: number
+          uid: string
+          path: string
+          size_bytes: number
+          state: 'waiting' | 'failed' | 'missing'
+          last_error: string | null
+        }[]
+        owner_id: number
+      }
+    }
+  }
+  /**
+   * One vault's mirror: role, linked server, state, grant, and what step a start is at. Super admins; on the
+   * core also the vault's admin View.
+   */
+  'mirror.get': {
+    payload: { vault_id: number }
+    response: {
+      vault: {
+        vault_id: number
+        vault_name: string
+        role: 'core' | 'mirror' | 'orphaned' | 'starting' | 'detached' | 'none'
+        peer: { id: number; node_id: string; name: string; revoked: boolean } | null
+        term: number | null
+        last_seq: number | null
+        state: 'starting' | 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked' | null
+        grant: {
+          role_name: string
+          files: number
+          directories: number
+          sync: number
+          roles: number
+          granted_by_node: string
+          granted_at: number
+        } | null
+        acked: { term: number; seq: number } | null
+        created_at: number | null
+        start: {
+          id: number
+          offer_uid: string
+          side: 'core' | 'mirror'
+          peer_id: number
+          vault_uid: string
+          vault_id: number | null
+          core_vault_id: number
+          term: number
+          name: string
+          description: string
+          quota: number
+          size_bytes: number
+          file_count: number
+          history: boolean
+          owner: { node: string; id: number; name: string }
+          role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+          state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned' | 'detached'
+          step: string
+          told: boolean
+          remove_copy: boolean
+          copy: 'removed' | 'kept' | 'none' | 'detached' | null
+          reason: string | null
+          detail: string | null
+          attempts: number
+          last_error: string | null
+          created_at: number
+          updated_at: number
+          expires_at: number
+          finished_at: number | null
+        } | null
+        switch: {
+          switch_id: string
+          side: 'core' | 'mirror'
+          phase: 'requested' | 'draining' | 'preparing' | 'prepared' | 'switched' | 'abandoned'
+          term: number
+          reason: string | null
+          created_at: number
+          ended_at: number | null
+        } | null
+        takeover: {
+          term: number
+          fork: { term: number; seq: number }
+          peer_id: number
+          contents_missing: number
+          created_at: number
+        } | null
+        advice: string | null
+        detached: {
+          id: number
+          side: 'mirror' | 'core'
+          vault_id: number
+          peer_id: number
+          fork: { term: number; seq: number }
+          digest_matched: boolean | null
+          was_state: string | null
+          missing: number
+          owner_id: number | null
+          detached_by: number | null
+          detached_at: number
+          rekeyed_at: number | null
+          rekey_recommended: boolean
+        } | null
+        rekey_recommended: boolean
+        deleting: { deleting: boolean; purge_after: number; copy: 'remove' | 'leave'; here?: string } | null
+        stop_reason: string | null
+        pending_changes: number
+        first_copy: WsModels['MirrorFirstCopy'] | null
+        link_up: boolean
+        confirmed_at: number | null
+        settings: WsModels['MirrorSettings'] | null
+      }
+    }
+  }
+  /**
+   * Drops a held change (or dismisses a conflict record); nothing in the vault changes. Super admins; audited
+   * mirror.held.discard.
+   */
+  'mirror.held.discard': {
+    payload: { id: number }
+    response: {
+      held: {
+        id: number
+        vault_id: number
+        kind: 'held' | 'conflict'
+        op: 'mkdir' | 'move' | 'rename' | 'remove' | 'copy' | 'write'
+        entry_uid: string | null
+        path: string | null
+        name: string
+        copy_name: string | null
+        person: { node: string; id: number }
+        reason_code: string
+        reason: string
+        state: 'open' | 'retried' | 'discarded'
+        created_at: number
+        resolved_at: number | null
+      }
+    }
+  }
+  /**
+   * A held write's bytes: the person's version, decrypted, inline (base64) up to 8 MiB; a larger one is
+   * refused too_large (vh mirror save streams it). Nothing in the vault changes. Super admins (whoever may
+   * list held changes).
+   */
+  'mirror.held.get': {
+    payload: { id: number }
+    response: {
+      held: {
+        id: number
+        vault_id: number
+        kind: string
+        op: string
+        entry_uid: string | null
+        path: string | null
+        name: string
+        copy_name: string | null
+        person: { node: string; id: number }
+        reason_code: string
+        reason: string
+        state: string
+        created_at: number
+        resolved_at: number | null
+      }
+      name: string
+      size: number
+      content_b64: string
+    }
+  }
+  /**
+   * Changes made on this server to a vault it mirrors that the core refused (held: the entry came back to the
+   * core's state, the change is kept with the reason) or turned into a conflict copy. Super admins.
+   */
+  'mirror.held.list': {
+    payload: { vault_id?: number; all?: boolean }
+    response: {
+      held: {
+        id: number
+        vault_id: number
+        kind: 'held' | 'conflict'
+        op: 'mkdir' | 'move' | 'rename' | 'remove' | 'copy' | 'write'
+        entry_uid: string | null
+        path: string | null
+        name: string
+        copy_name: string | null
+        person: { node: string; id: number }
+        reason_code: string
+        reason: string
+        state: 'open' | 'retried' | 'discarded'
+        created_at: number
+        resolved_at: number | null
+      }[]
+    }
+  }
+  /**
+   * Submits a held change to the core again as it was, as the person who made it; its result comes back in
+   * the log (a new refusal is held again). The vault must be live here. Super admins; audited
+   * mirror.held.retry.
+   */
+  'mirror.held.retry': {
+    payload: { id: number }
+    response: {
+      held: {
+        id: number
+        vault_id: number
+        kind: 'held' | 'conflict'
+        op: 'mkdir' | 'move' | 'rename' | 'remove' | 'copy' | 'write'
+        entry_uid: string | null
+        path: string | null
+        name: string
+        copy_name: string | null
+        person: { node: string; id: number }
+        reason_code: string
+        reason: string
+        state: 'open' | 'retried' | 'discarded'
+        created_at: number
+        resolved_at: number | null
+      }
+    }
+  }
+  /**
+   * Whether this server keeps the vaults a linked server (their core) removes: a cancel that asks to remove a
+   * finished copy leaves it here as an orphaned copy instead (default off). Super admins; audited
+   * mirror.keep_removed.set.
+   */
+  'mirror.keep_removed.set': {
+    payload: { peer: string; enabled: boolean }
+    response: {
+      peer: { id: number; node_id: string; name: string }
+      enabled: boolean
+      set_by: number | null
+      set_at: number | null
+    }
+  }
+  /**
+   * Every mirrored vault here (this server's role, the linked server, the grant) and every start in progress
+   * (role starting). Super admins.
+   */
+  'mirror.list': {
+    payload: null
+    response: {
+      vaults: {
+        vault_id: number
+        vault_name: string
+        role: 'core' | 'mirror' | 'orphaned' | 'starting' | 'detached' | 'none'
+        peer: { id: number; node_id: string; name: string; revoked: boolean } | null
+        term: number | null
+        last_seq: number | null
+        state: 'starting' | 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked' | null
+        grant: {
+          role_name: string
+          files: number
+          directories: number
+          sync: number
+          roles: number
+          granted_by_node: string
+          granted_at: number
+        } | null
+        acked: { term: number; seq: number } | null
+        created_at: number | null
+        start: {
+          id: number
+          offer_uid: string
+          side: 'core' | 'mirror'
+          peer_id: number
+          vault_uid: string
+          vault_id: number | null
+          core_vault_id: number
+          term: number
+          name: string
+          description: string
+          quota: number
+          size_bytes: number
+          file_count: number
+          history: boolean
+          owner: { node: string; id: number; name: string }
+          role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+          state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned' | 'detached'
+          step: string
+          told: boolean
+          remove_copy: boolean
+          copy: 'removed' | 'kept' | 'none' | 'detached' | null
+          reason: string | null
+          detail: string | null
+          attempts: number
+          last_error: string | null
+          created_at: number
+          updated_at: number
+          expires_at: number
+          finished_at: number | null
+        } | null
+        switch: {
+          switch_id: string
+          side: 'core' | 'mirror'
+          phase: 'requested' | 'draining' | 'preparing' | 'prepared' | 'switched' | 'abandoned'
+          term: number
+          reason: string | null
+          created_at: number
+          ended_at: number | null
+        } | null
+        takeover: {
+          term: number
+          fork: { term: number; seq: number }
+          peer_id: number
+          contents_missing: number
+          created_at: number
+        } | null
+        advice: string | null
+        detached: {
+          id: number
+          side: 'mirror' | 'core'
+          vault_id: number
+          peer_id: number
+          fork: { term: number; seq: number }
+          digest_matched: boolean | null
+          was_state: string | null
+          missing: number
+          owner_id: number | null
+          detached_by: number | null
+          detached_at: number
+          rekeyed_at: number | null
+          rekey_recommended: boolean
+        } | null
+        rekey_recommended: boolean
+        deleting: { deleting: boolean; purge_after: number; copy: 'remove' | 'leave'; here?: string } | null
+        stop_reason: string | null
+        pending_changes: number
+        first_copy: WsModels['MirrorFirstCopy'] | null
+        link_up: boolean
+        confirmed_at: number | null
+        settings: WsModels['MirrorSettings'] | null
+      }[]
+    }
+  }
+  /**
+   * On the core: whether this server mirrors every vault it owns to a linked server, new ones included
+   * (default off). When on, the start service offers each vault that is not mirrored yet and each new one as
+   * it is created (an offer the other server declined, or that ended, is not made again until the setting is
+   * turned on again); with the other server's accept_all on it is fully automatic. A vault whose
+   * preconditions refuse it waits until they pass. Super admins, a person only; turning it on asks the keys
+   * step-up in the console (every vault's keys go there). Audited mirror.mirror_all.set.
+   */
+  'mirror.mirror_all.set': {
+    payload: { peer: string; enabled: boolean }
+    response: {
+      peer: { id: number; node_id: string; name: string }
+      enabled: boolean
+      set_by: number | null
+      set_at: number | null
+    }
+  }
+  /**
+   * Offers linked servers made this server that wait for a super admin's answer.
+   */
+  'mirror.pending': {
+    payload: null
+    response: {
+      offers: {
+        id: number
+        offer_uid: string
+        side: 'core' | 'mirror'
+        peer_id: number
+        vault_uid: string
+        vault_id: number | null
+        core_vault_id: number
+        term: number
+        name: string
+        description: string
+        quota: number
+        size_bytes: number
+        file_count: number
+        history: boolean
+        owner: { node: string; id: number; name: string }
+        role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+        state: 'offered' | 'pending' | 'accepted' | 'keys_acked' | 'installed' | 'started' | 'declined' | 'cancelled' | 'expired' | 'failed' | 'orphaned' | 'detached'
+        step: string
+        told: boolean
+        remove_copy: boolean
+        copy: 'removed' | 'kept' | 'none' | 'detached' | null
+        reason: string | null
+        detail: string | null
+        attempts: number
+        last_error: string | null
+        created_at: number
+        updated_at: number
+        expires_at: number
+        finished_at: number | null
+      }[]
+    }
+  }
+  /**
+   * Starts a copy that stopped (diverged, expired or stopped) over from its core's tree without making it
+   * again: the core takes its baseline again in the next term and this server runs the first copy over the
+   * entries it has (files whose bytes are here already are not fetched). Changes still pending, this server's
+   * version of a file the core's replaces and anything the core's tree does not hold are kept as held
+   * changes. The link must be up. Super admins; audited mirror.resync.
+   */
+  'mirror.resync': {
+    payload: { vault_id: number }
+    response: { vault_id: number; state: string; copy_finished: boolean; term: number; held: number; entries: number }
+  }
+  /**
+   * A planned switch of the core role between the two servers of a mirrored vault, asked on either server:
+   * the core stops taking changes (the vault is read-only on both servers, reason mirror_switching), numbers
+   * its last change, waits for the mirror to apply it with the same digest and nothing pending, then both
+   * record the next term with the roles swapped. The old core keeps the vault only through the new core's
+   * role for it; with none the switch is abandoned (mirror_switch_no_role) unless accept_no_access. Anything
+   * that stops it before the core decides (a timeout, a refusal, a dropped link) changes nothing. Local
+   * vaults only. Waits for the outcome: switched, abandoned (with the reason) or running. Super admins of
+   * this server; audited mirror.switch.
+   */
+  'mirror.switch': {
+    payload: { vault_id: number; accept_no_access?: boolean }
+    response: {
+      vault_id: number
+      switch_id: string
+      outcome: 'switched' | 'abandoned' | 'running'
+      role: string | null
+      role_term: number | null
+      side: 'core' | 'mirror'
+      phase: 'requested' | 'draining' | 'preparing' | 'prepared' | 'switched' | 'abandoned'
+      term: number
+      seq: number | null
+      digest: string | null
+      entries: number | null
+      told: boolean
+      asked_on: 'core' | 'mirror'
+      asked_by: { node: string; id: number; name: string } | null
+      reason: string | null
+      detail: object
+      deadline: number
+      created_at: number
+      ended_at: number | null
+      peer_role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+      peer_access: 'read-only' | 'read-write' | 'none'
+    }
+  }
+  /**
+   * On a mirror whose core is gone or cannot be reached: take over as the vault's core. This server records
+   * the next term with itself as the core, the last change it applied from the old core as the fork point and
+   * its tree as the old core last confirmed it as the fork base (kept for the old core's return); changes
+   * made here and still pending become ordinary changes, held ones stay listed. Refused while the core
+   * answers (mirror_core_reachable: use mirror.switch). Also the way out of a planned switch whose core never
+   * came back. `confirm` is the vault's name, typed. Super admins, or holders of admin.mirror.takeover (Take
+   * over as core); the data.destroy step-up in the console; audited mirror.takeover.
+   */
+  'mirror.takeover': {
+    payload: { vault_id: number; confirm: string }
+    response: {
+      id: number
+      vault_id: number
+      peer_id: number
+      from_term: number
+      term: number
+      fork: { term: number; seq: number; digest: string; entries: number }
+      fork_rows: number
+      pending_made_local: number
+      held: number
+      contents_missing: number
+      by: { id: number | null; name: string }
+      created_at: number
+      settled_at: number | null
+      settled_how: string | null
+      detail: object
+      warning: string
+      fork_base_matches: boolean
+    }
+  }
+  /**
+   * Keep versions of what the core replaces or deletes, for a vault this server holds as another server's
+   * mirror (default off): before the core's replacement, trash or delete of a file is applied here, its prior
+   * generation is kept as a local version, bounded by keep_last, max_age_days and quota_bytes (unset ones
+   * default to 10 versions and 30 days when turning it on; 0 is no limit of that kind; at least one stays).
+   * This server's own state: never logged, hashed or submitted. Read them with recovery.list|inspect (whoever
+   * may read the file here); restoring one is a change made here (Live only). Super admins; audited
+   * mirror.versions.set.
+   */
+  'mirror.versions.set': {
+    payload: {
+      vault_id: number
+      enabled: boolean
+      keep_last?: number | null
+      max_age_days?: number | null
+      quota_bytes?: number | null
+    }
+    response: {
+      versions: {
+        enabled: boolean
+        keep_last: number | null
+        max_age_days: number | null
+        quota_bytes: number | null
+        set_by: number | null
+        set_at: number | null
+      }
     }
   }
   /**
@@ -5785,6 +6544,346 @@ export interface WsContract {
           next_attempt_at: number | null
         }
       }[]
+    }
+  }
+  /**
+   * The mirror applied everything through (term, seq) and its digest there is `digest`. The core compares it
+   * with its own: equal, the acknowledgement is recorded (retention may pass it, the baseline is dropped);
+   * different, the vault stops as diverged on both servers.
+   */
+  'peer.mirror.ack': {
+    payload: { vault_uid: string; term: number; seq: number; digest: string; entries: number }
+    response: {
+      known: boolean
+      match: boolean
+      recorded: boolean
+      core_digest: string | null
+      core_entries: number | null
+    }
+  }
+  /**
+   * The mirror's decision on an offer: accepted (the core then sends the keys) or declined with a reason.
+   * Answers the core's state of the offer.
+   */
+  'peer.mirror.answer': {
+    payload: { offer_uid: string; decision: 'accepted' | 'declined'; reason?: string; detail?: string }
+    response: { state: string }
+  }
+  /**
+   * The core started following the vault (its core row exists): the mirror's start is complete, and the grant
+   * comes with it (null: nothing granted).
+   */
+  'peer.mirror.begin': {
+    payload: {
+      offer_uid: string
+      vault_uid: string
+      term: number
+      grant: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+    }
+    response: { started: boolean }
+  }
+  /**
+   * Either side cancels a start, or the core ends a mirror (remove_copy: it asks the mirror to remove its
+   * copy). The core drops its core row and log. The mirror removes a copy whose first copy isn't finished; a
+   * finished one it removes when asked and its keep setting is off, and otherwise keeps orphaned (read-only,
+   * the last grant kept). Answers what it did.
+   */
+  'peer.mirror.cancel': {
+    payload: { offer_uid?: string | null; vault_uid: string; reason?: string; remove_copy?: boolean }
+    response: { cancelled: boolean; copy: 'removed' | 'kept' | 'none' }
+  }
+  /**
+   * The core says whether it is deleting a mirrored vault (its retention window): deleting with the date the
+   * purge is due and what it does to the copy (remove | leave, the mirror's keep setting deciding on its
+   * side), or not (restored). The mirror pauses its copy (read-only, reason mirror_core_deleting) or follows
+   * again where it was. Sent again on every link-up and whenever it changes. Only from the vault's core
+   * (not_found otherwise).
+   */
+  'peer.mirror.deleting': {
+    payload: { vault_uid: string; deleting: boolean; purge_after?: number; copy?: 'remove' | 'leave' }
+    response: { recorded: boolean; state: string }
+  }
+  /**
+   * The mirror detached its copy of a vault (told, not asked): the core ends the mirror on its side as a
+   * cancel does (its core row, log, submissions and staged bytes go), records it (its offer's copy becomes
+   * detached), audits mirror.detached, and leaves its own vault as it is. Answers whether it recorded
+   * anything (a vault it holds no record of: false).
+   */
+  'peer.mirror.detached': {
+    payload: { offer_uid?: string; vault_uid: string; at?: { term: number; seq: number }; missing?: number }
+    response: { recorded: boolean; record?: number }
+  }
+  /**
+   * What the core grants the mirror server for a vault now (its role's name and actual permissions; null:
+   * nothing). Sent at begin, on every link-up and whenever it changes. Kept only for a vault the sender is
+   * the core of (else not_found).
+   */
+  'peer.mirror.grant': {
+    payload: {
+      vault_uid: string
+      grant: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+    }
+    response: { recorded: boolean }
+  }
+  /**
+   * A key rotation on the core of a mirrored vault, before anything is sealed under the new version: that
+   * version as a KEV1 envelope (suite X25519) to the receiver's peer wrap key, the core's key check over its
+   * vault id and its attestation. The receiver (the vault's mirror for this very server) proves it against
+   * the attestation keys it pinned at pairing and holds it sealed under its own vault master with its origin;
+   * it becomes the current version there when the core's log names it. The same key again: the same answer.
+   * Refused (mirror_key_refused) when unprovable or when this server holds that version with another key;
+   * nothing is written.
+   */
+  'peer.mirror.key': {
+    payload: {
+      vault_uid: string
+      core_vault_id: number
+      version: number
+      envelope: string
+      key_check: string
+      attestation: { key_id: number; signature: string; public_key?: string }
+    }
+    response: { vault_uid: string; version: number; installed: boolean }
+  }
+  /**
+   * Every key version the vault needs: each a KEV1 envelope (suite X25519) to the receiver's peer wrap key,
+   * the core's key check over its vault id, and the core's attestation. The receiver proves every version
+   * against the attestation keys it pinned at pairing (vault::recover::prove); one unprovable version refuses
+   * the start (mirror_keys_refused) and nothing is written. Else it creates the vault (the core's uid and
+   * root uid), seals the keys under its own vault master with their origin, writes its mirror row, and
+   * answers (the acknowledgement). Again after that: the same answer.
+   */
+  'peer.mirror.keys': {
+    payload: {
+      offer_uid: string
+      vault_uid: string
+      core_vault_id: number
+      versions: {
+        version: number
+        current: boolean
+        envelope: string
+        key_check: string
+        attestation: { key_id: number; signature: string; public_key?: string }
+      }[]
+    }
+    response: { vault_uid: string; installed: boolean }
+  }
+  /**
+   * Whole groups of the core's log after (term, seq), at most 2,000 rows and 768 KiB; a single group larger
+   * than that comes in parts (part, asked again with the group's txid and the last seq held) and is applied
+   * whole. expired below retention or when the vault is no longer the core's.
+   */
+  'peer.mirror.log': {
+    payload: { vault_uid: string; term: number; seq: number; part?: { txid: number; after_seq: number } }
+    response: {
+      expired?: boolean
+      groups?: ({
+        term: number
+        txid: number
+        first_seq: number
+        last_seq: number
+        rows: ({
+          seq: number
+          op: 'upsert' | 'move' | 'trash' | 'restore' | 'purge' | 'delete' | 'vault' | 'key' | 'history'
+          uid: string | null
+          type: string | null
+          state: object
+          entry_hash: string | null
+          prev_hash: string | null
+          actor: { node: string; id: number } | null
+          origin: string | null
+        })[]
+      })[]
+      last?: { term: number; seq: number }
+      more?: boolean
+      part?: {
+        term: number
+        txid: number
+        first_seq: number
+        last_seq: number
+        rows: ({
+          seq: number
+          op: 'upsert' | 'move' | 'trash' | 'restore' | 'purge' | 'delete' | 'vault' | 'key' | 'history'
+          uid: string | null
+          type: string | null
+          state: object
+          entry_hash: string | null
+          prev_hash: string | null
+          actor: { node: string; id: number } | null
+          origin: string | null
+        })[]
+        complete: boolean
+      }
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked'
+    }
+  }
+  /**
+   * The core numbered groups of the vault through (term, seq): the mirror's follower looks now. Coalesced,
+   * never waited for; a lost one is harmless (the follower also polls).
+   */
+  'peer.mirror.notify': {
+    payload: { vault_uid: string; term: number; seq: number }
+    response: Record<string, never>
+  }
+  /**
+   * The core offers a vault: its uid (base32), its id on the core, its root folder's uid, the term, name,
+   * description, quota, size, file count, history (false), its owner (home node, id there, name) and the role
+   * it proposes. The receiver stores it (pending, or accepted when its link accepts every vault from the
+   * sender, or declined at once with a reason) and answers its state; the decision follows as
+   * peer.mirror.answer.
+   */
+  'peer.mirror.offer': {
+    payload: {
+      offer_uid: string
+      vault_uid: string
+      core_vault_id: number
+      root_uid: string
+      term: number
+      name: string
+      description?: string
+      quota: number
+      size_bytes: number
+      file_count: number
+      history: boolean
+      owner: { node: string; id: number; name?: string }
+      role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+      expires_at?: number
+    }
+    response: {
+      offer_uid: string
+      state: 'pending' | 'accepted' | 'declined' | 'installed' | 'started' | 'cancelled' | 'expired' | 'failed'
+    }
+  }
+  /**
+   * The new core tells its old core it took over (mirror.takeover), on every pass while the link is up until
+   * answered: the new term, the fork point and its digest, and the new core's digest at (term, 0). The old
+   * core stops taking changes for the vault at once (read-only) and answers pending until it decided:
+   * following (it committed nothing after the fork point: the vault's mirror in the new term), rejoining (it
+   * did: read-only with them until the merge; changes is their count) or forced (it had taken over too: both
+   * read-only until an operator picks one).
+   */
+  'peer.mirror.promoted': {
+    payload: {
+      vault_uid: string
+      term: number
+      fork: { term: number; seq: number; digest: string; entries: number }
+      baseline?: { digest: string; entries: number }
+    }
+    response: { outcome: 'pending' | 'following' | 'rejoining' | 'forced'; changes?: number }
+  }
+  /**
+   * The mirror starts its copy over (mirror.resync on the mirror): the core takes its baseline again in the
+   * next term (its log, entry hashes, submissions and baseline for the vault start again) and answers the new
+   * term and baseline. The caller must be the vault's mirror; a paused vault is refused.
+   */
+  'peer.mirror.resync': {
+    payload: { vault_uid: string }
+    response: { term: number; baseline: { term: number; seq: number }; entries: number }
+  }
+  /**
+   * A change made on the mirror, submitted to the core, which executes it as that person (the linked server's
+   * vault role is the ceiling) and logs it with the request id in `origin`. Answered at once: a new request
+   * is queued and executed in order on the core; asked again with the same request id, the core answers what
+   * it did the first time (never twice): running, executed with the number of groups it logged, or refused
+   * with the code (conflict: the name was taken; anything else is kept on the mirror as a held change).
+   */
+  'peer.mirror.submit': {
+    payload: {
+      vault_uid: string
+      request_id: string
+      person: { node: string; id: number }
+      at: { term: number; seq: number }
+      op: 'mkdir' | 'move' | 'rename' | 'remove' | 'copy' | 'write' | 'setattr'
+      entry_uid: string
+      args?: {
+        uid?: string
+        parent_uid?: string
+        name?: string
+        replace?: boolean
+        base?: string
+        generation?: string
+        key_version?: number
+        size?: number
+        content_hash?: string
+        mime?: string
+        mode?: number
+        mtime_us?: number
+      }
+      base_generation?: string
+    }
+    response: {
+      status: 'queued' | 'running' | 'executed' | 'refused'
+      groups?: number
+      code?: string
+      error?: string
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked'
+    }
+  }
+  /**
+   * The core's decision on a planned switch, told until answered. switched: the core is the vault's mirror in
+   * term + 1 now and the mirror becomes its core (its log starts at (term + 1, 1)); abandoned: nothing
+   * changed, and a mirror that prepared goes live again. Told again, it answers the same.
+   */
+  'peer.mirror.switch.commit': {
+    payload: { vault_uid: string; switch_id: string; outcome: 'switched' | 'abandoned'; reason?: string }
+    response: {
+      outcome: 'switched' | 'abandoned'
+      term?: number
+      peer_role?: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+    }
+  }
+  /**
+   * The core froze the vault for a planned switch: its last change is (term, seq) with `digest`. The mirror
+   * becomes read-only too and catches up; it answers ready once it is there with the same digest, nothing
+   * pending or dirty and every file's contents held, and then waits for the decision (it never decides on its
+   * own). Asked again until ready or the core's deadline; a refusal ends the switch on both servers with
+   * nothing changed.
+   */
+  'peer.mirror.switch.prepare': {
+    payload: {
+      vault_uid: string
+      switch_id: string
+      term: number
+      seq: number
+      digest: string
+      entries: number
+      by?: { node: string; id: number; name: string; on: 'core' | 'mirror' } | null
+    }
+    response: {
+      ready: boolean
+      waiting?: 'busy' | 'applying'
+      at: { term: number; seq: number } | null
+      digest: string | null
+      entries: number | null
+      peer_role?: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+    }
+  }
+  /**
+   * A super admin of the mirror asked for a planned switch (mirror.switch there): the core begins one (it
+   * freezes the vault, numbers its last change and prepares the mirror) and answers at once with the switch's
+   * id; the decision comes later as peer.mirror.switch.commit. The caller must be the vault's mirror.
+   */
+  'peer.mirror.switch.request': {
+    payload: { vault_uid: string; by: { id: number; name?: string }; accept_no_access?: boolean }
+    response: { switch_id: string; term: number }
+  }
+  /**
+   * The mirror's first copy: a page of the core's tree as of its baseline (the state documents of the
+   * replication log, a folder before what is under it, trashed files last), after `after`. expired once the
+   * baseline is gone (the mirror acknowledged it).
+   */
+  'peer.mirror.tree': {
+    payload: { vault_uid: string; after?: number }
+    response: {
+      expired?: boolean
+      baseline?: { term: number; seq: number }
+      digest?: string
+      entries?: number
+      rows?: number
+      vault?: object
+      items?: ({ ord: number; state: object })[]
+      more?: boolean
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | 'rejoining' | 'forked'
     }
   }
   /**
@@ -5993,15 +7092,6 @@ export interface WsContract {
         revoked: boolean
       }
     }
-  }
-  /**
-   * Whether linked servers are switched on here (peers.experimental in config.yaml). The one peer.* command
-   * that answers while the switch is off, so a console or Desktop can leave linked servers out without
-   * provoking peers_experimental. The same callers as the other management commands.
-   */
-  'peer.status': {
-    payload: null
-    response: { enabled: boolean }
   }
   /**
    * Unlink a server: the row is revoked (kept for the audit trail), its connections close at once, and it is
@@ -6334,8 +7424,8 @@ export interface WsContract {
   }
   /**
    * Assign a vault role to a user, a group or a linked server on a vault (one assignment per subject and
-   * vault). A linked server: peers.experimental must be on, and a person decides (never an agent, a scoped or
-   * a relayed device: peer_forbidden). Refused (conflict) on a vault held here as another server's copy.
+   * vault). A linked server: a person decides (never an agent, a scoped or a relayed device: peer_forbidden).
+   * Refused (conflict) on a vault held here as another server's copy.
    */
   'role.vault.assign': {
     payload: { vault_id: number; subject_type: 'user' | 'group' | 'peer'; subject_id: number; id: number }
@@ -7804,7 +8894,12 @@ export interface WsContract {
   /**
    * Delete a vault: restorable until the retention window ends, or purged on the next pass with `now`.
    * Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or 'vault_delete_now'
-   * (resend with confirm_now).
+   * (resend with confirm_now). A vault this server mirrors to a linked server takes mirror_copy (remove |
+   * leave: what happens to the mirror's copy, as mirror.cancel [remove_copy]; mirror_copy_choice_required
+   * without it), recorded with the deletion: the mirror is read-only for the retention window and ends with
+   * that choice at the purge (a restore keeps it; on a deleted vault, mirror_copy alone changes the choice);
+   * a copy held here is refused (vault_mirrored: detach it; vault_orphaned_copy: remove it with
+   * mirror.cancel).
    */
   'storage.vault.remove': {
     payload: {
@@ -7813,6 +8908,7 @@ export interface WsContract {
       delete_upstream?: boolean | null
       confirm_now?: boolean
       accept_key_loss?: boolean
+      mirror_copy?: 'remove' | 'leave' | null
     }
     response: { deletion: WsModels['VaultDeletion'] | null }
   }
@@ -8723,12 +9819,31 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'group.update',
   'groups.list',
   'groups.list.byUser',
-  'health.finding.acknowledge',
-  'health.finding.silence',
-  'health.finding.unsilence',
-  'health.findings.list',
   'meta.contract.get',
   'meta.hello',
+  'mirror.accept',
+  'mirror.accept_all.set',
+  'mirror.add',
+  'mirror.cancel',
+  'mirror.decline',
+  'mirror.detach',
+  'mirror.detach.copy',
+  'mirror.detach.copy.cancel',
+  'mirror.detach.copy.get',
+  'mirror.detach.preview',
+  'mirror.get',
+  'mirror.held.discard',
+  'mirror.held.get',
+  'mirror.held.list',
+  'mirror.held.retry',
+  'mirror.keep_removed.set',
+  'mirror.list',
+  'mirror.mirror_all.set',
+  'mirror.pending',
+  'mirror.resync',
+  'mirror.switch',
+  'mirror.takeover',
+  'mirror.versions.set',
   'peer.endpoints',
   'peer.get',
   'peer.hello',
@@ -8737,6 +9852,25 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.link.start',
   'peer.link.status',
   'peer.list',
+  'peer.mirror.ack',
+  'peer.mirror.answer',
+  'peer.mirror.begin',
+  'peer.mirror.cancel',
+  'peer.mirror.deleting',
+  'peer.mirror.detached',
+  'peer.mirror.grant',
+  'peer.mirror.key',
+  'peer.mirror.keys',
+  'peer.mirror.log',
+  'peer.mirror.notify',
+  'peer.mirror.offer',
+  'peer.mirror.promoted',
+  'peer.mirror.resync',
+  'peer.mirror.submit',
+  'peer.mirror.switch.commit',
+  'peer.mirror.switch.prepare',
+  'peer.mirror.switch.request',
+  'peer.mirror.tree',
   'peer.pair.confirm',
   'peer.pair.request',
   'peer.pair.status',
@@ -8749,7 +9883,6 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.policy.get',
   'peer.policy.set',
   'peer.rename',
-  'peer.status',
   'peer.unlink',
   'peer.unlinked',
   'permission.get',
@@ -9015,6 +10148,10 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'group.member.add': 'identity.admin',
   'group.member.remove': 'identity.admin',
   'group.remove': 'identity.admin',
+  'mirror.add': 'keys',
+  'mirror.cancel': 'data.destroy',
+  'mirror.mirror_all.set': 'keys',
+  'mirror.takeover': 'data.destroy',
   'peer.link.start': 'device.trust',
   'peer.pairing.approve': 'device.trust',
   'peer.policy.set': 'identity.admin',
@@ -9191,12 +10328,31 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'group.update': 15000,
   'groups.list': 15000,
   'groups.list.byUser': 15000,
-  'health.finding.acknowledge': 15000,
-  'health.finding.silence': 15000,
-  'health.finding.unsilence': 15000,
-  'health.findings.list': 15000,
   'meta.contract.get': 15000,
   'meta.hello': 15000,
+  'mirror.accept': 15000,
+  'mirror.accept_all.set': 15000,
+  'mirror.add': 15000,
+  'mirror.cancel': 15000,
+  'mirror.decline': 15000,
+  'mirror.detach': 15000,
+  'mirror.detach.copy': 15000,
+  'mirror.detach.copy.cancel': 15000,
+  'mirror.detach.copy.get': 15000,
+  'mirror.detach.preview': 15000,
+  'mirror.get': 15000,
+  'mirror.held.discard': 15000,
+  'mirror.held.get': 15000,
+  'mirror.held.list': 15000,
+  'mirror.held.retry': 15000,
+  'mirror.keep_removed.set': 15000,
+  'mirror.list': 15000,
+  'mirror.mirror_all.set': 15000,
+  'mirror.pending': 15000,
+  'mirror.resync': 15000,
+  'mirror.switch': 60000,
+  'mirror.takeover': 15000,
+  'mirror.versions.set': 15000,
   'peer.endpoints': 15000,
   'peer.get': 15000,
   'peer.hello': 15000,
@@ -9205,6 +10361,25 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.link.start': 15000,
   'peer.link.status': 15000,
   'peer.list': 15000,
+  'peer.mirror.ack': 15000,
+  'peer.mirror.answer': 15000,
+  'peer.mirror.begin': 15000,
+  'peer.mirror.cancel': 15000,
+  'peer.mirror.deleting': 15000,
+  'peer.mirror.detached': 15000,
+  'peer.mirror.grant': 15000,
+  'peer.mirror.key': 30000,
+  'peer.mirror.keys': 60000,
+  'peer.mirror.log': 15000,
+  'peer.mirror.notify': 15000,
+  'peer.mirror.offer': 15000,
+  'peer.mirror.promoted': 15000,
+  'peer.mirror.resync': 15000,
+  'peer.mirror.submit': 15000,
+  'peer.mirror.switch.commit': 15000,
+  'peer.mirror.switch.prepare': 15000,
+  'peer.mirror.switch.request': 15000,
+  'peer.mirror.tree': 15000,
   'peer.pair.confirm': 15000,
   'peer.pair.request': 15000,
   'peer.pair.status': 15000,
@@ -9217,7 +10392,6 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.policy.get': 15000,
   'peer.policy.set': 15000,
   'peer.rename': 15000,
-  'peer.status': 15000,
   'peer.unlink': 15000,
   'peer.unlinked': 15000,
   'permission.get': 15000,

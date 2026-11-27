@@ -26,6 +26,7 @@ namespace vh {
             MissingEngine,
             InvalidChildPath,
             AccessDenied,
+            ReadOnly,       // a vault held as another server's copy (mirror::access): EROFS
             InvalidRequest,
             InternalError
         };

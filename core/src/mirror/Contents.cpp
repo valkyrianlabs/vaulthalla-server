@@ -1,7 +1,6 @@
 #include "mirror/Contents.hpp"
 
 #include "concurrency/ThreadPoolManager.hpp"
-#include "config/Registry.hpp"
 #include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/File.hpp"
@@ -21,7 +20,11 @@
 
 #include <fmt/format.h>
 
+#include <paths.h>
+
 #include <cerrno>
+#include <cstdlib>
+#include <filesystem>
 #include <fcntl.h>
 #include <future>
 #include <algorithm>
@@ -135,7 +138,6 @@ public:
 
     SourceResult read(const uint64_t offset, const uint64_t sealedSize, const std::function<bool()>& cancelled,
                       const peer::object::Sink& sink) override {
-        if (!vh::config::Registry::get().peers.experimental) return {FetchStatus::Unreachable, "peers.experimental is off"};
         const auto links = peer::linkService();
         if (!links) return {FetchStatus::Unreachable, "the link service is not running"};
         const auto row = db::query::peer::Peers::byId(peerId_);
@@ -194,7 +196,6 @@ std::optional<std::string> linkDownReason(const MirrorVault& mirror, peer::LinkS
         std::scoped_lock lock(factoryMutex());
         if (testFactory()) return std::nullopt;
     }
-    if (!vh::config::Registry::get().peers.experimental) return "peers.experimental is off";
     const auto row = db::query::peer::Peers::byId(mirror.peer_id);
     if (!row || row->revoked()) return "the vault's linked server is no longer linked";
     if (!links.health(mirror.peer_id).connected) return "the link to " + row->name + " is down";
@@ -303,6 +304,7 @@ std::string_view codeOf(const Reason r) {
         case Reason::LinkDown: return "mirror_link_down";
         case Reason::TimedOut: return "mirror_fetch_timeout";
         case Reason::Failed: return "mirror_fetch_failed";
+        case Reason::Missing: return "mirror_contents_missing";
     }
     return "mirror_fetch_failed";
 }
@@ -311,7 +313,8 @@ int errnoOf(const Reason r) {
     switch (r) {
         case Reason::LinkDown: return ENOLINK;
         case Reason::TimedOut: return ETIMEDOUT;
-        case Reason::Failed: return ENODATA;
+        case Reason::Failed:
+        case Reason::Missing: return ENODATA;
     }
     return ENODATA;
 }
@@ -321,7 +324,7 @@ NotReceived::NotReceived(const Reason reason, const std::string& detail)
       reason_(reason) {}
 
 std::optional<std::string_view> reasonCodeIn(const std::string_view message) {
-    for (const auto r : {Reason::LinkDown, Reason::TimedOut, Reason::Failed}) {
+    for (const auto r : {Reason::LinkDown, Reason::TimedOut, Reason::Failed, Reason::Missing}) {
         const auto code = codeOf(r);
         if (message.starts_with(code) && message.size() > code.size() && message[code.size()] == ':') return code;
     }
@@ -456,6 +459,10 @@ bool awaitIfPending(const vh::fs::model::File& file, const std::chrono::millisec
     // Nothing pending, or pending for another generation than the row the caller holds (its bytes are whatever is on
     // disk for that row; the newer row arrives with the log).
     if (!expected || expected->generation != file.encryption_iv) return false;
+    // A detached vault's file whose contents never arrived (wave 5): it never will; the entry says so, nothing is read.
+    if (expected->missing())
+        throw NotReceived(Reason::Missing, "this file's contents never arrived from the core before the vault was "
+                                           "detached; only the core's copy holds them");
     if (expected->failed())
         throw NotReceived(Reason::Failed, expected->last_error.value_or("fetching this file failed"));
 
@@ -526,7 +533,18 @@ bool awaitIfPending(const vh::fs::model::File& file, const std::chrono::millisec
     return true;
 }
 
+// Test instances only (paths::testMode): while VH_TEST_FAULT_DIR/mirror-contents-hold exists, background fetching
+// fetches nothing, so the Tier B drill can show a file opened on the mirror arriving ahead of the queue. Never in a
+// packaged daemon. A person's open (awaitIfPending) is not held.
+static bool contentsHeldForTesting() {
+    if (!vh::paths::testMode) return false;
+    const char* dir = std::getenv("VH_TEST_FAULT_DIR");
+    std::error_code ec;
+    return dir && std::filesystem::exists(std::filesystem::path(dir) / "mirror-contents-hold", ec);
+}
+
 std::size_t fetchOutstanding(const uint32_t vaultId, const std::size_t max) {
+    if (contentsHeldForTesting()) return 0;
     const auto mirror = MirrorVaults::get(vaultId);
     if (!mirror || mirror->role != "mirror") return 0;
     const auto links = peer::linkService();

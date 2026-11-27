@@ -2,7 +2,7 @@
 
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/ssl/stream.hpp>
-#include <boost/beast/websocket.hpp>
+#include "compat/beast_websocket.hpp"
 #include <boost/beast/websocket/ssl.hpp>
 
 // A websocket over TLS (the device listener). ws::Session runs the same protocol over this or a plain TCP socket;

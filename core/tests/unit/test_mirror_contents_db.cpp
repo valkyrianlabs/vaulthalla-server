@@ -15,6 +15,7 @@
 #include "db/Transactions.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/mirror/Contents.hpp"
+#include "db/query/mirror/Log.hpp"
 #include "db/query/mirror/MirrorVault.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "fs/Filesystem.hpp"
@@ -197,9 +198,13 @@ protected:
         h.plaintext.resize(size);
         std::mt19937 rng(static_cast<unsigned>(size) + static_cast<unsigned>(path.size()));
         for (auto& b : h.plaintext) b = static_cast<uint8_t>(rng());
+        // The row is written as the log applier would have written it: here a local write, made while the vault is
+        // briefly not held as a mirror (a mirror refuses every local write, wave 4: mirror::access, migration 165).
+        EXPECT_TRUE(db::query::mirror::MirrorVaults::remove(engine->vault->id));
         (void)fs::Filesystem::createFile({.path = path, .fuse_path = engine->vaultPathToFusePath(path),
                                           .buffer = h.plaintext, .engine = engine, .user = superUser,
                                           .overwrite = true});
+        (void)db::query::mirror::MirrorVaults::startMirror(engine->vault->id, core.id);
         h.file = db::query::fs::File::getFileByPath(engine->vault->id, path);
         h.sealed = readFile(h.file->backing_path);
         std::filesystem::remove(h.file->backing_path);
@@ -355,6 +360,7 @@ TEST_F(MirrorContentsDbTest, ARowThatChangedWhileTheTransferRanIsNeverLinked) {
         std::array<uint8_t, 32> salt{};
         salt.fill(0x3c);
         db::Transactions::exec("row moves on", [&](pqxx::work& txn) {
+            db::query::mirror::Log::markMirrorApply(txn);   // as the follower writes it (a mirror refuses other writes)
             txn.exec("UPDATE files SET encryption_iv = $1 WHERE fs_entry_id = $2",
                      pqxx::params{vh::vault::content::generationOf(salt), h.file->id});
         });
@@ -440,9 +446,6 @@ TEST_F(MirrorContentsDbTest, AnOpenFetchesAheadAndAWaitingReaderIsServedOnceVeri
 
 TEST_F(MirrorContentsDbTest, WithTheLinkDownAnOpenFailsWithItsReasonWithinTheBound) {
     const auto h = notYetReceived("/unreachable.bin", 64'000);
-    auto cfg = config::Registry::get();
-    cfg.peers.experimental = true;
-    config::Registry::set(cfg);
     // No test source: the vault's linked server, which has no connection.
     const auto started = std::chrono::steady_clock::now();
     try {
@@ -476,12 +479,6 @@ TEST_F(MirrorContentsDbTest, WithTheLinkDownAnOpenFailsWithItsReasonWithinTheBou
     const auto pending = PendingContents::get(h.expected.vault_id, h.expected.object_uid);
     ASSERT_TRUE(pending);
     EXPECT_EQ(pending->attempts, 0u) << "a link down is not the file's failure";
-    // The switch off: the same.
-    cfg.peers.experimental = false;
-    config::Registry::set(cfg);
-    EXPECT_THROW((void)contents::awaitIfPending(*h.file), contents::NotReceived);
-    cfg.peers.experimental = true;
-    config::Registry::set(cfg);
 }
 
 // The mount's opens share one FUSE worker pool with every vault: only mountWaitCap() of them wait on pending files at
@@ -566,9 +563,6 @@ TEST_F(MirrorContentsDbTest, OnlyAFewMountOpensWaitAndTheRestAnswerAtOnceWhileTh
     EXPECT_EQ(contents::mountWaitersForTesting(), 0u) << "released on a failure";
     // ...and the link down (said before any wait: no place taken).
     contents::setSourceFactoryForTesting({});
-    auto cfg = config::Registry::get();
-    cfg.peers.experimental = true;
-    config::Registry::set(cfg);
     const auto down = notYetReceived("/down.bin", 20'000);
     EXPECT_THROW((void)contents::awaitIfPending(*down.file, 10s, contents::Opener::Mount), contents::NotReceived);
     EXPECT_EQ(contents::mountWaitersForTesting(), 0u) << "the link down";

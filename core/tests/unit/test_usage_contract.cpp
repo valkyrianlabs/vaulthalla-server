@@ -253,6 +253,12 @@ const std::map<std::string, std::string>& opaqueObjects() {
     static const std::map<std::string, std::string> kOpaque{
         {"HealthRemedy.payload", "the payload of the existing ws command a remedy names, passed through for the client to send as it is; its shape is that command's own"},
         {"PriceBudgetNotification.metadata", "operator notification details stored as JSONB; each producer (budget preflight, gateway budgets, recovery cost alerts) records its own keys"},
+        {"peer.mirror.log response.groups[].rows[].state", "a replication log row's state document (design/peers/mirror.md \"State documents\"), carried verbatim and hashed by its canonical encoding (mirror/Hash.hpp), never read by the contract"},
+        {"peer.mirror.log response.part.rows[].state", "a replication log row's state document, as in groups[].rows[].state"},
+        {"peer.mirror.tree response.items[].state", "a baseline entry's state document, the same documents the replication log carries"},
+        {"mirror.takeover response.detail", "a take over's record of its fork base (its own digest, whether it is the fork point's, the copy's state before): shown verbatim, never read by the contract"},
+        {"mirror.switch response.detail", "what the other server last said of a planned switch (its prepare's answer), or why the switch ended: shown verbatim, never read by the contract"},
+        {"peer.mirror.tree response.vault", "the vault's document (vh_mirror_vault_state) as of the baseline, recorded by the mirror verbatim"},
         {"cloud.storage.status response.billing", "the account's billing summary as the service last answered GET /v1/billing, passed through for display"},
         {"cloud.storage.status response.ejection", "the account's ejection progress as the service reports it in GET /v1/storage, passed through for display"},
         {"CloudStorageStatus.billing", "the account's billing summary as the service last answered GET /v1/billing, passed through for display"},
@@ -430,7 +436,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         // Scoped devices: a scoped device unpairing another, or anyone's scope changed from a device.
         {"device_scope", {"device.revoke", "device.scope.set"}},
         // design/peers/link.md: linked servers (every peer.* command, below).
-        {"peers_experimental", {}}, {"peer_forbidden", {}}};
+        {"peer_forbidden", {}}};
     const auto stepUp = contract::stepUpTable();
     const auto refusedCodeAllowed = [&](const std::string& code, const std::string& command) {
         if (code == "step_up_required")
@@ -447,11 +453,72 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
                                                        r.family == "identity.admin" || r.family == "secrets" ||
                                                        r.family == "settings" || r.family == "connector.trust");
                    });
-        // Linked servers: the switch and who may link (ops::peers), on every peer.* command; the window's own
+        // Linked servers: who may link (ops::peers), on every peer.* command; the window's own
         // refusals on the dialling server's side of pairing.
-        // Assigning a vault role names a linked server too (migration 162): the same two refusals there.
-        if (code == "peers_experimental" || code == "peer_forbidden")
-            return command.starts_with("peer.") || command == "role.vault.assign" || command == "role.vault.unassign";
+        // Assigning a vault role names a linked server too (migration 162): the same refusal there.
+        if (code == "peer_forbidden")
+            return command.starts_with("peer.") || command.starts_with("mirror.") || command == "role.vault.assign" ||
+                   command == "role.vault.unassign" || command == "storage.vault.remove";
+        // Starting a mirror (ops::mirrors, mirror::start): each refusal on the commands that send it.
+        static const std::map<std::string, std::set<std::string>> kMirrorCodes{
+            {"peer_revoked", {"peer.mirror.offer", "peer.mirror.answer", "peer.mirror.keys", "peer.mirror.begin",
+                              "peer.mirror.grant", "peer.mirror.cancel", "peer.mirror.submit", "peer.mirror.detached",
+                              "peer.mirror.deleting", "peer.mirror.resync", "peer.mirror.switch.request",
+                              "peer.mirror.switch.prepare", "peer.mirror.switch.commit", "peer.mirror.promoted",
+                              "peer.mirror.key"}},
+            {"mirror_already", {"mirror.add"}}, {"mirror_start_running", {"mirror.add"}},
+            {"vault_replicated", {"mirror.add"}}, {"vault_attach_running", {"mirror.add"}},
+            {"vault_detach_running", {"mirror.add"}}, {"layout_migration_running", {"mirror.add"}},
+            {"key_rotation_running", {"mirror.add"}}, {"key_salvage_running", {"mirror.add"}},
+            {"vault_pending_deletion", {"mirror.add"}}, {"vault_unavailable", {"mirror.add"}},
+            {"legacy_content", {"mirror.add"}}, {"key_version_missing", {"mirror.add"}},
+            {"key_version_unattested", {"mirror.add"}}, {"trashed_without_uid", {"mirror.add"}},
+            {"contents_not_held", {"mirror.add"}}, {"peer_not_linked", {"mirror.add", "mirror.mirror_all.set"}},
+            {"peer_link_down", {"mirror.add", "mirror.switch"}},
+            {"mirror_offer_not_pending", {"mirror.accept", "mirror.decline"}},
+            {"mirror_vault_exists", {"mirror.accept", "peer.mirror.keys"}},
+            {"mirror_name_taken", {"mirror.accept", "peer.mirror.keys"}},
+            {"mirror_no_space", {"mirror.accept", "peer.mirror.keys"}},
+            {"history_not_supported", {"mirror.accept", "peer.mirror.keys"}},
+            {"mirror_detach_required", {"mirror.cancel"}}, {"mirror_offer_finished", {"mirror.cancel"}},
+            {"mirror_keys_refused", {"peer.mirror.keys"}}, {"mirror_key_refused", {"peer.mirror.key"}}, {"mirror_offer_not_accepted", {"peer.mirror.keys"}},
+            {"mirror_offer_not_installed", {"peer.mirror.begin"}},
+            {"vault_mirrored", {"storage.vault.remove"}}, {"vault_orphaned_copy", {"storage.vault.remove"}},
+            {"mirror_copy_choice_required", {"storage.vault.remove"}},
+            // A change made on the mirror (wave 4 piece B, mirror::submit).
+            {"mirror_not_live", {"peer.mirror.submit", "mirror.switch", "peer.mirror.switch.request",
+                                 "peer.mirror.switch.prepare"}}, {"mirror_read_only", {"mirror.held.retry"}},
+            {"contents_missing", {"peer.mirror.submit"}},
+            // Leaving a mirror (wave 5 piece A, mirror::leave).
+            {"mirror_not_held", {"mirror.detach", "mirror.detach.preview", "mirror.versions.set", "mirror.detach.copy"}},
+            // Detach a copy (wave 5 piece C, mirror::copy).
+            {"mirror_copy_no_space", {"mirror.detach.copy"}}, {"mirror_copy_not_running", {"mirror.detach.copy.cancel"}},
+            {"too_large", {"mirror.held.get"}},
+            {"mirror_detached_copy", {"mirror.add", "mirror.accept", "peer.mirror.keys"}},
+            // Resync (wave 5 piece B, mirror::resync).
+            {"mirror_not_stopped", {"mirror.resync"}}, {"mirror_core_unreachable", {"mirror.resync", "mirror.switch"}},
+            {"mirror_core_gone", {"mirror.resync", "mirror.switch"}}, {"mirror_resync_refused", {"mirror.resync"}},
+            {"mirror_paused", {"mirror.resync", "peer.mirror.resync"}},
+            {"mirror_resync_failed", {"mirror.resync", "peer.mirror.resync"}},
+            // The planned switch (wave 5 piece B, mirror::switching).
+            {"mirror_switch_running", {"mirror.switch", "peer.mirror.switch.request"}},
+            {"mirror_vault_deleting", {"mirror.switch", "peer.mirror.switch.request"}},
+            {"mirror_submissions_queued", {"mirror.switch", "peer.mirror.switch.request"}},
+            {"mirror_has_remote", {"mirror.switch", "peer.mirror.switch.request"}},
+            {"mirror_pending_changes", {"mirror.switch", "peer.mirror.switch.prepare"}},
+            {"mirror_contents_missing", {"mirror.switch", "peer.mirror.switch.prepare"}},
+            {"mirror_first_copy", {"mirror.switch", "peer.mirror.switch.prepare", "mirror.takeover"}},
+            {"mirror_switch_refused", {"mirror.switch"}}, {"mirror_switch_no_role", {"mirror.switch"}}, {"mirror_orphaned", {"mirror.switch", "mirror.takeover"}},
+            {"mirror_term_mismatch", {"peer.mirror.switch.prepare"}},
+            {"mirror_switch_ended", {"peer.mirror.switch.prepare"}}, {"mirror_ahead", {"peer.mirror.switch.prepare"}},
+            {"mirror_digest_mismatch", {"peer.mirror.switch.prepare"}},
+            {"mirror_not_prepared", {"peer.mirror.switch.commit"}},
+            {"mirror_term_stale", {"peer.mirror.promoted"}},
+            // Take over (wave 5 piece B, mirror::takeover).
+            {"mirror_not_mirror", {"mirror.takeover"}}, {"mirror_diverged", {"mirror.takeover"}},
+            {"mirror_core_reachable", {"mirror.takeover"}}, {"mirror_name_mismatch", {"mirror.takeover"}},
+        };
+        if (const auto m = kMirrorCodes.find(code); m != kMirrorCodes.end() && m->second.contains(command)) return true;
         if ((code == "no_pairing_window" || code == "rate_limited" || code == "device_unknown") &&
             command.starts_with("peer.pair."))
             return true;

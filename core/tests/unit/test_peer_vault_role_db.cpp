@@ -14,7 +14,6 @@
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
 #include "auth/stepup/StepUp.hpp"
-#include "config/Registry.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/identities/helpers.hpp"
 #include "db/query/mirror/MirrorVault.hpp"
@@ -34,6 +33,7 @@
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/PeerPolicy.hpp"
+#include "mirror/access/Access.hpp"
 #include "rbac/Mirrored.hpp"
 #include "rbac/PolicyEpoch.hpp"
 #include "rbac/permission/admin/VaultGlobals.hpp"
@@ -88,7 +88,6 @@ protected:
     inline static UserPtr plainMember;
     inline static UserPtr roleHolder;
     inline static UserPtr selfOwner;  // its own vaults through its global vault policy (and admin.vaults.self.*)
-    inline static config::Config savedConfig;
 
     static void SetUpTestSuite() {
         if (!setUpDbSuite("peer_vault_role")) return;
@@ -100,21 +99,13 @@ protected:
         roleHolder = account("pv_holder", "unprivileged");
         selfOwner = policyAccount("pv_selfowner", rbac::role::vault::Base::Full(), true, false, false,
                                   {"admin.vaults.self.view", "admin.vaults.self.edit"});
-        savedConfig = config::Registry::get();
-        setExperimental(true);
     }
 
     static void TearDownTestSuite() {
         if (skipTests) return;
-        config::Registry::set(savedConfig);
         rbac::mirrored::resetForTesting();
+        vh::mirror::access::resetForTesting();
         tearDownDbSuite();
-    }
-
-    static void setExperimental(const bool on) {
-        auto cfg = config::Registry::get();
-        cfg.peers.experimental = on;
-        config::Registry::set(cfg);
     }
 
     static UserPtr account(const std::string& prefix, const std::string& role) {
@@ -392,28 +383,6 @@ TEST_F(PeerVaultRoleDb, ThePeerAssignmentIsListedAsSuchAndAuditedNamingTheServer
 }
 
 // ------------------------------------------------------------------------------------------------ who may
-
-TEST_F(PeerVaultRoleDb, TheSwitchOffRefusesEveryPeerSubjectAndPolicyCommand) {
-    const auto p = newPeer();
-    const auto v = vaultFor(plainOwner);
-    setExperimental(false);
-    const auto expectRefused = [](const auto& fn, const char* what) {
-        try {
-            fn();
-            ADD_FAILURE() << what << " ran with the switch off";
-        } catch (const ops::Refused& e) {
-            EXPECT_EQ(e.code, "peers_experimental") << what;
-        }
-    };
-    expectRefused([&] { (void)ops::peer_policy::get(super, std::to_string(p.id)); }, "peer.policy.get");
-    expectRefused([&] { (void)ops::peer_policy::set(super, std::to_string(p.id), std::nullopt); }, "peer.policy.set");
-    expectRefused([&] { assignPeer(super, v, p, "reader"); }, "role.vault.assign --peer");
-    expectRefused([&] {
-        (void)ops::roles::unassignVaultRole(super, {.vault_id = v, .subject = {.type = "peer", .id = p.id}});
-    }, "role.vault.unassign --peer");
-    setExperimental(true);
-    EXPECT_NO_THROW(assignPeer(super, v, p, "reader")) << "users and groups never needed the switch, a peer does";
-}
 
 TEST_F(PeerVaultRoleDb, APersonDecidesNeverAnAgentAScopedOrARelayedDevice) {
     namespace stepup = auth::stepup;

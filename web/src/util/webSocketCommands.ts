@@ -1004,10 +1004,8 @@ export interface WebSocketCommandMap {
   'device.identity.rotate': WsContract['device.identity.rotate']
   'device.server.identity': WsContract['device.server.identity']
   'device.endpoints': WsContract['device.endpoints']
-  // Linked servers (design/peers/link.md; experimental, off by default): the Linked servers page (features/peers).
-  // peer.status answers whether the switch is on (the only one that answers while it is off). peer.pair.* and the wire
-  // set (peer.hello ... peer.unlinked) only pass between two servers; the console never sends them.
-  'peer.status': WsContract['peer.status']
+  // Linked servers (design/peers/link.md): the Linked servers page (features/peers). peer.pair.* and the wire set
+  // (peer.hello ... peer.unlinked) only pass between two servers; the console never sends them.
   'peer.pairing.open': WsContract['peer.pairing.open']
   'peer.pairing.close': WsContract['peer.pairing.close']
   'peer.pairing.pending': WsContract['peer.pairing.pending']
@@ -1031,6 +1029,61 @@ export interface WebSocketCommandMap {
   'peer.endpoints': WsContract['peer.endpoints']
   'peer.identity.rotate': WsContract['peer.identity.rotate']
   'peer.unlinked': WsContract['peer.unlinked']
+  'mirror.add': WsContract['mirror.add']
+  'mirror.pending': WsContract['mirror.pending']
+  'mirror.accept': WsContract['mirror.accept']
+  'mirror.decline': WsContract['mirror.decline']
+  'mirror.cancel': WsContract['mirror.cancel']
+  'mirror.list': WsContract['mirror.list']
+  'mirror.get': WsContract['mirror.get']
+  'mirror.accept_all.set': WsContract['mirror.accept_all.set']
+  'mirror.keep_removed.set': WsContract['mirror.keep_removed.set']
+  // On the core: offer every vault (new ones included) to a linked server (super admins; keys step-up to turn on).
+  'mirror.mirror_all.set': WsContract['mirror.mirror_all.set']
+  // Changes made here that the core refused: held changes and conflict copies (super admins).
+  'mirror.held.list': WsContract['mirror.held.list']
+  'mirror.held.discard': WsContract['mirror.held.discard']
+  'mirror.held.retry': WsContract['mirror.held.retry']
+  // A copy that stopped starts over from its core's tree (super admins).
+  'mirror.resync': WsContract['mirror.resync']
+  // A planned switch of the core role, asked on either server (super admins); answers its outcome.
+  'mirror.switch': WsContract['mirror.switch']
+  // A mirror whose core is gone takes over as the vault's core (super admins; the vault's name typed).
+  'mirror.takeover': WsContract['mirror.takeover']
+  'peer.mirror.offer': WsContract['peer.mirror.offer']
+  'peer.mirror.answer': WsContract['peer.mirror.answer']
+  'peer.mirror.keys': WsContract['peer.mirror.keys']
+  // A key rotation on the core delivers its new version first (between two servers only).
+  'peer.mirror.key': WsContract['peer.mirror.key']
+  'peer.mirror.begin': WsContract['peer.mirror.begin']
+  'peer.mirror.grant': WsContract['peer.mirror.grant']
+  'peer.mirror.cancel': WsContract['peer.mirror.cancel']
+  // The server mirror's data plane (design/peers/mirror.md "As built: following the core"): between two servers only.
+  'peer.mirror.tree': WsContract['peer.mirror.tree']
+  'peer.mirror.log': WsContract['peer.mirror.log']
+  'peer.mirror.ack': WsContract['peer.mirror.ack']
+  'peer.mirror.notify': WsContract['peer.mirror.notify']
+  // A change made on the mirror, submitted to the core (design/peers/mirror.md "As built: a change made on the mirror").
+  'peer.mirror.submit': WsContract['peer.mirror.submit']
+  // Leaving a mirror (design/peers/mirror.md "As built: leaving a mirror"): detach a held copy here; the core is told.
+  'mirror.detach.preview': WsContract['mirror.detach.preview']
+  'mirror.detach': WsContract['mirror.detach']
+  // Detach a copy: a new vault written from the held copy in the background (its progress, a cancel).
+  'mirror.detach.copy': WsContract['mirror.detach.copy']
+  'mirror.detach.copy.get': WsContract['mirror.detach.copy.get']
+  'mirror.detach.copy.cancel': WsContract['mirror.detach.copy.cancel']
+  // Versions the mirror keeps of what its core replaces or deletes; a held change's bytes (the person's version).
+  'mirror.versions.set': WsContract['mirror.versions.set']
+  'mirror.held.get': WsContract['mirror.held.get']
+  'peer.mirror.detached': WsContract['peer.mirror.detached']
+  'peer.mirror.deleting': WsContract['peer.mirror.deleting']
+  'peer.mirror.resync': WsContract['peer.mirror.resync']
+  // The planned switch between the two linked servers (design/peers/mirror.md "As built: the planned switch").
+  'peer.mirror.switch.request': WsContract['peer.mirror.switch.request']
+  'peer.mirror.switch.prepare': WsContract['peer.mirror.switch.prepare']
+  'peer.mirror.switch.commit': WsContract['peer.mirror.switch.commit']
+  // The new core tells its old core it took over.
+  'peer.mirror.promoted': WsContract['peer.mirror.promoted']
   // Any signed-in user pairs devices to their own account: open a 10-minute window, then approve a request by picking
   // the one of its three code_choices the device shows (a wrong pick denies the request).
   'device.pairing.open': WsContract['device.pairing.open']

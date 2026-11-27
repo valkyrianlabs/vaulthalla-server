@@ -3,41 +3,25 @@
 import React, { useState } from 'react'
 import dynamic from 'next/dynamic'
 import { useWs } from '@/lib/query'
-import { WsError } from '@/lib/ws/errors'
 import { PageHeader } from '@/components/ui/Panel'
-import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
-import { Spinner } from '@/components/ui/Spinner'
-import { EmptyState, ErrorState, QueryState } from '@/components/ui/State'
+import { EmptyState, QueryState } from '@/components/ui/State'
 import { LinkIcon, PlusIcon, ServerIcon } from '@/components/ui/icons'
 import { PEERS_COPY } from '@/features/peers/copy'
-import { usePeersAvailability } from '@/features/peers/signal'
+import { PeersGate, PeersTabs } from '@/features/peers/Gate'
 import { PeerTable } from '@/features/peers/PeerTable'
 
 // The two pairing dialogs (Radix Dialog, their pollers, the number matching) load only when someone opens one.
 const AcceptLinkDialog = dynamic(() => import('@/features/peers/AcceptLinkDialog'), { ssr: false })
 const LinkServerDialog = dynamic(() => import('@/features/peers/LinkServerDialog'), { ssr: false })
 
-// /linked-servers (design/peers/link.md, "Three ways to drive it": the web console). Super admins only, and only on a
-// server with peers.experimental on (peer.status): anywhere else this URL shows a denial or one plain sentence, and the
-// nav has no entry (features/peers/signal.ts). The same operations as `vh peer`; the daemon decides everything.
-export const LinkedServersPage = () => {
-  const { superAdmin, pending, enabled } = usePeersAvailability()
-  if (!superAdmin) return <ErrorState error={new WsError('denied', PEERS_COPY.denied)} />
-  if (pending)
-    return (
-      <div className="flex justify-center py-14">
-        <Spinner className="size-6" label="Loading" />
-      </div>
-    )
-  if (!enabled)
-    return (
-      <div data-testid="peers-unavailable">
-        <EmptyState icon={ServerIcon} title={PEERS_COPY.unavailableTitle} description={PEERS_COPY.unavailableBody} />
-      </div>
-    )
-  return <LinkedServers />
-}
+// /linked-servers (design/peers/link.md, "Three ways to drive it": the web console). Super admins only: anyone else
+// gets a denial here, and the nav has no entry. The same operations as `vh peer`; the daemon decides everything.
+export const LinkedServersPage = () => (
+  <PeersGate>
+    <LinkedServers />
+  </PeersGate>
+)
 
 type Open = 'accept' | 'link' | null
 
@@ -49,14 +33,7 @@ const LinkedServers = () => {
   return (
     <div className="w-full">
       <PageHeader
-        title={
-          <span className="inline-flex items-center gap-2.5">
-            {PEERS_COPY.title}
-            <Badge tone="warn" className="align-middle" title="This feature is still being built and may change.">
-              <span data-testid="peers-experimental">{PEERS_COPY.experimental}</span>
-            </Badge>
-          </span>
-        }
+        title={PEERS_COPY.title}
         description={
           <>
             {PEERS_COPY.description}{' '}
@@ -75,7 +52,9 @@ const LinkedServers = () => {
             </Button>
           </>
         }
+        className="mb-4"
       />
+      <PeersTabs />
       <QueryState query={list}>
         {data => (
           <PeerTable

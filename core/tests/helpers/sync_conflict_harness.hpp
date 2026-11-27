@@ -3,6 +3,8 @@
 // Shared by test_sync_conflicts.cpp and test_ops_parity_conflicts.cpp (#187): an in-memory bucket (fake S3
 // controller) and a DB-backed fixture that makes remote vaults, runs real sync passes inline and builds conflicts.
 
+#include "mirror/access/Access.hpp"
+#include "rbac/Mirrored.hpp"
 #include "config/Config.hpp"
 #include "config/Registry.hpp"
 #include "db/Transactions.hpp"
@@ -264,6 +266,10 @@ protected:
         db::seed::nuke_and_recreate_schema_public();
         db::Transactions::dbPool_->initPreparedStatements();
         seed::seed_database();
+        // A fresh schema holds no vault as another server's copy: an earlier suite's held vault ids (rbac::mirrored)
+        // would otherwise resolve this schema's vaults of the same ids from a grant that isn't theirs.
+        vh::rbac::mirrored::resetForTesting();
+        vh::mirror::access::resetForTesting();
         runtime::Deps::init();
         fs::Filesystem::init(runtime::Deps::get().storageManager);
         superUser = vh::identities::manager().userByName("admin");

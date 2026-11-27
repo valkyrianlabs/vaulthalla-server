@@ -271,7 +271,34 @@ bool Router::isPeerWireCommand(const std::string_view command) {
         std::string_view{"peer.ping"},
         std::string_view{"peer.endpoints"},
         std::string_view{"peer.identity.rotate"},
-        std::string_view{"peer.unlinked"}
+        std::string_view{"peer.unlinked"},
+        // Mirror phase 2 wave 3, piece A: starting a mirror (handler/Mirrors.hpp).
+        std::string_view{"peer.mirror.offer"},
+        std::string_view{"peer.mirror.answer"},
+        std::string_view{"peer.mirror.keys"},
+        std::string_view{"peer.mirror.begin"},
+        std::string_view{"peer.mirror.grant"},
+        std::string_view{"peer.mirror.cancel"},
+        // The server mirror's data plane (wave 3 piece B; handler/MirrorFollow.hpp).
+        std::string_view{"peer.mirror.tree"},
+        std::string_view{"peer.mirror.log"},
+        std::string_view{"peer.mirror.ack"},
+        std::string_view{"peer.mirror.notify"},
+        // A change made on the mirror (wave 4 piece B; handler/MirrorFollow.hpp).
+        std::string_view{"peer.mirror.submit"},
+        // Leaving a mirror (wave 5 piece A; handler/MirrorLeave.hpp).
+        std::string_view{"peer.mirror.detached"},
+        std::string_view{"peer.mirror.deleting"},
+        // Resync (wave 5 piece B; handler/MirrorFollow.hpp).
+        std::string_view{"peer.mirror.resync"},
+        // The planned switch (wave 5 piece B; handler/MirrorFollow.hpp).
+        std::string_view{"peer.mirror.switch.request"},
+        std::string_view{"peer.mirror.switch.prepare"},
+        std::string_view{"peer.mirror.switch.commit"},
+        // Take over: the old core learns (wave 5 piece B; handler/MirrorFollow.hpp).
+        std::string_view{"peer.mirror.promoted"},
+        // Key rotation on a mirrored vault (handler/Mirrors.hpp).
+        std::string_view{"peer.mirror.key"}
     };
     return containsCommand(commands, command);
 }
@@ -300,7 +327,7 @@ bool Router::isRelayedReadCommand(const std::string_view command) {
 bool Router::isScopedDeviceForbidden(const std::string_view command) {
     // health.finding.: whether a warning has been dealt with is decided by a human (design/health/findings.md §7).
     for (const std::string_view prefix : {"device.pair", "device.approval.", "device.backup.grant.", "connector.", "peer.",
-                                          "health.finding."})
+                                          "mirror.", "health.finding."})
         if (command.starts_with(prefix)) return true;
     constexpr std::array exact{std::string_view{"vault.keys.export"}, std::string_view{"vault.keys.export.confirm"},
                                std::string_view{"vault.keys.import"}, std::string_view{"device.scope.set"}};

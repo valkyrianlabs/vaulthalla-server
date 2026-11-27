@@ -301,7 +301,8 @@ void vh::seed::initRoles() {
                 role.s3Gateway.toBitString(),
                 role.stats.toBitString(),
                 role.upstream.toBitString(),
-                role.cloud.toBitString()
+                role.cloud.toBitString(),
+                role.mirror.toBitString()
             }
         );
 

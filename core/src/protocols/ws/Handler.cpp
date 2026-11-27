@@ -7,6 +7,9 @@
 #include "protocols/ws/handler/StepUp.hpp"
 #include "protocols/ws/handler/Approvals.hpp"
 #include "protocols/ws/handler/Devices.hpp"
+#include "protocols/ws/handler/MirrorFollow.hpp"
+#include "protocols/ws/handler/MirrorLeave.hpp"
+#include "protocols/ws/handler/Mirrors.hpp"
 #include "protocols/ws/handler/PeerPolicy.hpp"
 #include "protocols/ws/handler/Peers.hpp"
 #include "protocols/ws/handler/fs/Changes.hpp"
@@ -118,7 +121,6 @@ void Handler::registerAuthHandlers(const std::shared_ptr<Router>& r) {
 // Paired devices (ops::devices). Which sessions reach which is the router's decision (classifyCommand).
 // design/peers/link.md: linked servers (handler/Peers.hpp).
 void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
-    r->registerSessionOnlyHandler("peer.status", &handler::Peers::status);
     r->registerSessionOnlyHandler("peer.pairing.open", &handler::Peers::pairingOpen);
     r->registerSessionOnlyHandler("peer.pairing.close", &handler::Peers::pairingClose);
     r->registerSessionOnlyHandler("peer.pairing.pending", &handler::Peers::pairingPending);
@@ -141,6 +143,54 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("peer.endpoints", &handler::Peers::endpoints);
     r->registerPayload("peer.identity.rotate", &handler::Peers::identityRotate);
     r->registerSessionOnlyHandler("peer.unlinked", &handler::Peers::unlinked);
+    // Mirror phase 2 wave 3, piece A: starting a mirror (handler/Mirrors.hpp; design/peers/mirror.md).
+    r->registerPayload("mirror.add", &handler::Mirrors::add);
+    r->registerSessionOnlyHandler("mirror.pending", &handler::Mirrors::pending);
+    r->registerPayload("mirror.accept", &handler::Mirrors::accept);
+    r->registerPayload("mirror.decline", &handler::Mirrors::decline);
+    r->registerPayload("mirror.cancel", &handler::Mirrors::cancel);
+    r->registerSessionOnlyHandler("mirror.list", &handler::Mirrors::list);
+    r->registerPayload("mirror.get", &handler::Mirrors::get);
+    r->registerPayload("mirror.accept_all.set", &handler::Mirrors::acceptAllSet);
+    r->registerPayload("mirror.keep_removed.set", &handler::Mirrors::keepRemovedSet);
+    r->registerPayload("mirror.mirror_all.set", &handler::Mirrors::mirrorAllSet);
+    r->registerPayload("mirror.held.list", &handler::Mirrors::heldList);
+    r->registerPayload("mirror.held.discard", &handler::Mirrors::heldDiscard);
+    r->registerPayload("mirror.held.retry", &handler::Mirrors::heldRetry);
+    r->registerPayload("mirror.resync", &handler::Mirrors::resync);
+    r->registerPayload("mirror.switch", &handler::Mirrors::switchRole);
+    r->registerPayload("mirror.takeover", &handler::Mirrors::takeover);
+    r->registerPayload("peer.mirror.offer", &handler::Mirrors::offer);
+    r->registerPayload("peer.mirror.answer", &handler::Mirrors::answer);
+    r->registerPayload("peer.mirror.keys", &handler::Mirrors::keys);
+    r->registerPayload("peer.mirror.begin", &handler::Mirrors::begin);
+    r->registerPayload("peer.mirror.grant", &handler::Mirrors::grant);
+    r->registerPayload("peer.mirror.cancel", &handler::Mirrors::cancelWire);
+    // Key rotation on a mirrored vault (mirror/rotate/Rotate.hpp).
+    r->registerPayload("peer.mirror.key", &handler::Mirrors::key);
+
+    // The server mirror's data plane (wave 3 piece B; design/peers/mirror.md "As built: following the core").
+    r->registerPayload("peer.mirror.tree", &handler::MirrorFollow::tree);
+    r->registerPayload("peer.mirror.log", &handler::MirrorFollow::log);
+    r->registerPayload("peer.mirror.ack", &handler::MirrorFollow::ack);
+    r->registerPayload("peer.mirror.notify", &handler::MirrorFollow::notify);
+    // A change made on the mirror (wave 4 piece B; design/peers/mirror.md "As built: a change made on the mirror").
+    r->registerPayload("peer.mirror.submit", &handler::MirrorFollow::submit);
+    // Leaving a mirror (wave 5 piece A; design/peers/mirror.md "As built: leaving a mirror").
+    r->registerPayload("mirror.detach.preview", &handler::MirrorLeave::detachPreview);
+    r->registerPayload("mirror.detach", &handler::MirrorLeave::detach);
+    r->registerPayload("mirror.detach.copy", &handler::MirrorLeave::detachCopy);
+    r->registerPayload("mirror.detach.copy.get", &handler::MirrorLeave::detachCopyGet);
+    r->registerPayload("mirror.detach.copy.cancel", &handler::MirrorLeave::detachCopyCancel);
+    r->registerPayload("mirror.versions.set", &handler::MirrorLeave::versionsSet);
+    r->registerPayload("mirror.held.get", &handler::MirrorLeave::heldGet);
+    r->registerPayload("peer.mirror.detached", &handler::MirrorLeave::detached);
+    r->registerPayload("peer.mirror.deleting", &handler::MirrorLeave::deleting);
+    r->registerPayload("peer.mirror.resync", &handler::MirrorFollow::resync);
+    r->registerPayload("peer.mirror.switch.request", &handler::MirrorFollow::switchRequest);
+    r->registerPayload("peer.mirror.switch.prepare", &handler::MirrorFollow::switchPrepare);
+    r->registerPayload("peer.mirror.switch.commit", &handler::MirrorFollow::switchCommit);
+    r->registerPayload("peer.mirror.promoted", &handler::MirrorFollow::promoted);
 }
 
 void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {

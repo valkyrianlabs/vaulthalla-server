@@ -48,6 +48,8 @@ inline constexpr int kCantCreat = 73;   // EX_CANTCREAT: the vault path exists (
 inline constexpr int kIoErr = 74;       // EX_IOERR: reading or writing a local file failed
 inline constexpr int kTempFail = 75;    // EX_TEMPFAIL: too many transfers in flight, or the connection dropped
 inline constexpr int kNoPerm = 77;      // EX_NOPERM: RBAC said no (also when revoked mid-transfer)
+inline constexpr int kReadOnly = 69;    // EX_UNAVAILABLE: the vault is read-only here (a copy of another server's
+                                        // vault: the server mirror's gate); the message says why
 }
 
 namespace detail {
@@ -149,6 +151,17 @@ namespace detail {
 // output option is --output/-o; everything else the daemon validates against the usage book.
 [[nodiscard]] inline LocalPlan planLocal(const std::vector<std::string>& argv) {
     LocalPlan plan;
+    // `vh mirror save <id> <dest|->`: a held write's version, written by the client (the server mirror, wave 5).
+    if (argv.size() >= 2 && (argv[0] == "mirror" || argv[0] == "mirrors") && argv[1] == "save") {
+        plan.kind = LocalPlan::Kind::Get;
+        std::vector<std::string> positionals;
+        for (std::size_t i = 2; i < argv.size(); ++i)
+            if (!detail::isFlag(argv[i])) positionals.push_back(argv[i]);
+        if (positionals.size() != 2) { plan.error = "usage: vh mirror save <id> <dest|->"; return plan; }
+        plan.explicitStdout = positionals[1] == "-";
+        plan.local = positionals[1] == "-" ? std::string{} : positionals[1];
+        return plan;
+    }
     if (argv.size() < 2 || !isFsAlias(argv[0])) return plan;
     if (isGetAlias(argv[1])) plan.kind = LocalPlan::Kind::Get;
     else if (isPutAlias(argv[1])) plan.kind = LocalPlan::Kind::Put;

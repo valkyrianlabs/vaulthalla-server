@@ -31,10 +31,15 @@
 #include "db/encoding/u8.hpp"
 #include "identities/User.hpp"
 #include "identities/Group.hpp"
+#include "identities/Manager.hpp"
 #include "fuse/WorkingCopies.hpp"
 #include "recovery/local/Versions.hpp"
 #include "vault/Content.hpp"
 #include "vault/model/S3Vault.hpp"
+#include "db/query/fs/AssignedUid.hpp"
+#include "db/query/mirror/Contents.hpp"
+#include "mirror/access/Access.hpp"
+#include "mirror/submit/Local.hpp"
 
 #include <ranges>
 #include <set>
@@ -108,6 +113,17 @@ std::optional<int32_t> userIdFor(const std::shared_ptr<vh::identities::User>& us
     return static_cast<int32_t>(user->id);
 }
 
+// The server mirror's write gate (mirror/access/Access.hpp), checked by every mutating call here after its engine is
+// known: a vault held as another server's copy changes through nothing but its core's log (which never calls these).
+// The surfaces ask first and report the refusal in their own terms; this is the layer under all of them.
+bool filesystemMirrorRefused(const std::shared_ptr<vh::storage::Engine>& engine, const std::string_view operation) {
+    if (!engine || !engine->vault) return false;
+    const auto why = vh::mirror::access::refusalReason(engine->vault->id);
+    if (!why) return false;
+    vh::log::Registry::fs()->debug("[Filesystem] {} refused in vault {}: {}", operation, engine->vault->id, *why);
+    return true;
+}
+
 } // namespace
 
 static void updateFile(pqxx::work& txn, const std::shared_ptr<File>& file) {
@@ -162,7 +178,7 @@ bool Filesystem::isReady() {
     return static_cast<bool>(storageManager_);
 }
 
-int Filesystem::mkdir(const MkdirContext& ctx) {
+int Filesystem::mkdirImpl(const MkdirContext& ctx) {
     const auto& absPath = ctx.path;
     auto engine = ctx.engine;
 
@@ -202,6 +218,7 @@ int Filesystem::mkdir(const MkdirContext& ctx) {
             log::Registry::fs()->error("[Filesystem::mkdir] No storage engine found for path: {}", log::path(absPath));
             return -EIO;
         }
+        if (!toCreate.empty() && filesystemMirrorRefused(engine, "mkdir")) return -EROFS;
 
         for (const auto& p : toCreate) {
             const auto path = makeAbsolute(p);
@@ -355,6 +372,13 @@ Filesystem::createSymlink(const FuseCreateSymlinkContext& ctx) {
         if (!resolved.ok()) return {-resolved.errnum, nullptr};
         if (!resolved.user) return {-EACCES, nullptr};
         if (!resolved.path || !resolved.engine || !resolved.parentEntry) return {-EINVAL, nullptr};
+        if (filesystemMirrorRefused(resolved.engine, "symlink")) return {-EROFS, nullptr};
+        // A symlink made on a mirror is not taken as a pending change (no operation on the core makes one yet).
+        if (resolved.engine && resolved.engine->vault && vh::mirror::access::held(resolved.engine->vault->id)) {
+            vh::log::Registry::fs()->debug("[Filesystem] symlink refused in vault {}: not taken on a mirror",
+                                           resolved.engine->vault->id);
+            return {-EROFS, nullptr};
+        }
 
         if (!storageManager_) {
             log::Registry::fs()->error("[Filesystem::createSymlink] StorageManager is not initialized");
@@ -495,7 +519,7 @@ void copyBackingBytes(const std::filesystem::path& from, const std::filesystem::
 
 } // namespace
 
-int Filesystem::copy(const CopyContext& ctx) {
+int Filesystem::copyImpl(const CopyContext& ctx) {
     const auto& from = ctx.from;
     const auto& to = ctx.to;
     const auto& cache = runtime::Deps::get().fsCache;
@@ -526,6 +550,7 @@ int Filesystem::copy(const CopyContext& ctx) {
                 log::Registry::fs()->error("[Filesystem::copy] Cross-vault copy not supported: {} -> {}", from.string(), to.string());
                 return -EXDEV;
             }
+            if (filesystemMirrorRefused(engine, "copy")) return -EROFS;
         }
 
         if (from == to) return 0;
@@ -806,7 +831,7 @@ int Filesystem::copy(const CopyContext& ctx) {
     return 0;
 }
 
-void Filesystem::remove(const std::filesystem::path& path, const unsigned int userId) {
+void Filesystem::removeImpl(const std::filesystem::path& path, const unsigned int userId) {
     const auto& cache = runtime::Deps::get().fsCache;
     const auto entry = cache->getEntry(path);
     if (!entry) throw std::runtime_error("[Filesystem] Path does not exist in cache: " + path.string());
@@ -819,6 +844,7 @@ void Filesystem::remove(const std::filesystem::path& path, const unsigned int us
 
     // Trashing ends a file id (its cache_index rows cascade): its sealed derived artifacts go with it.
     const auto engine = storageManager_ ? storageManager_->getEngine(*entry->vault_id) : nullptr;
+    vh::mirror::access::requireWritable(static_cast<uint32_t>(*entry->vault_id), "delete");
     const auto purgeDerived = [&engine](const unsigned int fileId) {
         if (engine) engine->purgeDerivedArtifacts(fileId);
     };
@@ -888,11 +914,12 @@ std::mutex& Filesystem::contentWriteMutex(const uint32_t fileId) {
     return stripes[fileId % stripes.size()];
 }
 
-std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
+std::shared_ptr<File> Filesystem::createFileImpl(const NewFileContext& ctx) {
     if (!ctx.user) throw std::runtime_error("[Filesystem] File creation requires a user");
 
     const auto engine = ctx.engine ? ctx.engine : storageManager_->resolveStorageEngine(ctx.path);
     if (!engine) throw std::runtime_error("[Filesystem] No storage engine found for file creation");
+    if (engine->vault) vh::mirror::access::requireWritable(engine->vault->id, "a file write");
 
     log::Registry::fs()->debug("Creating file at path: {}, fuse_path: {}", log::path(ctx.path), log::path(ctx.fuse_path));
 
@@ -900,14 +927,15 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
 
     if (ctx.path.empty()) throw std::runtime_error("Cannot create file at empty path");
     if (cache->entryExists(ctx.fuse_path)) {
+        // A create (overwrite false) never returns what is already there: a caller that lost a create race must not
+        // report its bytes as stored (`vh fs put`, share uploads, restores of a new file). EEXIST either way.
         if (!ctx.overwrite) {
-            log::Registry::fs()->warn("File already exists at path: {}", log::path(ctx.fuse_path));
             const auto entry = cache->getEntry(ctx.fuse_path);
-            if (entry->isDirectory()) throw std::filesystem::filesystem_error(
-                "[Filesystem] Cannot create file at path, a directory already exists",
+            throw std::filesystem::filesystem_error(
+                entry && entry->isDirectory() ? "[Filesystem] Cannot create file at path, a directory already exists"
+                                              : "[Filesystem] Cannot create file at path, a file already exists",
                 ctx.fuse_path,
                 std::make_error_code(std::errc::file_exists));
-            return std::static_pointer_cast<File>(entry);
         }
 
         log::Registry::fs()->debug("File already exists at path: {}, overwriting", log::path(ctx.fuse_path));
@@ -1060,6 +1088,9 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
     // The object uid the row will carry, so the VHF1 header names it: a row this one replaces (same inode: the same
     // file written again) keeps its uid (db::query::fs::File::upsertFile), anything else draws a new one when sealed.
     if (f->inode) f->object_uid = db::query::fs::File::objectUidByInode(*f->inode);
+    // A new file whose uid was chosen before it was created (a change made on a mirror, its execution on the core).
+    if (!f->object_uid && f->vault_id)
+        f->object_uid = db::query::fs::AssignedUid::forPath(static_cast<uint32_t>(*f->vault_id), f->path);
 
     // A new file at a fresh alias. Created exclusively or replaced by rename, never written in place: a retained
     // generation may share an existing backing inode (recovery.md, "Local storage").
@@ -1101,7 +1132,7 @@ std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
 }
 
 std::pair<int, std::shared_ptr<model::Entry>>
-Filesystem::createFile(const FuseCreateFileContext& ctx) {
+Filesystem::createFileImpl(const FuseCreateFileContext& ctx) {
     const auto& resolved = ctx.resolved;
     const auto path = resolved.path.value_or(std::filesystem::path{});
 
@@ -1111,6 +1142,7 @@ Filesystem::createFile(const FuseCreateFileContext& ctx) {
         if (!resolved.ok()) return {-resolved.errnum, nullptr};
         if (!resolved.user) return {-EACCES, nullptr};
         if (!resolved.path || !resolved.engine || !resolved.parentEntry) return {-EINVAL, nullptr};
+        if (filesystemMirrorRefused(resolved.engine, "create")) return {-EROFS, nullptr};
 
         if (!storageManager_) {
             log::Registry::fs()->error("[Filesystem::createFile] StorageManager is not initialized");
@@ -1213,6 +1245,162 @@ Filesystem::createFile(const FuseCreateFileContext& ctx) {
     }
 }
 
+bool vh::fs::isUploadStagingName(const std::string_view name) noexcept {
+    return name.starts_with(kHttpUploadTempPrefix) && name.ends_with(".part");
+}
+
+// ---- a vault held here as a Live mirror: each mutator's body runs as a pending change (mirror::submit::Local) ----------
+
+namespace {
+
+// A body's error code, carried out of Local::run (which takes a throw as "the change failed").
+struct FilesystemPendingError {
+    int err;
+};
+
+std::shared_ptr<Engine> filesystemEngineOf(const std::shared_ptr<Manager>& manager, const std::filesystem::path& fusePath) {
+    return manager ? manager->resolveStorageEngine(fusePath) : nullptr;
+}
+
+std::shared_ptr<vh::identities::User> filesystemPersonOf(const unsigned int userId) {
+    const auto& ids = vh::runtime::Deps::get().identityManager;
+    return ids ? ids->user(userId) : nullptr;
+}
+
+// Runs `body` (returning 0 or -errno) inside `pending`: an error is a change that failed (nothing pending is left when
+// nothing changed).
+int filesystemRunPending(vh::mirror::submit::Local& pending, const std::function<int()>& body) {
+    int err = 0;
+    try {
+        pending.run([&] {
+            err = body();
+            if (err) throw FilesystemPendingError{err};
+        });
+    } catch (const FilesystemPendingError& e) {
+        return e.err;
+    }
+    return err;
+}
+
+}
+
+int Filesystem::mkdir(const MkdirContext& ctx) {
+    const auto engine = ctx.engine ? ctx.engine : filesystemEngineOf(storageManager_, ctx.path);
+    if (!engine || !engine->vault || !ctx.user) return mkdirImpl(ctx);
+    vh::mirror::submit::Local pending(ctx.user, engine->vault->id, "mkdir");
+    if (!pending.active()) return mkdirImpl(ctx);
+    const auto& cache = runtime::Deps::get().fsCache;
+    if (cache->entryExists(ctx.path)) return ctx.failIfExists ? -EEXIST : 0;
+    // One folder at a time on a mirror: its parent must exist (a pending change creates exactly one entry).
+    if (!cache->entryExists(ctx.path.parent_path())) return -ENOENT;
+    (void)pending.creates(engine->fusePathToVaultPath(ctx.path));
+    return filesystemRunPending(pending, [&] { return mkdirImpl(ctx); });
+}
+
+int Filesystem::rename(const std::filesystem::path& oldPath, const std::filesystem::path& newPath,
+                       const std::shared_ptr<identities::User>& user, std::shared_ptr<Engine> engine,
+                       const RenameMode mode) {
+    if (!engine) engine = filesystemEngineOf(storageManager_, oldPath);
+    if (!engine || !engine->vault || !user || oldPath == newPath) return renameImpl(oldPath, newPath, user, engine, mode);
+    const auto from = engine->fusePathToVaultPath(oldPath);
+    const auto to = engine->fusePathToVaultPath(newPath);
+    vh::mirror::submit::Local pending(user, engine->vault->id, from.parent_path() == to.parent_path() ? "rename" : "move");
+    if (!pending.active()) return renameImpl(oldPath, newPath, user, engine, mode);
+    const auto& cache = runtime::Deps::get().fsCache;
+    if (!cache->entryExists(oldPath)) return -ENOENT;
+    pending.on(from, true);   // the moved entry names the change (a folder re-stamps what is under it)
+    if (cache->entryExists(newPath)) {
+        if (mode == RenameMode::NoReplace) return -EEXIST;
+        // rename(2) over an existing entry: the core removes it first, then moves (both under this one change).
+        pending.on(to, true);
+        pending.arg("replace", true);
+    }
+    pending.into(to);
+    return filesystemRunPending(pending, [&] { return renameImpl(oldPath, newPath, user, engine, mode); });
+}
+
+void Filesystem::remove(const std::filesystem::path& path, const unsigned int userId) {
+    const auto engine = filesystemEngineOf(storageManager_, path);
+    if (engine && engine->vault && isUploadStagingName(path.filename().string())) {
+        const vh::mirror::submit::Scratch scratch(engine->vault->id);
+        return removeImpl(path, userId);
+    }
+    const auto person = engine && engine->vault ? filesystemPersonOf(userId) : nullptr;
+    if (!person) return removeImpl(path, userId);
+    vh::mirror::submit::Local pending(person, engine->vault->id, "remove");
+    if (!pending.active()) return removeImpl(path, userId);
+    pending.on(engine->fusePathToVaultPath(path), true);
+    pending.run([&] { removeImpl(path, userId); });
+}
+
+int Filesystem::copy(const CopyContext& ctx) {
+    const auto engine = ctx.engine ? ctx.engine : filesystemEngineOf(storageManager_, ctx.from);
+    const auto person = engine && engine->vault ? filesystemPersonOf(ctx.userId) : nullptr;
+    if (!person) return copyImpl(ctx);
+    // On a mirror a copy is the core's to make: its new entries come back in the log with the core's uids.
+    vh::mirror::submit::Local pending(person, engine->vault->id, "copy");
+    if (!pending.active()) return copyImpl(ctx);
+    const auto& cache = runtime::Deps::get().fsCache;
+    if (!cache->entryExists(ctx.from)) return -ENOENT;
+    if (cache->entryExists(ctx.to)) return -EEXIST;
+    pending.on(engine->fusePathToVaultPath(ctx.from), false);
+    pending.into(engine->fusePathToVaultPath(ctx.to));
+    pending.submitOnly();
+    pending.run([] {});
+    return 0;
+}
+
+std::shared_ptr<File> Filesystem::createFile(const NewFileContext& ctx) {
+    const auto engine = ctx.engine ? ctx.engine : filesystemEngineOf(storageManager_, ctx.path);
+    if (engine && engine->vault && isUploadStagingName(ctx.path.filename().string())) {
+        const vh::mirror::submit::Scratch scratch(engine->vault->id);
+        return createFileImpl(ctx);
+    }
+    if (!ctx.user || !engine || !engine->vault) return createFileImpl(ctx);
+    vh::mirror::submit::Local pending(ctx.user, engine->vault->id, "write");
+    if (!pending.active()) return createFileImpl(ctx);
+    const auto existing = runtime::Deps::get().fsCache->getEntry(ctx.fuse_path);
+    if (existing) {
+        const auto file = std::dynamic_pointer_cast<File>(existing);
+        // What createFileImpl refuses (a folder there, a create over a file) it refuses with nothing pending.
+        if (!file || !ctx.overwrite) return createFileImpl(ctx);
+        pending.on(ctx.path, false);
+        pending.base(storage::generationOf(*file).sourceId());
+    } else {
+        (void)pending.creates(ctx.path);
+    }
+    std::shared_ptr<File> out;
+    pending.run([&] {
+        out = createFileImpl(ctx);
+        if (out) pending.content(*out);
+    });
+    return out;
+}
+
+std::pair<int, std::shared_ptr<model::Entry>> Filesystem::createFile(const FuseCreateFileContext& ctx) {
+    const auto& resolved = ctx.resolved;
+    if (resolved.ok() && resolved.path && resolved.engine && resolved.engine->vault &&
+        isUploadStagingName(resolved.path->filename().string())) {
+        const vh::mirror::submit::Scratch scratch(resolved.engine->vault->id);
+        return createFileImpl(ctx);
+    }
+    if (!resolved.ok() || !resolved.user || !resolved.path || !resolved.engine || !resolved.engine->vault)
+        return createFileImpl(ctx);
+    vh::mirror::submit::Local pending(resolved.user, resolved.engine->vault->id, "write");
+    if (!pending.active()) return createFileImpl(ctx);
+    if (runtime::Deps::get().fsCache->entryExists(*resolved.path)) return {-EEXIST, nullptr};
+    (void)pending.creates(resolved.engine->fusePathToVaultPath(*resolved.path));
+    std::pair<int, std::shared_ptr<model::Entry>> out{-EIO, nullptr};
+    const auto err = filesystemRunPending(pending, [&] {
+        out = createFileImpl(ctx);
+        if (out.first == 0)
+            if (const auto file = std::dynamic_pointer_cast<File>(out.second)) pending.content(*file);
+        return out.first;
+    });
+    if (err) return {err, nullptr};
+    return out;
+}
+
 void RenameJournal::rollback() noexcept {
     for (auto it = moved.rbegin(); it != moved.rend(); ++it) {
         std::error_code ec;
@@ -1262,11 +1450,11 @@ int replaceRefusal(const std::shared_ptr<Entry>& source, const std::shared_ptr<E
 
 }
 
-int Filesystem::rename(const std::filesystem::path& oldPath,
-                       const std::filesystem::path& newPath,
-                       const std::shared_ptr<identities::User>& user,
-                       std::shared_ptr<Engine> engine,
-                       const RenameMode mode) {
+int Filesystem::renameImpl(const std::filesystem::path& oldPath,
+                           const std::filesystem::path& newPath,
+                           const std::shared_ptr<identities::User>& user,
+                           std::shared_ptr<Engine> engine,
+                           const RenameMode mode) {
     std::scoped_lock lock(mutex_);
     RenameJournal journal;
 
@@ -1298,6 +1486,9 @@ int Filesystem::rename(const std::filesystem::path& oldPath,
                 "[Filesystem::rename] No storage engine found for source path: {}",
                 oldPath.string());
             return -ENOENT;
+        }
+        if (filesystemMirrorRefused(engine, "rename")) {
+            return -EROFS;
         }
 
         const auto toEngine = storageManager_->resolveStorageEngine(newPath);
@@ -1512,9 +1703,18 @@ int Filesystem::handleRename(const RenameContext& ctx) {
     }
 
     const auto oldBackingPath = entry->backing_path;
+    // A mirror's file whose contents have not arrived yet (mirror_content_pending): the move is the row's alone; the
+    // bytes are linked wherever the file is when they come (the receive path reads the row then).
+    bool contentsPending = false;
+    if (!symlinkStatusExists(oldBackingPath) && !entry->isDirectory() && !entry->isSymlink() && entry->vault_id &&
+        vh::mirror::access::held(static_cast<uint32_t>(*entry->vault_id)))
+        if (const auto f = std::static_pointer_cast<File>(entry); f->object_uid)
+            contentsPending = db::query::mirror::PendingContents::get(static_cast<uint32_t>(*entry->vault_id),
+                                                                      *f->object_uid)
+                                  .has_value();
     // A directory a restore or an apply created has no backing directory until something is stored in it (the drill:
     // moving an empty restored folder failed with ENOENT); the destination's is created below.
-    if (!symlinkStatusExists(oldBackingPath) && !entry->isDirectory()) {
+    if (!symlinkStatusExists(oldBackingPath) && !entry->isDirectory() && !contentsPending) {
         log::Registry::fs()->error(
             "[Filesystem::handleRename] Source backing path does not exist: {}",
             oldBackingPath.string());
@@ -1539,6 +1739,10 @@ int Filesystem::handleRename(const RenameContext& ctx) {
     if (entry->isDirectory()) {
         if (std::filesystem::create_directories(entry->backing_path))
             ctx.journal.created.push_back(entry->backing_path);
+    } else if (contentsPending) {
+        // Nothing on this disk to move yet.
+        if (std::filesystem::create_directories(entry->backing_path.parent_path()))
+            ctx.journal.created.push_back(entry->backing_path.parent_path());
     } else if (entry->isSymlink() || canFastPath(entry, ctx.engine)) {
         // Within a vault the bytes only move (see canFastPath).
         if (entry->backing_path != oldBackingPath) {

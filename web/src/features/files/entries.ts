@@ -19,6 +19,8 @@ export interface Entry {
   dirCount?: number
   // The server's preview plan (absent from older daemons: then preview/plan.ts falls back to isPreviewable).
   plan?: PreviewPlan
+  // A detached mirror's file whose contents never arrived: listed with its size, but it can't be opened.
+  missing?: boolean
 }
 
 // Normalized server preview plan. `derived` is always a list here.
@@ -68,6 +70,7 @@ export const toEntry = (raw: unknown, parentPath: string): Entry => {
     fileCount: num(wire.file_count) ?? undefined,
     dirCount: num(wire.subdirectory_count) ?? undefined,
     plan: isDir ? undefined : toPlan(wire.preview),
+    missing: !isDir && wire.contents_missing === true ? true : undefined,
   }
 }
 

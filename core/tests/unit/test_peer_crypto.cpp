@@ -2,13 +2,12 @@
 // (core/test-assets/peer/pairing-vectors.json, computed independently by tools/dev/peer_pairing_vectors.py), the
 // domain separation from device pairing (invariant 3), every card field bound into the code (invariant 4), cards and
 // endpoints as they travel, the in-memory link requests, the router's peer branch (invariants 1 and 8, with the MCP
-// catalog and ops' own refusal) and the experimental switch. The DB-backed half is test_peer_link_db.cpp.
+// catalog and ops' own refusal) and the removed switch's config key. The DB-backed half is test_peer_link_db.cpp.
 
 #include "Contract.hpp"
 #include "Mcp.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "config/Config.hpp"
-#include "config/Registry.hpp"
 #include "device/Crypto.hpp"
 #include "device/Pairing.hpp"
 #include "device/Peer.hpp"
@@ -30,6 +29,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <memory>
 #include <set>
 #include <string>
@@ -406,7 +406,24 @@ std::shared_ptr<protocols::ws::Session> peerSession(const bool pairing) {
 }
 
 std::vector<std::string> peerWireSet() {
-    return {"peer.hello", "peer.ping", "peer.endpoints", "peer.identity.rotate", "peer.unlinked"};
+    return {"peer.hello",        "peer.ping",          "peer.endpoints",   "peer.identity.rotate", "peer.unlinked",
+            // starting a mirror (mirror phase 2 wave 3, piece A)
+            "peer.mirror.offer", "peer.mirror.answer", "peer.mirror.keys", "peer.mirror.begin",    "peer.mirror.grant",
+            "peer.mirror.cancel",
+            // following the core (piece B)
+            "peer.mirror.tree",  "peer.mirror.log",    "peer.mirror.ack",  "peer.mirror.notify",
+            // a change made on the mirror (wave 4 piece B)
+            "peer.mirror.submit",
+            // leaving a mirror (wave 5 piece A)
+            "peer.mirror.detached", "peer.mirror.deleting",
+            // resync (wave 5 piece B)
+            "peer.mirror.resync",
+            // the planned switch (wave 5 piece B)
+            "peer.mirror.switch.request", "peer.mirror.switch.prepare", "peer.mirror.switch.commit",
+            // take over: the old core learns (wave 5 piece B)
+            "peer.mirror.promoted",
+            // key rotation on a mirrored vault
+            "peer.mirror.key"};
 }
 
 // Invariant 1: a peer session can call no command outside the peer set, whatever its vault roles are.
@@ -423,7 +440,7 @@ TEST(PeerRouting, ALinkedServerRunsThePeerWireSetAndNothingElse) {
     std::vector<std::string> names;
     for (const auto& c : everything) names.push_back(c.command);
     // Commands no book names (a later one, a typo, the pairing commands' look-alikes) are refused too: fail closed.
-    for (const auto* invented : {"peer.mirror.offer", "peer.identity.list", "peer.pings", "fs.dir.list.all", "x"})
+    for (const auto* invented : {"peer.mirror.submit", "peer.identity.list", "peer.pings", "fs.dir.list.all", "x"})
         names.emplace_back(invented);
     for (const auto& c : names)
         EXPECT_EQ(protocols::ws::Router::classifyCommand(c, *session),
@@ -458,8 +475,8 @@ TEST(PeerRouting, ScopedRelayedShareAndAgentCallersNeverManageLinks) {
     std::vector<std::string> management;
     for (const auto& c : contract::ws::commands())
         if (c.command.starts_with("peer.") && c.auth == "human") management.push_back(c.command);
-    ASSERT_EQ(management.size(), 15u) << "the twelve of the design, peer.status and peer.policy.get|set";
-    EXPECT_NE(std::ranges::find(management, std::string("peer.status")), management.end());
+    ASSERT_EQ(management.size(), 14u) << "the twelve of the design and peer.policy.get|set";
+    EXPECT_EQ(std::ranges::find(management, std::string("peer.status")), management.end()) << "the switch is gone";
     // Device principals are registered with the session manager: each is closed at the end.
     const auto full = deviceSession("destructive", false);
     const auto readOnly = deviceSession("read", false);
@@ -487,10 +504,6 @@ TEST(PeerRouting, ScopedRelayedShareAndAgentCallersNeverManageLinks) {
     EXPECT_FALSE(catalog.hasTool("peer_list"));
 
     // ops refuses them too (the router is not the only gate): an agent, a scoped device, a relayed one.
-    auto cfg = config::Registry::get();
-    const auto saved = cfg;
-    cfg.peers.experimental = true;
-    config::Registry::set(cfg);
     const auto admin = detachedSuperAdmin(5303);
     const auto refusedAs = [&](const std::function<void()>& call) {
         try {
@@ -505,49 +518,33 @@ TEST(PeerRouting, ScopedRelayedShareAndAgentCallersNeverManageLinks) {
         refusedAs([&] { (void)ops::peers::list(admin); });
         refusedAs([&] { (void)ops::peers::openWindow(admin); });
         refusedAs([&] { (void)ops::peers::linkStart(admin, {{.host = "h", .port = 1, .kind = "manual"}}, std::nullopt); });
-        refusedAs([&] { (void)ops::peers::enabled(admin); });
     }
     for (const auto& session : {readOnly, relayed}) {
         const auth::stepup::Scope device(session);
         refusedAs([&] { (void)ops::peers::unlink(admin, "1"); });
     }
-    config::Registry::set(saved);
     for (const auto& session : {full, readOnly, writeOnly, relayed}) session->close();
 }
 
-// ---- the switch ------------------------------------------------------------------------------------------------------
+// ---- the removed switch -------------------------------------------------------------------------------------------
 
-TEST(PeerSwitch, OffByDefaultAndEveryOperationSaysSo) {
-    EXPECT_FALSE(config::Config{}.peers.experimental);
-    // This tree's deploy/config/config.yaml ships it off.
-    const auto shipped = config::loadConfig(
-        (std::filesystem::path(VH_TEST_ASSETS_DIR).parent_path().parent_path() / "deploy" / "config" / "config.yaml").string());
-    EXPECT_FALSE(shipped.peers.experimental);
-    const auto path = std::filesystem::temp_directory_path() / ("vh-peer-switch-" + std::to_string(::getpid()) + ".yaml");
-    std::ofstream(path) << "peers:\n  experimental: true\n";
-    EXPECT_TRUE(config::loadConfig(path.string()).peers.experimental);
-    std::filesystem::remove(path);
-
-    auto cfg = config::Registry::get();
-    const auto saved = cfg;
-    cfg.peers.experimental = false;
-    config::Registry::set(cfg);
-    const auto admin = detachedSuperAdmin(5304);
-    const auto off = [&](const std::function<void()>& call) {
-        try {
-            call();
-            ADD_FAILURE() << "not refused";
-        } catch (const ops::Refused& e) {
-            EXPECT_EQ(e.code, "peers_experimental");
-        }
-    };
-    off([&] { (void)ops::peers::openWindow(admin); });
-    off([&] { (void)ops::peers::list(admin); });
-    off([&] { (void)ops::peers::linkStart(admin, {{.host = "h", .port = 1, .kind = "manual"}}, std::nullopt); });
-    off([&] { (void)ops::peers::unlink(admin, "1"); });
-    off([&] { (void)ops::peers::pairRequest(vh::device::Peer{}, json::object()); });
-    EXPECT_FALSE(ops::peers::enabled(admin)) << "peer.status answers the switch instead of refusing";
-    config::Registry::set(saved);
+// Linked servers ship on: the shipped config.yaml has no `peers:` section, and one an older install kept (the switch,
+// on or off) still loads, ignored.
+TEST(PeerSwitch, AConfigThatStillCarriesTheRemovedSwitchLoads) {
+    const auto shippedPath =
+        std::filesystem::path(VH_TEST_ASSETS_DIR).parent_path().parent_path() / "deploy" / "config" / "config.yaml";
+    std::ifstream shipped(shippedPath);
+    const std::string text((std::istreambuf_iterator<char>(shipped)), std::istreambuf_iterator<char>());
+    ASSERT_FALSE(text.empty());
+    EXPECT_EQ(text.find("\npeers:"), std::string::npos);
+    EXPECT_NO_THROW((void)config::loadConfig(shippedPath.string()));
+    for (const auto* value : {"true", "false"}) {
+        const auto path =
+            std::filesystem::temp_directory_path() / ("vh-peer-switch-" + std::to_string(::getpid()) + ".yaml");
+        std::ofstream(path) << "peers:\n  experimental: " << value << "\n";
+        EXPECT_NO_THROW((void)config::loadConfig(path.string())) << value;
+        std::filesystem::remove(path);
+    }
 }
 
 }

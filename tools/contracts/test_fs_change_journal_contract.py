@@ -41,10 +41,11 @@ WRITERS: dict[str, dict[tuple[str, str], int]] = {
         ("INSERT INTO", "directories"): 1,
     },
     # upsert_file_full: create (files insert) or update (content); update_file_only (the FUSE seal and overwrite):
-    # update; set/compare_and_set IV and version: update for a new seal, nothing for key rotation;
+    # update; set/compare_and_set IV and version (for key rotation also the sealed-bytes hash, under vh.key_rotation:
+    # migration 170): update for a new seal, nothing for key rotation;
     # mark_file_trashed(_by_id): delete.
     "core/src/db/preparedStatements/fs/files.cpp": {
-        ("INSERT INTO", "files"): 1, ("UPDATE", "fs_entry"): 1, ("UPDATE", "files"): 3, ("INSERT INTO", "fs_entry"): 1,
+        ("INSERT INTO", "files"): 1, ("UPDATE", "fs_entry"): 1, ("UPDATE", "files"): 4, ("INSERT INTO", "fs_entry"): 1,
         ("DELETE FROM", "files"): 2, ("DELETE FROM", "fs_entry"): 2,
     },
     # update_fs_entry_by_inode / rename_fs_entry: move, rename or update; delete_fs_entry*: delete.
@@ -66,6 +67,27 @@ WRITERS: dict[str, dict[tuple[str, str], int]] = {
         ("INSERT INTO", "fs_entry"): 1, ("INSERT INTO", "directories"): 2, ("INSERT INTO", "files"): 1,
         ("INSERT INTO", "symlinks"): 1,
     },
+    # The server mirror's log applier (design/peers/mirror.md "As built: following the core"; db::query::mirror::
+    # ApplyRows): the core's entries created (the typed inserts: create), moved or renamed and their paths rewritten
+    # (fs_entry update: move or rename), their attributes, times and content (fs_entry / files / symlinks update:
+    # update), removed (fs_entry delete: delete). On the mirror only, inside one transaction per group; the journal
+    # records them for this server's own clients. Covered in MirrorFollowDbTest.
+    "core/src/db/query/mirror/Apply.cpp": {
+        ("INSERT INTO", "fs_entry"): 1, ("INSERT INTO", "directories"): 1, ("INSERT INTO", "files"): 1,
+        ("INSERT INTO", "symlinks"): 1, ("UPDATE", "fs_entry"): 3, ("UPDATE", "files"): 1, ("UPDATE", "symlinks"): 1,
+        ("DELETE FROM", "fs_entry"): 1,
+    },
+    # Starting a mirror (migration 163): the mirror's new vault and its root folder, in one transaction; the root is
+    # never journaled (no entries below it yet).
+    "core/src/db/query/mirror/Start.cpp": {
+        ("INSERT INTO", "fs_entry"): 1, ("INSERT INTO", "directories"): 1,
+    },
+    # A setattr through the mount (chmod, chown, utimens: ops::fs::setAttributes, wave 4): mode (update), owner, group
+    # and modification time (nothing: not journaled), in one transaction. Covered in FsChangeJournalDbTest.
+    "core/src/db/query/fs/Entry.cpp": {("UPDATE", "fs_entry"): 1},
+    # Detach a copy (wave 5 piece C): the new vault's entries take their source's mode and modification time in one
+    # statement, as a setattr does (mode: update; time: nothing). Covered in MirrorCopyDbTest.
+    "core/src/db/query/mirror/Copy.cpp": {("UPDATE", "fs_entry"): 1},
     # Vault deletion/revival re-parents the vault root and clears inodes: the root is never journaled, inodes aren't
     # changes, and a purge's cascade skips a deleted vault.
     "core/src/db/query/vault/Deletion.cpp": {("UPDATE", "fs_entry"): 3},

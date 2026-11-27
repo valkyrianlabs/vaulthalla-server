@@ -219,7 +219,8 @@ json Vaults::remove(const json &payload, const std::shared_ptr<Session> &session
         .now = payload.value("now", false),
         .delete_upstream = vaultPayloadField<bool>(payload, "delete_upstream"),
         .confirm_now = payload.value("confirm_now", false),
-        .accept_key_loss = payload.value("accept_key_loss", false)
+        .accept_key_loss = payload.value("accept_key_loss", false),
+        .mirror_copy = vaultPayloadField<std::string>(payload, "mirror_copy")
     });
     return {{"deletion", deletion ? json(*deletion) : json(nullptr)}};
 }

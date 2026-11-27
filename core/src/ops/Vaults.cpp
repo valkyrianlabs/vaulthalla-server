@@ -1,5 +1,10 @@
+#include "mirror/start/Guard.hpp"
 #include "ops/Vaults.hpp"
+#include "mirror/access/Access.hpp"
 #include "ops/CloudStorage.hpp"
+#include "ops/PeerPolicy.hpp"
+#include "db/query/mirror/Detach.hpp"
+#include "mirror/leave/Leave.hpp"
 #include "sync/vault_manifest/Replicas.hpp"
 #include "db/query/sync/ManifestApply.hpp"
 #include "ops/VaultRemote.hpp"
@@ -432,6 +437,9 @@ VaultPtr create(const Actor& actor, const Create& req) {
 VaultPtr update(const Actor& actor, const Update& req) {
     requireActor(actor);
     const auto existing = requireVault(req.id);
+    // A copy's settings are its core's: said to whoever may see the vault (a copy's admin rights here are View only, so
+    // after the Edit check this would never be reached).
+    if (canOnVault(actor, VaultPerm::View, existing->id)) vh::mirror::access::refuseIfHeld(existing->id, "vault.update");
     if (!canOnVault(actor, VaultPerm::Edit, existing->id)) throw Denied("you do not have permission to edit this vault");
 
     auto staged = copyOf(existing);
@@ -566,8 +574,10 @@ void refuseUpstreamDeleteOfAdoptedBucket(const unsigned int vaultId, const bool 
 namespace {
 // data.destroy (#359) is bound to the vault and to what the removal does: a grant for a soft delete never purges it now
 // or takes its upstream data.
-std::string vaultRemoveStepUpTarget(const unsigned int vaultId, const bool now, const bool deleteUpstream) {
-    return "storage.vault.remove:" + std::to_string(vaultId) + (now ? ":now" : "") + (deleteUpstream ? ":upstream" : "");
+std::string vaultRemoveStepUpTarget(const unsigned int vaultId, const bool now, const bool deleteUpstream,
+                                    const bool mirrorCopy = false) {
+    return "storage.vault.remove:" + std::to_string(vaultId) + (now ? ":now" : "") + (deleteUpstream ? ":upstream" : "") +
+           (mirrorCopy ? ":mirror-copy" : "");
 }
 }
 
@@ -582,6 +592,27 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
         if (!pending || pending->state == vault::model::DeletionState::Purged)
             throw NotFound("vault not found: " + std::to_string(req.id));
         if (!canRemoveDeleted(actor, *pending)) throw Denied("you do not have permission to remove this vault");
+        vh::mirror::start::refuseDeletingAHeldCopy(req.id);
+        // A vault this server mirrors: its mirror ends at the purge with the recorded choice, which whoever may delete the
+        // vault can change during the window (the same step-up rule as the delete).
+        const auto newChoice = vh::mirror::start::mirrorCopyFrom(req.mirror_copy);
+        const bool mirrored = vh::mirror::leave::coreMirrored(req.id);
+        if (mirrored && newChoice) {
+            peer_policy::requirePerson(actor, "decide what happens to a mirror's copy");
+            const auto text = *newChoice == vh::mirror::start::MirrorCopy::Remove ? std::string("remove")
+                                                                                   : std::string("leave");
+            if (!req.now) {
+                auth::stepup::require(auth::stepup::Family::DataDestroy,
+                                      vaultRemoveStepUpTarget(req.id, false, false, text == "remove"));
+                vh::mirror::leave::recordDeletionChoice(req.id, text);
+                log::Registry::audit()->info("[ops::vaults] {} changed what deleted vault {} ('{}')'s purge does to its "
+                                             "mirror's copy: {}", actor->name(), req.id, pending->vault_name, text);
+                return db::query::vault::Deletion::get(req.id);
+            }
+        }
+        const bool removeMirrorCopy =
+            mirrored && (newChoice ? *newChoice == vh::mirror::start::MirrorCopy::Remove
+                                   : vh::db::query::mirror::MirrorDetach::deletingCopy(req.id).value_or("") == "remove");
         if (!req.now)
             throw Conflict("vault '" + pending->vault_name + "' is already deleted (purge after " + when(pending->purge_after) +
                            "): restore it with `vh vault restore " + std::to_string(req.id) + "`, or purge it now with --now");
@@ -599,7 +630,9 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
                                std::chrono::seconds(pending->key_retain_until - pending->deleted_at));
         requireNowConfirmed(req.confirm_now, pending->vault_name);
         auth::stepup::require(auth::stepup::Family::DataDestroy,
-                              vaultRemoveStepUpTarget(req.id, true, deleteUpstream));
+                              vaultRemoveStepUpTarget(req.id, true, deleteUpstream, removeMirrorCopy));
+        if (mirrored && newChoice)
+            vh::mirror::leave::recordDeletionChoice(req.id, removeMirrorCopy ? "remove" : "leave");
         if (!vault::retention::expedite(req.id, pending->isS3() ? std::optional<bool>(deleteUpstream) : std::nullopt))
             throw Conflict("vault '" + pending->vault_name + "' was purged meanwhile");
         log::Registry::audit()->info("[ops::vaults] {} expedited the purge of deleted vault {} ('{}')", actor->name(), req.id,
@@ -607,7 +640,19 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
         return db::query::vault::Deletion::get(req.id);
     }
 
-    if (!canOnVault(actor, VaultPerm::Remove, req.id)) throw Denied("you do not have permission to remove this vault");
+    // A copy held here is never deleted as a vault (detach it, or vh mirror cancel an orphaned one); a vault this server
+    // is the core of a mirror of is deleted in one step with the caller's choice for the mirror's copy, which ends the
+    // mirror first (mirror/start/Guard.hpp). A super admin is told why even where the mirror's rule leaves no Remove
+    // permission (another server's vault, an orphaned copy).
+    const auto copyChoice = vh::mirror::start::mirrorCopyFrom(req.mirror_copy);
+    if (!canOnVault(actor, VaultPerm::Remove, req.id)) {
+        if (actor->isSuperAdmin()) (void)vh::mirror::start::deletionEndsMirror(req.id, copyChoice);
+        throw Denied("you do not have permission to remove this vault");
+    }
+    const bool endsMirror = vh::mirror::start::deletionEndsMirror(req.id, copyChoice);
+    // Ending a mirror is a person's decision, never an agent's or a scoped device's (as mirror.cancel).
+    if (endsMirror) peer_policy::requirePerson(actor, "end a vault's mirror");
+    const bool removeMirrorCopy = endsMirror && copyChoice == vh::mirror::start::MirrorCopy::Remove;
     const bool isS3 = live->type == VaultType::S3;
     if (req.delete_upstream && *req.delete_upstream && !isS3) throw Invalid("only S3 vaults have upstream data to delete");
     const bool deleteUpstream = isS3 && req.delete_upstream.value_or(false);
@@ -622,7 +667,10 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
     }
     if (req.now) requireNowConfirmed(req.confirm_now, live->name);
     auth::stepup::require(auth::stepup::Family::DataDestroy,
-                          vaultRemoveStepUpTarget(req.id, req.now, deleteUpstream));
+                          vaultRemoveStepUpTarget(req.id, req.now, deleteUpstream, removeMirrorCopy));
+    // Recorded with the deletion, never acted on now: the mirror is told it is being deleted (read-only there, with the
+    // date and the choice) and ends with this choice at the purge, so a restore within the window keeps it.
+    if (endsMirror) vh::mirror::leave::recordDeletionChoice(req.id, removeMirrorCopy ? "remove" : "leave");
 
     try {
         auto record = vault::retention::schedule(req.id, actor->id, req.now, deleteUpstream);
@@ -837,6 +885,7 @@ PolicyPtr updateSync(const Actor& actor, const unsigned int vaultId, const SyncP
     if (!rbac::resolver::Vault::has<SyncConfigPerm>({.user = actor, .permission = SyncConfigPerm::Edit, .vault_id = vaultId}))
         throw Denied("you do not have permission to change this vault's sync settings");
     if (patch.empty()) throw Invalid("no sync settings to change");
+    vh::mirror::access::refuseIfHeld(vaultId, "vault.sync.update");   // a copy's settings are its core's
 
     auto policy = copyPolicy(currentPolicy(vaultId), vault->type);
     refuseMirrorOnReplica(vaultId, patch);

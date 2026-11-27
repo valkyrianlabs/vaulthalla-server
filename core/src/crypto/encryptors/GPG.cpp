@@ -17,6 +17,21 @@ void GPG::encryptToFile(const json& payload,
     int pipefd[2];
     if (pipe(pipefd) == -1) throw std::runtime_error("Failed to create pipe for GPG input");
 
+    // Everything the child needs is built here: between fork and exec a multithreaded process may only make
+    // async-signal-safe calls (no allocation), or the child can deadlock on a lock another thread held at the fork.
+    std::vector args = {
+        "gpg",
+        "--batch",
+        "--yes",
+        "--trust-model", "always",
+        "--encrypt",
+        "--recipient", recipient.c_str(),
+        "--output", outputPath.c_str()
+    };
+    if (armor)
+        args.push_back("--armor");
+    args.push_back(nullptr);
+
     const pid_t pid = fork();
     if (pid < 0) throw std::runtime_error("Failed to fork GPG process");
 
@@ -25,20 +40,6 @@ void GPG::encryptToFile(const json& payload,
         dup2(pipefd[0], STDIN_FILENO);
         close(pipefd[1]);
         close(pipefd[0]);
-
-        std::vector args = {
-            "gpg",
-            "--batch",
-            "--yes",
-            "--trust-model", "always",
-            "--encrypt",
-            "--recipient", recipient.c_str(),
-            "--output", outputPath.c_str()
-        };
-        if (armor)
-            args.push_back("--armor");
-
-        args.push_back(nullptr);
         execvp("gpg", const_cast<char* const*>(args.data()));
         _exit(127); // exec failed
     }

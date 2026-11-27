@@ -9,6 +9,7 @@
 #include <ctime>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -96,6 +97,13 @@ public:
     // Up to `limit` rows (1..kMaxPageRows) of whole groups numbered after `after`, oldest first. A first group larger
     // than `limit` comes whole. Does not sequence.
     [[nodiscard]] static Page groupsAfter(uint32_t vaultId, Position after, std::size_t limit);
+    // Up to `limit` numbered rows of one group (term, txid) after `afterSeq`, in order: a group too large for one answer
+    // is served in parts (peer.mirror.log). Does not check retention: the caller pages from a groupsAfter it read.
+    [[nodiscard]] static std::vector<Row> groupRows(uint32_t vaultId, uint64_t term, uint64_t txid, uint64_t afterSeq,
+                                                    std::size_t limit);
+    // The first and last numbered seq of one group, nullopt when no numbered row of it is in the log.
+    [[nodiscard]] static std::optional<std::pair<uint64_t, uint64_t>> groupSpan(uint32_t vaultId, uint64_t term,
+                                                                                uint64_t txid);
 
     // Retention (the Janitor): numbered rows older than `maxAge`, or more than `maxRows` behind the vault's last
     // number, go, but never one the mirror has not acknowledged; pending rows never. Rows and entry hashes of vaults
@@ -104,7 +112,12 @@ public:
 
     // Marks `txn` as applying a core's changes (SET LOCAL vh.mirror_apply = 'on', the mirror's applier): its changes
     // write no log rows and move no entry hash.
+    // (Migration 165) it also passes the backstop of a vault held here as another server's copy.
     static void markMirrorApply(pqxx::work& txn);
+    // Marks `txn` as a change made on the mirror and accepted as pending (SET LOCAL vh.mirror_local = 'on'; wave 4
+    // piece B's submit path): it passes migration 165's backstop of a held vault. Nothing calls it on piece A's branch
+    // but tests.
+    static void markMirrorLocal(pqxx::work& txn);
 };
 
 class Digests {

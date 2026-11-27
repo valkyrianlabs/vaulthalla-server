@@ -216,7 +216,7 @@ protected:
         d.crypto.bufferAuthenticates = [this](const Bytes& b, const EncryptionState& s) {
             return keys.bufferAuthenticates(b, s);
         };
-        d.catalog.commit = [this](const fs::model::File& f, const EncryptionState& expected) {
+        d.catalog.commit = [this](const fs::model::File& f, const EncryptionState& expected, bool) {
             auto& row = rows.at(f.path.string());
             if (!(row == expected)) return false;
             row = rotation::stateOf(f);

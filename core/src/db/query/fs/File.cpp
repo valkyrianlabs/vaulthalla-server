@@ -1,4 +1,5 @@
 #include "db/query/fs/File.hpp"
+#include "db/query/fs/AssignedUid.hpp"
 #include "db/query/fs/Directory.hpp"
 #include "db/Rows.hpp"
 #include "db/Transactions.hpp"
@@ -30,6 +31,9 @@ std::string objectUidFor(pqxx::work& txn, const std::shared_ptr<vh::fs::model::F
         const auto res = txn.exec(pqxx::prepped{"get_file_object_uid_by_inode"}, *file->inode);
         if (!res.empty()) file->object_uid = vh::crypto::id::fromUuid(res.one_field_ref().as<std::string>());
     }
+    // A uid chosen before the creation (a mirror's pending change, its execution on the core) for a new file.
+    if (!file->object_uid && file->vault_id)
+        file->object_uid = AssignedUid::forPath(static_cast<uint32_t>(*file->vault_id), file->path);
     return vh::crypto::id::toUuid(file->object_uid.value_or(vh::crypto::id::newObjectUid()));
 }
 
@@ -362,12 +366,37 @@ void File::setEncryptionIVAndVersion(const FilePtr& f) {
     });
 }
 
-bool File::compareAndSetEncryptionIVAndVersion(const F& f, const std::string& expectedIv, const unsigned int expectedVersion) {
+bool File::compareAndSetEncryptionIVAndVersion(const F& f, const std::string& expectedIv, const unsigned int expectedVersion,
+                                               const std::optional<std::string>& contentHash, const bool published) {
     if (!f.vault_id) throw std::invalid_argument("File::compareAndSetEncryptionIVAndVersion: file has no vault");
     return Transactions::exec("File::compareAndSetEncryptionIVAndVersion", [&](pqxx::work& txn) {
         pqxx::params p{*f.vault_id, to_utf8_string(f.path.u8string()), f.encryption_iv, f.encrypted_with_key_version,
                        expectedIv, expectedVersion};
-        return txn.exec(pqxx::prepped{"compare_and_set_file_encryption_iv_and_version"}, p).affected_rows() == 1;
+        if (!contentHash)
+            return txn.exec(pqxx::prepped{"compare_and_set_file_encryption_iv_and_version"}, p).affected_rows() == 1;
+        p.append(*contentHash);
+        const auto before = txn.exec("SELECT f.fs_entry_id, f.content_hash FROM files f JOIN fs_entry fs ON fs.id = "
+                                     "f.fs_entry_id WHERE fs.vault_id = $1 AND fs.path = $2",
+                                     pqxx::params{*f.vault_id, to_utf8_string(f.path.u8string())});
+        // A key rotation's re-seal: the plaintext is the same, so the change journal records nothing (migration 170).
+        txn.exec("SELECT set_config('vh.key_rotation', 'on', true)");
+        const bool moved =
+            txn.exec(pqxx::prepped{"compare_and_set_file_encryption_iv_version_and_hash"}, p).affected_rows() == 1;
+        txn.exec("SELECT set_config('vh.key_rotation', 'off', true)");
+        if (!moved || before.empty() || before[0][1].is_null()) return moved;
+        const auto fileId = before[0][0].as<uint32_t>();
+        const auto oldHash = before[0][1].as<std::string>();
+        if (oldHash == *contentHash) return moved;
+        // The sync baseline agreed on the old generation, so it agrees on its re-seal.
+        txn.exec("UPDATE sync_file_baseline SET content_hash = $2 WHERE file_id = $1 AND content_hash = $3",
+                 pqxx::params{fileId, *contentHash, oldHash});
+        if (published) {
+            txn.exec("UPDATE sync_file_baseline SET remote_content_hash = $2 WHERE file_id = $1 AND "
+                     "remote_content_hash = $3", pqxx::params{fileId, *contentHash, oldHash});
+            txn.exec("UPDATE remote_object_index SET content_hash = $2 WHERE vault_id = $1 AND content_hash = $3 AND "
+                     "encryption_iv = $4", pqxx::params{*f.vault_id, *contentHash, oldHash, expectedIv});
+        }
+        return moved;
     });
 }
 

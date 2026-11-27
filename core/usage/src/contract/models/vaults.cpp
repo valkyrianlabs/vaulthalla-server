@@ -228,6 +228,26 @@ std::vector<WsModel> vaultModels() {
          boolean("editable").desc("False for a key managed storage issued: shown, never changed by people (its "
                                   "update and removal are refused).")}));
 
+    // A mirrored vault beside its row (mirror.list and mirror.get; ops::mirrors::toJson(Status), core/src/ops/Mirrors.cpp).
+    out.push_back(model("MirrorFirstCopy",
+        "A mirrored vault's first copy (ops::mirrors::toJson(Status)): on the mirror, how far it got; on the core, "
+        "whether its mirror acknowledged it (the core can't tell how many entries arrived).",
+        {boolean("finished"),
+         integer("entries_copied").nullable().desc("mirror: the baseline entries applied so far; core: null."),
+         integer("entries_total").nullable().desc("The baseline's entries while it is kept; null once dropped.")}));
+    out.push_back(model("MirrorSettings",
+        "The settings that apply to a mirrored vault's row (ops::mirrors::toJson(Status)): on a mirror, the versions it "
+        "keeps of what its core replaces or deletes; for the row's linked server, this server's link settings.",
+        {object("versions", "",
+                {boolean("enabled"), integer("keep_last").nullable(), integer("max_age_days").nullable(),
+                 integer("quota_bytes").nullable(), integer("set_by").nullable(), integer("set_at").nullable()})
+             .nullable()
+             .desc("A mirror row only (mirror.versions.set); null on the core."),
+         boolean("accept_all").desc("This server accepts every vault the linked server offers (mirror.accept_all.set)."),
+         boolean("keep_removed").desc("This server keeps the vaults the linked server removes (mirror.keep_removed.set)."),
+         boolean("mirror_all").desc("This server, as core, offers the linked server every vault "
+                                    "(mirror.mirror_all.set).")}));
+
     return out;
 }
 

@@ -96,7 +96,7 @@
   component. Areas: `files` (FileBrowser over an `FsSource` adapter — vault or share — with capability-driven UI,
   URL-addressed paths, virtualized list/grid, transfer manager), `shares`, `share` (anonymous recipient page),
   `health`, `vaults`, `access`, `account`, `credentials`, `cost`, `gateway`, `notifications`, `settings`, `auth`,
-  `syncConflicts`, `recovery`, `devices`, `peers`.
+  `syncConflicts`, `recovery`, `devices`, `peers`, `mirrors`.
 
 ## Server-owned ws contract
 
@@ -249,20 +249,17 @@ permission bits (D3): any signed-in user, super-admin parts gated with `useCan({
   server key fingerprint (grouped, copyable); `Switch` → `confirm()` → `device.remote.enable|disable`, whose answer
   replaces the cached status.
 
-## Linked servers (`features/peers`, `/linked-servers`; experimental)
+## Linked servers (`features/peers`, `/linked-servers`)
 
 The server link (design/peers/link.md, "Three ways to drive it": the web console) for super admins, with the same
-operations as `vh peer`. Experimental and off by default (`peers.experimental` in config.yaml), so the console never
-advertises it while it is off:
-- **The switch:** `signal.ts` (`usePeersAvailability`, in every route's first load via the nav) asks `peer.status` (super
-  admins only, cached 10 min, no retry). It is the one `peer.*` command that answers `{enabled}` while the switch is
-  off; every other one refuses `peers_experimental`. The nav item (System › "Linked servers", `requires: {superAdmin}`,
-  `shownWhen: 'peers'`) shows only while it is on. Opening the URL directly: not a super admin → the typed denied
-  state; switched off (or a server without `peer.status`) → one sentence, "Linked servers aren’t available on this
-  server" (`data-testid="peers-unavailable"`), nothing about turning it on; no other `peer.*` is sent.
-- **Page** (`LinkedServersPage.tsx`): heading with an Experimental badge, one sentence on what a link is for (the
-  trusted connection vault mirroring will use in a later release; it carries nothing else today), Accept a link and
-  Link a server. `peer.list {all: true}` every 15 s in `PeerTable` (unlinked rows behind "Show unlinked"): name, health
+operations as `vh peer`. Shipped on (the `peers.experimental` switch, `peer.status` and the console's "unavailable"
+state went on 2026-11-27):
+- **Nav:** System › "Linked servers", `requires: {superAdmin}`. Opening the URL as anyone else: the typed denied state,
+  and no `peer.*` is sent.
+- **Gate and tabs** (`Gate.tsx`): `PeersGate` (the denial for anyone but a super admin) wraps every page under
+  `/linked-servers`; `PeersTabs` links Servers (`/linked-servers`) and Mirrored vaults (`/linked-servers/mirrors`).
+- **Page** (`LinkedServersPage.tsx`): heading, one sentence on what a link is for (the
+  trusted connection mirrored vaults travel over; it carries nothing else), Accept a link and Link a server. `peer.list {all: true}` every 15 s in `PeerTable` (unlinked rows behind "Show unlinked"): name, health
   (`model.ts` `healthText`: Connected with since / who dialled / round trip / version, "other protocol" as a warning,
   Not connected with the last error and next try, unknown while nothing is known, never healthy by guess), node id
   (12 characters), key (16 hex, copy the full one), "Code compared by" (`compared_by`: "A person" or "Desktop", from the
@@ -287,17 +284,63 @@ advertises it while it is off:
   dialog while it runs cancels it too.
 - **Refusals** are shown with the server's words and their `data.code` (`parts.tsx` `PeerError`), never swallowed.
 - Every sentence is in `copy.ts`; `copy.test.ts` keeps any mention of mirroring, syncing or backups out of it except
-  the one purpose sentence. Pure helpers in `model.ts` (`model.test.ts`). `tests/e2e/peers.spec.ts` scripts `peer.*`,
+  the one purpose sentence (the mirror pages' words live in `features/mirrors/copy.ts`). Pure helpers in `model.ts` (`model.test.ts`). `tests/e2e/peers.spec.ts` scripts `peer.*`,
   `device.remote.status` and `auth.stepup.*` (offline or against a daemon): switched off, not a super admin, list
   health / rename / unlink, a refusal's code, accept (wrong code, step-up, link), conflict, link (validation, payload,
   step-up, code, outcome), failure and cancel on close; screenshots at 1280 and 390 px.
+
+## Mirrored vaults (`features/mirrors`, `/linked-servers/mirrors`)
+
+The server mirror (design/peers/mirror.md) as `vh mirror` offers it, for super admins behind the same `PeersGate`.
+- **List** (`MirroredVaultsPage.tsx`, `MirrorTable.tsx`): `mirror.list` every 15 s, `peer.list {all: true}` (the Servers
+  tab's cache entry) for names and link health, `mirror.held.list {}` for open held counts per vault. Columns: vault,
+  other server, this server's role (`ROLE_TEXT`), state with its sentence (`statusText`: live, first copy, read-only
+  when the link is down (never healthy by guess), paused, diverged, expired, stopped, switching, replaced as the core
+  (`rejoining`), both took over (`forked`), took over (a core whose take over waits for the old core), the core deleting it
+  with the date and what happens to the copy, orphaned, detached, the start's steps; a stop reason without words is
+  shown as its code), position (`positionText`: last change, confirmed through, unconfirmed count on the core), held.
+  A start whose vault doesn't exist here yet is cancelled from its row by offer (`cancelTarget`). **Offers**
+  (`OffersPanel.tsx`, `mirror.pending`, shown while any wait): size, files, owner there, the access granted here,
+  versions, expiry; Accept / Decline behind `confirm()`. **Mirror a vault** (`AddMirrorDialog`, lazy): vaults not
+  mirrored yet (`offerable`) and linked servers; `mirror.add` (keys step-up, named "Give a linked server this vault’s
+  keys" by `models/stepUp.ts`). **Per linked server** (`LinkSettingsDialog`, lazy): `mirror.accept_all.set` /
+  `mirror.keep_removed.set`; no read exists, so each starts unchosen and shows what the answer set.
+- **A vault** (`MirrorDetailPage.tsx`, `/linked-servers/mirrors/[vaultId]`): `mirror.get` (5 s while starting or
+  switching, else 15 s); on the mirror side also `mirror.detach.preview` (changes nothing) for pending changes,
+  first-copy progress (`Meter`), digest and missing files. The advice line (`adviceFor`, `data-testid="mirror-advice"`)
+  is the server's `advice` when mirror.get carries one, else the console's own from the role and state (the wording
+  follows `vh mirror info`); the held count is added either way.
+  Actions by `actionsFor` (and the preview's first-copy flag): core live → Switch, End (`EndMirrorDialog`: leave the copy orphaned, the default, or ask to
+  remove it; data.destroy step-up, "End a vault’s mirror"); mirror → Switch (live), Resync (diverged / expired /
+  stopped; `confirm()`, disabled while the link is down), Detach (`DetachDialog`: the preview's pending, held and
+  missing files with a copy-all, owner, the vault's name typed as `confirm_name`), Versions (`VersionsDialog`:
+  `mirror.versions.set`, blank limits = the server's defaults; no read exists); orphaned → Detach, Remove (typed name);
+  mirror (first copy finished, not diverged or starting) → Take over (`TakeoverDialog`: what it does, the warning that the
+  old core may hold changes this server never received, the preview's pending and missing counts, the vault's name typed
+  as `confirm`; data.destroy step-up named "Take over as a vault’s core"; a refusal such as `mirror_core_reachable` shows
+  the server's sentence; the answer's `warning` is shown); mirror and orphaned → Detach a copy (`DetachCopyDialog`:
+  `mirror.detach.copy {name, owner}`, then `mirror.detach.copy.get` every 1.5 s while running for entries and bytes,
+  Cancel (`mirror.detach.copy.cancel`, `confirm()`), the finished job's skipped files with a copy-all); a replaced or
+  forked core → Resync, Detach; a core whose take over is open → Detach too;
+  a completed mirror never offers cancel (`mirror_detach_required`). Switch (`SwitchDialog`) waits for the outcome and
+  says what the old core keeps (`accessText`); `mirror_switch_no_role` shows the server's sentence and a checkbox that
+  resends with `accept_no_access`. **Held changes** (`HeldChanges.tsx`): `mirror.held.list {vault_id[, all]}`, the
+  change and path, the core's reason in its own words, Retry (live only), Discard (`confirm()`), save the person's
+  version (`mirror.held.get`, base64 to a Blob; `too_large` shows `vh mirror save <id>`).
+- Refusals use `PeerError` (the server's words and `data.code`). Every sentence is in `copy.ts` (`copy.test.ts`: no
+  command names, codes or config names; each confirmation one or two sentences). Pure helpers in `model.ts`
+  (`model.test.ts`). `tests/e2e/mirrors.spec.ts` scripts `mirror.*`, `peer.*`, `storage.vault.*` and `auth.stepup.*`
+  offline or against a daemon, with screenshots at 1280 and 390 px.
 
 ## Vault deletion (#162)
 
 `features/vaults/DeleteVaultDialog.tsx` (lazy, from Settings → Delete vault) is one dialog: it reads
 `storage.vault.remove.plan` (re-read on window focus, so a key exported from a terminal clears the warning), shows the
 restore and key windows, the S3 upstream choice (keep by default), the key-loss warning with the export command and a
-required "I understand" checkbox, then Delete or Delete now (typed name). `features/vaults/DeletedVaults.tsx` (lazy, Vaults
+required "I understand" checkbox, then Delete or Delete now (typed name). A vault this server mirrors (`mirror.get` role
+core, read while linked servers are on, or a `mirror_copy_choice_required` refusal) asks what happens to the copy on
+the other server (`mirror_copy`: leave or remove, no default); a copy held here (role mirror / orphaned) can't be
+deleted and the dialog links to its mirror page. `features/vaults/DeletedVaults.tsx` (lazy, Vaults
 page, accounts with a vault remove permission) lists `storage.vault.deleted.list` with Restore / Purge now and keeps the
 "export this key" warning on records with `upstream_key_at_risk`. Keys are never exported through the browser.
 
@@ -365,8 +408,8 @@ Typed ws `recovery.*` / `vault.recovery.*` (`models/recovery.ts`, `RECOVERY_CODE
 `/login`, `/files/[vaultId]/[...path]`, `/shares`, `/vaults` (+ `/new`, `/[id]` tabs: overview, access, shares,
 sync, gateway, settings), `/users` (+ `/new`, `/[name]`), `/groups`, `/roles` (+ `/new?type=`, `/[type]/[id]`),
 `/credentials` (+ `/new`, `/[id]`), `/cost`, `/s3-gateway`, `/health` (+ runtime, filesystem, storage, activity),
-`/notifications`, `/settings`, `/sync-conflicts`, `/account`, `/devices` (+ `/all`), `/linked-servers` (super admins, only
-with `peers.experimental`), `/share/[token]/[...path]` (public, no shell). Old URLs (`/fs`,
+`/notifications`, `/settings`, `/sync-conflicts`, `/account`, `/devices` (+ `/all`), `/linked-servers` (+ `/mirrors`,
+`/mirrors/[vaultId]`; super admins), `/share/[token]/[...path]` (public, no shell). Old URLs (`/fs`,
 `/dashboard/*`, `/api-keys/*`, `/pricing-budget`, `/operator-email`, `/users/add`, `/vaults/:id/edit|assign`,
 `/roles/admin|vault/*`) redirect (`next.config.ts`).
 

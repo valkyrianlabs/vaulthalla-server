@@ -54,8 +54,8 @@ struct Authorization {
 };
 
 // Authorizes a connection by its client key at handshake time: a live device (current or previous key) gives a
-// Device session as that row's user; then, only while peers.experimental is on and only for a key no device has ever
-// had, a live linked server (its pin, or the next key it announced, which then becomes the pin) gives a Peer
+// Device session as that row's user; then, only for a key no device has ever had, a live
+// linked server (its pin, or the next key it announced, which then becomes the pin) gives a Peer
 // session; anything else (unknown, revoked, an account that no longer exists) a pairing-only one. A handshake with a
 // rotated device's new key ends the old key's grace. Records last_seen_at/last_ip. Throws only on a database failure
 // (the listener then refuses the connection).

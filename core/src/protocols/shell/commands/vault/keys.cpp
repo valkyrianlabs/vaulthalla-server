@@ -1,3 +1,4 @@
+#include "ops/Error.hpp"
 #include "protocols/shell/commands/vault.hpp"
 #include "protocols/shell/util/argsHelpers.hpp"
 #include "protocols/shell/commands/helpers.hpp"
@@ -355,12 +356,15 @@ static CommandResult handle_rotate_vault_keys(const CommandCall& call) {
 
     // Reports what actually happened per vault: prepare_key_rotation() is a silent no-op while a rotation is
     // already pending, so that case must not be announced as a fresh rotation.
-    const auto rotateKey = [&syncNow](const std::shared_ptr<storage::Engine>& engine) -> std::string {
+    bool refused = false;   // a mirrored vault's rotation was refused (the single-vault form fails with it)
+    const auto rotateKey = [&syncNow, &refused](const std::shared_ptr<storage::Engine>& engine) -> std::string {
         const auto label = "'" + engine->vault->name + "' (ID: " + std::to_string(engine->vault->id) + ")";
         const bool alreadyPending = db::query::vault::Key::keyRotationInProgress(engine->vault->id);
         if (!alreadyPending && ::vh::sync::replicas::replicated(engine->vault->id))
             return "Key rotation for " + label + " is refused: the vault is replicated; " +
                    std::string(::vh::sync::replicas::kRotateHow) + ".\n";
+        // A mirrored vault rotates on its core, which delivers the new key version to the mirror first
+        // (mirror/rotate/Rotate.hpp): prepare_key_rotation refuses with the reason when it can't (below).
         // A new key version must not seal content before its recovery envelopes reach the bucket a remote attach is
         // filling: the rotation waits for the attach (vault/RemoteAttach.hpp) and starts when it ends.
         // A vault whose remote is read-only or unavailable can't put the new version's envelopes or re-sealed objects
@@ -374,7 +378,14 @@ static CommandResult handle_rotate_vault_keys(const CommandCall& call) {
             return "Key rotation for " + label + " is queued: a remote is being attached to this vault, and the "
                    "rotation starts once the attach has finished (vh vault remote status " +
                    std::to_string(engine->vault->id) + ").\n";
-        if (!alreadyPending) engine->encryptionManager->prepare_key_rotation();
+        if (!alreadyPending) {
+            try {
+                engine->encryptionManager->prepare_key_rotation();
+            } catch (const ::vh::ops::Refused& e) {
+                refused = true;
+                return "Key rotation for " + label + " is refused (" + e.code + "): " + e.what() + ".\n";
+            }
+        }
 
         std::string line = alreadyPending
             ? "Key rotation for " + label + " is already pending; no new rotation was started."
@@ -413,7 +424,9 @@ static CommandResult handle_rotate_vault_keys(const CommandCall& call) {
                        " is replicated, and only a solo vault rotates: " + std::string(::vh::sync::replicas::kRotateHow) +
                        " [vault_replicated]");
 
-    return ok(rotateKey(engine));
+    auto text = rotateKey(engine);
+    if (refused) return invalid("vault keys rotate: " + text);
+    return ok(text);
 }
 
 namespace recipients_ops = vh::ops::recovery_recipients;

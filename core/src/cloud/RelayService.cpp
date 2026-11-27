@@ -24,7 +24,7 @@
 #include <boost/asio/steady_timer.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/ssl.hpp>
-#include <boost/beast/websocket.hpp>
+#include "compat/beast_websocket.hpp"
 #include <boost/beast/websocket/ssl.hpp>
 #include <nlohmann/json.hpp>
 #include <sodium.h>

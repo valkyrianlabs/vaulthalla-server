@@ -89,6 +89,9 @@ std::vector<WsCommandUsage> healthCommands();
 std::vector<WsCommandUsage> emailCommands();
 std::vector<WsCommandUsage> deviceCommands();
 std::vector<WsCommandUsage> peerCommands();
+std::vector<WsCommandUsage> mirrorCommands();
+std::vector<WsCommandUsage> mirrorFollowCommands();
+std::vector<WsCommandUsage> mirrorLeaveCommands();
 std::vector<WsCommandUsage> vaultKeyCommands();
 
 }

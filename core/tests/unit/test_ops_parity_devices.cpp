@@ -148,7 +148,10 @@ TEST_F(DeviceParityTest, PairingWindowsOnBothSurfaces) {
     EXPECT_NEAR(static_cast<double>(opened.at("server_time").get<int64_t>()), static_cast<double>(now), 5.0);
     EXPECT_EQ(opened.at("port"), config::Registry::get().device_server.port);
     EXPECT_EQ(opened.at("remote"), config::Registry::get().device_server.remote);
-    EXPECT_EQ(opened.at("window").at("expires_at").get<int64_t>() - opened.at("server_time").get<int64_t>(), 600);
+    // The window's expiry and the reply's clock are two readings: a second may tick over between them.
+    const auto remaining = opened.at("window").at("expires_at").get<int64_t>() - opened.at("server_time").get<int64_t>();
+    EXPECT_GE(remaining, 599);
+    EXPECT_LE(remaining, 600);
     EXPECT_TRUE(handler::Devices::pairingPending(ws(bob)).contains("server_time"));
 
     // Closing is for the window's owner; forcing anyone's is explicit (any) and for super admins only.
