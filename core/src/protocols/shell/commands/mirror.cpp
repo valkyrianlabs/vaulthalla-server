@@ -1,5 +1,6 @@
 #include "protocols/shell/commands/all.hpp"
 
+#include "mirror/copy/Copy.hpp"
 #include "ops/Error.hpp"
 #include "ops/MirrorLeave.hpp"
 #include "ops/Mirrors.hpp"
@@ -306,12 +307,56 @@ std::string detachPreviewText(const ::vh::mirror::leave::Preview& p) {
     return out;
 }
 
+std::string copyText(const ::vh::mirror::copy::Job& j) {
+    std::string out = fmt::format("copy {} of vault {} into \"{}\"{}: {}, {} of {} entries, {} of {} bytes{}\n", j.id,
+                                  j.source_vault_id ? std::to_string(*j.source_vault_id) : std::string("(removed)"),
+                                  j.name, j.vault_id ? fmt::format(" (vault {})", *j.vault_id) : std::string(), j.state,
+                                  j.entries_done, j.entries_total, j.bytes_done, j.bytes_total,
+                                  j.error ? ": " + *j.error : std::string());
+    if (!j.skipped.empty()) {
+        out += fmt::format("  {} file(s) left out:\n", j.skipped.size());
+        for (const auto& s : j.skipped) out += fmt::format("    {}  ({} bytes, {})\n", s.path, s.size_bytes, s.reason);
+    }
+    return out;
+}
+
+CommandResult handleDetachCopy(const CommandCall& call, const uint32_t vaultId, const bool json) {
+    const auto render = [json](const char* key, const std::optional<::vh::mirror::copy::Job>& j, const std::string& lead) {
+        if (json) return mirrorPretty({{key, j ? ::vh::mirror::copy::toJson(*j) : nlohmann::json(nullptr)}});
+        return j ? lead + copyText(*j) : std::string("No copy of this vault was written here.\n");
+    };
+    if (hasFlag(call, "status"))
+        return runMirrorOp("mirror detach", [&] { return mirrors::copyStatus(call.user, vaultId); },
+                           [&](const std::optional<::vh::mirror::copy::Job>& j) { return render("copy", j, ""); });
+    if (hasFlag(call, "cancel"))
+        return runMirrorOp("mirror detach", [&] { return mirrors::cancelCopy(call.user, vaultId); },
+                           [&](const ::vh::mirror::copy::Job& j) {
+                               return render("copy", j, "Cancel asked: the partial vault is removed.\n");
+                           });
+    return runMirrorOp("mirror detach",
+                       [&] {
+                           return mirrors::detachCopy(call.user, {.vault_id = vaultId, .name = optVal(call, "name"),
+                                                                  .owner = optVal(call, "owner")});
+                       },
+                       [&](const ::vh::mirror::copy::Job& j) {
+                           return render("copy", j, fmt::format("Copying vault {} into a new vault in the background (vh "
+                                                                "mirror detach {} --copy --status shows how far it is); "
+                                                                "the held copy stays as it is.\n", vaultId, vaultId));
+                       });
+}
+
 CommandResult handleDetach(const CommandCall& call) {
     validatePositionals(call, resolveUsage({"mirror", "detach"}));
     const auto json = hasFlag(call, "json");
     const auto vault = parseUInt(call.positionals.at(0));
     if (!vault || *vault == 0) return invalid("mirror detach: the vault is its number (vh vault list)");
     const auto vaultId = static_cast<uint32_t>(*vault);
+    const bool copy = hasFlag(call, "copy");
+    if (!copy && (hasFlag(call, "status") || hasFlag(call, "cancel") || optVal(call, "name")))
+        return invalid("mirror detach: --name, --status and --cancel go with --copy");
+    if (copy && hasFlag(call, "status") && hasFlag(call, "cancel"))
+        return invalid("mirror detach: --status or --cancel, not both");
+    if (copy && !hasFlag(call, "dry-run")) return handleDetachCopy(call, vaultId, json);
     if (hasFlag(call, "dry-run"))
         return runMirrorOp("mirror detach", [&] { return mirrors::detachPreview(call.user, vaultId); },
                            [&](const ::vh::mirror::leave::Preview& p) {

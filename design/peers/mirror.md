@@ -8,7 +8,8 @@ the core" below), the write gate (phase 2 wave 4 piece A, migration 165; "As bui
 on the mirror without contents (wave 4 piece B, migration 166; "As built: a change made on the mirror" below), resync,
 the scrub and the planned switch (wave 5 piece B, migration 168; "As built: resync and the scrub", "As built: the
 planned switch" below), and leaving a mirror: detach, deleting a mirrored vault in one step, versions on the mirror
-(wave 5 piece A, migration 167; "As built: leaving a mirror" below). The rest is not implemented. It covers how a vault
+(wave 5 piece A, migration 167; "As built: leaving a mirror" below), and detach a copy (wave 5 piece C, migration 169;
+"As built: detach a copy" below). The rest is not implemented. It covers how a vault
 is kept identical on two linked servers: the core role, the replication log, applying it, changes made on the
 mirror, behaviour while the link is down, moving the core, leaving a mirror, and vaults that also have a remote. The
 link is in [`link.md`](link.md); accounts, ownership and audits are in [`identity.md`](identity.md). Section "What
@@ -1364,7 +1365,7 @@ try to remove the mirror's copy, the mirror may keep what its core removes, and 
 ### As built: leaving a mirror (phase 2 wave 5, piece A, migration 167)
 
 "Detach", "Who may do it", the core's side of "Ending a mirror from the core, and deleting", invariants 10 and 11, and
-opt-in versions on the mirror. Detach a copy and the re-key pass are piece C. Decided while building (owner's
+opt-in versions on the mirror. Detach a copy (below) and the re-key pass are piece C. Decided while building (owner's
 instruction to build without waiting for review); each is listed for confirmation in the hand-off:
 
 - **The permission** "Detach mirrored vaults" is the admin module `mirror` (`admin.mirror.detach`, bit 0 of
@@ -1486,6 +1487,30 @@ instruction to build without waiting for review); each is listed for confirmatio
 
 Proven: `MirrorLeaveDbTest` (`test_mirror_leave_db.cpp`), `MirrorSubmitDbTest.VersionsOnTheMirror...`,
 `RoleParityTest.MirrorDetach...`, `SqlDeployerHistoryDb.MirrorLeaveMigration167...`, and `vhh drill peers` step 9.
+
+### As built: detach a copy (phase 2 wave 5, piece C, migration 169)
+
+`vh mirror detach <vault> --copy [--name] [--owner] [--status | --cancel]`, ws `mirror.detach.copy`, `.get`, `.cancel`
+(`mirror/copy/Copy.hpp`, `db::query::mirror::MirrorCopies`, table `mirror_copy`). Decided while building:
+
+- **The same permission as detach** (`requireDetacher`); any held copy (role `mirror` in any state, or `orphaned`),
+  the link up or down. The new vault is made by `storage::Manager::addVault` (a new uid, its own key; the owner's
+  ordinary access), named `<name> copy` (then `copy 2`, ...) unless named, and takes the held vault's description and
+  quota. Folders, files and symlinks are written through `fs::Filesystem` (new entry uids; files decrypted as read and
+  streamed into `createFile`), then one transaction gives every entry its source's mode and modification time exactly.
+- **Left out and listed:** the files whose contents were not here when the copy started (the preview's list), and any
+  removed or failing authentication while it runs (`skipped`, with the reason). A live mirror keeps following during
+  the copy: the entries are the ones listed at the start, each file's contents as they are when it is reached.
+- **One running copy per held vault.** Refused up front without room: the volume's free space with a margin, or the
+  quota it takes (`mirror_copy_no_space`; this server has no per-account quota, so "the owner's quota" is the vault's).
+- **A complete vault or none:** while it runs the new vault is read-only to everything but the copy (`mirror::access`
+  `mirror_copy_writing`, published from the job row by `reload()`), so a failure or a cancel removes it losing nothing
+  of anyone's. A daemon stop leaves the job running; the next start removes the partial vault and starts over (restart,
+  not resume: `attempts` counts). Known window: a crash between `addVault` and the row naming the vault would leave
+  an unnamed partial vault.
+
+Proven: `MirrorCopyDbTest` (`test_mirror_copy_db.cpp`), `SqlDeployerHistoryDb.MirrorCopyMigration169...`, and `vhh
+drill peers` step 9e.
 
 ## A mirrored vault with a remote
 

@@ -871,6 +871,11 @@ Phase 2 wave 5, piece A. Full text: mirror.md "As built: leaving a mirror". Expe
   held vaults.
 - **Held bytes:** `ops::mirrors::heldContent` (a reader over `heldBlob` with the vault's key), ws `mirror.held.get`
   (inline ≤ 8 MiB), `vh mirror save <id> <dest>` (transfer frames; `transfer::planLocal` knows it).
+- **Detach a copy** (`mirror::copy`, `db::query::mirror::MirrorCopies`, migration 169 `mirror_copy`; service
+  "MirrorCopies" after MirrorContents): `ops::mirrors::detachCopy|copyStatus|cancelCopy`, ws `mirror.detach.copy(.get|
+  .cancel)`, `vh mirror detach --copy`. `Manager::addVault` + `Filesystem::mkdir|createFile(source)|createSymlink`
+  under `mirror::access::CopyWriter`; the target is gated `mirror_copy_writing` (`beginCopyTarget`, and from running
+  rows in `reload`/`reconcile`); failure/cancel `removeVault`; a restart starts over.
 - Tests: `MirrorLeaveDbTest.*` (`test_mirror_leave_db.cpp`), `MirrorSubmitDbTest.VersionsOnTheMirror*`,
   `RoleParityTest.MirrorDetach*`, `SqlDeployerHistoryDb.MirrorLeaveMigration167*`; Tier B `vhh drill peers` step 9.
 

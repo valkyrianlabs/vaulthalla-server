@@ -198,15 +198,30 @@ std::shared_ptr<CommandUsage> detach(const std::weak_ptr<CommandUsage>& parent) 
                        "server and no bucket is touched; changes made here and not yet confirmed become ordinary "
                        "changes; files whose contents never arrived stay listed, marked missing. --dry-run shows all of "
                        "that first (with --json, the list to export). The vault keeps the original's uid and keys "
-                       "until the re-key pass runs. Super admins, or holders of admin.mirror.detach; audited.";
+                       "until the re-key pass runs. With --copy the held copy stays what it is (still a mirror, or "
+                       "orphaned) and a new, separate vault is written from it in the background: a new uid, new "
+                       "entry uids and its own new key, owned by --owner, with every folder, file and symlink, their "
+                       "modes and modification times, and none of the trash, versions, shares or access rules; files "
+                       "whose contents never arrived here are left out and listed. --copy --status shows its progress, "
+                       "--copy --cancel stops it (the partial vault is removed). Super admins, or holders of "
+                       "admin.mirror.detach; audited.";
     cmd->positionals = {vaultPos};
     cmd->optional = {Optional::ManyToOne("owner", "The new owner: a sign-in account here (default: you)", {"owner"},
-                                         "user")};
+                                         "user"),
+                     Optional::ManyToOne("name", "With --copy: the new vault's name (default: \"<name> copy\")",
+                                         {"name"}, "name")};
     cmd->optional_flags = {Flag::WithAliases("dry_run", "Show what detaching would give, and change nothing",
                                              {"dry-run", "preview"}),
+                           Flag::WithAliases("copy", "Write a new, separate vault from the held copy instead, which "
+                                                     "stays as it is", {"copy"}),
+                           Flag::WithAliases("status", "With --copy: the newest copy's progress", {"status"}),
+                           Flag::WithAliases("cancel", "With --copy: stop the running copy and remove its partial vault",
+                                             {"cancel"}),
                            jsonFlag};
     cmd->examples = {{"vh mirror detach 5 --dry-run", "What detaching vault 5 would give, missing files included."},
-                     {"vh mirror detach 5 --owner alice", "Detach vault 5; alice owns it here."}};
+                     {"vh mirror detach 5 --owner alice", "Detach vault 5; alice owns it here."},
+                     {"vh mirror detach 5 --copy --name archive", "Write vault 5 into a new vault named archive."},
+                     {"vh mirror detach 5 --copy --status", "How far the copy of vault 5 is."}};
     return cmd;
 }
 

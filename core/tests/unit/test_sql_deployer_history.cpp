@@ -2625,6 +2625,62 @@ TEST_F(SqlDeployerHistoryDb, MirrorSwitchMigration168IsAdditiveAndIdempotent) {
     });
 }
 
+// Migration 169 (detach a copy, wave 5 piece C): on an upgraded database with a mirrored vault in it, mirror_copy is
+// added empty with its checks and its one-running-copy indexes, nothing existing changes, and a second run changes
+// nothing.
+TEST_F(SqlDeployerHistoryDb, MirrorCopyMigration169IsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        const std::string file = "169_mirror_copy.sql";
+        const auto count = [&](const std::string& q) { return txn.exec(q).one_field_ref().as<int64_t>(); };
+        // ---- back to the schema before 169
+        txn.exec("DROP TABLE IF EXISTS mirror_copy");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
+
+        // ---- an upgraded install: a vault held as a linked server's mirror
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_169_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES "
+                                    "('claude_test_169', $1, 'local', 'claude_test_169', gen_random_uuid()) RETURNING id",
+                                    pqxx::params{owner}).one_field_ref().as<int>();
+        const auto peer = txn.exec("INSERT INTO peer (node_id, name, spki_sha256, wrap_public_key) "
+                                   "VALUES ('claude-169-node', 'vps', repeat('cf', 32), decode(repeat('00', 32), 'hex')) "
+                                   "RETURNING id").one_field_ref().as<int>();
+        txn.exec("INSERT INTO mirror_vault (vault_id, peer_id, role, term, last_seq) VALUES ($1, $2, 'mirror', 2, 5)",
+                 pqxx::params{vault, peer});
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, file));
+        EXPECT_EQ(report.applied.size(), 1u) << "only 169 was missing";
+        EXPECT_EQ(recordedHash(txn, file), currentHash(file));
+        for (const auto* c : {"source_vault_id", "vault_id", "state", "entries_done", "bytes_done", "skipped",
+                              "cancel_requested", "attempts"})
+            EXPECT_TRUE(columnExists(txn, "mirror_copy", c)) << c;
+        EXPECT_EQ(count("SELECT count(*) FROM mirror_copy"), 0);
+        EXPECT_EQ(count("SELECT last_seq FROM mirror_vault WHERE vault_id = " + std::to_string(vault)), 5)
+            << "the row is untouched";
+        // One running copy per held vault; a finished one says when.
+        txn.exec("INSERT INTO mirror_copy (source_vault_id, name, owner_id) VALUES ($1, 'a copy', $2)",
+                 pqxx::params{vault, owner});
+        EXPECT_ANY_THROW(txn.exec("SAVEPOINT s169; INSERT INTO mirror_copy (source_vault_id, name, owner_id) "
+                                  "VALUES (" + std::to_string(vault) + ", 'b copy', " + std::to_string(owner) + ")"));
+        txn.exec("ROLLBACK TO SAVEPOINT s169");
+        EXPECT_ANY_THROW(txn.exec("SAVEPOINT s169b; UPDATE mirror_copy SET state = 'finished'"));
+        txn.exec("ROLLBACK TO SAVEPOINT s169b");
+        EXPECT_NO_THROW(txn.exec("UPDATE mirror_copy SET state = 'finished', finished_at = now()"));
+        // The vault it read goes: the record stays, without it.
+        txn.exec("DELETE FROM mirror_vault WHERE vault_id = $1", pqxx::params{vault});
+        txn.exec("DELETE FROM vault WHERE id = $1", pqxx::params{vault});
+        EXPECT_EQ(count("SELECT count(*) FROM mirror_copy WHERE source_vault_id IS NULL"), 1);
+
+        // A second run of the file, and of the deployer, changes nothing.
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / file)));
+    });
+}
+
 // Migration 167 (leaving a mirror, wave 5 piece A): on an upgraded database with mirror offers and expected contents in
 // it, admin.mirror.detach goes to super_admin only (the fresh seed's grants), the offer and content CHECKs learn
 // 'detached' and 'missing' without changing a row, mirror_detached and keep_versions are added empty, and a second run

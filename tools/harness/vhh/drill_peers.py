@@ -1147,6 +1147,20 @@ def _leaving(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, report:
     _wait("B's copy orphaned", lambda: _mirror_info(b, bv3).get("role") == "orphaned" or None, timeout=120)
     report.check("9d: --now with --mirror-copy leave: purged on A, B keeps an orphaned copy", cp.returncode == 0,
                  (cp.stdout + cp.stderr)[-300:])
+    # ---- 9e. Detach a copy (piece C): B writes a new vault from the orphaned copy, which stays orphaned
+    code, started, text = _json(b, "mirror", "detach", str(bv3), "--copy", "--name", "leftover-copy")
+    job = _wait("B's copy of the orphaned vault", lambda: (lambda c: c if c.get("state") != "running" else None)(
+        _json(b, "mirror", "detach", str(bv3), "--copy", "--status")[1].get("copy") or {"state": "running"}),
+        timeout=120) if code == 0 else {}
+    nv = job.get("vault_id")
+    if nv:
+        _wait("B's mount showing the copy", lambda: (b.inst.mount / "leftover-copy").is_dir(), timeout=60)
+    report.check("9e: B copies the orphaned copy into a new vault (new uid, the same file, the source still orphaned)",
+                 code == 0 and job.get("state") == "finished" and bool(nv)
+                 and _sql(b, f"SELECT count(*) FROM vault WHERE id = {nv} AND uid <> '{uid3}'") == "1"
+                 and _plain(b, "leftover-copy/f.txt") == hashlib.sha256(b"content of leftover\n").hexdigest()
+                 and _mirror_info(b, bv3).get("role") == "orphaned",
+                 (text + json.dumps(job))[-500:])
     code, det, text = _json(b, "mirror", "detach", str(bv3))
     report.check("9d: B detaches the orphaned copy: a local vault, readable and writable",
                  code == 0 and _sql(b, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {bv3}") == "0"

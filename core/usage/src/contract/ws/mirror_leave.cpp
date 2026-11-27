@@ -60,6 +60,25 @@ std::vector<WsField> mlRecordFields() {
                                               "pass runs.")};
 }
 
+std::vector<WsField> mlCopyFields() {
+    return {uinteger("id"), integer("source_vault_id").nullable().desc("The held vault it reads (null once it is gone)."),
+            integer("vault_id").nullable().desc("The new vault: while it is written (read-only to everything but the "
+                                                "copy) and once it is complete; null before it exists and after a "
+                                                "failed or cancelled copy removed it."),
+            str("name"), uinteger("owner_id"),
+            str("state").oneOf({"running", "finished", "failed", "cancelled"}),
+            uinteger("entries_total"), uinteger("entries_done"), uinteger("bytes_total"), uinteger("bytes_done"),
+            uinteger("skipped_count"),
+            objectArray("skipped", "", {str("path"), uinteger("size_bytes"),
+                                        str("reason").oneOf({"contents_missing", "removed", "unreadable"})})
+                .desc("The files left out, by path: contents that never arrived here (the detach preview's missing "
+                      "list), and any removed or unreadable while the copy ran."),
+            str("error").nullable(), integer("requested_by").nullable(), boolean("cancel_requested"),
+            uinteger("attempts").desc("How often the copy started: a daemon restart removes the partial vault and "
+                                      "starts again."),
+            integer("created_at"), integer("updated_at"), integer("finished_at").nullable()};
+}
+
 }
 
 std::vector<WsCommandUsage> mirrorLeaveCommands() {
@@ -100,6 +119,50 @@ std::vector<WsCommandUsage> mirrorLeaveCommands() {
                              str("core_told").oneOf({"when_reachable", "no"}),
                              object("record", "", mlRecordFields()), object("before", "", mlPreviewFields())})},
         .refusal_codes = mlRefusals({"mirror_not_held"}),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "mirror.detach.copy",
+        .description = "Detach a copy: write a new, separate local vault from a vault held here as another server's copy "
+                       "(a mirror in any state, or orphaned; the link up, down or gone; nothing is asked of the core), "
+                       "which stays exactly as it is. The new vault gets a new uid, new entry uids and its own new key, "
+                       "is owned by `owner` (default: the caller) with the owner's ordinary access, and holds every "
+                       "folder, file and symlink with its name, place, mode and modification time; not the trash, "
+                       "versions, shares or access rules. Files whose contents never arrived here are left out and "
+                       "listed. A background job: mirror.detach.copy.get shows its progress; while it runs the new vault "
+                       "is read-only to everything else (mirror_copy_writing); a failure or a cancel removes it. Refused "
+                       "when the volume's free space or the quota the new vault takes (the held vault's) can't hold "
+                       "the copy (mirror_copy_no_space). Super admins, or holders of admin.mirror.detach; audited "
+                       "mirror.detach.copy.",
+        .payload = {vaultId(),
+                    str("name").opt().nullable().desc("The new vault's name (default: \"<name> copy\")."),
+                    str("owner").opt().nullable().gen(gen::ref("user", {"name"}))
+                        .desc("The new owner: a sign-in account here, by number or name.")},
+        .response = {object("copy", "", mlCopyFields())},
+        .refusal_codes = mlRefusals({"mirror_not_held", "mirror_copy_no_space"}),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "mirror.detach.copy.get",
+        .description = "The newest copy of a held vault (mirror.detach.copy): its state and progress (entries and "
+                       "bytes done of the totals), the files it left out, its error; null when none was written here. "
+                       "Super admins, or holders of admin.mirror.detach.",
+        .payload = {vaultId()},
+        .response = {object("copy", "", mlCopyFields()).nullable()},
+        .refusal_codes = mlRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "mirror.detach.copy.cancel",
+        .description = "Stop the running copy of a held vault: it removes its partial vault and ends cancelled (a "
+                       "complete vault or none). Super admins, or holders of admin.mirror.detach; audited "
+                       "mirror.detach.copy.cancel.",
+        .payload = {vaultId()},
+        .response = {object("copy", "", mlCopyFields())},
+        .refusal_codes = mlRefusals({"mirror_copy_not_running"}),
         .client_timeout = kDefaultTimeout,
     });
 

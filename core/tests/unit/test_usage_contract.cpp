@@ -487,7 +487,9 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
                                  "peer.mirror.switch.prepare"}}, {"mirror_read_only", {"mirror.held.retry"}},
             {"contents_missing", {"peer.mirror.submit"}},
             // Leaving a mirror (wave 5 piece A, mirror::leave).
-            {"mirror_not_held", {"mirror.detach", "mirror.detach.preview", "mirror.versions.set"}},
+            {"mirror_not_held", {"mirror.detach", "mirror.detach.preview", "mirror.versions.set", "mirror.detach.copy"}},
+            // Detach a copy (wave 5 piece C, mirror::copy).
+            {"mirror_copy_no_space", {"mirror.detach.copy"}}, {"mirror_copy_not_running", {"mirror.detach.copy.cancel"}},
             {"too_large", {"mirror.held.get"}},
             {"mirror_detached_copy", {"mirror.add", "mirror.accept", "peer.mirror.keys"}},
             // Resync (wave 5 piece B, mirror::resync).

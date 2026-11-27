@@ -81,6 +81,31 @@ vh::mirror::leave::Detached detach(const Actor& actor, const DetachRequest& requ
     return vh::mirror::leave::detach(request.vault_id, owner->id, actor->id, actor->name());
 }
 
+// ---- detach a copy ------------------------------------------------------------------------------------------------
+
+vh::mirror::copy::Job detachCopy(const Actor& actor, const CopyRequest& request) {
+    using namespace ops_mirror_leave_detail;
+    requireDetacher(actor, "copy a mirrored vault into a new vault");
+    if (request.vault_id == 0) throw Invalid("vault ID must be a positive integer");
+    if (!vh::db::query::vault::Vault::getVault(request.vault_id))
+        throw NotFound("no vault with ID " + std::to_string(request.vault_id));
+    const auto owner = ownerOf(actor, request.owner);
+    return vh::mirror::copy::start({.source_vault_id = request.vault_id, .name = request.name, .owner_id = owner->id},
+                                   actor->id, actor->name());
+}
+
+std::optional<vh::mirror::copy::Job> copyStatus(const Actor& actor, const uint32_t vaultId) {
+    requireDetacher(actor, "see a copy of a mirrored vault");
+    if (vaultId == 0) throw Invalid("vault ID must be a positive integer");
+    return vh::mirror::copy::latest(vaultId);
+}
+
+vh::mirror::copy::Job cancelCopy(const Actor& actor, const uint32_t vaultId) {
+    requireDetacher(actor, "cancel a copy of a mirrored vault");
+    if (vaultId == 0) throw Invalid("vault ID must be a positive integer");
+    return vh::mirror::copy::cancel(vaultId, actor->id, actor->name());
+}
+
 // ---- versions on the mirror -----------------------------------------------------------------------------------------
 
 vh::mirror::versions::Setting setVersions(const Actor& actor, const VersionsRequest& request) {
