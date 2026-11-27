@@ -61,7 +61,7 @@ export const OffersPanel = ({ offers, peers }: { offers: MirrorOffer[]; peers: M
               </p>
               <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-subtle">
                 <span className="tabular">{C.offerSize(formatBytes(o.size_bytes), formatInt(o.file_count))}</span>
-                {o.owner?.name ? <span>{C.offerOwner(o.owner.name)}</span> : null}
+                {o.owner?.name ? <span>{C.offerOwner(o.owner.name, nameOf(o))}</span> : null}
                 {o.role ? <span>{C.offerGrant(o.role.role_name)}</span> : null}
                 {o.history ? <Badge className="h-5 px-2 text-[11px]">{C.offerHistory}</Badge> : null}
                 {o.expires_at ? <span>{C.offerExpires(formatRelative(o.expires_at))}</span> : null}

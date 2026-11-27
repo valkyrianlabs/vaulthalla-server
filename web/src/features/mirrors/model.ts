@@ -108,6 +108,8 @@ export const REASON_TEXT: Readonly<Record<string, string>> = {
   mirror_peers_off: 'linked servers are switched off on this server',
 }
 
+const DIVERGED_ITSELF: readonly string[] = ['mirror_diverged', 'mirror_core_diverged', 'mirror_digest_mismatch']
+
 export const reasonText = (code: string | null | undefined): string | null => {
   if (!code) return null
   return REASON_TEXT[code] ?? null
@@ -206,7 +208,12 @@ export const statusText = (row: MirroredVault, facts: StatusFacts): StatusText =
     case 'paused':
       return withCode({ label: C.stPaused, tone: 'warn', sentence: core ? C.stPausedCore(peer, reason) : C.stPausedMirror(reason) })
     case 'diverged':
-      return withCode({ label: C.stDiverged, tone: 'danger', sentence: core ? C.stDivergedCore(peer) : C.stDivergedMirror(reason) })
+      // "The copies stopped matching" is what diverged means: only a more specific reason is worth adding.
+      return withCode({
+        label: C.stDiverged,
+        tone: 'danger',
+        sentence: core ? C.stDivergedCore(peer) : C.stDivergedMirror(row.stop_reason && DIVERGED_ITSELF.includes(row.stop_reason) ? null : reason),
+      })
     case 'expired':
       return withCode({ label: C.stExpired, tone: 'danger', sentence: core ? C.stExpiredCore(peer) : C.stExpiredMirror })
     case 'stopped':

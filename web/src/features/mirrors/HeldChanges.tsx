@@ -120,7 +120,7 @@ export const HeldChanges = ({ vaultId, live }: { vaultId: number; live: boolean 
       header: 'When',
       sortValue: h => h.created_at,
       cell: h => (
-        <span className="tabular text-fg-muted" title={formatDateTime(h.created_at)}>
+        <span className="whitespace-nowrap tabular text-fg-muted" title={formatDateTime(h.created_at)}>
           {formatRelative(h.created_at)}
         </span>
       ),

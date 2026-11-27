@@ -10,11 +10,11 @@ import { ROLE_TEXT, statusText, type MirroredVault, type StatusFacts } from '@/f
 
 export const date = (unix: number) => formatDateTime(unix)
 
-export const RoleBadge = ({ role }: { role: MirroredVault['role'] }) => {
+export const RoleBadge = ({ role, testId = 'mirror-role' }: { role: MirroredVault['role']; testId?: string }) => {
   const r = ROLE_TEXT[role] ?? { label: role, tone: 'neutral' as const }
   return (
     <Badge tone={r.tone} className="h-5 px-2 text-[11px]">
-      <span data-testid="mirror-role">{r.label}</span>
+      <span data-testid={testId}>{r.label}</span>
     </Badge>
   )
 }

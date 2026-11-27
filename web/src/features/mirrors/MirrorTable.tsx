@@ -38,10 +38,17 @@ export const MirrorTable = ({
       header: C.colVault,
       sortValue: r => r.vault_name.toLowerCase(),
       cell: r => (
-        <span className="truncate font-medium" data-testid="mirror-vault-name">
-          {r.vault_name || r.start?.name || '—'}
+        <span className="flex min-w-0 flex-col items-start gap-1">
+          <span className="truncate font-medium" data-testid="mirror-vault-name">
+            {r.vault_name || r.start?.name || '—'}
+          </span>
+          {/* The role column is hidden on a phone: the badge sits under the name there. */}
+          <span className="sm:hidden">
+            <RoleBadge role={r.role} testId="mirror-role-narrow" />
+          </span>
         </span>
       ),
+      className: 'py-2.5',
     },
     {
       key: 'server',
@@ -52,19 +59,21 @@ export const MirrorTable = ({
           {peerName(r)}
         </span>
       ),
-      hideBelow: 'sm',
+      hideBelow: 'md',
     },
     {
       key: 'role',
       header: C.colRole,
       sortValue: r => r.role,
       cell: r => <RoleBadge role={r.role} />,
+      hideBelow: 'sm',
     },
     {
       key: 'state',
       header: C.colState,
       sortValue: r => statusText(r, { linkUp: linkUpOf(peers, r.peer?.id), date }).label,
-      cell: r => <MirrorStatus row={r} facts={{ linkUp: linkUpOf(peers, r.peer?.id) }} className="max-w-md" />,
+      cell: r => <MirrorStatus row={r} facts={{ linkUp: linkUpOf(peers, r.peer?.id) }} className="max-w-md min-w-48" />,
+      className: 'py-2.5',
     },
     {
       key: 'position',
@@ -87,7 +96,7 @@ export const MirrorTable = ({
       cell: r => {
         const n = held.get(r.vault_id) ?? 0
         return (
-          <span className={n ? 'font-medium text-warn tabular' : 'text-fg-faint'} data-testid="mirror-held-count">
+          <span className={n ? 'font-medium whitespace-nowrap text-warn tabular' : 'text-fg-faint'} data-testid="mirror-held-count">
             {n ? C.heldCount(n) : C.heldNone}
           </span>
         )

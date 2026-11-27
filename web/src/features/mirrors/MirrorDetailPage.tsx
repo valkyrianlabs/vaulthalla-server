@@ -175,7 +175,7 @@ const Loaded = ({ row }: { row: MirroredVault }) => {
       case 'resync':
         return { label: 'Resync…', hint: linkUp === false ? C.resyncNeedsLink : 'Start the copy over from the core’s files.' }
       case 'detach':
-        return { label: 'Detach…', hint: 'Keep this copy as a standalone vault on this server.', danger: true }
+        return { label: 'Detach…', hint: 'Keep this copy as a standalone vault on this server.' }
       case 'versions':
         return { label: C.manageVersions, hint: 'Keep previous versions of what the core replaces or deletes.' }
       case 'cancel':
@@ -190,7 +190,6 @@ const Loaded = ({ row }: { row: MirroredVault }) => {
   const busy = cancel.isPending || resync.isPending
 
   const facts: [React.ReactNode, React.ReactNode][] = [
-    [C.detailRole, roleSentence(row)],
     [
       C.detailServer,
       row.peer ?

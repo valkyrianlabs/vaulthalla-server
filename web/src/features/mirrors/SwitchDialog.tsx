@@ -48,7 +48,8 @@ export default function SwitchDialog({
     })
   }
   const refusedNoRole = isWsError(run.error) && run.error.code === NO_ROLE
-  const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1)
+  // Sentences may start with "this server"; a server's own name keeps its spelling.
+  const cap = (s: string) => (s.startsWith(C.thisServer) ? `T${s.slice(1)}` : s)
 
   const footer =
     result ?

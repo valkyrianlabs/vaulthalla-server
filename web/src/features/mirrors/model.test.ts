@@ -95,8 +95,9 @@ test('the first copy shows its progress', () => {
 test('stopped states give their reason in words, or the code when it has none', () => {
   const d = statusText(row({ state: 'diverged', stop_reason: 'mirror_digest_mismatch' }), { linkUp: true, date })
   assert.equal(d.label, 'Diverged')
-  assert.match(d.sentence, /stopped matching/)
+  assert.match(d.sentence, /stopped matching the core’s, so/)
   assert.equal(d.code, null)
+  assert.match(statusText(row({ state: 'diverged', stop_reason: 'mirror_type_mismatch' }), { linkUp: true, date }).sentence, /a file on one server/)
   const odd = statusText(row({ state: 'stopped', stop_reason: 'mirror_something_new' }), { linkUp: true, date })
   assert.equal(odd.code, 'mirror_something_new')
   assert.equal(statusText(row({ state: 'expired' }), { linkUp: true, date }).tone, 'danger')

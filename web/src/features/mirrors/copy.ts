@@ -131,7 +131,6 @@ export const MIRROR_COPY = {
     n === 1 ? 'One change made here was refused by the core: review it under Held changes.' : `${n} changes made here were refused by the core: review them under Held changes.`,
 
   // ---- detail
-  detailRole: 'This server',
   detailServer: 'Other server',
   detailLink: 'Link',
   linkUp: 'Connected',
@@ -166,7 +165,7 @@ export const MIRROR_COPY = {
   offersBody: 'Linked servers offered these vaults to this server. Accepting creates a copy here and sends this server the vault’s keys.',
   offerFrom: (peer: string) => `from ${peer}`,
   offerSize: (size: string, files: string) => `${size} · ${files} files`,
-  offerOwner: (name: string) => `Owned by ${name} there`,
+  offerOwner: (name: string, peer: string) => `Owner on ${peer}: ${name}`,
   offerHistory: 'Keeps file versions',
   offerGrant: (role: string) => `Access here: role “${role}”`,
   offerExpires: (when: string) => `Expires ${when}`,
@@ -245,8 +244,7 @@ export const MIRROR_COPY = {
   switchBody: (from: string, to: string) =>
     `${to} becomes the vault’s core and ${from} keeps a copy. The vault is read-only on both servers for a moment while the last changes arrive; if anything goes wrong, nothing changes.`,
   switchNoAccessTitle: 'The old core would keep no access',
-  switchNoAccess: (from: string, to: string) =>
-    `${to} gives ${from} no role on this vault, so people on ${from} couldn’t open it there after the switch until someone sets one on ${to}.`,
+  switchNoAccess: (from: string, to: string) => `People on ${from} can open it there again once ${to} gives ${from} a role on it.`,
   switchNoAccessAccept: 'Switch anyway, without access for the old core',
   switchConfirm: 'Switch',
   switching: 'Switching…',
