@@ -3,6 +3,7 @@
 #include "db/Transactions.hpp"
 #include "fs/tree_apply/TreeApply.hpp"
 #include "mirror/Hash.hpp"
+#include "ops/Error.hpp"
 
 #include <pqxx/pqxx>
 
@@ -458,6 +459,12 @@ std::optional<Submission> Pending::submission(const uint32_t vaultId, const std:
 bool Pending::enqueue(const uint32_t vaultId, const uint32_t peerId, const std::string& requestId,
                       const nlohmann::json& payload) {
     return Transactions::exec("Pending::enqueue", [&](pqxx::work& txn) {
+        // A key share of the core's row, live: a planned switch's freeze (FOR UPDATE) waits for this transaction or
+        // this one sees it and queues nothing (migration 168).
+        if (txn.exec("SELECT 1 FROM mirror_vault WHERE vault_id = $1 AND role = 'core' AND state = 'live' FOR KEY SHARE",
+                     pqxx::params{vaultId})
+                .empty())
+            throw vh::ops::Refused("mirror_not_live", "the core holds this vault in another state now; ask again");
         return txn.exec("INSERT INTO mirror_submission (vault_id, request_id, peer_id, payload) "
                         "VALUES ($1, $2, $3, $4::jsonb) ON CONFLICT (vault_id, request_id) DO NOTHING",
                         pqxx::params{vaultId, requestId, peerId, payload.dump()})
@@ -467,6 +474,11 @@ bool Pending::enqueue(const uint32_t vaultId, const uint32_t peerId, const std::
 
 std::optional<Submission> Pending::claimNext(const uint32_t vaultId) {
     return Transactions::exec("Pending::claimNext", [&](pqxx::work& txn) -> std::optional<Submission> {
+        // Nothing starts while a planned switch holds the vault (its freeze takes the row FOR UPDATE: see enqueue).
+        if (txn.exec("SELECT 1 FROM mirror_vault WHERE vault_id = $1 AND role = 'core' AND state = 'live' FOR KEY SHARE",
+                     pqxx::params{vaultId})
+                .empty())
+            return std::nullopt;
         const auto r = txn.exec(std::string(kSubmissionSelect) +
                                     " WHERE vault_id = $1 AND state = 'queued' ORDER BY seq LIMIT 1 FOR UPDATE SKIP LOCKED",
                                 pqxx::params{vaultId});

@@ -156,6 +156,7 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("mirror.held.discard", &handler::Mirrors::heldDiscard);
     r->registerPayload("mirror.held.retry", &handler::Mirrors::heldRetry);
     r->registerPayload("mirror.resync", &handler::Mirrors::resync);
+    r->registerPayload("mirror.switch", &handler::Mirrors::switchRole);
     r->registerPayload("peer.mirror.offer", &handler::Mirrors::offer);
     r->registerPayload("peer.mirror.answer", &handler::Mirrors::answer);
     r->registerPayload("peer.mirror.keys", &handler::Mirrors::keys);
@@ -171,6 +172,9 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     // A change made on the mirror (wave 4 piece B; design/peers/mirror.md "As built: a change made on the mirror").
     r->registerPayload("peer.mirror.submit", &handler::MirrorFollow::submit);
     r->registerPayload("peer.mirror.resync", &handler::MirrorFollow::resync);
+    r->registerPayload("peer.mirror.switch.request", &handler::MirrorFollow::switchRequest);
+    r->registerPayload("peer.mirror.switch.prepare", &handler::MirrorFollow::switchPrepare);
+    r->registerPayload("peer.mirror.switch.commit", &handler::MirrorFollow::switchCommit);
 }
 
 void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {

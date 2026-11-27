@@ -139,6 +139,15 @@ Local::Local(const vh::ops::Actor& actor, const uint32_t vaultId, std::string op
     if (state != vh::mirror::access::State::Live && !sealWhileDown)
         return;   // the gate's line before this one refused already; nothing here changes that
     lock_ = std::unique_lock(vaultMutex(vaultId));
+    // Judged again under the lock: a planned switch's prepare (mirror::switching) publishes the vault read-only while it
+    // holds this lock, and counts what is pending; a change that waited for the lock must not begin after that count.
+    // Inert, the change meets the backstop and is refused, nothing written.
+    if (const auto now = vh::mirror::access::state(vaultId);
+        now != vh::mirror::access::State::Live &&
+        !(sealWhileDown && vh::mirror::access::reason(vaultId) == vh::mirror::access::kLinkDown)) {
+        lock_ = {};
+        return;
+    }
     active_ = true;
     submitLocalRunning().push_back(vaultId);
     pushed_ = true;

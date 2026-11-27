@@ -1046,6 +1046,8 @@ export interface WebSocketCommandMap {
   'mirror.held.retry': WsContract['mirror.held.retry']
   // A copy that stopped starts over from its core's tree (super admins).
   'mirror.resync': WsContract['mirror.resync']
+  // A planned switch of the core role, asked on either server (super admins); answers its outcome.
+  'mirror.switch': WsContract['mirror.switch']
   'peer.mirror.offer': WsContract['peer.mirror.offer']
   'peer.mirror.answer': WsContract['peer.mirror.answer']
   'peer.mirror.keys': WsContract['peer.mirror.keys']
@@ -1060,6 +1062,10 @@ export interface WebSocketCommandMap {
   // A change made on the mirror, submitted to the core (design/peers/mirror.md "As built: a change made on the mirror").
   'peer.mirror.submit': WsContract['peer.mirror.submit']
   'peer.mirror.resync': WsContract['peer.mirror.resync']
+  // The planned switch between the two linked servers (design/peers/mirror.md "As built: the planned switch").
+  'peer.mirror.switch.request': WsContract['peer.mirror.switch.request']
+  'peer.mirror.switch.prepare': WsContract['peer.mirror.switch.prepare']
+  'peer.mirror.switch.commit': WsContract['peer.mirror.switch.commit']
   // Any signed-in user pairs devices to their own account: open a 10-minute window, then approve a request by picking
   // the one of its three code_choices the device shows (a wrong pick denies the request).
   'device.pairing.open': WsContract['device.pairing.open']

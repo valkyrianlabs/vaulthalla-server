@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'b752e918f661679f0c3d7e3dd23bec1c362d0e1d2b13076428a06c7a6fb98c29'
+export const WS_CONTRACT_HASH = 'f1da94f09faa9f30dff3d140cc060a930ab847a127b98699c4667b82ddaea0a8'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
@@ -5680,7 +5680,7 @@ export interface WsContract {
         peer: { id: number; node_id: string; name: string; revoked: boolean } | null
         term: number | null
         last_seq: number | null
-        state: 'live' | 'paused' | 'diverged' | null
+        state: 'starting' | 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | null
         grant: {
           role_name: string
           files: number
@@ -5830,7 +5830,7 @@ export interface WsContract {
         peer: { id: number; node_id: string; name: string; revoked: boolean } | null
         term: number | null
         last_seq: number | null
-        state: 'live' | 'paused' | 'diverged' | null
+        state: 'starting' | 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching' | null
         grant: {
           role_name: string
           files: number
@@ -5925,6 +5925,42 @@ export interface WsContract {
   'mirror.resync': {
     payload: { vault_id: number }
     response: { vault_id: number; state: string; copy_finished: boolean; term: number; held: number; entries: number }
+  }
+  /**
+   * A planned switch of the core role between the two servers of a mirrored vault, asked on either server:
+   * the core stops taking changes (the vault is read-only on both servers, reason mirror_switching), numbers
+   * its last change, waits for the mirror to apply it with the same digest and nothing pending, then both
+   * record the next term with the roles swapped. The old core keeps the vault only through the new core's
+   * role for it; with none the switch is abandoned (mirror_switch_no_role) unless accept_no_access. Anything
+   * that stops it before the core decides (a timeout, a refusal, a dropped link) changes nothing. Local
+   * vaults only. Waits for the outcome: switched, abandoned (with the reason) or running. Super admins of
+   * this server; audited mirror.switch.
+   */
+  'mirror.switch': {
+    payload: { vault_id: number; accept_no_access?: boolean }
+    response: {
+      vault_id: number
+      switch_id: string
+      outcome: 'switched' | 'abandoned' | 'running'
+      role: string | null
+      role_term: number | null
+      side: 'core' | 'mirror'
+      phase: 'requested' | 'draining' | 'preparing' | 'prepared' | 'switched' | 'abandoned'
+      term: number
+      seq: number | null
+      digest: string | null
+      entries: number | null
+      told: boolean
+      asked_on: 'core' | 'mirror'
+      asked_by: { node: string; id: number; name: string } | null
+      reason: string | null
+      detail: object
+      deadline: number
+      created_at: number
+      ended_at: number | null
+      peer_role: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+      peer_access: 'read-only' | 'read-write' | 'none'
+    }
   }
   /**
    * Where the sender can be reached (its device listener's advertisement); answers the receiver's. Each side
@@ -6230,7 +6266,7 @@ export interface WsContract {
         })[]
         complete: boolean
       }
-      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped'
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching'
     }
   }
   /**
@@ -6315,8 +6351,56 @@ export interface WsContract {
       groups?: number
       code?: string
       error?: string
-      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped'
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching'
     }
+  }
+  /**
+   * The core's decision on a planned switch, told until answered. switched: the core is the vault's mirror in
+   * term + 1 now and the mirror becomes its core (its log starts at (term + 1, 1)); abandoned: nothing
+   * changed, and a mirror that prepared goes live again. Told again, it answers the same.
+   */
+  'peer.mirror.switch.commit': {
+    payload: { vault_uid: string; switch_id: string; outcome: 'switched' | 'abandoned'; reason?: string }
+    response: {
+      outcome: 'switched' | 'abandoned'
+      term?: number
+      peer_role?: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+    }
+  }
+  /**
+   * The core froze the vault for a planned switch: its last change is (term, seq) with `digest`. The mirror
+   * becomes read-only too and catches up; it answers ready once it is there with the same digest, nothing
+   * pending or dirty and every file's contents held, and then waits for the decision (it never decides on its
+   * own). Asked again until ready or the core's deadline; a refusal ends the switch on both servers with
+   * nothing changed.
+   */
+  'peer.mirror.switch.prepare': {
+    payload: {
+      vault_uid: string
+      switch_id: string
+      term: number
+      seq: number
+      digest: string
+      entries: number
+      by?: { node: string; id: number; name: string; on: 'core' | 'mirror' } | null
+    }
+    response: {
+      ready: boolean
+      waiting?: 'busy' | 'applying'
+      at: { term: number; seq: number } | null
+      digest: string | null
+      entries: number | null
+      peer_role?: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
+    }
+  }
+  /**
+   * A super admin of the mirror asked for a planned switch (mirror.switch there): the core begins one (it
+   * freezes the vault, numbers its last change and prepares the mirror) and answers at once with the switch's
+   * id; the decision comes later as peer.mirror.switch.commit. The caller must be the vault's mirror.
+   */
+  'peer.mirror.switch.request': {
+    payload: { vault_uid: string; by: { id: number; name?: string }; accept_no_access?: boolean }
+    response: { switch_id: string; term: number }
   }
   /**
    * The mirror's first copy: a page of the core's tree as of its baseline (the state documents of the
@@ -6334,7 +6418,7 @@ export interface WsContract {
       vault?: object
       items?: ({ ord: number; state: object })[]
       more?: boolean
-      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped'
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped' | 'switching'
     }
   }
   /**
@@ -9289,6 +9373,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'mirror.list',
   'mirror.pending',
   'mirror.resync',
+  'mirror.switch',
   'peer.endpoints',
   'peer.get',
   'peer.hello',
@@ -9308,6 +9393,9 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.mirror.offer',
   'peer.mirror.resync',
   'peer.mirror.submit',
+  'peer.mirror.switch.commit',
+  'peer.mirror.switch.prepare',
+  'peer.mirror.switch.request',
   'peer.mirror.tree',
   'peer.pair.confirm',
   'peer.pair.request',
@@ -9780,6 +9868,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'mirror.list': 15000,
   'mirror.pending': 15000,
   'mirror.resync': 15000,
+  'mirror.switch': 60000,
   'peer.endpoints': 15000,
   'peer.get': 15000,
   'peer.hello': 15000,
@@ -9799,6 +9888,9 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.mirror.offer': 15000,
   'peer.mirror.resync': 15000,
   'peer.mirror.submit': 15000,
+  'peer.mirror.switch.commit': 15000,
+  'peer.mirror.switch.prepare': 15000,
+  'peer.mirror.switch.request': 15000,
   'peer.mirror.tree': 15000,
   'peer.pair.confirm': 15000,
   'peer.pair.request': 15000,

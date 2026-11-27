@@ -39845,9 +39845,13 @@
             },
             {
               "enum": [
+                "starting",
                 "live",
                 "paused",
-                "diverged"
+                "diverged",
+                "expired",
+                "stopped",
+                "switching"
               ],
               "name": "state",
               "required": true,
@@ -41157,9 +41161,13 @@
             },
             {
               "enum": [
+                "starting",
                 "live",
                 "paused",
-                "diverged"
+                "diverged",
+                "expired",
+                "stopped",
+                "switching"
               ],
               "name": "state",
               "required": true,
@@ -42087,6 +42095,353 @@
           "required": true,
           "types": [
             "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 60000,
+      "command": "mirror.switch",
+      "confirmations": [],
+      "description": "A planned switch of the core role between the two servers of a mirrored vault, asked on either server: the core stops taking changes (the vault is read-only on both servers, reason mirror_switching), numbers its last change, waits for the mirror to apply it with the same digest and nothing pending, then both record the next term with the roles swapped. The old core keeps the vault only through the new core's role for it; with none the switch is abandoned (mirror_switch_no_role) unless accept_no_access. Anything that stops it before the core decides (a timeout, a refusal, a dropped link) changes nothing. Local vaults only. Waits for the outcome: switched, abandoned (with the reason) or running. Super admins of this server; audited mirror.switch.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Go ahead even though the old core would hold no role on the vault on its new core (refused otherwise, mirror_switch_no_role).",
+          "name": "accept_no_access",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_switch_no_role",
+        "mirror_not_live",
+        "mirror_first_copy",
+        "mirror_switch_running",
+        "mirror_submissions_queued",
+        "mirror_has_remote",
+        "mirror_pending_changes",
+        "mirror_contents_missing",
+        "mirror_core_unreachable",
+        "mirror_core_gone",
+        "mirror_switch_refused",
+        "mirror_orphaned",
+        "peer_link_down"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_switch_no_role",
+        "mirror_not_live",
+        "mirror_first_copy",
+        "mirror_switch_running",
+        "mirror_submissions_queued",
+        "mirror_has_remote",
+        "mirror_pending_changes",
+        "mirror_contents_missing",
+        "mirror_core_unreachable",
+        "mirror_core_gone",
+        "mirror_switch_refused",
+        "mirror_orphaned",
+        "peer_link_down"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "switch_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "switched",
+            "abandoned",
+            "running"
+          ],
+          "name": "outcome",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "This server's role for the vault now.",
+          "name": "role",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "This server's term for the vault now.",
+          "name": "role_term",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "This server's role when the switch began.",
+          "enum": [
+            "core",
+            "mirror"
+          ],
+          "name": "side",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "requested",
+            "draining",
+            "preparing",
+            "prepared",
+            "switched",
+            "abandoned"
+          ],
+          "name": "phase",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The term the switch leaves.",
+          "minimum": 0,
+          "name": "term",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "seq",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "digest",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "entries",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "core: the mirror was told the decision.",
+          "name": "told",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "enum": [
+            "core",
+            "mirror"
+          ],
+          "name": "asked_on",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "asked_by",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "abandoned: why (mirror_switch_timeout, a refusal's code, ...).",
+          "name": "reason",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "What the other server last said, or why it ended.",
+          "name": "detail",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "deadline",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "created_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "ended_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The role the old core holds on the vault on its new core (the new core's policy for it); null: none.",
+          "fields": [
+            {
+              "description": "1-50 characters: the role's name on the core, never matched to a role here.",
+              "name": "role_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "directories",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "sync",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "roles",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "peer_role",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "What that role allows, in a word.",
+          "enum": [
+            "read-only",
+            "read-write",
+            "none"
+          ],
+          "name": "peer_access",
+          "required": true,
+          "types": [
+            "string"
           ]
         }
       ],
@@ -44984,7 +45339,8 @@
             "paused",
             "diverged",
             "expired",
-            "stopped"
+            "stopped",
+            "switching"
           ],
           "name": "core_state",
           "required": false,
@@ -45852,12 +46208,616 @@
             "paused",
             "diverged",
             "expired",
-            "stopped"
+            "stopped",
+            "switching"
           ],
           "name": "core_state",
           "required": false,
           "types": [
             "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.switch.commit",
+      "confirmations": [],
+      "description": "The core's decision on a planned switch, told until answered. switched: the core is the vault's mirror in term + 1 now and the mirror becomes its core (its log starts at (term + 1, 1)); abandoned: nothing changed, and a mirror that prepared goes live again. Told again, it answers the same.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
+          "generator": {
+            "attrs": [
+              "uid"
+            ],
+            "entity": "mirror.vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The switch's id (UUID), the same on both servers.",
+          "generator": {
+            "attrs": [
+              "switch_id"
+            ],
+            "entity": "mirror.switch",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "switch_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "switched",
+            "abandoned"
+          ],
+          "name": "outcome",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "abandoned: why.",
+          "generator": {
+            "attrs": [
+              "reason"
+            ],
+            "entity": "mirror.switch",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "reason",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked",
+        "mirror_not_prepared"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked",
+        "mirror_not_prepared"
+      ],
+      "response": [
+        {
+          "enum": [
+            "switched",
+            "abandoned"
+          ],
+          "name": "outcome",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "switched: the new term.",
+          "minimum": 0,
+          "name": "term",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "switched: the role the old core holds on the vault on the new core (its ceiling); null: none.",
+          "fields": [
+            {
+              "name": "role_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "directories",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "sync",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "roles",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "peer_role",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.switch.prepare",
+      "confirmations": [],
+      "description": "The core froze the vault for a planned switch: its last change is (term, seq) with `digest`. The mirror becomes read-only too and catches up; it answers ready once it is there with the same digest, nothing pending or dirty and every file's contents held, and then waits for the decision (it never decides on its own). Asked again until ready or the core's deadline; a refusal ends the switch on both servers with nothing changed.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
+          "generator": {
+            "attrs": [
+              "uid"
+            ],
+            "entity": "mirror.vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The switch's id (UUID), the same on both servers.",
+          "generator": {
+            "attrs": [
+              "switch_id"
+            ],
+            "entity": "mirror.switch",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "switch_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "term"
+            ],
+            "entity": "mirror.position",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "term",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "seq"
+            ],
+            "entity": "mirror.position",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "seq",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "64 hex digits.",
+          "generator": {
+            "attrs": [
+              "digest"
+            ],
+            "entity": "mirror.digest",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "digest",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "entries"
+            ],
+            "entity": "mirror.digest",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "entries",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Who asked, and on which server.",
+          "fields": [
+            {
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "core",
+                "mirror"
+              ],
+              "name": "on",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "node",
+              "id",
+              "name",
+              "on"
+            ],
+            "entity": "mirror.person",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "by",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked",
+        "mirror_not_live",
+        "mirror_first_copy",
+        "mirror_term_mismatch",
+        "mirror_switch_ended",
+        "mirror_pending_changes",
+        "mirror_contents_missing",
+        "mirror_ahead",
+        "mirror_digest_mismatch"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked",
+        "mirror_not_live",
+        "mirror_first_copy",
+        "mirror_term_mismatch",
+        "mirror_switch_ended",
+        "mirror_pending_changes",
+        "mirror_contents_missing",
+        "mirror_ahead",
+        "mirror_digest_mismatch"
+      ],
+      "response": [
+        {
+          "name": "ready",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Not ready yet: a change here holds the vault (busy), or the mirror is applying.",
+          "enum": [
+            "busy",
+            "applying"
+          ],
+          "name": "waiting",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Where the mirror stands.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "seq",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "at",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "name": "digest",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "name": "entries",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The role the core will hold on the vault here once this server is its core (this server's policy for it); null: none, and the core abandons the switch (mirror_switch_no_role) unless the person accepted that.",
+          "fields": [
+            {
+              "name": "role_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "files",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "directories",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "sync",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "roles",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "peer_role",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.switch.request",
+      "confirmations": [],
+      "description": "A super admin of the mirror asked for a planned switch (mirror.switch there): the core begins one (it freezes the vault, numbers its last change and prepares the mirror) and answers at once with the switch's id; the decision comes later as peer.mirror.switch.commit. The caller must be the vault's mirror.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
+          "generator": {
+            "attrs": [
+              "uid"
+            ],
+            "entity": "mirror.vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "Who asked.",
+          "fields": [
+            {
+              "description": "The person's account id on the mirror.",
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Their display name (attribution only).",
+              "name": "name",
+              "required": false,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "id",
+              "name"
+            ],
+            "entity": "mirror.person",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "by",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "The person accepted that the core may hold no role on the vault on the mirror afterwards.",
+          "name": "accept_no_access",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked",
+        "conflict",
+        "mirror_not_live",
+        "mirror_switch_running",
+        "mirror_submissions_queued",
+        "mirror_has_remote"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked",
+        "conflict",
+        "mirror_not_live",
+        "mirror_switch_running",
+        "mirror_submissions_queued",
+        "mirror_has_remote"
+      ],
+      "response": [
+        {
+          "description": "The switch's id (UUID), the same on both servers.",
+          "generator": {
+            "attrs": [
+              "switch_id"
+            ],
+            "entity": "mirror.switch",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "switch_id",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The term the switch leaves.",
+          "minimum": 0,
+          "name": "term",
+          "required": true,
+          "types": [
+            "integer"
           ]
         }
       ],
@@ -46031,7 +46991,8 @@
             "paused",
             "diverged",
             "expired",
-            "stopped"
+            "stopped",
+            "switching"
           ],
           "name": "core_state",
           "required": false,
@@ -68191,5 +69152,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "b752e918f661679f0c3d7e3dd23bec1c362d0e1d2b13076428a06c7a6fb98c29"
+  "ws_hash": "f1da94f09faa9f30dff3d140cc060a930ab847a127b98699c4667b82ddaea0a8"
 }

@@ -262,6 +262,48 @@ CommandResult handleResync(const CommandCall& call) {
                        });
 }
 
+CommandResult handleSwitch(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"mirror", "switch"}));
+    const auto json = hasFlag(call, "json");
+    const auto acceptNoAccess = hasFlag(call, "accept-no-access");
+    const auto vault = parseUInt(call.positionals.at(0));
+    if (!vault || *vault == 0) return invalid("mirror switch: the vault is its number (vh vault list)");
+    return runMirrorOp(
+        "mirror switch", [&] { return mirrors::switchRole(call.user, static_cast<uint32_t>(*vault), acceptNoAccess); },
+        [&](const nlohmann::json& r) {
+            if (json) return mirrorPretty(r);
+            const auto text = [&](const char* key, const std::string& fallback) {
+                return r.contains(key) && r[key].is_string() ? r[key].get<std::string>() : fallback;
+            };
+            const auto outcome = text("outcome", "");
+            const auto role = text("role", "-");
+            // The old core's role on the vault on the new core: what its people may do there afterwards.
+            const auto peerRole = r.contains("peer_role") && r["peer_role"].is_object()
+                                      ? r["peer_role"].value("role_name", std::string("?"))
+                                      : std::string{};
+            const auto access = text("peer_access", "none");
+            const auto oldCore = text("side", "core") == "core" ? std::string("this server") : std::string("the old core");
+            const auto roleLine =
+                peerRole.empty() ? fmt::format("{} holds no role on the vault on its new core (no access)", oldCore)
+                                 : fmt::format("{} holds role '{}' on the vault on its new core ({})", oldCore, peerRole,
+                                               access);
+            if (outcome == "switched")
+                return fmt::format("Vault {} switched: this server is its {} now (term {}){}; {}.\n", *vault, role,
+                                   r.value("role_term", int64_t{0}),
+                                   r.value("told", true) ? "" : ", the other server has not confirmed yet", roleLine);
+            if (outcome == "abandoned") {
+                const auto why = r.contains("detail") && r["detail"].is_object() && r["detail"].contains("why") &&
+                                         r["detail"]["why"].is_string()
+                                     ? ": " + r["detail"]["why"].get<std::string>()
+                                     : std::string{};
+                return fmt::format("Vault {}'s switch was abandoned ({}{}); nothing changed, this server is still its "
+                                   "{}.\n",
+                                   *vault, text("reason", "abandoned"), why, role);
+            }
+            return fmt::format("Vault {}'s switch is still running (vh mirror info {} shows it).\n", *vault, *vault);
+        });
+}
+
 CommandResult handleMirror(const CommandCall& call) {
     if (call.positionals.empty()) return usage(call.constructFullArgs());
     const auto [sub, subcall] = descend(call);
@@ -279,6 +321,7 @@ CommandResult handleMirror(const CommandCall& call) {
     if (is("discard")) return handleHeldDecision(subcall, false);
     if (is("retry")) return handleHeldDecision(subcall, true);
     if (is("resync")) return handleResync(subcall);
+    if (is("switch")) return handleSwitch(subcall);
     return invalid(call.constructFullArgs(), "Unknown mirror subcommand: '" + std::string(sub) + "'");
 }
 
