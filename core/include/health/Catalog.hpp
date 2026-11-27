@@ -17,9 +17,9 @@ namespace vh::health {
 // Something a person can do about a finding. It only names an existing place or command: whoever runs it goes
 // through that command's own permission check, confirmation and audit. There is no remedy endpoint.
 struct Remedy {
-    std::string id;                      // stable within its class
-    std::string label;
-    std::string kind;                    // "open" | "command"
+    std::string id{};                      // stable within its class
+    std::string label{};
+    std::string kind{};                    // "open" | "command"
     std::optional<std::string> href{};     // open: the console's route ("/cost#budget-alerts")
     std::optional<std::string> command{};  // command: an existing ws command
     nlohmann::json payload = nullptr;    // command: its payload
@@ -27,10 +27,10 @@ struct Remedy {
 };
 
 struct FindingClass {
-    std::string code;
-    std::string cardId;
-    std::string title;
-    std::string maxSeverity;  // the worst severity the class is raised with: "warning" | "error"
+    std::string code{};
+    std::string cardId{};
+    std::string title{};
+    std::string maxSeverity{};  // the worst severity the class is raised with: "warning" | "error"
     bool notifies = true;
     std::vector<Remedy> remedies{};
 };

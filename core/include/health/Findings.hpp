@@ -21,12 +21,12 @@ namespace vh::health {
 
 // A row of health_finding_state.
 struct Mark {
-    std::string cls;
-    std::string subject;   // "" for the whole server
-    std::string state;     // "acknowledged" | "silenced"
-    std::string severity;  // the class's severity when the mark was set: "warning" | "error"
+    std::string cls{};
+    std::string subject{};   // "" for the whole server
+    std::string state{};     // "acknowledged" | "silenced"
+    std::string severity{};  // the class's severity when the mark was set: "warning" | "error"
     std::optional<std::uint32_t> setBy{};
-    std::string setByName;
+    std::string setByName{};
     std::uint64_t setAt = 0;                 // epoch seconds
     std::optional<std::uint64_t> expiresAt{};  // epoch seconds; never for an acknowledgement
     std::optional<std::string> note{};
@@ -34,18 +34,18 @@ struct Mark {
 
 // A finding as a card raised it.
 struct Active {
-    std::string code;
-    std::string subject;
-    std::string cardId;
-    std::string severity;  // "warning" | "error"
-    std::string title;     // the card's
-    std::string message;
+    std::string code{};
+    std::string subject{};
+    std::string cardId{};
+    std::string severity{};  // "warning" | "error"
+    std::string title{};     // the card's
+    std::string message{};
     std::optional<std::string> href{};
     std::optional<std::string> metricKey{};
 };
 
 struct Finding {
-    Active raised;
+    Active raised{};
     std::string state = "active";  // "active" | "acknowledged" | "silenced"
     std::optional<Mark> mark{};      // the mark behind `state`, when it isn't "active"
 };
@@ -53,9 +53,9 @@ struct Finding {
 using Key = std::pair<std::string, std::string>;  // class, subject
 
 struct Resolution {
-    std::vector<Finding> findings;  // every active finding, in the order given
-    std::vector<Mark> silences;     // silences whose class isn't active now
-    std::vector<Key> stale;         // marks to delete: expired, or acknowledgements whose occurrence is over
+    std::vector<Finding> findings{};  // every active finding, in the order given
+    std::vector<Mark> silences{};     // silences whose class isn't active now
+    std::vector<Key> stale{};         // marks to delete: expired, or acknowledgements whose occurrence is over
     std::uint32_t unattendedErrors = 0;
     std::uint32_t unattendedWarnings = 0;
 };
@@ -73,7 +73,7 @@ struct Resolution {
 [[nodiscard]] int severityRank(std::string_view severity) noexcept;
 
 struct Snapshot {
-    std::string overallStatus;
+    std::string overallStatus{};
     std::uint32_t errorCount = 0;
     std::uint32_t warningCount = 0;
     std::uint32_t unattendedErrorCount = 0;
