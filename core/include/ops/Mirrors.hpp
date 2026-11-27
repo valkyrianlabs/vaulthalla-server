@@ -105,6 +105,11 @@ struct Mirrored {
 
 [[nodiscard]] nlohmann::json toJson(const db::query::mirror::HeldChange& h);
 
+// Starts a stopped copy over from its core's tree (wave 5 piece B; mirror::resync::start): the vault is held here as a
+// mirror, diverged, expired or stopped. Super admins of this server; audited mirror.resync. Answers the row's new state
+// and how many pending changes were kept as held.
+[[nodiscard]] nlohmann::json resync(const Actor& actor, uint32_t vaultId);
+
 [[nodiscard]] nlohmann::json toJson(const Offer& offer);
 [[nodiscard]] nlohmann::json toJson(const Mirrored& m);
 [[nodiscard]] nlohmann::json toJson(const Cancelled& c);

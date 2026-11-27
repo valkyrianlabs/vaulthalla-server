@@ -594,24 +594,27 @@ void schedule(const uint32_t vaultId) {
 }
 
 std::size_t orphaned(const uint32_t vaultId) {
+    return holdAllPending(vaultId, "mirror_orphaned", "the core ended this vault's mirror before it confirmed the change");
+}
+
+std::size_t holdAllPending(const uint32_t vaultId, const std::string& code, const std::string& why) {
     std::scoped_lock local(vaultMutex(vaultId));
     std::size_t n = 0;
     for (const auto& p : mq::Pending::list(vaultId)) {
-        auto held = submitHeldOf(p, "held", "mirror_orphaned",
-                                 "the core ended this vault's mirror before it confirmed the change");
+        auto held = submitHeldOf(p, "held", code, why);
         uint64_t heldId = 0;
-        vh::db::Transactions::exec("mirror::submit orphaned", [&](pqxx::work& txn) {
+        vh::db::Transactions::exec("mirror::submit hold pending", [&](pqxx::work& txn) {
             mq::Pending::remove(txn, p.id);
             heldId = mq::Pending::hold(txn, held);
         });
         contents::moveBlob(contents::pendingBlob(vaultId, p.id), contents::heldBlob(vaultId, heldId));
         ++n;
     }
-    vh::db::Transactions::exec("mirror::submit orphaned clean", [&](pqxx::work& txn) {
+    vh::db::Transactions::exec("mirror::submit hold pending clean", [&](pqxx::work& txn) {
         txn.exec("DELETE FROM mirror_dirty WHERE vault_id = $1", pqxx::params{vaultId});
     });
-    if (n) vh::log::Registry::sync()->info("[MirrorSubmit] Vault {}: orphaned with {} change(s) pending; kept as held",
-                                           vaultId, n);
+    if (n) vh::log::Registry::sync()->info("[MirrorSubmit] Vault {}: {} change(s) pending kept as held ({})", vaultId, n,
+                                           code);
     return n;
 }
 

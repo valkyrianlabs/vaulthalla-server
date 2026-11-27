@@ -145,6 +145,10 @@ json Mirrors::heldRetry(const json& payload, const std::shared_ptr<Session>& ses
     return {{"held", mirrors::toJson(mirrors::retryHeld(mirrorActorOf(session), mirrorRequiredId(payload, "id")))}};
 }
 
+json Mirrors::resync(const json& payload, const std::shared_ptr<Session>& session) {
+    return mirrors::resync(mirrorActorOf(session), mirrorRequiredId(payload, "vault_id"));
+}
+
 json Mirrors::offer(const json& payload, const std::shared_ptr<Session>& session) {
     return vh::mirror::start::offerReceived(mirrorPeerOf(session), payload);
 }

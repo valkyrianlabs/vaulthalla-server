@@ -1101,6 +1101,48 @@ for the core's tree, compares it with its own by uid and generation, and takes t
 difference. Contents are fetched only for files whose generation differs. Whatever the mirror had that the core did
 not becomes held changes.
 
+### As built: resync and the scrub (phase 2 wave 5, piece B, migration 168)
+
+Decided while building (owner's instruction to build without waiting for review); each is listed for confirmation in
+the hand-off:
+
+- **Resync** (`mirror.resync`, `vh mirror resync <vault>`, on the mirror; super admins, never an agent, a scoped or a
+  relayed device; audited `mirror.resync` on both sides): for a copy that is `diverged`, `expired` or `stopped`, with
+  the link up. **Through the first-copy path.** The mirror asks its core first (`peer.mirror.resync {vault_uid}`): the
+  core takes its baseline again **in the next term** (its row becomes `starting`, the vault's log, entry hashes,
+  baseline and submissions go, then `MirrorVaults::startCore(term + 1)`; a start that cannot finish (the writers'
+  bound) leaves the row `diverged`, `mirror_resync_failed`, so the mirror can ask again; a paused vault is refused).
+  Then the mirror holds every pending change (`mirror_resync`, its bytes with it: `submit::holdAllPending`, which the
+  orphaned rule now shares), forgets its entry hashes and dirty rows, and resets its row (live, first copy at cursor 0,
+  no baseline, zero digest; `resync_at`, `resync_by`, `resync_count`); pending-contents rows stay. The follower then
+  runs the first copy as usual.
+- **The copy takes this server's entries as they are.** A copy page's entry that is here by uid is brought to the
+  core's state in place (moved, renamed, its fields written): the same entry row, and **the bytes it holds are reused
+  when the generation is the core's** (the comparison is with the entry before the transaction, as for a confirmed
+  change: nothing identical is fetched). An entry of this server's that holds a name the core's entry needs, and that
+  no page has named yet, steps aside to its conflict name (a later page takes it into place, or the end keeps it).
+- **Nothing a person wrote here is dropped.** A file whose generation differs keeps this server's version as a held
+  change (`mirror_resync_replaced`, op `write`, its facts and its bytes linked into the held store before the core's
+  bytes are fetched over them), unless a change of its held at the start keeps it already. When the copy is complete,
+  every live entry and trash row whose uid the core's tree does not hold leaves the tree as a held change
+  (`mirror_resync_extra`: a file with its bytes, a folder as `mkdir`, a symlink as `symlink` with its target, a trash
+  row with its bytes), kept once; so the digests agree and the evidence of the divergence is listed (`vh mirror held`)
+  until a super admin discards it. Metadata that differed (a name, a mode) is the core's afterwards and is in neither
+  list: the copy's adoption is the report (known limit). The held changes name the person who started the resync.
+- **The scrub** (`mirror::resync::scrub`, `Resync::scrub`): one statement compares every entry's hash from the tables
+  (`vh_mirror_tree`) with the recorded one (an entry a change made here holds dirty is skipped), and on the mirror the
+  running digest with the recorded hashes' sum. Run from the follower's hourly pass for every live vault (a core, or a
+  mirror whose first copy is complete) not scrubbed for `kScrubEvery` (24 h; `scrubbed_at`); never on a server that
+  mirrors nothing. A difference stops the vault as `diverged` (`mirror_scrub_mismatch`, the count and the first 20
+  uids with both hashes), audited `mirror.scrub`; the mirror learns of a core's divergence from its next answer.
+  Contents are not re-hashed (the design's scrub also re-hashes file contents: not built). Cost: the scrub of 100,000
+  entries is the hashing measured for the baseline (about 11.5 s on the dev VM), on the follower's thread once a day.
+  Test instances only (`paths::testMode`, `VH_TEST_FAULT_DIR/mirror-scrub-now`): every vault is due at every pass, so
+  `vhh drill peers` (step 7o) sees a planted difference caught, then resyncs.
+
+Known limits: a vault whose baseline takes longer than the link's request timeout (15 s) to take again answers the
+mirror's resync too late: the core has started over, the mirror has not; asking again works (the core takes it again).
+
 ## Moving the core
 
 Each server keeps a `mirror_vault` row per mirrored vault: the peer, its own role, the term, the last `(term, seq)`

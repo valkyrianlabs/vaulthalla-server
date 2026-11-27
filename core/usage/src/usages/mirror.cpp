@@ -173,6 +173,20 @@ std::shared_ptr<CommandUsage> retry(const std::weak_ptr<CommandUsage>& parent) {
     return cmd;
 }
 
+std::shared_ptr<CommandUsage> resync(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
+    cmd->aliases = {"resync"};
+    cmd->description = "Start a copy that stopped (diverged, expired or stopped) over from its core's tree, without "
+                       "making it again: files whose bytes are here already are not fetched; changes still pending, "
+                       "this server's version of a file the core's replaces and anything the core's tree does not hold "
+                       "are kept as held changes (vh mirror held). The link must be up. Super admins only; audited.";
+    cmd->positionals = {vaultPos};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh mirror resync 4", "Start vault 4's copy over from its core."}};
+    return cmd;
+}
+
 std::shared_ptr<CommandUsage> acceptAll(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->effect = CommandEffect::Write;
@@ -199,7 +213,7 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
                          decline(root->weak_from_this()), cancel(root->weak_from_this()), list(root->weak_from_this()),
                          info(root->weak_from_this()),    acceptAll(root->weak_from_this()),
                          keep(root->weak_from_this()),    held(root->weak_from_this()),    discard(root->weak_from_this()),
-                         retry(root->weak_from_this())};
+                         retry(root->weak_from_this()),   resync(root->weak_from_this())};
     root->examples = {
         {"vh mirror add <vault> --to <server>", "On the core: offer a vault."},
         {"vh mirror pending", "On the other server: offers waiting."},

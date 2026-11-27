@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'f72196a90fbfb3e34dadc86bd5dceff0cf0f329fb469433edbc2b4981784221e'
+export const WS_CONTRACT_HASH = 'b752e918f661679f0c3d7e3dd23bec1c362d0e1d2b13076428a06c7a6fb98c29'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
@@ -5916,6 +5916,17 @@ export interface WsContract {
     }
   }
   /**
+   * Starts a copy that stopped (diverged, expired or stopped) over from its core's tree without making it
+   * again: the core takes its baseline again in the next term and this server runs the first copy over the
+   * entries it has (files whose bytes are here already are not fetched). Changes still pending, this server's
+   * version of a file the core's replaces and anything the core's tree does not hold are kept as held
+   * changes. The link must be up. Super admins; audited mirror.resync.
+   */
+  'mirror.resync': {
+    payload: { vault_id: number }
+    response: { vault_id: number; state: string; copy_finished: boolean; term: number; held: number; entries: number }
+  }
+  /**
    * Where the sender can be reached (its device listener's advertisement); answers the receiver's. Each side
    * stores what it is told.
    */
@@ -6258,6 +6269,15 @@ export interface WsContract {
       offer_uid: string
       state: 'pending' | 'accepted' | 'declined' | 'installed' | 'started' | 'cancelled' | 'expired' | 'failed'
     }
+  }
+  /**
+   * The mirror starts its copy over (mirror.resync on the mirror): the core takes its baseline again in the
+   * next term (its log, entry hashes, submissions and baseline for the vault start again) and answers the new
+   * term and baseline. The caller must be the vault's mirror; a paused vault is refused.
+   */
+  'peer.mirror.resync': {
+    payload: { vault_uid: string }
+    response: { term: number; baseline: { term: number; seq: number }; entries: number }
   }
   /**
    * A change made on the mirror, submitted to the core, which executes it as that person (the linked server's
@@ -9268,6 +9288,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'mirror.keep_removed.set',
   'mirror.list',
   'mirror.pending',
+  'mirror.resync',
   'peer.endpoints',
   'peer.get',
   'peer.hello',
@@ -9285,6 +9306,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.mirror.log',
   'peer.mirror.notify',
   'peer.mirror.offer',
+  'peer.mirror.resync',
   'peer.mirror.submit',
   'peer.mirror.tree',
   'peer.pair.confirm',
@@ -9757,6 +9779,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'mirror.keep_removed.set': 15000,
   'mirror.list': 15000,
   'mirror.pending': 15000,
+  'mirror.resync': 15000,
   'peer.endpoints': 15000,
   'peer.get': 15000,
   'peer.hello': 15000,
@@ -9774,6 +9797,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.mirror.log': 15000,
   'peer.mirror.notify': 15000,
   'peer.mirror.offer': 15000,
+  'peer.mirror.resync': 15000,
   'peer.mirror.submit': 15000,
   'peer.mirror.tree': 15000,
   'peer.pair.confirm': 15000,
