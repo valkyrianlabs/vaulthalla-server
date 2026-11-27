@@ -651,9 +651,18 @@ def _changes_on_the_mirror(a: Node, va: int, b: Node, vb: int, faults_b: Path, n
     report.check("7j: an HTTP upload on A stores the file", errors == {"/docs/uploaded_on_a.bin": None}, json.dumps(errors))
     ok = settled("the uploads on both sides")
     on_b = b.inst.mount / "whole" / "docs" / "uploaded_on_a.bin"
+
+    def arrived_on_b():
+        # Settled means equal digests; the bytes come on the sealed lane after (an open meanwhile may answer ENODATA).
+        try:
+            return on_b.read_bytes() == body_a or None
+        except OSError:
+            return None
+
+    arrived = _wait("A's upload's bytes on B", arrived_on_b, timeout=60)
     report.check("7j: both arrive and come back confirmed",
                  bool(ok) and _plain(a, "whole/from_b/uploaded_on_b.txt") == _plain(b, "whole/from_b/uploaded_on_b.txt")
-                 and on_b.is_file() and on_b.read_bytes() == body_a, json.dumps(ok)[:300])
+                 and bool(arrived), json.dumps(ok)[:300])
     report.check("7j: B's upload was exactly one change submitted to A (its write), no staging file among them",
                  _sql(a, f"SELECT count(*) FROM mirror_submission WHERE vault_id = {va} "
                          "AND payload -> 'args' ->> 'name' = 'uploaded_on_b.txt'") == "1"
