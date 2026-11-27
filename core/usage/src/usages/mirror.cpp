@@ -2,8 +2,7 @@
 
 using namespace vh::protocols::shell;
 
-// `vh mirror ...`: mirrored vaults between linked servers (design/peers/mirror.md). Experimental and off by default
-// (peers.experimental). The minimal set for starting and cancelling a mirror; the polished CLI comes later.
+// `vh mirror ...`: mirrored vaults between linked servers (design/peers/mirror.md).
 namespace vh::protocols::shell::mirror_book {
 
 namespace {
@@ -333,8 +332,7 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
     auto root = build(parent);
     root->aliases = {"mirror"};
     root->pluralAliasImpliesList = true;
-    root->description = "Mirror a vault between this server and a linked one (experimental; peers.experimental in "
-                        "config.yaml). One server is the vault's core; the other holds a copy and the vault's keys.";
+    root->description = "Mirror a vault between this server and a linked one. One server is the vault's core; the other holds a copy and the vault's keys.";
     root->subcommands = {add(root->weak_from_this()),    pending(root->weak_from_this()), accept(root->weak_from_this()),
                          decline(root->weak_from_this()), cancel(root->weak_from_this()), list(root->weak_from_this()),
                          info(root->weak_from_this()),    acceptAll(root->weak_from_this()),

@@ -28,8 +28,7 @@
 //     setting: super admins of this server only.
 //   - mirror.list, mirror.get: super admins (every mirrored vault and start); on the core, the vault's admin View.
 // Never an agent (MCP, `vh mcp`), a scoped device, a relayed device or a linked server's session: Refused
-// "peer_forbidden" (and the router and the MCP catalog refuse first). Gate: peers.experimental, else Refused
-// "peers_experimental".
+// "peer_forbidden" (and the router and the MCP catalog refuse first).
 namespace vh::ops::mirrors {
 
 using db::query::mirror::Offer;

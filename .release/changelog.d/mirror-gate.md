@@ -1,5 +1,4 @@
-- Server mirror, the gate (migration 165_mirror_gate.sql; design/peers/mirror.md "As built: the gate"), experimental
-  and off by default (peers.experimental).
+- Server mirror, the gate (migration 165_mirror_gate.sql; design/peers/mirror.md "As built: the gate").
   - mirror::access: per-vault state of a vault held as another server's copy (NotMirrored, Live, ReadOnly with a
     reason), in memory, published at startup and by every mirror_vault writer, kept by the link's up and down,
     reconciled by MirrorAccessWatcher; requireWritable throws MirrorReadOnly (ops::ReadOnly, code read_only, reason).

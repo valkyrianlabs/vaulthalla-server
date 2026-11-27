@@ -39,6 +39,13 @@ public:
     [[nodiscard]] static std::vector<Record> listAll();
     [[nodiscard]] static std::vector<Record> listLive();
     [[nodiscard]] static std::size_t countLive();
+    // Whether this server ever linked another (any row, live or unlinked: rows are never deleted). What keeps a server
+    // that links nothing idle: the link service, the follower, the starter, background contents and detach copies do
+    // nothing while it is false. True for the rest of the process once seen (insert says so at once); until then the
+    // table is asked at most every kRecordedProbe, and a failed probe answers false.
+    [[nodiscard]] static bool anyRecorded();
+    // Tests: forget what anyRecorded() saw, so its next call asks the table.
+    static void forgetRecordedForTesting();
 
     // ops::Conflict when a live row has this node id or key.
     [[nodiscard]] static Record insert(const NewPeer& p);

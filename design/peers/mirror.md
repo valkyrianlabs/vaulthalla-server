@@ -584,7 +584,7 @@ without waiting for review); each is listed for confirmation in the hand-off:
 - **The wire.** `peer.mirror.tree {vault_uid, after}`, `peer.mirror.log {vault_uid, term, seq, part?}`,
   `peer.mirror.ack {vault_uid, term, seq, digest, entries}` (the core answers) and `peer.mirror.notify {vault_uid, term,
   seq}` (the mirror wakes), on the link's websocket (`peer::LinkService::request|notify`), peer sessions only (the peer
-  wire set), `peers_experimental` while the switch is off. A caller that is not the vault's linked server with the other
+  wire set). A caller that is not the vault's linked server with the other
   role, a vault not mirrored here or no such vault: `not_found` "Not found", the sealed lane's answer. Every answer
   carries the core's state; `diverged` there stops the mirror. **Bounds:** the link takes messages of at most 1 MiB
   (`protocols::ws::Session`, `kWebSocketReadBufferMaxBytes`), so an answer stays under 768 KiB and 1,000 tree entries
@@ -965,12 +965,12 @@ waiting for review; each is listed for confirmation in the hand-off):
 
 - **`vh::mirror::access`** (`core/include/mirror/access/Access.hpp`, the interface piece B builds on): `state(vault)`
   is `NotMirrored` (no row here, or this server is the core), `Live` (role `mirror`, `copy_finished`, state `live`,
-  `peers.experimental` on, the link up) or `ReadOnly`; `reason(vault)` is the code `requireWritable` refuses with
+  the link up) or `ReadOnly`; `reason(vault)` is the code `requireWritable` refuses with
   (`""` when it lets the write through); `requireWritable(vault, operation)` throws `MirrorReadOnly` (an
   `ops::ReadOnly`, itself an `ops::Refused` with code `read_only` and a `reason` member); `acceptsLocalChanges()` is
   false. Reasons, in the order they are judged: `mirror_orphaned`, `mirror_diverged`, `mirror_expired`,
   `mirror_paused`, `mirror_stopped` (any other state, with `stop_reason` kept in `facts()`), `mirror_first_copy`,
-  `mirror_peers_off` (the switch off here: the follower does not run), `mirror_link_down`, and for a `Live` vault
+  `mirror_link_down`, and for a `Live` vault
   `mirror_writes_not_built` while `acceptsLocalChanges()` is false. Each has a sentence (`sentence()`), with no path,
   name or key material. **`mirror_core_owned`** (added): what is never a local change on a held vault, `Live` or not:
   its name, description, quota, owner, sync and recovery settings and a remote (`refuseIfHeld`).

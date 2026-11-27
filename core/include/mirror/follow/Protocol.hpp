@@ -10,7 +10,7 @@
 
 // The server mirror's data plane on the link (design/peers/mirror.md "Following the core", "As built: following the
 // core"): peer.mirror.tree, peer.mirror.log and peer.mirror.ack (the core answers its mirror), peer.mirror.notify (the
-// core tells its mirror a group was numbered). Peer sessions only, refused while peers.experimental is off
+// core tells its mirror a group was numbered). Peer sessions only
 // (protocols::ws::handler::MirrorFollow). The caller must be the vault's linked server with the other role: for
 // another server, a vault it is not the linked server of, or no such vault, every message answers exactly as the
 // sealed lane does (ops::NotFound "Not found", code not_found), so a peer learns nothing about vaults it is not the

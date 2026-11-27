@@ -6,7 +6,7 @@
 
 // ws peer.mirror.tree / peer.mirror.log / peer.mirror.ack / peer.mirror.notify / peer.mirror.submit: the server mirror's data plane
 // (design/peers/mirror.md "As built: following the core"; mirror::follow::Protocol). Only on a linked server's Peer
-// session (Router::classifyCommand: the peer wire set), refused while peers.experimental is off. Never an agent, a
+// session (Router::classifyCommand: the peer wire set). Never an agent, a
 // scoped or relayed device or a person's session: the router denies the wire set to every other kind of session.
 namespace vh::protocols::ws::handler {
 

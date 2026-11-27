@@ -1,7 +1,6 @@
 #include "mirror/start/Start.hpp"
 
 #include "audit/Trail.hpp"
-#include "config/Registry.hpp"
 #include "db/query/mirror/MirrorVault.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "log/Registry.hpp"
@@ -143,7 +142,7 @@ void Service::runLoop() {
 
 void Service::tick() {
     using namespace start_service_detail;
-    if (!config::Registry::get().peers.experimental) return;
+    if (!vh::db::query::peer::Peers::anyRecorded()) return;  // a server that links nothing: nothing to start
     bool woken = false;
     {
         std::scoped_lock lock(mutex_);

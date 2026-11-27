@@ -2,15 +2,15 @@ import { expect, test, type Page } from '@playwright/test'
 import { armStepUp, authenticateAndSaveState, authStatePath, explicitSkipRequested } from './helpers/auth'
 import { NOW, OFFLINE, count, scriptWs, type Answer, type Frame, type ScriptedRole } from './helpers/scriptedWs'
 
-// Mirrored vaults (/linked-servers/mirrors; design/peers/mirror.md, experimental like linked servers): the area only
-// exists for a super admin on a server with peers.experimental on; the list's states and reasons in words, offers
-// (accept, decline), mirroring a vault (the keys step-up), a vault's page with its advice and only the actions its role
-// and state allow (resync, switch with the no-access choice, detach with its preview and typed name, versions, ending
-// a mirror with the copy choice, take over as core with its step-up and refusal, detach a copy with its progress, cancel
-// and the files left out), the states take over brings (rejoining, forked, an open take over, the server's advice line)
-// and held changes (retry, discard). mirror.*, peer.*, storage.vault.list and
-// auth.stepup.* are scripted on the console socket (helpers/scriptedWs.ts), so the suite proves the console's own
-// rules; a real two-server mirror is the `vhh drill` harness's job. Screenshots land in test-results/.
+// Mirrored vaults (/linked-servers/mirrors; design/peers/mirror.md): the area only exists for a super admin; the list's
+// states and reasons in words, offers (accept, decline), mirroring a vault (the keys step-up), a vault's page with its
+// advice and only the actions its role and state allow (resync, switch with the no-access choice, detach with its
+// preview and typed name, versions, ending a mirror with the copy choice, take over as core with its step-up and
+// refusal, detach a copy with its progress, cancel and the files left out), the states take over brings (rejoining,
+// forked, an open take over, the server's advice line) and held changes (retry, discard). mirror.*, peer.*,
+// storage.vault.list and auth.stepup.* are scripted on the console socket (helpers/scriptedWs.ts), so the suite proves
+// the console's own rules; a real two-server mirror is the `vhh drill` harness's job. Screenshots land in
+// test-results/.
 //
 //     VAULTHALLA_E2E_OFFLINE=1 pnpm exec playwright test tests/e2e/mirrors.spec.ts                  # no daemon
 
@@ -170,14 +170,13 @@ const owns = (command: string) =>
   command.startsWith('storage.vault.') ||
   command === 'auth.users.list'
 
-const scriptMirrors = (page: Page, answer: (frame: Frame) => Answer | undefined, { role = true as ScriptedRole, enabled = true } = {}) =>
+const scriptMirrors = (page: Page, answer: (frame: Frame) => Answer | undefined, { role = true as ScriptedRole } = {}) =>
   scriptWs(
     page,
     owns,
     frame => {
       const own = answer(frame)
       if (own) return own
-      if (frame.command === 'peer.status') return { data: { enabled } }
       if (frame.command === 'peer.list') return { data: { peers: PEERS } }
       if (frame.command === 'mirror.pending') return { data: { offers: [] } }
       if (frame.command === 'mirror.held.list') return { data: { held: [] } }
@@ -219,27 +218,11 @@ const shoot = async (page: Page, name: string) => {
 const mirrorCommands = (sent: Frame[]) => sent.filter(f => f.command.startsWith('mirror.')).map(f => f.command)
 
 test.describe.serial('mirrored vaults', () => {
-  test('switched off: the URL says only that linked servers aren’t available, and nothing is asked', async ({ page }) => {
-    const sent = await scriptMirrors(page, () => undefined, { enabled: false })
-    await page.goto('/linked-servers/mirrors')
-    await expect(page.getByTestId('peers-unavailable')).toHaveText(/Linked servers aren’t available on this server/)
-    await expect(page.locator('main')).not.toContainText(/experimental|config\.yaml/i)
-    expect(mirrorCommands(sent)).toEqual([])
-  })
-
   test('not a super admin: denied, and nothing is asked', async ({ page }) => {
     const sent = await scriptMirrors(page, () => undefined, { role: false })
     await page.goto('/linked-servers/mirrors/5')
     await expect(page.getByText('You don\'t have access to this')).toBeVisible()
     expect(mirrorCommands(sent)).toEqual([])
-  })
-
-  test('a mirror command answering that linked servers are off shows the same state', async ({ page }) => {
-    await scriptMirrors(page, frame =>
-      frame.command === 'mirror.list' ? { error: 'linked servers are experimental and off on this server', code: 'peers_experimental' } : undefined,
-    )
-    await page.goto('/linked-servers/mirrors')
-    await expect(page.getByTestId('peers-unavailable')).toBeVisible()
   })
 
   test('list: tabs, each state with its reason in words, held counts, offers accepted and declined', async ({ page }) => {

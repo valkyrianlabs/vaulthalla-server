@@ -12,7 +12,6 @@
 #include "db/query/device/Device.hpp"
 #include "device/Pairing.hpp"
 #include "device/ServerIdentity.hpp"
-#include "config/Registry.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "identities/User.hpp"
 #include "peer/Links.hpp"
@@ -296,11 +295,11 @@ DeviceIdentityRotation rotateDeviceIdentity(const Actor& actor, const bool confi
         // #362: every key-backup grant ends with its device (in the revocation's transaction); audited below.
         const auto liveGrants = db::query::device::BackupGrants::listLive();
         // design/peers/link.md: connected linked servers hear of the new key first (unless this is the emergency
-        // rotation, or linked servers are off); every link that didn't store it is revoked with the switch.
+        // rotation); every link that didn't store it is revoked with the switch.
         vh::device::IdentityRotationOptions options;
         const auto links = vh::peer::linkService();
         out.revoke_peers = revokePeers;
-        if (!revokePeers && links && vh::config::Registry::get().peers.experimental)
+        if (!revokePeers && links)
             options.announce = [&](const vh::device::ServerIdentity& current, const vh::device::crypto::Hash& next,
                                    const unsigned int version) {
                 auto stored = links->announceRotation(current, next, version);

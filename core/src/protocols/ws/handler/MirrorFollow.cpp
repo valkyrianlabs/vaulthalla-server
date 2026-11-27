@@ -7,7 +7,6 @@
 #include "mirror/switching/Switch.hpp"
 #include "mirror/takeover/Takeover.hpp"
 #include "ops/Error.hpp"
-#include "ops/Peers.hpp"
 #include "peer/Peer.hpp"
 #include "protocols/ws/Session.hpp"
 
@@ -20,7 +19,6 @@ namespace {
 // The linked server asking: a Peer session with a peer row (the router admits no other session to the wire set; this
 // is the second check).
 uint32_t mirrorFollowCaller(const std::shared_ptr<Session>& session) {
-    vh::ops::peers::requireExperimental();
     if (!session || !session->isPeerSession() || !session->peerPrincipal() || session->peerPrincipal()->pairing ||
         session->peerPrincipal()->peer_id == 0)
         throw ops::Denied("only a linked server may ask this");

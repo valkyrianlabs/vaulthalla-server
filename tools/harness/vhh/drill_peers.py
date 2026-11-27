@@ -3,8 +3,9 @@
     sudo tools/harness/vhh.sh drill peers --build build [--keep] [--out report.json]
 
 Two independent private instances (own database, swtpm, state, device listener on a private loopback port), driven
-through the real `vh` as their super admin. First with peers.experimental off: every `vh peer` command refuses.
-Then on (config.yaml appended, both restarted):
+through the real `vh` as their super admin. First, two servers that have linked nothing: neither lists a linked server
+or a mirror, and a config.yaml that still carries the removed `peers: {experimental: ...}` key starts (it is ignored).
+Then:
 
   1. trust on first use: B opens a window (`vh peer pair`), A dials it (`vh peer link`) and shows a code; B is offered
      three codes, a wrong pick denies the request; then the right one links both sides, and the link comes up;
@@ -83,7 +84,8 @@ from pathlib import Path
 from vhh.drill import DrillError, Node, Report
 from vhh.instance import Instance
 
-PEERS_ON = "peers: {experimental: true}\n"
+# The switch linked servers had before they shipped on: an old config.yaml may still say so, and is read without it.
+STALE_PEERS_KEY = "peers: {experimental: false}\n"
 
 
 def _json(node: Node, *args: str) -> tuple[int, dict, str]:
@@ -1382,23 +1384,21 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
             nodes.append(n)
             return n
 
-        def enable(n: Node) -> None:
-            with open(n.inst.run_dir / "config.yaml", "a") as f:
-                f.write(PEERS_ON)
-            n.close()
-            n.inst.restart(kill=False)
-
-        # ------------------------------------------------------------------ 0. the switch
-        print("vhh drill peers: two daemons; the switch is off", flush=True)
+        # ------------------------------------------------------------------ 0. nothing linked
+        print("vhh drill peers: two daemons that have linked nothing", flush=True)
         a, b = node("a"), node("b")
-        for who, n, args in (("B", b, ("peer", "pair")), ("A", a, ("peer", "list")),
-                             ("A", a, ("peer", "link", "127.0.0.1:1"))):
-            cp = n.vh(*args, check=False)
-            report.check(f"0: {who}: `vh {' '.join(args)}` refuses while peers.experimental is off",
-                         cp.returncode != 0 and "experimental" in (cp.stdout + cp.stderr),
-                         (cp.stdout + cp.stderr)[-300:])
-        enable(a)
-        enable(b)
+        with open(a.inst.run_dir / "config.yaml", "a") as f:
+            f.write(STALE_PEERS_KEY)
+        a.close()
+        a.inst.restart(kill=False)
+        for who, n in (("A", a), ("B", b)):
+            peers_now = _peers(n, everything=True)
+            code, mirrors, text = _json(n, "mirror", "list")
+            report.check(f"0: {who} has linked nothing: no linked server and no mirror",
+                         not peers_now and code == 0 and not mirrors.get("vaults"),
+                         json.dumps({"peers": peers_now, "mirrors": mirrors})[:300] or text[-300:])
+        report.check("0: A starts with the removed peers.experimental key still in its config.yaml (ignored)",
+                     _peers(a) == [], "")
         spki_a, port_a = _identity(a)
         spki_b, port_b = _identity(b)
         addr_b = f"127.0.0.1:{port_b}"

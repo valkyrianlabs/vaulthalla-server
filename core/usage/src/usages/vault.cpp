@@ -529,8 +529,8 @@ static std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& par
     return cmd;
 }
 
-// Assigning and removing a vault role names a linked server too (--peer: experimental, peers.experimental); its
-// path overrides stay a user's or a group's (subjectOption).
+// Assigning and removing a vault role names a linked server too (--peer); its path
+// overrides stay a user's or a group's (subjectOption).
 const auto roleSubjectOption =
     Option::Multi("subject",
                   "The user or group the command is targeting, or a linked server (--peer: its number from `vh peer "

@@ -5,16 +5,13 @@ import { useSession } from '@/lib/session'
 import { meets } from '@/lib/permissions'
 import { useSyncConflictCount } from '@/features/syncConflicts/summary'
 import { useManagedStorageSignal } from '@/features/managedStorage/signal'
-import { usePeersSignal } from '@/features/peers/signal'
 
 export const useVisibleNav = (): NavSection[] => {
   const user = useSession(state => state.user)
   // "Sync Conflicts" only appears while there are open conflicts this account can resolve (core filters the count).
   const conflicts = useSyncConflictCount()
   const cloudStorage = useManagedStorageSignal()
-  // Linked servers are experimental and off by default: no entry unless the server has them on.
-  const peers = usePeersSignal()
-  const signals: Record<NavSignal, boolean> = { syncConflicts: conflicts > 0, cloudStorage, peers }
+  const signals: Record<NavSignal, boolean> = { syncConflicts: conflicts > 0, cloudStorage }
   return NAV.map(section => ({
     ...section,
     items: section.items.filter(item => meets(user, item.requires) && (!item.shownWhen || signals[item.shownWhen])),

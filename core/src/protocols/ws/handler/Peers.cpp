@@ -9,6 +9,7 @@
 #include "protocols/ws/Session.hpp"
 
 #include <ctime>
+#include <stdexcept>
 
 #include <nlohmann/json.hpp>
 
@@ -66,10 +67,6 @@ json peerLinkedJson(const peers::Linked& l) {
     return j;
 }
 
-}
-
-json Peers::status(const std::shared_ptr<Session>& session) {
-    return {{"enabled", peers::enabled(peerActorOf(session))}};
 }
 
 json Peers::pairingOpen(const std::shared_ptr<Session>& session) {
@@ -158,22 +155,19 @@ json Peers::pairStatus(const json& payload, const std::shared_ptr<Session>& sess
 }
 
 json Peers::hello(const json& payload, const std::shared_ptr<Session>& session) {
-    peers::requireExperimental();
     const auto links = vh::peer::linkService();
-    if (!links) throw ops::Refused("peers_experimental", "the link service is not available");
+    if (!links) throw std::runtime_error("the link service is not available");
     return links->helloReceived(session, payload);
 }
 
 json Peers::ping(const std::shared_ptr<Session>& session) {
     (void)session;
-    peers::requireExperimental();
     return {{"time", peerServerTime()}};
 }
 
 json Peers::endpoints(const json& payload, const std::shared_ptr<Session>& session) {
-    peers::requireExperimental();
     const auto links = vh::peer::linkService();
-    if (!links) throw ops::Refused("peers_experimental", "the link service is not available");
+    if (!links) throw std::runtime_error("the link service is not available");
     return links->endpointsReceived(session, payload);
 }
 

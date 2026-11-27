@@ -120,7 +120,6 @@ void Handler::registerAuthHandlers(const std::shared_ptr<Router>& r) {
 // Paired devices (ops::devices). Which sessions reach which is the router's decision (classifyCommand).
 // design/peers/link.md: linked servers (handler/Peers.hpp).
 void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
-    r->registerSessionOnlyHandler("peer.status", &handler::Peers::status);
     r->registerSessionOnlyHandler("peer.pairing.open", &handler::Peers::pairingOpen);
     r->registerSessionOnlyHandler("peer.pairing.close", &handler::Peers::pairingClose);
     r->registerSessionOnlyHandler("peer.pairing.pending", &handler::Peers::pairingPending);

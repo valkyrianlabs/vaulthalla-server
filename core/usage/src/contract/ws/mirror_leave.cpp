@@ -1,6 +1,5 @@
 // ws book: leaving a mirror (core/src/protocols/ws/handler/MirrorLeave.cpp; ops/MirrorLeave.hpp, mirror/leave/Leave.hpp;
 // design/peers/mirror.md "Leaving a mirror", "As built: leaving a mirror"). Server mirror phase 2, wave 5, piece A.
-// Experimental and off by default (peers.experimental): every command answers peers_experimental while it is off.
 //
 // mirror.detach.preview and mirror.detach are "human" (a signed-in person, or a full-access paired device's session:
 // never a scoped device, a relayed one, an agent or a share session: peer_forbidden), for a super admin of this server
@@ -14,7 +13,6 @@ namespace {
 
 std::vector<std::string> mlRefusals(const std::vector<std::string>& extra = {}) {
     auto out = opsRefusals();
-    out.emplace_back("peers_experimental");
     out.emplace_back("peer_forbidden");
     for (const auto& e : extra) out.push_back(e);
     return out;
@@ -215,7 +213,7 @@ std::vector<WsCommandUsage> mirrorLeaveCommands() {
                     integer("purge_after").opt().gen(gen::ref("peer.mirror.deleting", {"purge_after"})),
                     str("copy").opt().oneOf({"remove", "leave"})},
         .response = {boolean("recorded"), str("state")},
-        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "peers_experimental",
+        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized",
                           "peer_revoked"},
         .client_timeout = kDefaultTimeout,
     });
@@ -233,7 +231,7 @@ std::vector<WsCommandUsage> mirrorLeaveCommands() {
                         .gen(gen::ref("peer.mirror.detached", {"at"})),
                     uinteger("missing").opt().gen(gen::ref("peer.mirror.detached", {"missing"}))},
         .response = {boolean("recorded"), uinteger("record").opt()},
-        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized", "peers_experimental",
+        .refusal_codes = {"denied", "invalid", "not_found", "conflict", "unauthorized",
                           "peer_revoked"},
         .client_timeout = kDefaultTimeout,
     });

@@ -1,4 +1,4 @@
-- Server mirror (experimental, behind peers.experimental): take over (migration 168: mirror_takeover,
+- Server mirror: take over (migration 168: mirror_takeover,
   mirror_fork_base; admin.mirror.takeover, bit 1 of admin_role.mirror_permissions, super_admin only among the built-in
   roles, --allow-mirror-takeover). mirror.takeover / vh mirror takeover <vault> --confirm <name> on the mirror (super
   admins or holders of admin.mirror.takeover, people only, via ops::mirrors::requireTakeover; the data.destroy step-up in the console; audited mirror.takeover): refused while the

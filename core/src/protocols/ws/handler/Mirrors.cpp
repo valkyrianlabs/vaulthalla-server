@@ -64,7 +64,6 @@ json mirrorOffers(const std::vector<ops::mirrors::Offer>& list) {
 
 // The linked server on the other end of this Peer session (the router admits nothing else here).
 vh::peer::Record mirrorPeerOf(const std::shared_ptr<Session>& session) {
-    ::vh::ops::peers::requireExperimental();
     const auto& principal = session ? session->peerPrincipal() : nullptr;
     if (!principal || principal->peer_id == 0) throw ops::Denied("not a linked server's session");
     const auto row = db::query::peer::Peers::byId(principal->peer_id);

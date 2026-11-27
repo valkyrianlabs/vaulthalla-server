@@ -18,7 +18,6 @@
 #include "../helpers/identities.hpp"
 #include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
-#include "config/Registry.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/File.hpp"
@@ -105,21 +104,17 @@ json mlOk(json data = json::object()) { return {{"status", "OK"}, {"data", std::
 
 class MirrorLeaveDbTest : public vh::test::db::Suite {
 protected:
-    inline static config::Config savedConfig;
     inline static std::mutex sentMutex;
     inline static std::vector<std::pair<std::string, json>> sent;
     inline static std::optional<std::time_t> linkUp{1000};
 
     static void SetUpTestSuite() {
         if (!setUpDbSuite("mirror_leave")) return;
-        savedConfig = config::Registry::get();
-        setExperimental(true);
     }
 
     static void TearDownTestSuite() {
         if (skipTests) return;
         start::setTransportForTesting({});
-        config::Registry::set(savedConfig);
         rbac::mirrored::resetForTesting();
         vh::mirror::access::resetForTesting();
         tearDownDbSuite();
@@ -128,7 +123,6 @@ protected:
     void SetUp() override {
         Suite::SetUp();
         if (IsSkipped()) return;
-        setExperimental(true);
         {
             std::scoped_lock lock(sentMutex);
             sent.clear();
@@ -153,12 +147,6 @@ protected:
     void TearDown() override {
         start::setTransportForTesting({});
         (void)runtime::Deps::releaseSessions();   // the device sessions of the who-may test
-    }
-
-    static void setExperimental(const bool on) {
-        auto cfg = config::Registry::get();
-        cfg.peers.experimental = on;
-        config::Registry::set(cfg);
     }
 
     static void sql(const std::string& statement) {
@@ -671,9 +659,6 @@ TEST_F(MirrorLeaveDbTest, OnlyASuperAdminOrAHolderOfTheDetachPermissionDetachesN
         EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::detach(superUser, {.vault_id = h.vaultId}); }), "peer_forbidden")
             << scope;
     }
-    setExperimental(false);
-    EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::detach(superUser, {.vault_id = h.vaultId}); }), "peers_experimental");
-    setExperimental(true);
     EXPECT_TRUE(mq::MirrorVaults::get(h.vaultId)) << "nothing was detached by any of them";
 
     // A typed name that is not the vault's refuses; an owner that is another server's person refuses.

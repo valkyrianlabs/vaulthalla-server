@@ -1,5 +1,4 @@
-- Leaving a mirror (migration 167_mirror_leave.sql; design/peers/mirror.md "As built: leaving a mirror"), experimental
-  and off by default (peers.experimental).
+- Leaving a mirror (migration 167_mirror_leave.sql; design/peers/mirror.md "As built: leaving a mirror").
   - admin_role.mirror_permissions: the admin module `mirror`, admin.mirror.detach ("Detach mirrored vaults"); super_admin
     only among the built-in roles; --allow-mirror-detach.
   - mirror_detached (the record of a detach on both servers), mirror_offer state 'detached' and copy_outcome 'detached',

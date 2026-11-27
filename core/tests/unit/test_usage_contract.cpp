@@ -435,7 +435,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         // Scoped devices: a scoped device unpairing another, or anyone's scope changed from a device.
         {"device_scope", {"device.revoke", "device.scope.set"}},
         // design/peers/link.md: linked servers (every peer.* command, below).
-        {"peers_experimental", {}}, {"peer_forbidden", {}}};
+        {"peer_forbidden", {}}};
     const auto stepUp = contract::stepUpTable();
     const auto refusedCodeAllowed = [&](const std::string& code, const std::string& command) {
         if (code == "step_up_required")
@@ -452,10 +452,10 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
                                                        r.family == "identity.admin" || r.family == "secrets" ||
                                                        r.family == "settings" || r.family == "connector.trust");
                    });
-        // Linked servers: the switch and who may link (ops::peers), on every peer.* command; the window's own
+        // Linked servers: who may link (ops::peers), on every peer.* command; the window's own
         // refusals on the dialling server's side of pairing.
-        // Assigning a vault role names a linked server too (migration 162): the same two refusals there.
-        if (code == "peers_experimental" || code == "peer_forbidden")
+        // Assigning a vault role names a linked server too (migration 162): the same refusal there.
+        if (code == "peer_forbidden")
             return command.starts_with("peer.") || command.starts_with("mirror.") || command == "role.vault.assign" ||
                    command == "role.vault.unassign" || command == "storage.vault.remove";
         // Starting a mirror (ops::mirrors, mirror::start): each refusal on the commands that send it.

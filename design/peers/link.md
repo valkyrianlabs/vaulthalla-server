@@ -1,6 +1,6 @@
 # Server link: pairing two Vaulthalla servers
 
-Status: phase 1a built (2026-11-25), experimental and off by default (`peers.experimental` in config.yaml): pairing,
+Status: phase 1a built (2026-11-25), switched on since 2026-11-27 (the `peers.experimental` switch is gone): pairing,
 the link, unlinking and the announced identity rotation, and the console's Linked servers page; not Desktop's brokered
 flow. What the
 build changed or decided is in "As built (phase 1a)" at the end; the rest of this text is the design. It covers how two
@@ -219,7 +219,7 @@ Linking does not require `device_server.remote` on both servers, only that one o
 
 Management, for a person (super admin; console, `vh`, or a full-access Desktop):
 
-`peer.status` (as built: whether the switch is on) · `peer.pairing.open` · `peer.pairing.close` · `peer.pairing.pending` · `peer.pairing.approve` · `peer.pairing.deny` ·
+`peer.pairing.open` · `peer.pairing.close` · `peer.pairing.pending` · `peer.pairing.approve` · `peer.pairing.deny` ·
 `peer.link.start` · `peer.link.status` · `peer.link.cancel` · `peer.list` · `peer.get` · `peer.rename` ·
 `peer.unlink`
 
@@ -277,9 +277,10 @@ the code was compared: person or Desktop, and as built whether a key was pinned)
 Work items 1 to 7 and 9 without the console page, the operator page and Desktop (8). Decided while building (under
 the owner's instruction to build without waiting for review; compatibility policy rule 5):
 
-- **The switch.** `peers.experimental: false` (config.yaml only, like `cloud`). Off: the link service closes every link
-  and dials nothing, the listener never looks a key up in `peer`, and every `peer.*` command and `vh peer` answers
-  `peers_experimental`.
+- **The switch** (removed 2026-11-27). Built behind `peers.experimental: false`; linked servers now ship on, and an old
+  config.yaml that still has the key loads (it is ignored). What the switch kept idle, `Peers::anyRecorded()` keeps
+  idle now: until a server has a `peer` row (live or unlinked), the link service, the follower, the starter,
+  background contents and detach copies do nothing (one indexed probe every 10 s, none after the first row).
 - **Unique among live rows** (schema above), and the extra columns.
 - **The commitment** has its own domain, `vh/peer/commit/v1` (device pairing's is `vh-pair-commit-v1`); the card has an
   exact encoding (Pairing, step 4).
@@ -318,8 +319,5 @@ the owner's instruction to build without waiting for review; compatibility polic
   connections with the same pins (`mirror.md` "As built: sealed contents"). A linked key gets it and nothing else over
   HTTP; unlinking closes its connections with the websocket (invariant 7). The dialling side's pin check is one function
   for both (`peer::pinnedKeyOf`).
-- **The console page** (built after phase 1a, same day): `/linked-servers` for super admins, shown only while the switch
-  is on. The console learns the switch from `peer.status {enabled}`, the one management command that answers while it
-  is off (the same callers as the rest), so no page load provokes `peers_experimental` and nothing advertises a
-  switched-off feature; a server without the command leaves the page out too. It drives the commands above, never the
-  wire set.
+- **The console page** (built after phase 1a, same day): `/linked-servers` for super admins (`peer.status` and the
+  unavailable state it fed went with the switch). It drives the commands above, never the wire set.

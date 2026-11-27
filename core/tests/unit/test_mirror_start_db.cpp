@@ -20,7 +20,6 @@
 #include "auth/stepup/StepUp.hpp"
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
-#include "config/Registry.hpp"
 #include "crypto/SecretKey.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/File.hpp"
@@ -148,7 +147,6 @@ json refusal(const std::string& code, const std::string& text) {
 
 class MirrorStartDbTest : public vh::test::db::Suite {
 protected:
-    inline static config::Config savedConfig;
     inline static std::shared_ptr<Wire> wire;
     // The fake mirror's wrap key (the core wraps to it).
     inline static std::array<uint8_t, 32> mirrorWrapSecret{};
@@ -158,8 +156,6 @@ protected:
 
     static void SetUpTestSuite() {
         if (!setUpDbSuite("mirror_start")) return;
-        savedConfig = config::Registry::get();
-        setExperimental(true);
         randombytes_buf(mirrorWrapSecret.data(), mirrorWrapSecret.size());
         crypto_scalarmult_base(mirrorWrapPublic.data(), mirrorWrapSecret.data());
         randombytes_buf(coreSeed.data(), coreSeed.size());
@@ -171,7 +167,6 @@ protected:
         if (skipTests) return;
         start::setTransportForTesting({});
         mirror::contents::setSourceFactoryForTesting({});
-        config::Registry::set(savedConfig);
         rbac::mirrored::resetForTesting();
         vh::mirror::access::resetForTesting();
         tearDownDbSuite();
@@ -180,7 +175,6 @@ protected:
     void SetUp() override {
         Suite::SetUp();
         if (IsSkipped()) return;
-        setExperimental(true);
         wire = std::make_shared<Wire>();
         const auto w = wire;
         start::setTransportForTesting(
@@ -207,12 +201,6 @@ protected:
     void TearDown() override {
         start::setTransportForTesting({});
         mirror::contents::setSourceFactoryForTesting({});
-    }
-
-    static void setExperimental(const bool on) {
-        auto cfg = config::Registry::get();
-        cfg.peers.experimental = on;
-        config::Registry::set(cfg);
     }
 
     static vh::peer::Key32 coreAttestPublic() {
@@ -488,11 +476,6 @@ TEST_F(MirrorStartDbTest, OnlyAPersonWhoMayManageTheVaultStartsAMirrorAndOnlyWit
     EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::add(plain, {.vault_id = v, .peer = std::to_string(peer.id)}); }),
               "denied");
     EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::pending(plain); }), "denied") << "the mirror's side: super admins";
-    setExperimental(false);
-    EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::add(superUser, {.vault_id = v, .peer = std::to_string(peer.id)}); }),
-              "peers_experimental");
-    EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::list(superUser); }), "peers_experimental");
-    setExperimental(true);
     const auto offer = ops::mirrors::add(superUser, {.vault_id = v, .peer = std::to_string(peer.id)});
     EXPECT_EQ(offer.state, "offered");
     EXPECT_TRUE(offer.notify);
@@ -1114,10 +1097,6 @@ TEST_F(MirrorStartDbTest, TheKeepSettingIsASuperAdminsAndAudited) {
                                        .password = std::string("Mirror-Start-Pass-123")})
             .user->id);
     EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::setKeepRemoved(plain, std::to_string(core.id), true); }), "denied");
-    setExperimental(false);
-    EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::setKeepRemoved(superUser, std::to_string(core.id), true); }),
-              "peers_experimental");
-    setExperimental(true);
     EXPECT_FALSE(MirrorStart::keepVaults(core.id).enabled) << "off by default";
     EXPECT_TRUE(ops::mirrors::setKeepRemoved(superUser, std::to_string(core.id), true).enabled);
     EXPECT_TRUE(audit::Trail::instance()->flushNow());
@@ -1442,7 +1421,6 @@ TEST_F(MirrorStartDbTest, BackgroundContentsFetchWhileTheLinkIsUpAndBackOffFromF
     EXPECT_EQ(vh::fs::ops::readFileToString(file->backing_path), sealed);
     (void)MirrorVaults::remove(v);
 }
-
 
 // ============================================================================ mirror every vault (the core's link)
 

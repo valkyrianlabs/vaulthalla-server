@@ -1,5 +1,5 @@
 - Starting a mirror (migration 163_mirror_start.sql; design/peers/mirror.md "As built: starting a mirror"): the control
-  plane of the server mirror, experimental and off by default (peers.experimental).
+  plane of the server mirror.
   - mirror_offer (one row per start on each side, shared offer_uid; states offered/pending/accepted/keys_acked/
     installed/started and declined/cancelled/expired/failed; a notify flag for what the other server must still be
     told; 7-day expiry of unanswered offers; finished rows swept after 30 days, never a started one whose mirror lives),

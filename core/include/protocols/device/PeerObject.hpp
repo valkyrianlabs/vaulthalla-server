@@ -12,10 +12,10 @@
 
 // The sealed lane on the device listener (design/peers/mirror.md "Contents"; peer/ObjectClient.hpp has the address):
 // GET (and HEAD) /peer/object/<vault uid>/<object uid>/<generation> serves one file generation's backing bytes exactly
-// as they are on disk. Only a Peer session reaches it (the listener hands it nothing else), and only while
-// peers.experimental is on; every answer is decided here, per request, before a byte is read:
+// as they are on disk. Only a Peer session reaches it (the listener hands it nothing else); every answer
+// is decided here, per request, before a byte is read:
 //
-//   404 not_found              the switch is off, no such mirrored vault, the vault's linked server is another one
+//   404 not_found              no such mirrored vault, the vault's linked server is another one
 //                              (whatever role this server has: core or mirror; never orphaned), or no such file there
 //   403 peer_revoked           the caller's link was revoked (or its key is no longer the row's) since its handshake
 //   410 generation_not_current the file's current generation is another one

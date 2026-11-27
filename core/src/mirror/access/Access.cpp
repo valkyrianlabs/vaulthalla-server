@@ -1,6 +1,5 @@
 #include "mirror/access/Access.hpp"
 
-#include "config/Registry.hpp"
 #include "db/query/mirror/Copy.hpp"
 #include "db/query/mirror/MirrorVault.hpp"
 #include "log/Registry.hpp"
@@ -102,8 +101,6 @@ bool publishHeld(std::map<uint32_t, HeldVault> next, const bool force) {
     return changed;
 }
 
-bool peersOn() { return vh::config::Registry::get().peers.experimental; }
-
 // The reason a held vault is read-only, "" when it is live. Caller holds the gate's lock (shared).
 std::string readOnlyReason(const HeldVault& v, const bool linkUp) {
     if (v.role == "orphaned") return std::string(kOrphaned);
@@ -116,7 +113,6 @@ std::string readOnlyReason(const HeldVault& v, const bool linkUp) {
     if (v.state == "paused") return std::string(kPaused);
     if (v.state != "live") return std::string(kStopped);
     if (!v.copy_finished) return std::string(kFirstCopy);
-    if (!peersOn()) return std::string(kPeersOff);
     if (!linkUp) return std::string(kLinkDown);
     return {};
 }
@@ -219,8 +215,6 @@ std::string sentence(const std::string_view code) {
         return "This vault's core server is deleting it: the copy is read-only until the core's restore window ends, "
                "when it is removed here or kept as an orphaned copy (vh mirror info shows which, and when), unless the "
                "core restores the vault; to keep it as this server's own vault, detach it (vh mirror detach)";
-    if (code == kPeersOff)
-        return "Linked servers are switched off on this server (peers.experimental); a mirrored copy is read-only";
     if (code == kLinkDown)
         return "The link to this vault's core server is down; the copy is read-only until it is back";
     if (code == kCoreOwned)

@@ -446,9 +446,6 @@ TEST_F(MirrorContentsDbTest, AnOpenFetchesAheadAndAWaitingReaderIsServedOnceVeri
 
 TEST_F(MirrorContentsDbTest, WithTheLinkDownAnOpenFailsWithItsReasonWithinTheBound) {
     const auto h = notYetReceived("/unreachable.bin", 64'000);
-    auto cfg = config::Registry::get();
-    cfg.peers.experimental = true;
-    config::Registry::set(cfg);
     // No test source: the vault's linked server, which has no connection.
     const auto started = std::chrono::steady_clock::now();
     try {
@@ -482,12 +479,6 @@ TEST_F(MirrorContentsDbTest, WithTheLinkDownAnOpenFailsWithItsReasonWithinTheBou
     const auto pending = PendingContents::get(h.expected.vault_id, h.expected.object_uid);
     ASSERT_TRUE(pending);
     EXPECT_EQ(pending->attempts, 0u) << "a link down is not the file's failure";
-    // The switch off: the same.
-    cfg.peers.experimental = false;
-    config::Registry::set(cfg);
-    EXPECT_THROW((void)contents::awaitIfPending(*h.file), contents::NotReceived);
-    cfg.peers.experimental = true;
-    config::Registry::set(cfg);
 }
 
 // The mount's opens share one FUSE worker pool with every vault: only mountWaitCap() of them wait on pending files at
@@ -572,9 +563,6 @@ TEST_F(MirrorContentsDbTest, OnlyAFewMountOpensWaitAndTheRestAnswerAtOnceWhileTh
     EXPECT_EQ(contents::mountWaitersForTesting(), 0u) << "released on a failure";
     // ...and the link down (said before any wait: no place taken).
     contents::setSourceFactoryForTesting({});
-    auto cfg = config::Registry::get();
-    cfg.peers.experimental = true;
-    config::Registry::set(cfg);
     const auto down = notYetReceived("/down.bin", 20'000);
     EXPECT_THROW((void)contents::awaitIfPending(*down.file, 10s, contents::Opener::Mount), contents::NotReceived);
     EXPECT_EQ(contents::mountWaitersForTesting(), 0u) << "the link down";

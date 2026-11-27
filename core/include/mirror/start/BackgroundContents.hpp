@@ -16,7 +16,7 @@
 // when it stops (so a stop never waits for a transfer here). A pass that received nothing (the files failed, or no slot
 // was free) backs off that vault with jitter, up to kBackoffCap; a file fails for good after three attempts
 // (PendingContents::kMaxAttempts) and is not fetched again until retried, so failed rows never keep it busy. Nothing
-// runs while the link is down or peers.experimental is off. Piece B's applier only inserts the pending rows.
+// runs while the link is down or on a server that has linked nothing. Piece B's applier only inserts the pending rows.
 // Registered with runtime::Manager as "MirrorContents", after the link service.
 namespace vh::mirror::start {
 

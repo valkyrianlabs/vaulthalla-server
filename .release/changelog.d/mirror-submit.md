@@ -1,4 +1,4 @@
-- Server mirror (experimental, behind peers.experimental): a change made on the mirror. On a Live mirror, ops::fs and
+- Server mirror: a change made on the mirror. On a Live mirror, ops::fs and
   vh::fs::Filesystem's mutators (and FUSE unlink, rmdir and seals) apply mkdir, move, rename, remove, write and setattr
   as pending changes (migration 166: mirror_pending, mirror_dirty, mirror_held, mirror_submission), submitted in order
   with peer.mirror.submit; a write's sealed bytes go first with PUT on the sealed lane (verified and staged by the core).

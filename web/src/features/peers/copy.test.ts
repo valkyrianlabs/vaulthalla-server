@@ -15,11 +15,6 @@ test('only the purpose sentence says what the link carries', () => {
   }
 })
 
-test('the page is marked experimental and the unavailable state names nothing to switch on', () => {
-  assert.equal(PEERS_COPY.experimental, 'Experimental')
-  for (const text of [PEERS_COPY.unavailableTitle, PEERS_COPY.unavailableBody]) assert.doesNotMatch(text, /experimental|config|peers\./i)
-})
-
 test('unlinking says what it does and does not do', () => {
   const body = PEERS_COPY.unlinkBody('vps')
   assert.match(body, /keeps nothing it can use to reconnect/)

@@ -20,14 +20,6 @@ export type Tone = 'ok' | 'info' | 'warn' | 'danger' | 'neutral' | 'unknown'
 // Every read a mirror change can affect.
 export const MIRROR_READS = ['mirror.list', 'mirror.get', 'mirror.pending', 'mirror.held.list', 'mirror.detach.preview', 'mirror.detach.copy.get'] as const
 
-// ---- the switch: linked servers off
-
-// Every mirror.* command refuses peers_experimental while peers.experimental is off (ops::peers gate).
-export const PEERS_OFF_CODES: readonly string[] = ['peers_experimental', 'mirror_peers_off']
-export const isPeersOff = (error: unknown): boolean => {
-  const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined
-  return typeof code === 'string' && PEERS_OFF_CODES.includes(code)
-}
 
 // ---- names
 
@@ -107,7 +99,6 @@ export const REASON_TEXT: Readonly<Record<string, string>> = {
   mirror_orphaned: 'its core ended the mirror',
   mirror_first_copy: 'the first copy is not finished',
   mirror_stopped: 'the mirror stopped',
-  mirror_peers_off: 'linked servers are switched off on this server',
   mirror_rejoining: 'the other server took over as the core and this server holds changes it never received',
   mirror_both_forced: 'both servers took over as the core while they were cut off',
   mirror_copy_writing: 'a copy is still being written into it',

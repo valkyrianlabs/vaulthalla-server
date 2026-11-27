@@ -1,7 +1,8 @@
 # Linked servers and the server mirror
 
 Design documents, never published (they live outside `docs/`). Phase 0 of the server mirror plan of 2026-11-25.
-Phase 1a, the link (link.md), is built, experimental and off by default (`peers.experimental`); nothing else here is.
+Phase 1a, the link (link.md), and the server mirror (mirror.md) are built and ship switched on (the `peers.experimental`
+switch they were built behind was removed on 2026-11-27); a server that links nothing does nothing for them.
 
 | Document | One line |
 |---|---|

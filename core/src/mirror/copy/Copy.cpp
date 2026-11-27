@@ -1,11 +1,11 @@
 #include "mirror/copy/Copy.hpp"
 
 #include "audit/Trail.hpp"
-#include "config/Registry.hpp"
 #include "db/query/fs/Entry.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/mirror/Detach.hpp"
 #include "db/query/mirror/MirrorVault.hpp"
+#include "db/query/peer/Peer.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/PlaintextSource.hpp"
@@ -480,7 +480,7 @@ void Service::wake() {
 void Service::onStop() { wake(); }
 
 std::size_t Service::tick() {
-    if (!config::Registry::get().peers.experimental) return 0;
+    if (!vh::db::query::peer::Peers::anyRecorded()) return 0;  // nothing ever linked: no copy is held here
     std::size_t ran = 0;
     for (const auto& job : mirror_copy_detail::mq::MirrorCopies::running()) {
         if (shouldStop() && isRunning()) break;

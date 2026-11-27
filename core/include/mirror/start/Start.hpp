@@ -42,8 +42,7 @@
 // A `core` row exists only after the mirror holds its keys and its own `mirror` row, and the mirror is told the begin
 // until it answers; a crash at any point leaves a state the Service resumes or mirror.cancel removes (on both sides).
 //
-// Gate: with peers.experimental off nothing here runs (the handlers and ops refuse with peers_experimental, the Service
-// does nothing). Key material is never logged, audited, put in an error or stored outside vault_keys.
+// On a server that has linked nothing the Service does nothing (db::query::peer::Peers::anyRecorded). Key material is never logged, audited, put in an error or stored outside vault_keys.
 namespace vh::mirror::start {
 
 using json = nlohmann::json;

@@ -17,7 +17,6 @@
 #include "auth/model/TokenPair.hpp"
 #include "auth/session/Manager.hpp"
 #include "auth/stepup/StepUp.hpp"
-#include "config/Registry.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/peer/Peer.hpp"
@@ -103,7 +102,6 @@ protected:
     inline static std::shared_ptr<const vh::device::ServerIdentity> server;
     inline static uint16_t port = 0;
     inline static UserPtr super;
-    inline static config::Config savedConfig;
 
     static void SetUpTestSuite() {
         if (!setUpDbSuite("peer_link")) return;
@@ -122,8 +120,6 @@ protected:
         super = test::identities::createUser("pl_super_" + tag(), db::query::rbac::role::Admin::get("super_admin"),
                                              "pl_super_" + tag() + "@vaulthalla.test");
         protocols::device::endpoints::clearNodeIdForTesting();
-        savedConfig = config::Registry::get();
-        setExperimental(true);
     }
 
     static void TearDownTestSuite() {
@@ -138,7 +134,6 @@ protected:
         listener.reset();
         (void)runtime::Deps::releaseSessions();
         ioc.reset();
-        config::Registry::set(savedConfig);
         vh::device::setCurrentServerIdentity(nullptr);
         tearDownDbSuite();
     }
@@ -148,13 +143,6 @@ protected:
         if (IsSkipped()) return;
         vh::device::Pairing::instance().resetForTesting();
         vh::peer::Pairing::instance().resetForTesting();
-        setExperimental(true);
-    }
-
-    static void setExperimental(const bool on) {
-        auto cfg = config::Registry::get();
-        cfg.peers.experimental = on;
-        config::Registry::set(cfg);
     }
 
     static std::shared_ptr<protocols::ws::Session> console(const UserPtr& user) {
@@ -251,9 +239,12 @@ protected:
     }
 };
 
-// Invariant 6: no rows, nothing dials and no key is a peer's.
+// Invariant 6: no rows, nothing dials and no key is a peer's. Linked servers ship on: a server that has linked nothing
+// does nothing for them (Peers::anyRecorded keeps the link service, the follower and the starter idle).
 TEST_F(PeerLinkDbTest, WithoutLinkedServersNothingDialsAndNoKeyIsAPeer) {
     db::Transactions::exec("peer.reset", [](pqxx::work& txn) { txn.exec("DELETE FROM peer"); });
+    db::query::peer::Peers::forgetRecordedForTesting();
+    EXPECT_FALSE(db::query::peer::Peers::anyRecorded()) << "no row: nothing was ever linked";
     const auto links = vh::peer::linkService();
     ASSERT_TRUE(links);
     const auto before = links->dialsStarted();
@@ -268,6 +259,14 @@ TEST_F(PeerLinkDbTest, WithoutLinkedServersNothingDialsAndNoKeyIsAPeer) {
     Client client(port, stranger);
     ASSERT_TRUE(client.connect());
     EXPECT_EQ(replyCode(client.call("peer.ping")), "device_unknown") << "a pairing-only connection";
+    EXPECT_FALSE(db::query::peer::Peers::anyRecorded());
+
+    // The first link says so at once, without waiting for the next probe.
+    const ClientIdentity a;
+    const auto linked = link(a);
+    EXPECT_TRUE(db::query::peer::Peers::anyRecorded());
+    (void)ops::peers::unlink(super, std::to_string(linked.row.id));
+    EXPECT_TRUE(db::query::peer::Peers::anyRecorded()) << "an unlinked server stays recorded";
 }
 
 TEST_F(PeerLinkDbTest, TwoServersPairByNumberMatchingAndTheLinkedKeyGetsAPeerSession) {
@@ -559,57 +558,6 @@ TEST_F(PeerLinkDbTest, ARotationAnnouncementIsVerifiedAndTheAnnouncedKeyTakesOve
     EXPECT_EQ(replyCode(old.call("peer.ping")), "device_unknown") << "the old key is dropped once the new one is seen";
     (void)ops::peers::unlink(super, std::to_string(linked.row.id));
 }
-
-TEST_F(PeerLinkDbTest, WithTheSwitchOffALinkedKeyIsNoPeerAndNothingAnswers) {
-    const ClientIdentity a;
-    const auto linked = link(a);
-    setExperimental(false);
-    EXPECT_FALSE(vh::device::authorize(a.publicKey(), "127.0.0.1").linked);
-    Client client(port, a);
-    ASSERT_TRUE(client.connect());
-    EXPECT_EQ(replyCode(client.call("peer.ping")), "device_unknown");
-    EXPECT_EQ(replyCode(client.call("peer.pair.request", {{"card", vh::peer::toJson(cardOf("n"))},
-                                                          {"commitment", dc::toHex(dc::randomNonce())}})),
-              "peers_experimental");
-    try {
-        (void)ops::peers::list(super);
-        ADD_FAILURE() << "listed with the switch off";
-    } catch (const ops::Refused& e) {
-        EXPECT_EQ(e.code, "peers_experimental");
-    }
-    const auto links = vh::peer::linkService();
-    const auto before = links->dialsStarted();
-    links->tickForTesting();
-    EXPECT_EQ(links->dialsStarted(), before) << "the switch off: nothing dials";
-    setExperimental(true);
-    (void)ops::peers::unlink(super, std::to_string(linked.row.id));
-}
-
-// peer.status reports the switch, on or off, without the peers_experimental refusal every other command answers, so
-// the console can leave linked servers out; it is still a super admin's (and a person's) question.
-TEST_F(PeerLinkDbTest, TheStatusAnswersTheSwitchEitherWayToTheSameCallers) {
-    EXPECT_EQ(handler::Peers::status(console(super)), json({{"enabled", true}}));
-    setExperimental(false);
-    EXPECT_EQ(handler::Peers::status(console(super)), json({{"enabled", false}})) << "answered, not refused";
-    EXPECT_THROW((void)handler::Peers::pairingPending(console(super)), ops::Refused) << "the rest still refuse";
-
-    const auto name = "pl_user_" + tag();
-    const auto plain = test::identities::createUser(name, db::query::rbac::role::Admin::get("unprivileged"),
-                                                    name + "@vaulthalla.test");
-    EXPECT_THROW((void)handler::Peers::status(console(plain)), ops::Denied) << "only super admins";
-    {
-        const auth::stepup::Scope agent(auth::stepup::Channel::Agent);
-        try {
-            (void)ops::peers::enabled(super);
-            ADD_FAILURE() << "an agent read the switch";
-        } catch (const ops::Refused& e) {
-            EXPECT_EQ(e.code, "peer_forbidden");
-        }
-    }
-    setExperimental(true);
-    EXPECT_TRUE(ops::peers::enabled(super));
-}
-
 
 // Who may make a link: the console steps up (device.trust, bound to the target), a full-access Desktop connected
 // directly does not (RBAC alone, decision 2), nor does the host; a device reached through the relay never gets there.

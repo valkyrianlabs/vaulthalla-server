@@ -10,12 +10,20 @@
 #include <pqxx/pqxx>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <exception>
 
 namespace vh::db::query::peer {
 
 namespace {
 
 using json = nlohmann::json;
+
+constexpr auto kRecordedProbe = std::chrono::seconds(10);
+std::atomic<bool> recorded{false};
+// steady_clock ticks of the last probe; 0 is "never asked".
+std::atomic<std::chrono::steady_clock::rep> lastRecordedProbe{0};
 
 constexpr const char* kPeerColumns = R"SQL(
     id, node_id, name, spki_sha256, next_spki_sha256, rotate_counter, attest_public_keys::text AS attest_public_keys,
@@ -115,6 +123,29 @@ std::vector<Record> Peers::listLive() {
     });
 }
 
+bool Peers::anyRecorded() {
+    if (recorded.load(std::memory_order_acquire)) return true;
+    const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
+    auto last = lastRecordedProbe.load(std::memory_order_acquire);
+    const auto every = std::chrono::duration_cast<std::chrono::steady_clock::duration>(kRecordedProbe).count();
+    if (last != 0 && now - last < every) return false;
+    if (!lastRecordedProbe.compare_exchange_strong(last, now, std::memory_order_acq_rel)) return false;  // another asks
+    try {
+        const bool any = Transactions::read("Peers::anyRecorded", [&](pqxx::transaction_base& txn) {
+            return txn.exec("SELECT EXISTS (SELECT 1 FROM peer)").one_field_ref().as<bool>();
+        });
+        if (any) recorded.store(true, std::memory_order_release);
+        return any;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+void Peers::forgetRecordedForTesting() {
+    recorded.store(false, std::memory_order_release);
+    lastRecordedProbe.store(0, std::memory_order_release);
+}
+
 std::size_t Peers::countLive() {
     return Transactions::read("Peers::countLive", [&](pqxx::transaction_base& txn) {
         return txn.exec("SELECT count(*) FROM peer WHERE revoked_at IS NULL").one_field_ref().as<std::size_t>();
@@ -139,6 +170,7 @@ Record Peers::insert(const NewPeer& p) {
                              vh::peer::toJson(p.endpoints).dump(), p.approved_by, p.compared_by, p.peer_protocol,
                              p.product_version});
             const auto id = res.one_field_ref().as<uint32_t>();
+            recorded.store(true, std::memory_order_release);
             return peerFromRow(txn.exec(selectPeers("WHERE id = $1"), pqxx::params{id}).one_row_ref());
         });
     } catch (const pqxx::unique_violation&) {

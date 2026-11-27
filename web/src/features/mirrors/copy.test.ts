@@ -13,13 +13,9 @@ const everything = () => [
 test('every sentence is plain: no internal codes, no config names, no CLI-only words', () => {
   for (const text of everything()) {
     assert.doesNotMatch(text, /\b(mirror|peer|vault)\.[a-z_]+/i, text) // ws command names
-    assert.doesNotMatch(text, /\bmirror_[a-z_]+|peers_experimental|config\.yaml/i, text)
+    assert.doesNotMatch(text, /\bmirror_[a-z_]+|experimental|config\.yaml/i, text)
     assert.doesNotMatch(text, /\b(seq|uid|digest|baseline|tombstone|undefined|null|NaN)\b/, text)
   }
-})
-
-test('the unavailable and denied states name nothing to switch on', () => {
-  assert.doesNotMatch(MIRROR_COPY.denied, /experimental|config/i)
 })
 
 test('each confirmation says what will happen in one or two sentences', () => {

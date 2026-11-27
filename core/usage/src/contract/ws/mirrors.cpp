@@ -1,6 +1,5 @@
 // ws book: mirror.* and peer.mirror.* (core/src/protocols/ws/handler/Mirrors.cpp; design/peers/mirror.md "Starting a
-// mirror", "As built: starting a mirror"). Experimental and off by default (peers.experimental): every command answers
-// peers_experimental while it is off.
+// mirror", "As built: starting a mirror").
 //
 // Auth levels: the management commands are "human" (a signed-in person, or a full-access paired device's session:
 // never a scoped device, a relayed one, an agent or a share session; ops answers peer_forbidden, the router and the
@@ -14,15 +13,13 @@ namespace {
 
 std::vector<std::string> mcMirrorRefusals(const std::vector<std::string>& extra = {}) {
     auto out = opsRefusals();
-    out.emplace_back("peers_experimental");
     out.emplace_back("peer_forbidden");
     for (const auto& e : extra) out.push_back(e);
     return out;
 }
 
 std::vector<std::string> mcWireRefusals(const std::vector<std::string>& extra = {}) {
-    std::vector<std::string> out{"denied", "invalid", "not_found", "conflict", "unauthorized", "peers_experimental",
-                                 "peer_revoked"};
+    std::vector<std::string> out{"denied", "invalid", "not_found", "conflict", "unauthorized", "peer_revoked"};
     for (const auto& e : extra) out.push_back(e);
     return out;
 }

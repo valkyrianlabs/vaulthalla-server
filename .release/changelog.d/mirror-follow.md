@@ -4,8 +4,8 @@
   mirror_baseline for the first copy; the sequencer records the digest after every group (digest_after); mirror_vault
   gains the states starting, expired and stopped, a stop reason and details, the first copy's cursor and the recorded
   vault document; an entry directly under a vault's root names the vault's uid as its parent in its replicated state.
-- New peer wire commands peer.mirror.tree, peer.mirror.log, peer.mirror.ack and peer.mirror.notify (peer sessions only,
-  refused while peers.experimental is off; not_found for a vault the caller is not the linked server of), the mirror's
+- New peer wire commands peer.mirror.tree, peer.mirror.log, peer.mirror.ack and peer.mirror.notify (peer sessions only;
+  not_found for a vault the caller is not the linked server of), the mirror's
   log applier (mirror::apply: one transaction per group, compare-and-set on entry hashes, temporary names for swaps,
   remote accounts created for another server's {node, id}, pending contents expected in the same transaction) and the
   "MirrorFollower" runtime service. A shared tree-apply module (fs/tree_apply) carries the uid lookup and the

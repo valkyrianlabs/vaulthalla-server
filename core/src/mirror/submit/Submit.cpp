@@ -689,7 +689,7 @@ SubmitStep submitPending(const uint32_t vaultId, vh::mirror::follow::Transport& 
             return out;
         }
         if (!a->ok) {
-            if (a->code == "not_found" || a->code == "peers_experimental" || a->code == "mirror_not_live" ||
+            if (a->code == "not_found" || a->code == "mirror_not_live" ||
                 a->code == "peer_revoked" || a->code == "contents_missing") {
                 mq::Pending::noteError(next->id, a->code + ": " + a->error);
                 out.waiting = true;

@@ -2,13 +2,12 @@ import { expect, test, type Page } from '@playwright/test'
 import { armStepUp, authenticateAndSaveState, authStatePath, explicitSkipRequested } from './helpers/auth'
 import { NOW, OFFLINE, count, scriptWs, type Answer, type Frame, type ScriptedRole } from './helpers/scriptedWs'
 
-// Linked servers (/linked-servers; design/peers/link.md, experimental and off by default): the page only exists for a
-// super admin on a server with peers.experimental on (peer.status), the list's health words, rename and unlink, Accept
-// a link (the window, three codes, a wrong code declining, the device.trust step-up before approving) and Link a server
-// (the address and key sent, the step-up, the code this server computed, the outcome, cancelling). peer.*,
-// device.remote.status and auth.stepup.* are scripted on the console socket (helpers/scriptedWs.ts), so the suite proves
-// the console's own rules against any daemon; a real two-server link is the `vhh drill peers` harness's job.
-// Screenshots of each layout land in the test's output directory (test-results/).
+// Linked servers (/linked-servers; design/peers/link.md): the page only exists for a super admin, the list's health
+// words, rename and unlink, Accept a link (the window, three codes, a wrong code declining, the device.trust step-up
+// before approving) and Link a server (the address and key sent, the step-up, the code this server computed, the
+// outcome, cancelling). peer.*, device.remote.status and auth.stepup.* are scripted on the console socket
+// (helpers/scriptedWs.ts), so the suite proves the console's own rules against any daemon; a real two-server link is
+// the `vhh drill peers` harness's job. Screenshots of each layout land in the test's output directory (test-results/).
 //
 //     VAULTHALLA_E2E_OFFLINE=1 pnpm exec playwright test tests/e2e/peers.spec.ts                  # no daemon
 //     VAULTHALLA_E2E_BASE_URL=https://localhost VAULTHALLA_E2E_NO_WEB_SERVER=1 pnpm exec playwright test tests/e2e/peers.spec.ts
@@ -126,16 +125,14 @@ const stepUpFor = (target: string): Answer => ({
 
 const owns = (command: string) => command.startsWith('peer.') || command.startsWith('auth.stepup.') || command === 'device.remote.status'
 
-// The test's own answers first; then peer.status (on unless a test says otherwise), the listener's status and a
-// scripted step-up (password only) that always succeeds.
-const scriptPeers = (page: Page, answer: (frame: Frame) => Answer | undefined, { role = true as ScriptedRole, enabled = true } = {}) =>
+// The test's own answers first; then the listener's status and a scripted step-up (password only) that always succeeds.
+const scriptPeers = (page: Page, answer: (frame: Frame) => Answer | undefined, { role = true as ScriptedRole } = {}) =>
   scriptWs(
     page,
     owns,
     frame => {
       const own = answer(frame)
       if (own) return own
-      if (frame.command === 'peer.status') return { data: { enabled } }
       if (frame.command === 'device.remote.status') return { data: { status: listener() } }
       if (frame.command === 'auth.stepup.begin') {
         const target = String(frame.payload?.target ?? '')
@@ -171,20 +168,8 @@ const shoot = async (page: Page, name: string) => {
   await page.setViewportSize({ width: 1280, height: 900 })
 }
 
-const peerCommands = (sent: Frame[]) => sent.filter(f => f.command.startsWith('peer.') && f.command !== 'peer.status').map(f => f.command)
 
 test.describe.serial('linked servers', () => {
-  test('switched off: no nav entry, and the URL says only that it is not available', async ({ page }) => {
-    const sent = await scriptPeers(page, () => undefined, { enabled: false })
-    await page.goto('/linked-servers')
-    const off = page.getByTestId('peers-unavailable')
-    await expect(off).toHaveText(/Linked servers aren’t available on this server/)
-    await expect(page.locator('main')).not.toContainText(/experimental|peers\.experimental|config\.yaml/i)
-    await expect(page.getByRole('link', { name: 'Linked servers' })).toHaveCount(0)
-    expect(count(sent, 'peer.status')).toBeGreaterThan(0)
-    expect(peerCommands(sent)).toEqual([])
-  })
-
   test('not a super admin: denied, and nothing is asked', async ({ page }) => {
     const sent = await scriptPeers(page, () => undefined, { role: false })
     await page.goto('/linked-servers')
@@ -220,7 +205,7 @@ test.describe.serial('linked servers', () => {
     })
     await page.goto('/linked-servers')
     await expect(page.getByRole('heading', { level: 1 })).toContainText('Linked servers')
-    await expect(page.getByTestId('peers-experimental')).toHaveText('Experimental')
+    await expect(page.locator('main')).not.toContainText(/experimental/i)
     await expect(page.getByTestId('peers-purpose')).toHaveText(/mirrored vaults travel over; it carries nothing else/)
     await expect(page.getByRole('link', { name: 'Linked servers' }).first()).toBeVisible()
     expect(sent.find(f => f.command === 'peer.list')?.payload).toEqual({ all: true })

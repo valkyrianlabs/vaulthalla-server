@@ -203,7 +203,6 @@ std::vector<WsEffect> effectTable() {
         {"peer.policy.set", "write"},
         {"peer.ping", "read"},
         {"peer.rename", "write"},
-        {"peer.status", "read"},
         {"peer.unlink", "destructive"},
         {"peer.unlinked", "destructive"},
         {"permission.get", "read"},

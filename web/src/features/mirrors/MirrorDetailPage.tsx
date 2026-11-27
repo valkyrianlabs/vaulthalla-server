@@ -26,7 +26,7 @@ import {
   TrashIcon,
   VaultIcon,
 } from '@/components/ui/icons'
-import { PeersGate, PeersUnavailable } from '@/features/peers/Gate'
+import { PeersGate } from '@/features/peers/Gate'
 import { healthText } from '@/features/peers/model'
 import { PeerError } from '@/features/peers/parts'
 import { MIRROR_COPY as C } from '@/features/mirrors/copy'
@@ -37,7 +37,6 @@ import {
   cancelKind,
   cancelTarget,
   firstCopyProgress,
-  isPeersOff,
   peerName,
   positionText,
   roleSentence,
@@ -86,7 +85,6 @@ const MirrorDetail = ({ vaultId }: { vaultId: number }) => {
     select: d => d.vault,
     refetchInterval: q => (running(q.state.data?.vault) ? DETAIL_POLL_MS : LIST_POLL_MS),
   })
-  if (isPeersOff(get.error)) return <PeersUnavailable />
   return (
     <div className="min-w-0">
       <BackLink />
@@ -278,7 +276,7 @@ const Loaded = ({ row }: { row: MirroredVault }) => {
 
           <Panel title={C.detailFacts}>
             <DefinitionList items={facts} />
-            {preview.error && !isPeersOff(preview.error) ? <PeerError error={preview.error} fallback={C.loadFailed} className="mt-3" /> : null}
+            {preview.error ? <PeerError error={preview.error} fallback={C.loadFailed} className="mt-3" /> : null}
           </Panel>
         </div>
 

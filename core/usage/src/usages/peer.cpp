@@ -2,7 +2,7 @@
 
 using namespace vh::protocols::shell;
 
-// `vh peer ...`: linked servers (design/peers/link.md). Experimental and off by default (peers.experimental).
+// `vh peer ...`: linked servers (design/peers/link.md).
 namespace vh::protocols::shell::peer_book {
 
 namespace {
@@ -185,8 +185,7 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
     auto root = build(parent);
     root->aliases = {"peer"};
     root->pluralAliasImpliesList = true;
-    root->description = "Link this server with other Vaulthalla servers (experimental; peers.experimental in "
-                        "config.yaml). A linked server is its own kind of principal: it never acts as a user.";
+    root->description = "Link this server with other Vaulthalla servers. A linked server is its own kind of principal: it never acts as a user.";
     root->subcommands = {pair(root->weak_from_this()),   pending(root->weak_from_this()), approve(root->weak_from_this()),
                          deny(root->weak_from_this()),   link(root->weak_from_this()),    list(root->weak_from_this()),
                          info(root->weak_from_this()),   rename(root->weak_from_this()),  unlink(root->weak_from_this()),

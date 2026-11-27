@@ -197,7 +197,7 @@ static std::shared_ptr<CommandUsage> device_identity_rotate(const std::weak_ptr<
     cmd->effect = CommandEffect::Destructive;
     cmd->description = "Replace the device listener's identity (the TLS key every paired Desktop pins) with a fresh one. "
                        "Every paired device is revoked and disconnected and has to pair again with a new pairing code; "
-                       "pairing requests in progress are dropped. Linked servers (experimental) that are connected are "
+                       "pairing requests in progress are dropped. Linked servers that are connected are "
                        "told of the new key first, signed by the old one, and keep their links; the others are "
                        "unlinked. No rollback: the old key is deleted. Super admins only; asks to confirm (--yes "
                        "without a terminal).";

@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '212012f65ccedd7b05761532bb2c3970da702f2c7233b787b414115f238ac0c2'
+export const WS_CONTRACT_HASH = '2d929ea0319172a28adf80a6156ada78111213be91e7140752130dfb8cd5a876'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = '22ee63a7649f4d3e730bfe38c9e071777204f292e084265c7a867a3729b941e6'
@@ -7094,15 +7094,6 @@ export interface WsContract {
     }
   }
   /**
-   * Whether linked servers are switched on here (peers.experimental in config.yaml). The one peer.* command
-   * that answers while the switch is off, so a console or Desktop can leave linked servers out without
-   * provoking peers_experimental. The same callers as the other management commands.
-   */
-  'peer.status': {
-    payload: null
-    response: { enabled: boolean }
-  }
-  /**
    * Unlink a server: the row is revoked (kept for the audit trail), its connections close at once, and it is
    * told (peer.unlinked) if it is connected. Linking it again needs a new pairing.
    */
@@ -7433,8 +7424,8 @@ export interface WsContract {
   }
   /**
    * Assign a vault role to a user, a group or a linked server on a vault (one assignment per subject and
-   * vault). A linked server: peers.experimental must be on, and a person decides (never an agent, a scoped or
-   * a relayed device: peer_forbidden). Refused (conflict) on a vault held here as another server's copy.
+   * vault). A linked server: a person decides (never an agent, a scoped or a relayed device: peer_forbidden).
+   * Refused (conflict) on a vault held here as another server's copy.
    */
   'role.vault.assign': {
     payload: { vault_id: number; subject_type: 'user' | 'group' | 'peer'; subject_id: number; id: number }
@@ -9892,7 +9883,6 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.policy.get',
   'peer.policy.set',
   'peer.rename',
-  'peer.status',
   'peer.unlink',
   'peer.unlinked',
   'permission.get',
@@ -10402,7 +10392,6 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.policy.get': 15000,
   'peer.policy.set': 15000,
   'peer.rename': 15000,
-  'peer.status': 15000,
   'peer.unlink': 15000,
   'peer.unlinked': 15000,
   'permission.get': 15000,

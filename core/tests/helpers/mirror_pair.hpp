@@ -12,7 +12,6 @@
 
 #include "audit/Trail.hpp"
 #include "crypto/id/ObjectUid.hpp"
-#include "config/Registry.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/fs/Entry.hpp"
@@ -66,7 +65,6 @@
 
 namespace vh::test_mirror_pair {
 
-
 using json = nlohmann::json;
 using EnginePtr = std::shared_ptr<storage::Engine>;
 namespace mq = vh::db::query::mirror;
@@ -115,7 +113,6 @@ protected:
         ms::setInlineForTesting(false);
         ms::setPollPauseForTesting(100ms);
         vh::mirror::access::linkChanged(corePeer, false);
-        setExperimental(false);
         tearDownDbSuite();
     }
 
@@ -123,13 +120,6 @@ protected:
         Suite::SetUp();
         if (IsSkipped()) return;
         ownNode = vh::db::query::device::Devices::nodeId();
-        setExperimental(true);
-    }
-
-    static void setExperimental(const bool on) {
-        auto cfg = config::Registry::get();
-        cfg.peers.experimental = on;
-        config::Registry::set(cfg);
     }
 
     // ---- helpers

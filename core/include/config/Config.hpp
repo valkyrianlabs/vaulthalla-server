@@ -523,13 +523,6 @@ struct CloudConfig {
     unsigned int storage_ended_grace_hours = 24;
 };
 
-// peers: linked servers (design/peers/link.md). Experimental and off by default. Read from config.yaml only, like
-// `cloud`: never written back or exposed through settings. While it is off nothing dials another server, the device
-// listener never authorizes a peer key, and every peer.* command and `vh peer` refuses (peers_experimental).
-struct PeersConfig {
-    bool experimental = false;
-};
-
 struct SecretsConfig {
     // Refuse to seal or unseal unless a hardware TPM or the Secure Enclave protects the secrets (no swtpm, no files).
     bool require_hardware = false;
@@ -563,7 +556,6 @@ struct Config {
     MountConfig mount;
     TransferConfig transfer;
     CloudConfig cloud;
-    PeersConfig peers;
 
     LoggingConfig logging; // internal only
 

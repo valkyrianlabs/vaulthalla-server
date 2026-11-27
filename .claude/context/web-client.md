@@ -249,20 +249,16 @@ permission bits (D3): any signed-in user, super-admin parts gated with `useCan({
   server key fingerprint (grouped, copyable); `Switch` → `confirm()` → `device.remote.enable|disable`, whose answer
   replaces the cached status.
 
-## Linked servers (`features/peers`, `/linked-servers`; experimental)
+## Linked servers (`features/peers`, `/linked-servers`)
 
 The server link (design/peers/link.md, "Three ways to drive it": the web console) for super admins, with the same
-operations as `vh peer`. Experimental and off by default (`peers.experimental` in config.yaml), so the console never
-advertises it while it is off:
-- **The switch:** `signal.ts` (`usePeersAvailability`, in every route's first load via the nav) asks `peer.status` (super
-  admins only, cached 10 min, no retry). It is the one `peer.*` command that answers `{enabled}` while the switch is
-  off; every other one refuses `peers_experimental`. The nav item (System › "Linked servers", `requires: {superAdmin}`,
-  `shownWhen: 'peers'`) shows only while it is on. Opening the URL directly: not a super admin → the typed denied
-  state; switched off (or a server without `peer.status`) → one sentence, "Linked servers aren’t available on this
-  server" (`data-testid="peers-unavailable"`), nothing about turning it on; no other `peer.*` is sent.
-- **Gate and tabs** (`Gate.tsx`): `PeersGate` (denied / spinner / `PeersUnavailable`) wraps every page under
+operations as `vh peer`. Shipped on (the `peers.experimental` switch, `peer.status` and the console's "unavailable"
+state went on 2026-11-27):
+- **Nav:** System › "Linked servers", `requires: {superAdmin}`. Opening the URL as anyone else: the typed denied state,
+  and no `peer.*` is sent.
+- **Gate and tabs** (`Gate.tsx`): `PeersGate` (the denial for anyone but a super admin) wraps every page under
   `/linked-servers`; `PeersTabs` links Servers (`/linked-servers`) and Mirrored vaults (`/linked-servers/mirrors`).
-- **Page** (`LinkedServersPage.tsx`): heading with an Experimental badge, one sentence on what a link is for (the
+- **Page** (`LinkedServersPage.tsx`): heading, one sentence on what a link is for (the
   trusted connection mirrored vaults travel over; it carries nothing else), Accept a link and Link a server. `peer.list {all: true}` every 15 s in `PeerTable` (unlinked rows behind "Show unlinked"): name, health
   (`model.ts` `healthText`: Connected with since / who dialled / round trip / version, "other protocol" as a warning,
   Not connected with the last error and next try, unknown while nothing is known, never healthy by guess), node id
@@ -293,10 +289,9 @@ advertises it while it is off:
   health / rename / unlink, a refusal's code, accept (wrong code, step-up, link), conflict, link (validation, payload,
   step-up, code, outcome), failure and cancel on close; screenshots at 1280 and 390 px.
 
-## Mirrored vaults (`features/mirrors`, `/linked-servers/mirrors`; experimental)
+## Mirrored vaults (`features/mirrors`, `/linked-servers/mirrors`)
 
-The server mirror (design/peers/mirror.md) as `vh mirror` offers it, for super admins behind the same `PeersGate`; a
-`peers_experimental` refusal from any `mirror.*` read shows `PeersUnavailable` too (`model.ts` `isPeersOff`).
+The server mirror (design/peers/mirror.md) as `vh mirror` offers it, for super admins behind the same `PeersGate`.
 - **List** (`MirroredVaultsPage.tsx`, `MirrorTable.tsx`): `mirror.list` every 15 s, `peer.list {all: true}` (the Servers
   tab's cache entry) for names and link health, `mirror.held.list {}` for open held counts per vault. Columns: vault,
   other server, this server's role (`ROLE_TEXT`), state with its sentence (`statusText`: live, first copy, read-only
@@ -414,7 +409,7 @@ Typed ws `recovery.*` / `vault.recovery.*` (`models/recovery.ts`, `RECOVERY_CODE
 sync, gateway, settings), `/users` (+ `/new`, `/[name]`), `/groups`, `/roles` (+ `/new?type=`, `/[type]/[id]`),
 `/credentials` (+ `/new`, `/[id]`), `/cost`, `/s3-gateway`, `/health` (+ runtime, filesystem, storage, activity),
 `/notifications`, `/settings`, `/sync-conflicts`, `/account`, `/devices` (+ `/all`), `/linked-servers` (+ `/mirrors`,
-`/mirrors/[vaultId]`; super admins, only with `peers.experimental`), `/share/[token]/[...path]` (public, no shell). Old URLs (`/fs`,
+`/mirrors/[vaultId]`; super admins), `/share/[token]/[...path]` (public, no shell). Old URLs (`/fs`,
 `/dashboard/*`, `/api-keys/*`, `/pricing-budget`, `/operator-email`, `/users/add`, `/vaults/:id/edit|assign`,
 `/roles/admin|vault/*`) redirect (`next.config.ts`).
 

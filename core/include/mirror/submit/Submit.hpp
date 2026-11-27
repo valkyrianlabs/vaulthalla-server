@@ -12,8 +12,8 @@
 // mirror" steps 3 to 5, "When the core refuses", "As built: a change made on the mirror").
 //
 // peer.mirror.submit {vault_uid, request_id, person: {node, id}, at: {term, seq}, op, entry_uid, args,
-// base_generation?}: the mirror's pending change, every entry named by uid. Peer sessions only (the peer wire set),
-// refused while peers.experimental is off; the caller must be the vault's mirror and this server its core (else
+// base_generation?}: the mirror's pending change, every entry named by uid. Peer sessions only (the peer wire set);
+// the caller must be the vault's mirror and this server its core (else
 // not_found, the sealed lane's answer). The person must be one of the caller's own accounts (its node id). The core
 // answers at once and never runs the change on the link's thread: a new request is queued (status queued) and executed
 // on a pool thread, one vault's in the order received; asked again with the same request id it answers what it did the

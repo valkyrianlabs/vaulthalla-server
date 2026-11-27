@@ -1,6 +1,4 @@
-// ws book: peer.* (core/src/protocols/ws/handler/Peers.cpp; design/peers/link.md). Linked servers: experimental and
-// off by default (peers.experimental in config.yaml); every peer.* command but peer.status then answers
-// peers_experimental.
+// ws book: peer.* (core/src/protocols/ws/handler/Peers.cpp; design/peers/link.md). Linked servers.
 //
 // Auth levels: the management commands are "human" (a signed-in super admin, or a full-access paired device's session:
 // never a scoped device, a relayed one, an agent or a share session; ops answers peer_forbidden, the router and the
@@ -18,12 +16,11 @@ WsField pcHex64(std::string name) { return str(std::move(name)).desc("64 lowerca
 
 std::vector<std::string> pcPeerRefusals() {
     auto out = opsRefusals();
-    out.emplace_back("peers_experimental");
     out.emplace_back("peer_forbidden");
     return out;
 }
 
-std::vector<std::string> pcWireRefusals() { return {"denied", "invalid", "not_found", "conflict", "unauthorized", "peers_experimental"}; }
+std::vector<std::string> pcWireRefusals() { return {"denied", "invalid", "not_found", "conflict", "unauthorized"}; }
 
 WsField pcWindowObject() {
     return object("window", "", {uinteger("owner_id"), uinteger("opened_at"), uinteger("expires_at")})
@@ -103,24 +100,6 @@ std::vector<WsField> pcHelloFields() {
 
 std::vector<WsCommandUsage> peerCommands() {
     std::vector<WsCommandUsage> out;
-
-    // ---- the switch
-
-    out.push_back({
-        .command = "peer.status",
-        .description = "Whether linked servers are switched on here (peers.experimental in config.yaml). The one peer.* "
-                       "command that answers while the switch is off, so a console or Desktop can leave linked "
-                       "servers out without provoking peers_experimental. The same callers as the other management "
-                       "commands.",
-        .input = "none",
-        .response = {boolean("enabled").desc("peers.experimental: every other peer.* command refuses while false.")},
-        .refusal_codes = [] {
-            auto r = opsRefusals();
-            r.emplace_back("peer_forbidden");
-            return r;
-        }(),
-        .client_timeout = kDefaultTimeout,
-    });
 
     // ---- the window's side (B)
 

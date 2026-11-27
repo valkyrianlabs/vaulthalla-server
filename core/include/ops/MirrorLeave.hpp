@@ -18,8 +18,8 @@
 // shared by `vh mirror detach` and the ws mirror.detach commands. Server mirror phase 2, wave 5, piece A.
 //
 // Who may: a person (never an agent, a scoped or relayed device, a linked server's session: peer_forbidden) who is a
-// super admin of this server or holds "Detach mirrored vaults" (admin.mirror.detach) through an admin role. The switch
-// first (peers.experimental, else peers_experimental). The paths of missing files are shown only to such a person.
+// super admin of this server or holds "Detach mirrored vaults" (admin.mirror.detach) through an admin role. The paths
+// of missing files are shown only to such a person.
 namespace vh::ops::mirrors {
 
 // Throws Refused/Denied unless `actor` may detach mirrored vaults here.

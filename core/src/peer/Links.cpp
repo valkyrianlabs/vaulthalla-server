@@ -2,7 +2,6 @@
 
 #include "audit/Trail.hpp"
 #include "concurrency/Backoff.hpp"
-#include "config/Registry.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "device/Crypto.hpp"
@@ -60,8 +59,6 @@ constexpr auto kAttemptLifetime = std::chrono::minutes(11);
 constexpr unsigned kIoThreads = 2;
 
 std::time_t wallNow() { return std::time(nullptr); }
-
-bool experimental() { return config::Registry::get().peers.experimental; }
 
 std::string errorText(const json& answer) {
     if (const auto e = answer.find("error"); e != answer.end() && e->is_string()) return e->get<std::string>();
@@ -350,16 +347,8 @@ void LinkService::wake() {
 void LinkService::tickForTesting() { tick(); }
 
 void LinkService::tick() {
-    if (!experimental()) {
-        // The switch is off: nothing dials, and no link stays up.
-        bool any = false;
-        {
-            std::scoped_lock lock(mutex_);
-            any = !connections_.empty();
-        }
-        if (any) (void)disconnectAll();
-        return;
-    }
+    // A server that has linked nothing: nothing to load, dial or ping (Peers::anyRecorded asks at most every 10 s).
+    if (!db::query::peer::Peers::anyRecorded()) return;
     const auto now = SteadyClock::now();
     bool reload = false;
     {
