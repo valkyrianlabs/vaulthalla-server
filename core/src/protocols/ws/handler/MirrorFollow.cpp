@@ -4,6 +4,7 @@
 #include "mirror/follow/Protocol.hpp"
 #include "mirror/resync/Resync.hpp"
 #include "mirror/submit/Submit.hpp"
+#include "mirror/switching/Switch.hpp"
 #include "ops/Error.hpp"
 #include "ops/Peers.hpp"
 #include "peer/Peer.hpp"
@@ -53,6 +54,18 @@ json MirrorFollow::notify(const json& payload, const std::shared_ptr<Session>& s
 
 json MirrorFollow::resync(const json& payload, const std::shared_ptr<Session>& session) {
     return vh::mirror::resync::serveResync(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::switchRequest(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::switching::serveRequest(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::switchPrepare(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::switching::servePrepare(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::switchCommit(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::switching::serveCommit(mirrorFollowCaller(session), mirrorFollowPayload(payload));
 }
 
 json MirrorFollow::submit(const json& payload, const std::shared_ptr<Session>& session) {

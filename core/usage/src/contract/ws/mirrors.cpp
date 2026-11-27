@@ -71,7 +71,7 @@ std::vector<WsField> mcMirroredFields() {
             str("role").oneOf({"core", "mirror", "orphaned", "starting", "none"}),
             object("peer", "", {uinteger("id"), str("node_id"), str("name"), boolean("revoked")}).nullable(),
             integer("term").nullable(), integer("last_seq").nullable(),
-            str("state").oneOf({"live", "paused", "diverged"}).nullable(),
+            str("state").oneOf({"starting", "live", "paused", "diverged", "expired", "stopped", "switching"}).nullable(),
             object("grant", "", {str("role_name"), uinteger("files"), uinteger("directories"), uinteger("sync"),
                                  uinteger("roles"), str("granted_by_node"), uinteger("granted_at")})
                 .nullable()
@@ -283,6 +283,37 @@ std::vector<WsCommandUsage> mirrorCommands() {
         .refusal_codes = mcMirrorRefusals({"mirror_not_stopped", "mirror_core_unreachable", "mirror_core_gone",
                                            "mirror_paused", "mirror_resync_failed", "mirror_resync_refused"}),
         .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "mirror.switch",
+        .description = "A planned switch of the core role between the two servers of a mirrored vault, asked on "
+                       "either server: the core stops taking changes (the vault is read-only on both servers, reason "
+                       "mirror_switching), numbers its last change, waits for the mirror to apply it with the same "
+                       "digest and nothing pending, then both record the next term with the roles swapped. Anything "
+                       "that stops it before the core decides (a timeout, a refusal, a dropped link) changes nothing. "
+                       "Local vaults only. Waits for the outcome: switched, abandoned (with the reason) or running. "
+                       "Super admins of this server; audited mirror.switch.",
+        .payload = {mcVaultIdField()},
+        .response = {uinteger("vault_id"), str("switch_id"),
+                     str("outcome").oneOf({"switched", "abandoned", "running"}),
+                     str("role").nullable().desc("This server's role for the vault now."),
+                     integer("role_term").nullable().desc("This server's term for the vault now."),
+                     str("side").oneOf({"core", "mirror"}).desc("This server's role when the switch began."),
+                     str("phase").oneOf({"requested", "draining", "preparing", "prepared", "switched", "abandoned"}),
+                     uinteger("term").desc("The term the switch leaves."), integer("seq").nullable(),
+                     str("digest").nullable(), integer("entries").nullable(),
+                     boolean("told").desc("core: the mirror was told the decision."),
+                     str("asked_on").oneOf({"core", "mirror"}),
+                     object("asked_by", "", {str("node"), uinteger("id"), str("name")}).nullable(),
+                     str("reason").nullable().desc("abandoned: why (mirror_switch_timeout, a refusal's code, ...)."),
+                     object("detail").desc("What the other server last said, or why it ended."),
+                     uinteger("deadline"), uinteger("created_at"), integer("ended_at").nullable()},
+        .refusal_codes = mcMirrorRefusals({"mirror_not_live", "mirror_first_copy", "mirror_switch_running",
+                                           "mirror_submissions_queued", "mirror_has_remote", "mirror_pending_changes",
+                                           "mirror_contents_missing", "mirror_core_unreachable", "mirror_core_gone",
+                                           "mirror_switch_refused", "mirror_orphaned", "peer_link_down"}),
+        .client_timeout = std::chrono::milliseconds(60'000),
     });
 
     // ---- a linked server's own session (mirror/start/Start.hpp)

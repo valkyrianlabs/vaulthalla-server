@@ -110,6 +110,11 @@ struct Mirrored {
 // and how many pending changes were kept as held.
 [[nodiscard]] nlohmann::json resync(const Actor& actor, uint32_t vaultId);
 
+// A planned switch of the core role (wave 5 piece B; mirror::switching::request), asked on either server: super admins
+// of this server. Waits for the outcome (bounded: the switch's deadline and a margin) and answers it: switched,
+// abandoned (nothing changed, with the reason) or running. Audited mirror.switch on both servers.
+[[nodiscard]] nlohmann::json switchRole(const Actor& actor, uint32_t vaultId);
+
 [[nodiscard]] nlohmann::json toJson(const Offer& offer);
 [[nodiscard]] nlohmann::json toJson(const Mirrored& m);
 [[nodiscard]] nlohmann::json toJson(const Cancelled& c);

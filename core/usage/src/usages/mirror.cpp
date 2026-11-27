@@ -187,6 +187,21 @@ std::shared_ptr<CommandUsage> resync(const std::weak_ptr<CommandUsage>& parent) 
     return cmd;
 }
 
+std::shared_ptr<CommandUsage> switchCore(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
+    cmd->aliases = {"switch"};
+    cmd->description = "Move a mirrored vault's core role to the other server by agreement, asked on either server: "
+                       "the core stops taking changes (the vault is read-only on both servers for moments), the mirror "
+                       "applies its last change with the same digest and nothing pending, then the roles swap in the "
+                       "next term. A switch that does not complete in time, or is refused, changes nothing and says "
+                       "why. Local vaults only. Super admins only; audited.";
+    cmd->positionals = {vaultPos};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh mirror switch 4", "Swap vault 4's core and mirror."}};
+    return cmd;
+}
+
 std::shared_ptr<CommandUsage> acceptAll(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->effect = CommandEffect::Write;
@@ -213,7 +228,8 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
                          decline(root->weak_from_this()), cancel(root->weak_from_this()), list(root->weak_from_this()),
                          info(root->weak_from_this()),    acceptAll(root->weak_from_this()),
                          keep(root->weak_from_this()),    held(root->weak_from_this()),    discard(root->weak_from_this()),
-                         retry(root->weak_from_this()),   resync(root->weak_from_this())};
+                         retry(root->weak_from_this()),   resync(root->weak_from_this()),
+                         switchCore(root->weak_from_this())};
     root->examples = {
         {"vh mirror add <vault> --to <server>", "On the core: offer a vault."},
         {"vh mirror pending", "On the other server: offers waiting."},

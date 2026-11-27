@@ -262,6 +262,34 @@ CommandResult handleResync(const CommandCall& call) {
                        });
 }
 
+CommandResult handleSwitch(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"mirror", "switch"}));
+    const auto json = hasFlag(call, "json");
+    const auto vault = parseUInt(call.positionals.at(0));
+    if (!vault || *vault == 0) return invalid("mirror switch: the vault is its number (vh vault list)");
+    return runMirrorOp("mirror switch", [&] { return mirrors::switchRole(call.user, static_cast<uint32_t>(*vault)); },
+                       [&](const nlohmann::json& r) {
+                           if (json) return mirrorPretty(r);
+                           const auto outcome = r.value("outcome", std::string{});
+                           const auto role = r.contains("role") && r["role"].is_string() ? r["role"].get<std::string>()
+                                                                                         : std::string("-");
+                           if (outcome == "switched")
+                               return fmt::format("Vault {} switched: this server is its {} now (term {}){}.\n", *vault,
+                                                  role, r.value("role_term", int64_t{0}),
+                                                  r.value("told", true) ? "" : "; the other server has not confirmed yet");
+                           if (outcome == "abandoned") {
+                               const auto reason = r.contains("reason") && r["reason"].is_string()
+                                                       ? r["reason"].get<std::string>()
+                                                       : std::string("abandoned");
+                               return fmt::format("Vault {}'s switch was abandoned ({}): nothing changed, this server is "
+                                                  "still its {}.\n",
+                                                  *vault, reason, role);
+                           }
+                           return fmt::format("Vault {}'s switch is still running (vh mirror info {} shows it).\n",
+                                              *vault, *vault);
+                       });
+}
+
 CommandResult handleMirror(const CommandCall& call) {
     if (call.positionals.empty()) return usage(call.constructFullArgs());
     const auto [sub, subcall] = descend(call);
@@ -279,6 +307,7 @@ CommandResult handleMirror(const CommandCall& call) {
     if (is("discard")) return handleHeldDecision(subcall, false);
     if (is("retry")) return handleHeldDecision(subcall, true);
     if (is("resync")) return handleResync(subcall);
+    if (is("switch")) return handleSwitch(subcall);
     return invalid(call.constructFullArgs(), "Unknown mirror subcommand: '" + std::string(sub) + "'");
 }
 

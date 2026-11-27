@@ -149,6 +149,10 @@ json Mirrors::resync(const json& payload, const std::shared_ptr<Session>& sessio
     return mirrors::resync(mirrorActorOf(session), mirrorRequiredId(payload, "vault_id"));
 }
 
+json Mirrors::switchRole(const json& payload, const std::shared_ptr<Session>& session) {
+    return mirrors::switchRole(mirrorActorOf(session), mirrorRequiredId(payload, "vault_id"));
+}
+
 json Mirrors::offer(const json& payload, const std::shared_ptr<Session>& session) {
     return vh::mirror::start::offerReceived(mirrorPeerOf(session), payload);
 }

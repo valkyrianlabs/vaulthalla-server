@@ -1,4 +1,5 @@
-// ws book: peer.mirror.tree, peer.mirror.log, peer.mirror.ack, peer.mirror.notify, peer.mirror.submit
+// ws book: peer.mirror.tree, peer.mirror.log, peer.mirror.ack, peer.mirror.notify, peer.mirror.submit,
+// peer.mirror.resync, peer.mirror.switch.request|prepare|commit (mirror::switching)
 // (core/src/protocols/ws/handler/MirrorFollow.cpp; mirror::follow::Protocol; design/peers/mirror.md "As built: following the core"). The server
 // mirror's data plane, between the two linked servers of a mirrored vault only ("peer": a linked server's own Peer
 // session). Experimental: refused with peers_experimental while peers.experimental is off. A vault the caller is not
@@ -26,7 +27,7 @@ WsField mfPosition(std::string name) {
 }
 
 WsField mfCoreState() {
-    return str("core_state").oneOf({"live", "paused", "diverged", "expired", "stopped"}).opt()
+    return str("core_state").oneOf({"live", "paused", "diverged", "expired", "stopped", "switching"}).opt()
         .desc("The vault's state on the core: diverged stops the mirror too.");
 }
 
@@ -131,6 +132,90 @@ std::vector<WsCommandUsage> mirrorFollowCommands() {
             r.push_back("mirror_paused");
             r.push_back("mirror_resync_failed");
             r.push_back("peer_revoked");
+            return r;
+        }(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    // ---- the planned switch (mirror/switching/Switch.hpp)
+
+    const auto switchId = [] {
+        return str("switch_id").gen(gen::ref("mirror.switch", {"switch_id"})).desc("The switch's id (UUID), the same on "
+                                                                                   "both servers.");
+    };
+    out.push_back({
+        .command = "peer.mirror.switch.request",
+        .description = "A super admin of the mirror asked for a planned switch (mirror.switch there): the core begins "
+                       "one (it freezes the vault, numbers its last change and prepares the mirror) and answers at "
+                       "once with the switch's id; the decision comes later as peer.mirror.switch.commit. The caller "
+                       "must be the vault's mirror.",
+        .auth = "peer",
+        .payload = {mfVaultUid(),
+                    object("by", "", {uinteger("id").desc("The person's account id on the mirror."),
+                                      str("name").opt().desc("Their display name (attribution only).")})
+                        .gen(gen::ref("mirror.person", {"id", "name"}))
+                        .desc("Who asked.")},
+        .response = {switchId(), uinteger("term").desc("The term the switch leaves.")},
+        .refusal_codes = [] {
+            auto r = mfRefusals();
+            for (const auto* c : {"peer_revoked", "conflict", "mirror_not_live", "mirror_switch_running",
+                                  "mirror_submissions_queued", "mirror_has_remote"})
+                r.emplace_back(c);
+            return r;
+        }(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "peer.mirror.switch.prepare",
+        .description = "The core froze the vault for a planned switch: its last change is (term, seq) with `digest`. "
+                       "The mirror becomes read-only too and catches up; it answers ready once it is there with the "
+                       "same digest, nothing pending or dirty and every file's contents held, and then waits for the "
+                       "decision (it never decides on its own). Asked again until ready or the core's deadline; a "
+                       "refusal ends the switch on both servers with nothing changed.",
+        .auth = "peer",
+        .payload = {mfVaultUid(), switchId(), mfTerm(), mfSeq(),
+                    str("digest").gen(gen::ref("mirror.digest", {"digest"})).desc("64 hex digits."),
+                    integer("entries").gen(gen::ref("mirror.digest", {"entries"})),
+                    object("by", "", {str("node"), uinteger("id"), str("name"), str("on").oneOf({"core", "mirror"})})
+                        .nullable().opt().gen(gen::ref("mirror.person", {"node", "id", "name", "on"}))
+                        .desc("Who asked, and on which server.")},
+        .response = {boolean("ready"),
+                     str("waiting").oneOf({"busy", "applying"}).opt()
+                         .desc("Not ready yet: a change here holds the vault (busy), or the mirror is applying."),
+                     mfPosition("at").nullable().desc("Where the mirror stands."),
+                     str("digest").nullable(), integer("entries").nullable()},
+        .refusal_codes = [] {
+            auto r = mfRefusals();
+            for (const auto* c : {"peer_revoked", "mirror_not_live", "mirror_first_copy", "mirror_term_mismatch",
+                                  "mirror_switch_ended", "mirror_pending_changes", "mirror_contents_missing",
+                                  "mirror_ahead", "mirror_digest_mismatch"})
+                r.emplace_back(c);
+            return r;
+        }(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "peer.mirror.switch.commit",
+        .description = "The core's decision on a planned switch, told until answered. switched: the core is the "
+                       "vault's mirror in term + 1 now and the mirror becomes its core (its log starts at (term + 1, "
+                       "1)); abandoned: nothing changed, and a mirror that prepared goes live again. Told again, it "
+                       "answers the same.",
+        .auth = "peer",
+        .payload = {mfVaultUid(), switchId(), str("outcome").oneOf({"switched", "abandoned"}),
+                    str("reason").opt().gen(gen::ref("mirror.switch", {"reason"})).desc("abandoned: why.")},
+        .response = {str("outcome").oneOf({"switched", "abandoned"}),
+                     uinteger("term").opt().desc("switched: the new term."),
+                     object("peer_role", "", {str("role_name"), uinteger("files"), uinteger("directories"),
+                                              uinteger("sync"), uinteger("roles")})
+                         .nullable().opt()
+                         .desc("switched: the role the old core holds on the vault on the new core (its ceiling); "
+                               "null: none.")},
+        .refusal_codes = [] {
+            auto r = mfRefusals();
+            r.emplace_back("peer_revoked");
+            r.emplace_back("mirror_not_prepared");
             return r;
         }(),
         .client_timeout = kDefaultTimeout,

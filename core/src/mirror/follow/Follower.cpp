@@ -9,6 +9,7 @@
 #include "mirror/start/Start.hpp"
 #include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Submit.hpp"
+#include "mirror/switching/Switch.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "peer/Links.hpp"
@@ -205,7 +206,10 @@ StepResult Follower::step(const uint32_t vaultId, Transport& transport, const ap
         partials_.erase(vaultId);
         return {.step = Step::Gone};
     }
-    if (mv->state != "live") return {.step = Step::Stopped, .detail = mv->state};
+    // A planned switch preparing here: the core's log is followed up to the position it hands over (nothing is
+    // submitted: nothing may be pending). Prepared, or any other state: nothing is asked.
+    if (mv->state != "live" && !(mv->state == "switching" && vh::mirror::switching::following(vaultId)))
+        return {.step = Step::Stopped, .detail = mv->state};
     if (!transport.connected(mv->peer_id)) return {.step = Step::Waiting, .detail = "link_down"};
     // Piece A's start not complete yet (the core's begin has not arrived, so its core row may not exist): ask nothing,
     // or the core's not_found would read as "the core is gone" and stop the vault for good.
@@ -381,6 +385,12 @@ void Follower::runLoop() {
             }
             const auto t = transport();
             (void)sendNotices(*t);
+            // Planned switches: the core's steps and its decisions to tell (mirror::switching; nothing when none).
+            try {
+                (void)vh::mirror::switching::tick(*t);
+            } catch (const std::exception& e) {
+                log::Registry::sync()->warn("[MirrorFollower] Switches: {}", e.what());
+            }
 
             std::set<uint32_t> woken;
             {

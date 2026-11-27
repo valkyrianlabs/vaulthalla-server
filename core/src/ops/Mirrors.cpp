@@ -12,6 +12,7 @@
 #include "mirror/start/Start.hpp"
 #include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Local.hpp"
+#include "mirror/switching/Switch.hpp"
 #include "ops/PeerPolicy.hpp"
 #include "ops/Peers.hpp"
 #include "rbac/permission/admin/Vaults.hpp"
@@ -26,6 +27,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cstdlib>
 #include <map>
@@ -369,6 +371,15 @@ nlohmann::json resync(const Actor& actor, const uint32_t vaultId) {
     return vh::mirror::resync::start(vaultId, actor->id, actor->name(), *vh::mirror::follow::linkTransport());
 }
 
+// ---- the planned switch (wave 5 piece B) ----------------------------------------------------------------------------
+
+nlohmann::json switchRole(const Actor& actor, const uint32_t vaultId) {
+    ops_mirrors_detail::requireSuperAdmin(actor, "switch a mirrored vault's core");
+    (void)ops_mirrors_detail::liveVault(vaultId);
+    return vh::mirror::switching::request(vaultId, actor->id, actor->name(), *vh::mirror::follow::linkTransport(),
+                                          vh::mirror::switching::timeout() + std::chrono::seconds(10));
+}
+
 // ---- held changes ------------------------------------------------------------------------------------------------------
 
 std::vector<db::query::mirror::HeldChange> held(const Actor& actor, const std::optional<uint32_t> vaultId,
@@ -376,7 +387,8 @@ std::vector<db::query::mirror::HeldChange> held(const Actor& actor, const std::o
     ops_mirrors_detail::requireSuperAdmin(actor, "list held changes");
     std::vector<db::query::mirror::HeldChange> out;
     for (const auto& m : db::query::mirror::MirrorVaults::list()) {
-        if (m.role == "core" || (vaultId && m.vault_id != *vaultId)) continue;
+        // A core holds the changes it held while it was the mirror (a planned switch since): still listed.
+        if (vaultId && m.vault_id != *vaultId) continue;
         for (auto& h : db::query::mirror::Pending::heldChanges(m.vault_id, all)) out.push_back(std::move(h));
     }
     return out;
@@ -404,6 +416,10 @@ db::query::mirror::HeldChange retryHeld(const Actor& actor, const uint64_t id) {
     if (h->kind != "held") throw Invalid("a conflict copy is in the vault already; there is nothing to retry");
     if (h->state != "open") throw Conflict("held change " + std::to_string(id) + " is " + h->state + " already");
     if (!h->entry_uid) throw Invalid("held change " + std::to_string(id) + " names no entry");
+    if (vh::mirror::access::state(h->vault_id) == vh::mirror::access::State::NotMirrored)
+        throw Refused("mirror_read_only", "this server is not the vault's mirror now (its core since a planned switch, "
+                                          "or no longer mirrored): a held change is retried from a mirror; make the "
+                                          "change again here, or discard it");
     if (vh::mirror::access::state(h->vault_id) != vh::mirror::access::State::Live)
         throw Refused("mirror_read_only", "the vault is read-only on this server now: " +
                                               vh::mirror::access::reason(h->vault_id));
