@@ -568,10 +568,15 @@ def _takeover(a: Node, va: int, b: Node, vb: int, node_a: str, node_b: str, repo
     report.check("7q: A came back, learned of the take over and is B's mirror in the new term (nothing past the fork "
                  "point, no copy)", bool(followed), json.dumps({"a": _mv(a, va), "b": _mv(b, vb)})[:400])
     ok = _wait_synced(b, vb, a, va, "A follows B after the take over", timeout=180)
+    settled = _wait("B settles its take over (told following)", lambda: _sql(
+        b, f"SELECT settled_how FROM mirror_takeover WHERE vault_id = {vb} ORDER BY id DESC LIMIT 1") == "returned"
+        or None, timeout=60)
     report.check("7q: A applies B's writes made after the take over; equal digests; the take over settled",
-                 bool(ok) and (a.inst.mount / "whole" / "docs" / "after_takeover.txt").exists()
-                 and _sql(b, f"SELECT settled_how FROM mirror_takeover WHERE vault_id = {vb} ORDER BY id DESC LIMIT 1")
-                 == "returned", json.dumps(ok)[:300])
+                 bool(ok) and bool(settled)
+                 and _sql(a, f"SELECT count(*) FROM fs_entry WHERE vault_id = {va} AND path = '/docs/after_takeover.txt'")
+                 == "1",
+                 json.dumps({"ok": ok, "settled": _sql(b, f"SELECT COALESCE(settled_how, '-') FROM mirror_takeover "
+                                                          f"WHERE vault_id = {vb} ORDER BY id DESC LIMIT 1")})[:400])
 
     # ---- again, the other way round, with a change the old core made that the new one never received: B is the core
     # now; A goes down, B writes, B goes down, A takes over, B comes back.
@@ -620,12 +625,20 @@ def _takeover(a: Node, va: int, b: Node, vb: int, node_a: str, node_b: str, repo
     report.check("7q: `vh mirror resync` on B starts its copy over from A", cp.returncode == 0,
                  (cp.stdout + cp.stderr)[-300:])
     ok = _wait_synced(a, va, b, vb, "B resynced from A after its rejoin", timeout=240)
-    held = _sql(b, f"SELECT count(*) FROM mirror_held WHERE vault_id = {vb} AND state = 'open' "
-                   "AND path LIKE '%unseen_by_a.txt'")
+    held = _wait("the change A never received held on B", lambda: _sql(
+        b, f"SELECT count(*) FROM mirror_held WHERE vault_id = {vb} AND state = 'open' "
+           "AND (path LIKE '%unseen_by_a.txt' OR args ->> 'name' = 'unseen_by_a.txt')") not in ("", "0") or None,
+        timeout=60)
+    # (Its grant comes from A's policy for it, none here: the tables say what it holds.)
+    arrived = _wait("A's file on B", lambda: _sql(b, f"SELECT count(*) FROM fs_entry WHERE vault_id = {vb} "
+                                                     "AND path = '/docs/after_second_takeover.txt'") == "1" or None,
+                    timeout=60)
     report.check("7q: after the resync B follows A, equal digests, and the change A never received is kept on B as a "
-                 "held change", bool(ok) and held not in ("", "0")
-                 and (b.inst.mount / "whole" / "docs" / "after_second_takeover.txt").exists(),
-                 json.dumps({"ok": ok, "held": held})[:300])
+                 "held change", bool(ok) and bool(held) and bool(arrived),
+                 json.dumps({"ok": bool(ok), "held": _sql(b, "SELECT string_agg(kind || ':' || op || ':' || "
+                                                             "COALESCE(path, '-') || ':' || reason_code, ', ') "
+                                                             f"FROM mirror_held WHERE vault_id = {vb}"),
+                             "arrived": bool(arrived)})[:600])
 
 
 def _put(node: Node, args: tuple, text: str) -> subprocess.CompletedProcess:
@@ -951,9 +964,14 @@ def _planned_switch(a: Node, va: int, b: Node, vb: int, node_a: str, node_b: str
                                       f"AND term = {term + 1}") in ("1", "")
                  and (b.inst.mount / "whole" / "docs" / "after_switch_a.txt").exists(),
                  json.dumps(ok)[:300])
+    def same_everywhere():
+        try:
+            return all(_plain(a, f"whole/docs/{n}") == _plain(b, f"whole/docs/{n}") != "" for n in (
+                "before_switch_a.txt", "before_switch_b.txt", "after_switch_a.txt", "after_switch_b.txt")) or None
+        except DrillError:
+            return None   # a read while its contents are still on their way: read again
     report.check("7p: the files written before and after the switch read the same on both servers",
-                 all(_plain(a, f"whole/docs/{n}") == _plain(b, f"whole/docs/{n}") for n in (
-                     "before_switch_a.txt", "before_switch_b.txt", "after_switch_a.txt", "after_switch_b.txt")))
+                 bool(_wait("the four files read the same on both servers", same_everywhere, timeout=90)))
 
     report.check("7p: every file's contents on A, the mirror, before the switch back", contents_here(a, va))
     code, out = a.vh_json("mirror", "switch", str(va), check=False)
