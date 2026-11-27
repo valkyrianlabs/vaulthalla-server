@@ -782,7 +782,10 @@ review); each is listed for confirmation in the hand-off:
   the body to a private file, then verifies (invariant 6: the size, the BLAKE2b, the header and every chunk
   authenticated with the vault's key as that generation; the object is not bound, wave 2's rule) and keeps it
   **staged** by generation (`.vh-mirror-staged/<vault>/<object uuid>.<generation>`) with the facts it verified beside
-  it (`<staged>.facts`, written first): 201, else 422 `invalid_contents`, 409 `key_version_missing`, 404. A submit of a write whose bytes are not staged is refused `contents_missing` before it is queued (not kept
+  it (`<staged>.facts`, written first): 201, else 422 `invalid_contents`, 409 `key_version_missing`, 404. Before a
+  byte is kept it refuses a mirror whose role on the vault creates and replaces no file (403 `denied`) and bytes the
+  vault has no room for (413 `over_quota`, or `no_space` without a quota): neither is sent again, the mirror holds the
+  change. A submit of a write whose bytes are not staged is refused `contents_missing` before it is queued (not kept
   for the request), and the mirror sends them again; a write's `generation` must be a VHF1 salt (none for an empty
   file), else `invalid`. The core commits the file from the staged bytes (`ops::fs::commitSealed`, a writer that links
   them) with the mirror's uid and MIME type and **the facts it verified** (generation, key version, size, BLAKE2b),

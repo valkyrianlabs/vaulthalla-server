@@ -11,6 +11,12 @@
 #include "mirror/submit/Contents.hpp"
 #include "peer/ObjectClient.hpp"
 #include "peer/Peer.hpp"
+#include "rbac/permission/vault/Filesystem.hpp"
+#include "rbac/resolver/PeerVault.hpp"
+#include "runtime/Deps.hpp"
+#include "storage/Engine.hpp"
+#include "storage/Manager.hpp"
+#include "vault/model/Vault.hpp"
 #include "protocols/http/handler/Common.hpp"
 #include "storage/PlaintextReader.hpp"
 #include "vault/Content.hpp"
@@ -249,6 +255,31 @@ PutStart beginPut(const http::request& req, const vh::peer::Principal& caller, c
     const auto sealed = vh::vault::content::sealedSizeOf(*size, address->generation);
     if (!contentLength || *contentLength != sealed) {
         out.refusal = jsonError(req, status::bad_request, "invalid", "The body is not that generation's sealed length");
+        return out;
+    }
+    // Bytes are taken only from a mirror that may write a file into the vault (its role here, the ceiling every change
+    // it submits is held to: create or replace one), and only as many as the vault has room for. Neither is worth
+    // sending again: the mirror keeps the change as held.
+    using FsAction = vh::rbac::permission::vault::FilesystemAction;
+    if (!vh::rbac::resolver::PeerVault::may(caller.peer_id, mv->vault_id, FsAction::Write, "/.vh-mirror-put", false,
+                                            false) &&
+        !vh::rbac::resolver::PeerVault::may(caller.peer_id, mv->vault_id, FsAction::Overwrite, "/.vh-mirror-put", true,
+                                            false)) {
+        out.refusal = jsonError(req, status::forbidden, "denied",
+                                "This server's role on the vault lets it write no file");
+        return out;
+    }
+    const auto& manager = vh::runtime::Deps::get().storageManager;
+    const auto engine = manager ? manager->getEngine(mv->vault_id) : nullptr;
+    if (!engine || !engine->vault) {
+        out.refusal = notFound(req);
+        return out;
+    }
+    if (sealed > engine->freeSpace()) {
+        const bool quota = engine->vault->quota > 0;
+        out.refusal = jsonError(req, status::payload_too_large, quota ? "over_quota" : "no_space",
+                                quota ? "The vault's quota has no room for these bytes"
+                                      : "This server has no room for these bytes");
         return out;
     }
     out.target = PutTarget{.vault_id = mv->vault_id,

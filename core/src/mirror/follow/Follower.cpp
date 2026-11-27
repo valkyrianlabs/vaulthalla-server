@@ -103,7 +103,7 @@ Transport::Sent Transport::sendContent(const uint32_t peerId, const Content& con
     // Refused for the bytes themselves: never worth sending again (the change is kept as held). Anything else: later.
     if (r.status == vh::peer::object::FetchStatus::Refused &&
         (r.code == "invalid_contents" || r.code == "format_not_portable" || r.code == "key_version_missing" ||
-         r.code == "invalid"))
+         r.code == "invalid" || r.code == "denied" || r.code == "over_quota" || r.code == "no_space"))
         return {.ok = false, .retry = false, .code = r.code, .error = r.error};
     return {.ok = false, .retry = true, .code = r.code, .error = r.error};
 }
