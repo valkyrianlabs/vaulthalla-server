@@ -770,6 +770,9 @@ def _scrub_and_resync(a: Node, va: int, b: Node, vb: int, faults_b: Path, report
     to every pass with the test-only mirror-scrub-now file) and stops B's copy as diverged; `vh mirror resync` starts it
     over from A's tree, reusing every file whose bytes B holds, and the digests agree again."""
     ok = _wait_synced(a, va, b, vb, "settled before the planted difference", timeout=120)
+    # Every file's contents on B first: the check below counts what the resync made B fetch (equal digests say nothing
+    # of the sealed lane, which delivers after; one run in three still had 7n's bytes on their way).
+    _contents_here(b, vb, "every file's contents on B before the planted difference")
     report.check("7o: settled before the planted difference", bool(ok), json.dumps(ok)[:300])
     _sql(b, "BEGIN; SELECT set_config('vh.mirror_apply', 'on', true); "
             f"UPDATE fs_entry SET mode = (COALESCE(mode, 420) # 1) WHERE vault_id = {vb} AND path = '/top.txt'; COMMIT;")
