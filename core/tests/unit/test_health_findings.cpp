@@ -85,11 +85,17 @@ TEST(HealthCatalog, CoversEveryCodeTheCardsRaise) {
         EXPECT_FALSE(cls.title.empty()) << cls.code;
         EXPECT_FALSE(cls.remedies.empty()) << cls.code << " offers nothing to do";
         // Every error interrupts; only a warning may be marked as normal work.
-        if (cls.maxSeverity == "error") EXPECT_TRUE(cls.notifies) << cls.code;
+        if (cls.maxSeverity == "error") {
+            EXPECT_TRUE(cls.notifies) << cls.code;
+        }
         for (const auto& remedy : cls.remedies) {
             EXPECT_TRUE(remedy.kind == "open" || remedy.kind == "command") << cls.code;
-            if (remedy.kind == "open") EXPECT_TRUE(remedy.href && remedy.href->starts_with("/")) << cls.code;
-            if (remedy.kind == "command") EXPECT_TRUE(remedy.command && remedy.effect) << cls.code;
+            if (remedy.kind == "open") {
+                EXPECT_TRUE(remedy.href && remedy.href->starts_with("/")) << cls.code;
+            }
+            if (remedy.kind == "command") {
+                EXPECT_TRUE(remedy.command && remedy.effect) << cls.code;
+            }
         }
     }
     for (const auto& code : raisedCodes) EXPECT_TRUE(known.contains(code)) << code << " is raised but not in the catalog";
@@ -327,8 +333,8 @@ TEST_F(HealthFindingsDb, ViewingIsNotManaging) {
 
     const auto none = test::identities::detachedUser(9102, "health_none",
                                                      std::make_shared<rbac::role::Admin>(rbac::role::Admin::None()));
-    EXPECT_THROW(ops::health::list(none), ops::Denied);
-    EXPECT_THROW(ops::health::list(nullptr), ops::Denied);
+    EXPECT_THROW((void)ops::health::list(none), ops::Denied);
+    EXPECT_THROW((void)ops::health::list(nullptr), ops::Denied);
 }
 
 TEST_F(HealthFindingsDb, TheWsCommandsAnswerTheWholeStateAndTheDashboardCarriesIt) {
