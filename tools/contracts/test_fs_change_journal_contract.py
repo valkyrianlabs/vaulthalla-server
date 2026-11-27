@@ -84,6 +84,9 @@ WRITERS: dict[str, dict[tuple[str, str], int]] = {
     # A setattr through the mount (chmod, chown, utimens: ops::fs::setAttributes, wave 4): mode (update), owner, group
     # and modification time (nothing: not journaled), in one transaction. Covered in FsChangeJournalDbTest.
     "core/src/db/query/fs/Entry.cpp": {("UPDATE", "fs_entry"): 1},
+    # Detach a copy (wave 5 piece C): the new vault's entries take their source's mode and modification time in one
+    # statement, as a setattr does (mode: update; time: nothing). Covered in MirrorCopyDbTest.
+    "core/src/db/query/mirror/Copy.cpp": {("UPDATE", "fs_entry"): 1},
     # Vault deletion/revival re-parents the vault root and clears inodes: the root is never journaled, inodes aren't
     # changes, and a purge's cascade skips a deleted vault.
     "core/src/db/query/vault/Deletion.cpp": {("UPDATE", "fs_entry"): 3},

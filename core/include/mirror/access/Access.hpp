@@ -55,6 +55,7 @@ inline constexpr std::string_view kCoreOwned = "mirror_core_owned";      // sett
 inline constexpr std::string_view kSwitching = "mirror_switching";       // a planned switch of the core role runs
 inline constexpr std::string_view kRejoining = "mirror_rejoining";       // old core with changes the new one lacks
 inline constexpr std::string_view kForked = "mirror_both_forced";        // both servers took over
+inline constexpr std::string_view kCopyWriting = "mirror_copy_writing";  // a copy of a held vault is written into it
 
 // What the gate knows of a held vault (tests, status). nullopt: not held here.
 struct Facts {
@@ -108,6 +109,27 @@ void reload();
 bool reconcile();
 // The link to `peerId` came up (peer.hello answered and the connection kept) or went down.
 void linkChanged(uint32_t peerId, bool up) noexcept;
+// ---- the new vault a copy of a held vault is written into (mirror::copy, "Detach a copy")
+//
+// Read-only (kCopyWriting) to every surface but the copy itself while the copy runs, so nothing anyone writes there can
+// be lost when a failed or cancelled copy removes the vault. Published from running mirror_copy rows by reload() and
+// reconcile() (so a daemon restart gates a partial vault before anything serves it), and by the copy itself the moment
+// it creates the vault (beginCopyTarget, before its row says so) until it ends (endCopyTarget). Not held: its content is
+// this server's own.
+void beginCopyTarget(uint32_t vaultId);
+void endCopyTarget(uint32_t vaultId);
+// While one exists on a thread, that thread writes the copy's vault (nothing else is let through).
+class CopyWriter {
+public:
+    explicit CopyWriter(uint32_t vaultId) noexcept;
+    ~CopyWriter();
+    CopyWriter(const CopyWriter&) = delete;
+    CopyWriter& operator=(const CopyWriter&) = delete;
+
+private:
+    uint32_t previous_{};
+};
+
 // Every vault held here (tests, the background-job skips).
 [[nodiscard]] std::vector<uint32_t> heldVaults();
 

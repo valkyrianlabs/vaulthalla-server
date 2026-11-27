@@ -40304,6 +40304,780 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
+      "command": "mirror.detach.copy",
+      "confirmations": [],
+      "description": "Detach a copy: write a new, separate local vault from a vault held here as another server's copy (a mirror in any state, or orphaned; the link up, down or gone; nothing is asked of the core), which stays exactly as it is. The new vault gets a new uid, new entry uids and its own new key, is owned by `owner` (default: the caller) with the owner's ordinary access, and holds every folder, file and symlink with its name, place, mode and modification time; not the trash, versions, shares or access rules. Files whose contents never arrived here are left out and listed. A background job: mirror.detach.copy.get shows its progress; while it runs the new vault is read-only to everything else (mirror_copy_writing); a failure or a cancel removes it. Refused when the volume's free space or the quota the new vault takes (the held vault's) can't hold the copy (mirror_copy_no_space). Super admins, or holders of admin.mirror.detach; audited mirror.detach.copy.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The new vault's name (default: \"<name> copy\").",
+          "name": "name",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The new owner: a sign-in account here, by number or name.",
+          "generator": {
+            "attrs": [
+              "name"
+            ],
+            "entity": "user",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "owner",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_not_held",
+        "mirror_copy_no_space"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_not_held",
+        "mirror_copy_no_space"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The held vault it reads (null once it is gone).",
+              "name": "source_vault_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "The new vault: while it is written (read-only to everything but the copy) and once it is complete; null before it exists and after a failed or cancelled copy removed it.",
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "owner_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "enum": [
+                "running",
+                "finished",
+                "failed",
+                "cancelled"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "entries_total",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "entries_done",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "bytes_total",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "bytes_done",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "skipped_count",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The files left out, by path: contents that never arrived here (the detach preview's missing list), and any removed or unreadable while the copy ran.",
+              "fields": [
+                {
+                  "name": "path",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "size_bytes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "contents_missing",
+                    "removed",
+                    "unreadable"
+                  ],
+                  "name": "reason",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "skipped",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "name": "error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "requested_by",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "cancel_requested",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "How often the copy started: a daemon restart removes the partial vault and starts again.",
+              "minimum": 0,
+              "name": "attempts",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "updated_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "finished_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "copy",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.detach.copy.cancel",
+      "confirmations": [],
+      "description": "Stop the running copy of a held vault: it removes its partial vault and ends cancelled (a complete vault or none). Super admins, or holders of admin.mirror.detach; audited mirror.detach.copy.cancel.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_copy_not_running"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_copy_not_running"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The held vault it reads (null once it is gone).",
+              "name": "source_vault_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "The new vault: while it is written (read-only to everything but the copy) and once it is complete; null before it exists and after a failed or cancelled copy removed it.",
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "owner_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "enum": [
+                "running",
+                "finished",
+                "failed",
+                "cancelled"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "entries_total",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "entries_done",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "bytes_total",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "bytes_done",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "skipped_count",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The files left out, by path: contents that never arrived here (the detach preview's missing list), and any removed or unreadable while the copy ran.",
+              "fields": [
+                {
+                  "name": "path",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "size_bytes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "contents_missing",
+                    "removed",
+                    "unreadable"
+                  ],
+                  "name": "reason",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "skipped",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "name": "error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "requested_by",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "cancel_requested",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "How often the copy started: a daemon restart removes the partial vault and starts again.",
+              "minimum": 0,
+              "name": "attempts",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "updated_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "finished_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "copy",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.detach.copy.get",
+      "confirmations": [],
+      "description": "The newest copy of a held vault (mirror.detach.copy): its state and progress (entries and bytes done of the totals), the files it left out, its error; null when none was written here. Super admins, or holders of admin.mirror.detach.",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The held vault it reads (null once it is gone).",
+              "name": "source_vault_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "The new vault: while it is written (read-only to everything but the copy) and once it is complete; null before it exists and after a failed or cancelled copy removed it.",
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "owner_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "enum": [
+                "running",
+                "finished",
+                "failed",
+                "cancelled"
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "entries_total",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "entries_done",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "bytes_total",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "bytes_done",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "skipped_count",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The files left out, by path: contents that never arrived here (the detach preview's missing list), and any removed or unreadable while the copy ran.",
+              "fields": [
+                {
+                  "name": "path",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "size_bytes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "contents_missing",
+                    "removed",
+                    "unreadable"
+                  ],
+                  "name": "reason",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "skipped",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "name": "error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "requested_by",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "cancel_requested",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "How often the copy started: a daemon restart removes the partial vault and starts again.",
+              "minimum": 0,
+              "name": "attempts",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "updated_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "finished_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "copy",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
       "command": "mirror.detach.preview",
       "confirmations": [],
       "description": "What detaching a vault this server holds as another server's copy would give, before anything happens: the fork point, whether the digest matched there, the pending and held changes, and every file whose contents are not here (the list to export). Changes nothing. Super admins, or holders of admin.mirror.detach.",
@@ -71843,5 +72617,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "c5ab5edde934cfbd3210345d8ecfe878320a3f4f549a3051b0aa33c294fb0b55"
+  "ws_hash": "bbf4aad5ca1cd380384c549ab8a1ceb28a7df3e6ae5f04d4d32359715df3762d"
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "db/query/mirror/Pending.hpp"
+#include "mirror/copy/Copy.hpp"
 #include "mirror/leave/Leave.hpp"
 #include "mirror/versions/Versions.hpp"
 #include "ops/Actor.hpp"
@@ -37,6 +38,20 @@ struct DetachRequest {
 // Turns the held copy into a standalone vault here (mirror::leave::detach). No step-up (design decision: nothing is
 // destroyed or sent anywhere; the console asks for the vault's name to be typed). Audited mirror.detach.
 [[nodiscard]] vh::mirror::leave::Detached detach(const Actor& actor, const DetachRequest& request);
+
+// ---- detach a copy (mirror/copy/Copy.hpp): a new, separate local vault written from the held copy, which stays as it is
+
+struct CopyRequest {
+    uint32_t vault_id{};                        // the held vault
+    std::optional<std::string> name{};          // default: "<name> copy"
+    std::optional<std::string> owner{};         // a sign-in account here, by number or name; default the caller
+};
+// The same permission and refusals as detach (requireDetacher). Queues the copy; audited mirror.detach.copy.
+[[nodiscard]] vh::mirror::copy::Job detachCopy(const Actor& actor, const CopyRequest& request);
+// The newest copy of the held vault (its progress), nullopt when it has none.
+[[nodiscard]] std::optional<vh::mirror::copy::Job> copyStatus(const Actor& actor, uint32_t vaultId);
+// Cancels the running copy of the held vault: its partial vault is removed. Audited mirror.detach.copy.cancel.
+[[nodiscard]] vh::mirror::copy::Job cancelCopy(const Actor& actor, uint32_t vaultId);
 
 // ---- versions on the mirror (mirror/versions/Versions.hpp)
 

@@ -86,6 +86,8 @@ ENTRY_WRITERS_LOG: dict[str, str] = {
     "core/src/db/query/mirror/Start.cpp": "nothing: the mirror's new vault and its root; never a core vault",
     "core/src/db/query/fs/Entry.cpp": "upsert (a setattr: mode, owner, group, modification time; ops::fs::setAttributes, "
                                       "with vh.actor)",
+    "core/src/db/query/mirror/Copy.cpp": "upsert (detach a copy: the new local vault's entries take their source's mode "
+                                         "and modification time, with vh.actor; never a held vault)",
 }
 
 

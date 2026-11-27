@@ -1066,6 +1066,10 @@ export interface WebSocketCommandMap {
   // Leaving a mirror (design/peers/mirror.md "As built: leaving a mirror"): detach a held copy here; the core is told.
   'mirror.detach.preview': WsContract['mirror.detach.preview']
   'mirror.detach': WsContract['mirror.detach']
+  // Detach a copy: a new vault written from the held copy in the background (its progress, a cancel).
+  'mirror.detach.copy': WsContract['mirror.detach.copy']
+  'mirror.detach.copy.get': WsContract['mirror.detach.copy.get']
+  'mirror.detach.copy.cancel': WsContract['mirror.detach.copy.cancel']
   // Versions the mirror keeps of what its core replaces or deletes; a held change's bytes (the person's version).
   'mirror.versions.set': WsContract['mirror.versions.set']
   'mirror.held.get': WsContract['mirror.held.get']
