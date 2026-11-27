@@ -322,7 +322,7 @@ void Service::offerEveryVault(const bool now) {
         if (!t.upSince(peerId)) continue;   // offered once the link is up
         const auto peer = db::query::peer::Peers::byId(peerId);
         if (!peer || peer->revoked()) continue;
-        for (const auto vaultId : Q::mirrorEveryVaultCandidates(peerId, setting.set_at.value_or(0))) {
+        for (const auto vaultId : Q::mirrorEveryVaultCandidates(peerId)) {
             const auto key = std::make_pair(peerId, vaultId);
             {
                 std::scoped_lock lock(mutex_);

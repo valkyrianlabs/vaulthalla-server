@@ -174,8 +174,8 @@ public:
     [[nodiscard]] static std::vector<std::pair<uint32_t, AcceptVaults>> mirroringEveryVault();
     // The vaults mirror_vaults would offer `peerId` now: this server's own (no mirror row of any role, not deleted, with
     // a uid), no start of it running on this side, and no offer of it to that server that ended (or was made) since
-    // `since` (a declined, cancelled, expired or failed offer is not made again). Ascending ids.
-    [[nodiscard]] static std::vector<uint32_t> mirrorEveryVaultCandidates(uint32_t peerId, std::time_t since);
+    // the setting was last turned on (a declined, cancelled, expired or failed offer is not made again). Ascending ids.
+    [[nodiscard]] static std::vector<uint32_t> mirrorEveryVaultCandidates(uint32_t peerId);
 
     // ---- the core's vault
 

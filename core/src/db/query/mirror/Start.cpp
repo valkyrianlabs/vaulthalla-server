@@ -373,7 +373,7 @@ std::vector<std::pair<uint32_t, AcceptVaults>> MirrorStart::mirroringEveryVault(
     });
 }
 
-std::vector<uint32_t> MirrorStart::mirrorEveryVaultCandidates(const uint32_t peerId, const std::time_t since) {
+std::vector<uint32_t> MirrorStart::mirrorEveryVaultCandidates(const uint32_t peerId) {
     return Transactions::exec("mirror::MirrorStart::mirrorEveryVaultCandidates", [&](pqxx::work& txn) {
         std::vector<uint32_t> out;
         for (const auto row : txn.exec(
@@ -383,9 +383,11 @@ std::vector<uint32_t> MirrorStart::mirrorEveryVaultCandidates(const uint32_t pee
                  "  AND NOT EXISTS (SELECT 1 FROM mirror_detached d WHERE d.vault_uid = v.uid AND d.peer_id = $1 "
                  "                  AND d.rekeyed_at IS NULL) "
                  "  AND NOT EXISTS (SELECT 1 FROM mirror_offer o WHERE o.vault_uid = v.uid AND o.side = 'core' "
-                 "                  AND (o.finished_at IS NULL OR (o.peer_id = $1 AND o.updated_at >= to_timestamp($2)))) "
+                 "                  AND (o.finished_at IS NULL OR (o.peer_id = $1 AND o.updated_at >= "
+                 "                       (SELECT COALESCE(p.mirror_vaults_set_at, '-infinity') FROM peer p "
+                 "                        WHERE p.id = $1)))) "
                  "ORDER BY v.id",
-                 pqxx::params{peerId, static_cast<int64_t>(since)}))
+                 pqxx::params{peerId}))
             out.push_back(row[0].as<uint32_t>());
         return out;
     });
