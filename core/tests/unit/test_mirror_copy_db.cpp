@@ -283,6 +283,10 @@ TEST_F(MirrorCopyDbTest, TheCopyEqualsTheHeldCopyInContentsAndMetadataListsTheMi
 
         // Equal: every name, folder, mode, modification time and symlink; the contents byte for byte.
         EXPECT_EQ(tree(target), tree(h.vaultId));
+        for (const auto* want : {"/dir d 488 ", "/dir/sub/c.txt f18 384 2020-01-02 ", "/link ldir/sub/c.txt 511 ",
+                                 "/empty.txt f0 420 ", "/dir/big.bin f"})
+            EXPECT_NE(tree(target).find(want), std::string::npos) << want << " in " << tree(target);
+        EXPECT_EQ(tree(target).find("/gone.txt"), std::string::npos) << "trash is not copied";
         EXPECT_EQ(read(target, "/a.txt"), "alpha from the core");
         EXPECT_EQ(read(target, "/empty.txt"), "");
         EXPECT_EQ(read(target, "/dir/sub/c.txt"), "charlie, deep down");

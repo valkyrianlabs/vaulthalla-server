@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'fd188f2489ad6cb105150128a52f288aab24e4f04d04699966c1c4b0136607b8'
+export const WS_CONTRACT_HASH = '0a41b8dc5e8a8d8d9eb3b518bd86d8571059e389ad22f23bfd44bea0e48cdcff'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = '340de841a7a45bc8da2d720dd791cb0e378bf45cdf8f66ae7b484ce08837aa0c'
@@ -5731,6 +5731,105 @@ export interface WsContract {
     }
   }
   /**
+   * Detach a copy: write a new, separate local vault from a vault held here as another server's copy (a
+   * mirror in any state, or orphaned; the link up, down or gone; nothing is asked of the core), which stays
+   * exactly as it is. The new vault gets a new uid, new entry uids and its own new key, is owned by `owner`
+   * (default: the caller) with the owner's ordinary access, and holds every folder, file and symlink with its
+   * name, place, mode and modification time; not the trash, versions, shares or access rules. Files whose
+   * contents never arrived here are left out and listed. A background job: mirror.detach.copy.get shows its
+   * progress; while it runs the new vault is read-only to everything else (mirror_copy_writing); a failure or
+   * a cancel removes it. Refused when the volume's free space or the quota the new vault takes (the held
+   * vault's) can't hold the copy (mirror_copy_no_space). Super admins, or holders of admin.mirror.detach;
+   * audited mirror.detach.copy.
+   */
+  'mirror.detach.copy': {
+    payload: { vault_id: number; name?: string | null; owner?: string | null }
+    response: {
+      copy: {
+        id: number
+        source_vault_id: number | null
+        vault_id: number | null
+        name: string
+        owner_id: number
+        state: 'running' | 'finished' | 'failed' | 'cancelled'
+        entries_total: number
+        entries_done: number
+        bytes_total: number
+        bytes_done: number
+        skipped_count: number
+        skipped: { path: string; size_bytes: number; reason: 'contents_missing' | 'removed' | 'unreadable' }[]
+        error: string | null
+        requested_by: number | null
+        cancel_requested: boolean
+        attempts: number
+        created_at: number
+        updated_at: number
+        finished_at: number | null
+      }
+    }
+  }
+  /**
+   * Stop the running copy of a held vault: it removes its partial vault and ends cancelled (a complete vault
+   * or none). Super admins, or holders of admin.mirror.detach; audited mirror.detach.copy.cancel.
+   */
+  'mirror.detach.copy.cancel': {
+    payload: { vault_id: number }
+    response: {
+      copy: {
+        id: number
+        source_vault_id: number | null
+        vault_id: number | null
+        name: string
+        owner_id: number
+        state: 'running' | 'finished' | 'failed' | 'cancelled'
+        entries_total: number
+        entries_done: number
+        bytes_total: number
+        bytes_done: number
+        skipped_count: number
+        skipped: { path: string; size_bytes: number; reason: 'contents_missing' | 'removed' | 'unreadable' }[]
+        error: string | null
+        requested_by: number | null
+        cancel_requested: boolean
+        attempts: number
+        created_at: number
+        updated_at: number
+        finished_at: number | null
+      }
+    }
+  }
+  /**
+   * The newest copy of a held vault (mirror.detach.copy): its state and progress (entries and bytes done of
+   * the totals), the files it left out, its error; null when none was written here. Super admins, or holders
+   * of admin.mirror.detach.
+   */
+  'mirror.detach.copy.get': {
+    payload: { vault_id: number }
+    response: {
+      copy: {
+        id: number
+        source_vault_id: number | null
+        vault_id: number | null
+        name: string
+        owner_id: number
+        state: 'running' | 'finished' | 'failed' | 'cancelled'
+        entries_total: number
+        entries_done: number
+        bytes_total: number
+        bytes_done: number
+        skipped_count: number
+        skipped: { path: string; size_bytes: number; reason: 'contents_missing' | 'removed' | 'unreadable' }[]
+        error: string | null
+        requested_by: number | null
+        cancel_requested: boolean
+        attempts: number
+        created_at: number
+        updated_at: number
+        finished_at: number | null
+      } | null
+    }
+  }
+  /**
    * What detaching a vault this server holds as another server's copy would give, before anything happens:
    * the fork point, whether the digest matched there, the pending and held changes, and every file whose
    * contents are not here (the list to export). Changes nothing. Super admins, or holders of
@@ -9585,6 +9684,9 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'mirror.cancel',
   'mirror.decline',
   'mirror.detach',
+  'mirror.detach.copy',
+  'mirror.detach.copy.cancel',
+  'mirror.detach.copy.get',
   'mirror.detach.preview',
   'mirror.get',
   'mirror.held.discard',
@@ -10086,6 +10188,9 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'mirror.cancel': 15000,
   'mirror.decline': 15000,
   'mirror.detach': 15000,
+  'mirror.detach.copy': 15000,
+  'mirror.detach.copy.cancel': 15000,
+  'mirror.detach.copy.get': 15000,
   'mirror.detach.preview': 15000,
   'mirror.get': 15000,
   'mirror.held.discard': 15000,

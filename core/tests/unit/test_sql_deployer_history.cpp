@@ -2376,6 +2376,9 @@ TEST_F(SqlDeployerHistoryDb, PeerVaultRoleMigration162IsAdditiveAndIdempotent) {
                               "granted_sync_permissions", "granted_roles_permissions", "granted_by_node", "granted_at"})
             txn.exec(std::string("ALTER TABLE mirror_vault DROP COLUMN IF EXISTS ") + c);
         txn.exec("ALTER TABLE vault_role_assignments DROP CONSTRAINT vault_role_assignments_subject_type_check");
+        // A 161 schema holds no linked server's assignment; suites sharing this database (the mirror ones) may have
+        // left some, which the old CHECK would refuse (rolled back with the rest).
+        txn.exec("DELETE FROM vault_role_assignments WHERE subject_type NOT IN ('user', 'group')");
         txn.exec("ALTER TABLE vault_role_assignments ADD CONSTRAINT vault_role_assignments_subject_type_check "
                  "CHECK (subject_type IN ('user', 'group'))");
         txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
