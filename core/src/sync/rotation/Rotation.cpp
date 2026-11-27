@@ -51,9 +51,9 @@ mode_t sidecarMode(const std::filesystem::path& backing) {
     return 0600;
 }
 
-bool commitRow(const Deps& deps, const FileSP& file, const EncryptionState& expected) {
+bool commitRow(const Deps& deps, const FileSP& file, const EncryptionState& expected, const bool published) {
     if (!deps.catalog.commit) throw std::logic_error("key rotation: no catalog commit");
-    return deps.catalog.commit(*file, expected);
+    return deps.catalog.commit(*file, expected, published);
 }
 
 void notifyCommitted(const Deps& deps, const FileSP& file) {
@@ -119,7 +119,7 @@ Outcome rotateLocalCopy(const FileSP& file, const EncryptionState& expected, con
 
     // If the commit throws, whether it took effect is unknown: the sidecar is kept, and recovery keeps whichever
     // copy authenticates under what the row says.
-    if (!commitRow(deps, file, expected)) {
+    if (!commitRow(deps, file, expected, publish)) {
         removeSidecarQuietly(sidecar);
         return Outcome::Conflict;
     }
@@ -187,7 +187,7 @@ Outcome rotateRemoteObject(const FileSP& file, const EncryptionState& expected, 
         reachedStep(deps, Step::Published, file);
     }
 
-    if (!commitRow(deps, file, expected)) return Outcome::Conflict;
+    if (!commitRow(deps, file, expected, true)) return Outcome::Conflict;
     reachedStep(deps, Step::Committed, file);
     notifyCommitted(deps, file);
     return Outcome::Rotated;
