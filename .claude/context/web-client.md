@@ -300,7 +300,8 @@ The server mirror (design/peers/mirror.md) as `vh mirror` offers it, for super a
 - **List** (`MirroredVaultsPage.tsx`, `MirrorTable.tsx`): `mirror.list` every 15 s, `peer.list {all: true}` (the Servers
   tab's cache entry) for names and link health, `mirror.held.list {}` for open held counts per vault. Columns: vault,
   other server, this server's role (`ROLE_TEXT`), state with its sentence (`statusText`: live, first copy, read-only
-  when the link is down (never healthy by guess), paused, diverged, expired, stopped, switching, the core deleting it
+  when the link is down (never healthy by guess), paused, diverged, expired, stopped, switching, replaced as the core
+  (`rejoining`), both took over (`forked`), took over (a core whose take over waits for the old core), the core deleting it
   with the date and what happens to the copy, orphaned, detached, the start's steps; a stop reason without words is
   shown as its code), position (`positionText`: last change, confirmed through, unconfirmed count on the core), held.
   A start whose vault doesn't exist here yet is cancelled from its row by offer (`cancelTarget`). **Offers**
@@ -312,12 +313,20 @@ The server mirror (design/peers/mirror.md) as `vh mirror` offers it, for super a
 - **A vault** (`MirrorDetailPage.tsx`, `/linked-servers/mirrors/[vaultId]`): `mirror.get` (5 s while starting or
   switching, else 15 s); on the mirror side also `mirror.detach.preview` (changes nothing) for pending changes,
   first-copy progress (`Meter`), digest and missing files. The advice line (`adviceFor`, `data-testid="mirror-advice"`)
-  is the console's own, from the role and state (mirror.get carries none; the wording follows `vh mirror info`).
-  Actions by `actionsFor`: core live → Switch, End (`EndMirrorDialog`: leave the copy orphaned, the default, or ask to
+  is the server's `advice` when mirror.get carries one, else the console's own from the role and state (the wording
+  follows `vh mirror info`); the held count is added either way.
+  Actions by `actionsFor` (and the preview's first-copy flag): core live → Switch, End (`EndMirrorDialog`: leave the copy orphaned, the default, or ask to
   remove it; data.destroy step-up, "End a vault’s mirror"); mirror → Switch (live), Resync (diverged / expired /
   stopped; `confirm()`, disabled while the link is down), Detach (`DetachDialog`: the preview's pending, held and
   missing files with a copy-all, owner, the vault's name typed as `confirm_name`), Versions (`VersionsDialog`:
   `mirror.versions.set`, blank limits = the server's defaults; no read exists); orphaned → Detach, Remove (typed name);
+  mirror (first copy finished, not diverged or starting) → Take over (`TakeoverDialog`: what it does, the warning that the
+  old core may hold changes this server never received, the preview's pending and missing counts, the vault's name typed
+  as `confirm`; data.destroy step-up named "Take over as a vault’s core"; a refusal such as `mirror_core_reachable` shows
+  the server's sentence; the answer's `warning` is shown); mirror and orphaned → Detach a copy (`DetachCopyDialog`:
+  `mirror.detach.copy {name, owner}`, then `mirror.detach.copy.get` every 1.5 s while running for entries and bytes,
+  Cancel (`mirror.detach.copy.cancel`, `confirm()`), the finished job's skipped files with a copy-all); a replaced or
+  forked core → Resync, Detach; a core whose take over is open → Detach too;
   a completed mirror never offers cancel (`mirror_detach_required`). Switch (`SwitchDialog`) waits for the outcome and
   says what the old core keeps (`accessText`); `mirror_switch_no_role` shows the server's sentence and a checkbox that
   resends with `accept_no_access`. **Held changes** (`HeldChanges.tsx`): `mirror.held.list {vault_id[, all]}`, the
@@ -326,7 +335,7 @@ The server mirror (design/peers/mirror.md) as `vh mirror` offers it, for super a
 - Refusals use `PeerError` (the server's words and `data.code`). Every sentence is in `copy.ts` (`copy.test.ts`: no
   command names, codes or config names; each confirmation one or two sentences). Pure helpers in `model.ts`
   (`model.test.ts`). `tests/e2e/mirrors.spec.ts` scripts `mirror.*`, `peer.*`, `storage.vault.*` and `auth.stepup.*`
-  offline or against a daemon, with screenshots at 1280 and 390 px. Take over (`mirror.takeover`) is not built yet.
+  offline or against a daemon, with screenshots at 1280 and 390 px.
 
 ## Vault deletion (#162)
 
