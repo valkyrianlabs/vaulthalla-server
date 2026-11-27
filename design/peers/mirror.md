@@ -1360,7 +1360,10 @@ instruction to build without waiting for review); each is listed for confirmatio
   may read the file); a restore is a change made on the mirror (the restore writes through `Filesystem::createFile`, a
   pending write while Live; `read_only` with the gate's reason otherwise). After a detach they are the local vault's like
   any others (its own policy from then on); a removed copy takes them with its recovery store. **Cost**: with it off, one
-  atomic load per group (nothing measurable); with it on, see "Cost" below.
+  atomic load per group: nothing beyond the applier's own work. Measured
+  (`MirrorSubmitDbTest.DISABLED_VersionsOnTheMirrorCostPerGroup`, dev VM, ASan build, PostgreSQL 16, 2026-11-27, load
+  about 2: 100 groups each replacing one file): 12.1 ms a group off, 16.7 ms on (+4.6 ms: the hard link of the prior
+  bytes, the version and blob rows under a savepoint, the per-file prune).
 - **A held change's bytes** (`mirror.held.get`, `vh mirror held get <id> <dest|->`): the person's version of a held write,
   decrypted with the vault's key at that generation, for super admins (who may list held changes); inline base64 up to
   8 MiB on ws (`too_large` beyond), streamed with `vh fs get`'s transfer frames on the CLI (the client writes `<dest>`).
