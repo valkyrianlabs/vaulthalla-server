@@ -4,6 +4,7 @@
 #include "mirror/Hash.hpp"
 
 #include <nlohmann/json.hpp>
+#include <pqxx/transaction>
 
 #include <cstddef>
 #include <cstdint>
@@ -48,6 +49,7 @@ struct LogRow {
     nlohmann::json state{};
     std::optional<vh::mirror::Hash> entry_hash{};
     std::optional<vh::mirror::Hash> prev_hash{};
+    std::optional<std::string> origin{};   // a mirror's request id when the change was submitted by it
 };
 
 struct LogGroup {
@@ -103,7 +105,19 @@ struct Options {
 
 // The next page of the first copy (its items must start right after the copy's cursor).
 [[nodiscard]] Result applyTreePage(uint32_t vaultId, const TreePage& page, const Options& options = {});
-// The next group of the log (it must start right after the last applied position).
+// The next group of the log (it must start right after the last applied position). A group whose origin is one of
+// this server's pending changes (mirror::submit) counts towards its confirmation; once all of the change's groups are
+// here it is confirmed (never applied a second time: the tables hold the group's result) and the entries it held
+// settle. An entry a change made here still holds is applied from wherever it stands here; one in the way of the
+// core's change is brought back to what the core last confirmed for it, or (holding the name the core's entry needs)
+// set aside to its conflict name.
 [[nodiscard]] Result applyGroup(uint32_t vaultId, const LogGroup& group, const Options& options = {});
+
+// Settles entries a pending change held (it was refused, or executed with nothing to apply here): each one no other
+// pending change holds is brought back to the state the core last confirmed for it where its tables differ, and is
+// clean again. `also` runs first in the same transaction (the pending row's removal, the held change it leaves). No
+// position or digest moves. Applied, or the vault's state (Stopped, Gone) when it is not live here.
+[[nodiscard]] Result settle(uint32_t vaultId, const std::vector<std::string>& uids,
+                            const std::function<void(pqxx::work&)>& also = {});
 
 }

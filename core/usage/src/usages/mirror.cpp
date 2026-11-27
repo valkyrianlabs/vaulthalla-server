@@ -133,6 +133,46 @@ std::shared_ptr<CommandUsage> keep(const std::weak_ptr<CommandUsage>& parent) {
     return cmd;
 }
 
+const auto heldPos = Positional::WithAliases("held", "The held change's number (vh mirror held)", {"held", "id"},
+                                             contract::gen::pattern("{9}"));
+
+std::shared_ptr<CommandUsage> held(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Read;
+    cmd->aliases = {"held"};
+    cmd->description = "List the changes made here to a vault this server mirrors that its core refused (held: the "
+                       "entry went back to the core's state and the change is kept, with the reason) or turned into a "
+                       "conflict copy. Super admins only.";
+    cmd->optional = {Optional::ManyToOne("vault", "One vault only (its number here)", {"vault"}, "vault")};
+    cmd->optional_flags = {Flag::WithAliases("all", "Include the ones discarded or retried", {"all"}), jsonFlag};
+    cmd->examples = {{"vh mirror held", "Held changes and conflict copies."}};
+    return cmd;
+}
+
+std::shared_ptr<CommandUsage> discard(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Destructive;
+    cmd->aliases = {"discard"};
+    cmd->description = "Drop a held change (or dismiss a conflict copy's record); nothing in the vault changes. Super "
+                       "admins only; audited.";
+    cmd->positionals = {heldPos};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh mirror discard 7", "Drop held change 7."}};
+    return cmd;
+}
+
+std::shared_ptr<CommandUsage> retry(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
+    cmd->aliases = {"retry"};
+    cmd->description = "Send a held change to the vault's core again, as the person who made it (after the core's "
+                       "grant changed, say); it comes back in the log, or is held again. Super admins only; audited.";
+    cmd->positionals = {heldPos};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh mirror retry 7", "Submit held change 7 again."}};
+    return cmd;
+}
+
 std::shared_ptr<CommandUsage> acceptAll(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->effect = CommandEffect::Write;
@@ -158,7 +198,8 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
     root->subcommands = {add(root->weak_from_this()),    pending(root->weak_from_this()), accept(root->weak_from_this()),
                          decline(root->weak_from_this()), cancel(root->weak_from_this()), list(root->weak_from_this()),
                          info(root->weak_from_this()),    acceptAll(root->weak_from_this()),
-                         keep(root->weak_from_this())};
+                         keep(root->weak_from_this()),    held(root->weak_from_this()),    discard(root->weak_from_this()),
+                         retry(root->weak_from_this())};
     root->examples = {
         {"vh mirror add <vault> --to <server>", "On the core: offer a vault."},
         {"vh mirror pending", "On the other server: offers waiting."},

@@ -1,4 +1,5 @@
 #include "db/query/fs/Symlink.hpp"
+#include "db/query/fs/AssignedUid.hpp"
 
 #include "crypto/id/ObjectUid.hpp"
 #include "db/Transactions.hpp"
@@ -34,6 +35,8 @@ unsigned int Symlink::upsertSymlink(const SymlinkPtr& symlink) {
         p.append(symlink->is_hidden);
         p.append(symlink->is_system);
         p.append(symlink->target);
+        if (!symlink->uid && symlink->vault_id)   // chosen before the creation (a mirror's pending change)
+            symlink->uid = AssignedUid::forPath(static_cast<uint32_t>(*symlink->vault_id), symlink->path);
         if (!symlink->uid) symlink->uid = vh::crypto::id::newObjectUid();   // migration 158: assigned at insert
         p.append(vh::crypto::id::toUuid(*symlink->uid));
 

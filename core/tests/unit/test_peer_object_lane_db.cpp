@@ -12,6 +12,7 @@
 #include "../helpers/db_suite.hpp"
 #include "../helpers/device_client.hpp"
 #include "config/Registry.hpp"
+#include "crypto/id/ObjectUid.hpp"
 #include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/device/Device.hpp"
@@ -22,6 +23,8 @@
 #include "device/ServerIdentity.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/model/File.hpp"
+#include "mirror/submit/Contents.hpp"
+#include "ops/Roles.hpp"
 #include "ops/Vaults.hpp"
 #include "peer/Links.hpp"
 #include "peer/ObjectClient.hpp"
@@ -406,6 +409,58 @@ TEST_F(PeerObjectLaneDbTest, BytesThatAreNotOnThisServersDiskAreNotHeldHere) {
     std::filesystem::remove(f->backing_path);
     std::filesystem::rename(aside, f->backing_path);
     EXPECT_EQ(get(*linkedKey, targetOf(*f))->result_int(), 200);
+}
+
+TEST_F(PeerObjectLaneDbTest, BytesAreTakenOnlyFromAMirrorWhoseRoleWritesFilesAndOnlyAsManyAsTheVaultHasRoomFor) {
+    // The linked server's PUT of a write's sealed bytes (mirror::submit; design/peers/mirror.md "As built: a change
+    // made on the mirror"): this vault's own sealed bytes under a new object uid, which verify here.
+    const auto f = db::query::fs::File::getFileByPath(engine->vault->id, "/blob.bin");
+    ASSERT_TRUE(f && f->object_uid);
+    const auto sealed = readAll(f->backing_path);
+    const auto uid = vh::crypto::id::newObjectUid();
+    const auto target = object::target({.vault = engine->encryptionManager->vaultUid(), .object = uid,
+                                        .generation = f->encryption_iv});
+    const std::vector<std::pair<std::string, std::string>> facts{
+        {std::string(object::kSizeHeader), std::to_string(f->size_bytes)},
+        {std::string(object::kContentHashHeader), f->content_hash.value_or("")},
+        {std::string(object::kKeyVersionHeader), std::to_string(f->encrypted_with_key_version)}};
+    const auto put = [&] {
+        HttpClient http(port, *linkedKey);
+        EXPECT_TRUE(http.connect());
+        return http.request(bhttp::verb::put, target, std::string(sealed.begin(), sealed.end()), facts);
+    };
+    const vh::ops::roles::VaultSubject subject{.vault_id = engine->vault->id, .subject = {.type = "peer", .id = linked.id}};
+
+    // No role that creates or replaces a file (none here at all, then a reader's): refused before a byte is kept.
+    auto res = put();
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->result_int(), 403) << res->body();
+    EXPECT_EQ(codeOf(res), "denied");
+    (void)ops::roles::assignVaultRole(superUser, {.target = subject, .role = "reader"});
+    res = put();
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->result_int(), 403) << res->body();
+    (void)ops::roles::unassignVaultRole(superUser, subject);
+
+    // A role that writes: staged.
+    (void)ops::roles::assignVaultRole(superUser, {.target = subject, .role = "power_user"});
+    res = put();
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->result_int(), 201) << res->body();
+
+    // A vault whose quota has no room: refused with what to tell the person.
+    const auto quota = engine->vault->quota;
+    engine->vault->quota = 1;
+    res = put();
+    engine->vault->quota = quota;
+    ASSERT_TRUE(res);
+    EXPECT_EQ(res->result_int(), 413) << res->body();
+    EXPECT_EQ(codeOf(res), "over_quota");
+
+    (void)ops::roles::unassignVaultRole(superUser, subject);
+    if (const auto kept = vh::mirror::submit::contents::staged(engine->vault->id, vh::crypto::id::toUuid(uid),
+                                                                 f->encryption_iv))
+        vh::mirror::submit::contents::dropStaged(*kept);
 }
 
 }

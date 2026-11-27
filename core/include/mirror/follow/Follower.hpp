@@ -55,6 +55,25 @@ public:
     [[nodiscard]] virtual std::optional<Answer> request(uint32_t peerId, const std::string& command,
                                                         const nlohmann::json& payload) = 0;
     virtual bool notify(uint32_t peerId, const std::string& command, const nlohmann::json& payload) = 0;
+
+    // The sealed bytes of a change made here, to the vault's core ahead of the change (mirror::submit): PUT on the
+    // sealed lane (peer::object::put) by default.
+    struct Sent {
+        bool ok{false};          // the core holds them, verified
+        bool retry{false};       // not reached, or broken off: send again later
+        std::string code{};      // the core's refusal
+        std::string error{};
+    };
+    struct Content {
+        std::string vault_uid{};   // uuid text
+        std::string object_uid{};  // uuid text
+        std::string generation{};
+        uint32_t key_version{};
+        uint64_t size{};
+        std::string content_hash{};
+        std::string path{};        // the sealed bytes here
+    };
+    virtual Sent sendContent(uint32_t peerId, const Content& content);
 };
 
 // The link service's (peer::LinkService::request / notify).
@@ -101,6 +120,11 @@ public:
     // Core side: the sequencer numbered groups of `vaultId` through `last` (coalesced; sent from this service).
     void numbered(uint32_t vaultId, vh::db::query::mirror::Position last);
 
+    // The loop's housekeeping of the mirror's and the core's sealed bytes (mirror::submit::contents::housekeeping): at
+    // its first pass (with the startup sweep) and every kHousekeeping after. Returns what it removed (tests call it).
+    static constexpr std::chrono::hours kHousekeeping{1};
+    std::size_t housekeep(std::chrono::steady_clock::time_point now);
+
     // Tests: the transport the loop uses (null: the link service's).
     void setTransportForTesting(std::shared_ptr<Transport> transport);
     // Tests: the notices waiting to be sent, then sent through `transport`; how many were sent.
@@ -133,6 +157,7 @@ private:
     std::map<uint32_t, Partial> partials_;
     std::map<uint32_t, Schedule> schedule_;
     std::shared_ptr<Transport> testTransport_;
+    std::optional<std::chrono::steady_clock::time_point> housekept_;
 };
 
 }

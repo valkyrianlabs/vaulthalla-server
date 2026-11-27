@@ -1,4 +1,5 @@
 #include "protocols/http/Session.hpp"
+#include "platform/Durable.hpp"
 #include "protocols/device/Scope.hpp"
 #include "device/ScopeAudit.hpp"
 
@@ -34,7 +35,12 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <cerrno>
+#include <fcntl.h>
+#include <filesystem>
 #include <poll.h>
+#include <system_error>
+#include <unistd.h>
 #include <sys/socket.h>
 #include <variant>
 #include <vector>
@@ -734,6 +740,7 @@ bool Session::handle_peer_object(HeaderParser& parser) {
     auto req = make_request_from_parser(parser);
     const auto keepAlive = req.keep_alive();
     const bool head = req.method() == verb::head;
+    if (req.method() == verb::put) return handle_peer_object_put(parser);
     if (parser.chunked() || (parser.content_length() && *parser.content_length() > 0)) {
         auto res = Router::makeErrorResponse(req, "The sealed lane takes no request body", status::bad_request);
         std::visit([](auto& r) { r.keep_alive(false); }, res);
@@ -760,6 +767,74 @@ bool Session::handle_peer_object(HeaderParser& parser) {
 
 // PUT /upload/sessions/<id>/files/<file_id>?offset=: every rule is checked from the header (a refusal closes the
 // connection with the body unread); an accepted part streams in kReadBufferBytes chunks, encrypted as it arrives.
+// PUT /peer/object/...: the vault's mirror sends sealed bytes to this server, its core (design/peers/mirror.md "A change
+// made on the mirror" step 2). Decided from the header, then the body streams to a private file in the vault's staging
+// directory, then it is verified and kept (protocols::device::peer_object::finishPut). The connection closes after.
+bool Session::handle_peer_object_put(HeaderParser& parser) {
+    auto req = make_request_from_parser(parser);
+    const auto contentLength = parser.chunked() || !parser.content_length()
+                                   ? std::optional<uint64_t>{}
+                                   : std::make_optional(static_cast<uint64_t>(*parser.content_length()));
+    const auto closeWith = [&](model::preview::Response response) {
+        std::visit([](auto& res) { res.keep_alive(false); }, response);
+        (void)write_response(std::move(response));
+        return false;
+    };
+    auto begun = protocols::device::peer_object::beginPut(req, *device_->connection.linked, contentLength);
+    if (begun.refusal) return closeWith(std::move(*begun.refusal));
+    const auto& target = begun.target;
+    const int fd = ::open(target.receiving.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (fd < 0) return closeWith(Router::makeErrorResponse(req, "Internal error", status::internal_server_error));
+    bool ok = true;
+    uint64_t written = 0;
+    try {
+        std::array<char, kReadBufferBytes> storage{};
+        beast::error_code ec;
+        while (!parser.is_done() && !stopping()) {
+            parser.get().body().data = storage.data();
+            parser.get().body().size = storage.size();
+            boost::beast::http::read(*stream_, buffer_, parser, ec);
+            const auto used = storage.size() - parser.get().body().size;
+            for (std::size_t done = 0; done < used;) {
+                const auto n = ::write(fd, storage.data() + done, used - done);
+                if (n < 0) {
+                    if (errno == EINTR) continue;
+                    throw std::system_error(errno, std::generic_category(), "write staged bytes");
+                }
+                done += static_cast<std::size_t>(n);
+            }
+            written += used;
+            if (written > target.sealed_size) throw std::runtime_error("more bytes than announced");
+            if (ec == boost::beast::http::error::need_buffer) {
+                ec = {};
+                continue;
+            }
+            if (ec) throw boost::system::system_error(ec);
+        }
+        if (stopping()) ok = false;
+        if (vh::platform::durable::sync(fd) != 0) ok = false;
+    } catch (const std::exception& e) {
+        log::Registry::http()->debug("[Session] Sealed lane PUT body failed: {}", e.what());
+        ok = false;
+    }
+    ::close(fd);
+    if (!ok) {
+        std::error_code ignored;
+        std::filesystem::remove(target.receiving, ignored);
+        return false;  // the mirror sends them again
+    }
+    model::preview::Response response;
+    try {
+        response = protocols::device::peer_object::finishPut(req, target);
+    } catch (const std::exception& e) {
+        log::Registry::http()->error("[Session] Sealed lane PUT {} failed: {}", std::string(req.target()), e.what());
+        std::error_code ignored;
+        std::filesystem::remove(target.receiving, ignored);
+        return closeWith(Router::makeErrorResponse(req, "Internal error", status::internal_server_error));
+    }
+    return closeWith(std::move(response));
+}
+
 bool Session::handle_resumable_part(
     boost::beast::http::request_parser<boost::beast::http::buffer_body>& parser
 ) {

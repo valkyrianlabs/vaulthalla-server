@@ -1,4 +1,5 @@
 #include "db/query/fs/File.hpp"
+#include "db/query/fs/AssignedUid.hpp"
 #include "db/query/fs/Directory.hpp"
 #include "db/Rows.hpp"
 #include "db/Transactions.hpp"
@@ -30,6 +31,9 @@ std::string objectUidFor(pqxx::work& txn, const std::shared_ptr<vh::fs::model::F
         const auto res = txn.exec(pqxx::prepped{"get_file_object_uid_by_inode"}, *file->inode);
         if (!res.empty()) file->object_uid = vh::crypto::id::fromUuid(res.one_field_ref().as<std::string>());
     }
+    // A uid chosen before the creation (a mirror's pending change, its execution on the core) for a new file.
+    if (!file->object_uid && file->vault_id)
+        file->object_uid = AssignedUid::forPath(static_cast<uint32_t>(*file->vault_id), file->path);
     return vh::crypto::id::toUuid(file->object_uid.value_or(vh::crypto::id::newObjectUid()));
 }
 

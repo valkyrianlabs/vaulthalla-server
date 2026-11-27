@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'c24d8019783110835e3f62e871acf01e5de3cf86d7e2716187bacc8d703a520d'
+export const WS_CONTRACT_HASH = 'f72196a90fbfb3e34dadc86bd5dceff0cf0f329fb469433edbc2b4981784221e'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
@@ -5727,6 +5727,82 @@ export interface WsContract {
     }
   }
   /**
+   * Drops a held change (or dismisses a conflict record); nothing in the vault changes. Super admins; audited
+   * mirror.held.discard.
+   */
+  'mirror.held.discard': {
+    payload: { id: number }
+    response: {
+      held: {
+        id: number
+        vault_id: number
+        kind: 'held' | 'conflict'
+        op: 'mkdir' | 'move' | 'rename' | 'remove' | 'copy' | 'write'
+        entry_uid: string | null
+        path: string | null
+        name: string
+        copy_name: string | null
+        person: { node: string; id: number }
+        reason_code: string
+        reason: string
+        state: 'open' | 'retried' | 'discarded'
+        created_at: number
+        resolved_at: number | null
+      }
+    }
+  }
+  /**
+   * Changes made on this server to a vault it mirrors that the core refused (held: the entry came back to the
+   * core's state, the change is kept with the reason) or turned into a conflict copy. Super admins.
+   */
+  'mirror.held.list': {
+    payload: { vault_id?: number; all?: boolean }
+    response: {
+      held: {
+        id: number
+        vault_id: number
+        kind: 'held' | 'conflict'
+        op: 'mkdir' | 'move' | 'rename' | 'remove' | 'copy' | 'write'
+        entry_uid: string | null
+        path: string | null
+        name: string
+        copy_name: string | null
+        person: { node: string; id: number }
+        reason_code: string
+        reason: string
+        state: 'open' | 'retried' | 'discarded'
+        created_at: number
+        resolved_at: number | null
+      }[]
+    }
+  }
+  /**
+   * Submits a held change to the core again as it was, as the person who made it; its result comes back in
+   * the log (a new refusal is held again). The vault must be live here. Super admins; audited
+   * mirror.held.retry.
+   */
+  'mirror.held.retry': {
+    payload: { id: number }
+    response: {
+      held: {
+        id: number
+        vault_id: number
+        kind: 'held' | 'conflict'
+        op: 'mkdir' | 'move' | 'rename' | 'remove' | 'copy' | 'write'
+        entry_uid: string | null
+        path: string | null
+        name: string
+        copy_name: string | null
+        person: { node: string; id: number }
+        reason_code: string
+        reason: string
+        state: 'open' | 'retried' | 'discarded'
+        created_at: number
+        resolved_at: number | null
+      }
+    }
+  }
+  /**
    * Whether this server keeps the vaults a linked server (their core) removes: a cancel that asks to remove a
    * finished copy leaves it here as an orphaned copy instead (default off). Super admins; audited
    * mirror.keep_removed.set.
@@ -6120,6 +6196,7 @@ export interface WsContract {
           entry_hash: string | null
           prev_hash: string | null
           actor: { node: string; id: number } | null
+          origin: string | null
         })[]
       })[]
       last?: { term: number; seq: number }
@@ -6138,6 +6215,7 @@ export interface WsContract {
           entry_hash: string | null
           prev_hash: string | null
           actor: { node: string; id: number } | null
+          origin: string | null
         })[]
         complete: boolean
       }
@@ -6179,6 +6257,45 @@ export interface WsContract {
     response: {
       offer_uid: string
       state: 'pending' | 'accepted' | 'declined' | 'installed' | 'started' | 'cancelled' | 'expired' | 'failed'
+    }
+  }
+  /**
+   * A change made on the mirror, submitted to the core, which executes it as that person (the linked server's
+   * vault role is the ceiling) and logs it with the request id in `origin`. Answered at once: a new request
+   * is queued and executed in order on the core; asked again with the same request id, the core answers what
+   * it did the first time (never twice): running, executed with the number of groups it logged, or refused
+   * with the code (conflict: the name was taken; anything else is kept on the mirror as a held change).
+   */
+  'peer.mirror.submit': {
+    payload: {
+      vault_uid: string
+      request_id: string
+      person: { node: string; id: number }
+      at: { term: number; seq: number }
+      op: 'mkdir' | 'move' | 'rename' | 'remove' | 'copy' | 'write' | 'setattr'
+      entry_uid: string
+      args?: {
+        uid?: string
+        parent_uid?: string
+        name?: string
+        replace?: boolean
+        base?: string
+        generation?: string
+        key_version?: number
+        size?: number
+        content_hash?: string
+        mime?: string
+        mode?: number
+        mtime_us?: number
+      }
+      base_generation?: string
+    }
+    response: {
+      status: 'queued' | 'running' | 'executed' | 'refused'
+      groups?: number
+      code?: string
+      error?: string
+      core_state?: 'live' | 'paused' | 'diverged' | 'expired' | 'stopped'
     }
   }
   /**
@@ -9145,6 +9262,9 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'mirror.cancel',
   'mirror.decline',
   'mirror.get',
+  'mirror.held.discard',
+  'mirror.held.list',
+  'mirror.held.retry',
   'mirror.keep_removed.set',
   'mirror.list',
   'mirror.pending',
@@ -9165,6 +9285,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.mirror.log',
   'peer.mirror.notify',
   'peer.mirror.offer',
+  'peer.mirror.submit',
   'peer.mirror.tree',
   'peer.pair.confirm',
   'peer.pair.request',
@@ -9630,6 +9751,9 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'mirror.cancel': 15000,
   'mirror.decline': 15000,
   'mirror.get': 15000,
+  'mirror.held.discard': 15000,
+  'mirror.held.list': 15000,
+  'mirror.held.retry': 15000,
   'mirror.keep_removed.set': 15000,
   'mirror.list': 15000,
   'mirror.pending': 15000,
@@ -9650,6 +9774,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.mirror.log': 15000,
   'peer.mirror.notify': 15000,
   'peer.mirror.offer': 15000,
+  'peer.mirror.submit': 15000,
   'peer.mirror.tree': 15000,
   'peer.pair.confirm': 15000,
   'peer.pair.request': 15000,

@@ -31,9 +31,8 @@
 //     by hand, a link state the hook did not see.
 // A database failure keeps what memory held: an unreadable database never turns a read-only copy writable.
 //
-// On this branch (piece A) acceptsLocalChanges() is false: a mirror is strictly read-only, link up or down, and a Live
-// vault refuses with `mirror_writes_not_built`. Piece B (the mirror's own changes, pending and submitted to the core)
-// flips it and handles what requireWritable lets through.
+// acceptsLocalChanges() is true (piece B): a Live mirror lets a person's change through, and the operation behind the
+// gate takes it as pending and submits it to the core (mirror::submit); a mirror is read-only whenever it is not Live.
 namespace vh::mirror::access {
 
 enum class State { NotMirrored, Live, ReadOnly };
@@ -73,7 +72,7 @@ struct Facts {
 // The sentence a person reads for a reason code (never a path, a name or key material).
 [[nodiscard]] std::string sentence(std::string_view reasonCode);
 
-// Whether a Live mirror takes local changes (piece B: applied as pending, sent to the core). False on piece A's branch.
+// Whether a Live mirror takes local changes (piece B: applied as pending, sent to the core).
 [[nodiscard]] bool acceptsLocalChanges() noexcept;
 
 // The gate refused a write. ops::Refused with code "read_only" (ws data.code; the CLI and HTTP lanes map it), `reason`

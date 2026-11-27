@@ -216,6 +216,58 @@ std::vector<WsCommandUsage> mirrorCommands() {
         .client_timeout = kDefaultTimeout,
     });
 
+    // ---- a change made on the mirror that the core refused (mirror::submit; ops::mirrors::held*)
+
+    const auto heldFields = [] {
+        return std::vector<WsField>{
+            uinteger("id"), uinteger("vault_id"), str("kind").oneOf({"held", "conflict"}),
+            str("op").oneOf({"mkdir", "move", "rename", "remove", "copy", "write"}), str("entry_uid").nullable(),
+            str("path").nullable().desc("Where the person's version was (vault path)."),
+            str("name").desc("The name the change gave the entry."),
+            str("copy_name").nullable().desc("kind conflict: the name the person's version took."),
+            object("person", "", {str("node"), uinteger("id")}).desc("Who made the change ({node, id})."),
+            str("reason_code").desc("The core's refusal code (denied, not_found, conflict, ...)."), str("reason"),
+            str("state").oneOf({"open", "retried", "discarded"}), integer("created_at"),
+            integer("resolved_at").nullable()};
+    };
+
+    out.push_back({
+        .command = "mirror.held.list",
+        .description = "Changes made on this server to a vault it mirrors that the core refused (held: the entry came "
+                       "back to the core's state, the change is kept with the reason) or turned into a conflict copy. "
+                       "Super admins.",
+        .payload = {uinteger("vault_id").opt().gen(gen::ref("vault", {"id"})).desc("One vault only."),
+                    boolean("all").opt().gen(gen::boolean()).desc("Include discarded and retried ones.")},
+        .response = {objectArray("held", "", heldFields())},
+        .refusal_codes = mcMirrorRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "mirror.held.discard",
+        .description = "Drops a held change (or dismisses a conflict record); nothing in the vault changes. Super "
+                       "admins; audited mirror.held.discard.",
+        .payload = {uinteger("id").gen(gen::ref("mirror.held", {"id"}))},
+        .response = {object("held", "", heldFields())},
+        .refusal_codes = mcMirrorRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "mirror.held.retry",
+        .description = "Submits a held change to the core again as it was, as the person who made it; its result "
+                       "comes back in the log (a new refusal is held again). The vault must be live here. Super "
+                       "admins; audited mirror.held.retry.",
+        .payload = {uinteger("id").gen(gen::ref("mirror.held", {"id"}))},
+        .response = {object("held", "", heldFields())},
+        .refusal_codes = [] {
+            auto r = mcMirrorRefusals();
+            r.push_back("mirror_read_only");
+            return r;
+        }(),
+        .client_timeout = kDefaultTimeout,
+    });
+
     // ---- a linked server's own session (mirror/start/Start.hpp)
 
     out.push_back({

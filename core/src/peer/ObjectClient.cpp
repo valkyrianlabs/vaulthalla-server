@@ -207,6 +207,95 @@ std::string_view toString(const FetchStatus s) {
     return "unknown";
 }
 
+namespace {
+
+// One endpoint: resolved, connected and through a TLS 1.3 handshake with the pinned key (the row's, or the one it
+// announced, which becomes the pin as the link does). Ok, or why not: TryNext (another endpoint may answer), StopAll
+// (the deadline: no other endpoint is tried), Cancelled.
+enum class Dial { Ok, TryNext, StopAll, Cancelled };
+
+Dial dialPinned(Connection& conn, const vh::peer::Endpoint& endpoint, const Record& peer, std::string& why) {
+    Step resolved;
+    tcp::resolver::results_type results;
+    conn.resolver().async_resolve(endpoint.host, std::to_string(endpoint.port),
+                                  [&](const boost::system::error_code& ec, tcp::resolver::results_type r) {
+                                      resolved.ec = ec;
+                                      results = std::move(r);
+                                      resolved.done = true;
+                                  });
+    if (!conn.drive(resolved.done)) {
+        if (conn.cancelledByCaller()) return Dial::Cancelled;
+        why = "timed out resolving";
+        return Dial::StopAll;
+    }
+    if (resolved.ec) {
+        why = "cannot resolve: " + resolved.ec.message();
+        return Dial::TryNext;
+    }
+    Step connected;
+    conn.arm();
+    beast::get_lowest_layer(conn.stream()).async_connect(results, [&](const boost::system::error_code& ec,
+                                                                      const tcp::endpoint&) {
+        connected.ec = ec;
+        connected.done = true;
+    });
+    if (!conn.drive(connected.done)) {
+        if (conn.cancelledByCaller()) return Dial::Cancelled;
+        why = "timed out connecting";
+        return Dial::StopAll;
+    }
+    if (connected.ec) {
+        why = "cannot connect: " + connected.ec.message();
+        return Dial::TryNext;
+    }
+    boost::system::error_code ignored;
+    beast::get_lowest_layer(conn.stream()).socket().set_option(tcp::no_delay(true), ignored);
+
+    // TLS 1.3 with the pin: the row's key or the one it announced, never the trust store.
+    auto& stream = conn.stream();
+    if (!isIpLiteral(endpoint.host) && !SSL_set_tlsext_host_name(stream.native_handle(), endpoint.host.c_str())) {
+        why = "cannot set the server name";
+        return Dial::TryNext;
+    }
+    stream.set_verify_mode(ssl::verify_peer);
+    stream.set_verify_callback([&peer](bool, ssl::verify_context& ctx) {
+        X509_STORE_CTX* store = ctx.native_handle();
+        if (X509_STORE_CTX_get_error_depth(store) > 0) return true;
+        return pinnedKeyOf(peer, X509_STORE_CTX_get_current_cert(store)).has_value();
+    });
+    Step shaken;
+    conn.arm();
+    stream.async_handshake(ssl::stream_base::client, [&](const boost::system::error_code& ec) {
+        shaken.ec = ec;
+        shaken.done = true;
+    });
+    if (!conn.drive(shaken.done)) {
+        if (conn.cancelledByCaller()) return Dial::Cancelled;
+        why = "timed out in the TLS handshake";
+        return Dial::StopAll;
+    }
+    if (shaken.ec) {
+        why = "TLS handshake failed: " + shaken.ec.message();
+        return Dial::TryNext;
+    }
+    // Whatever the callback saw, the certificate the session ended up with is checked again.
+    X509* leaf = SSL_get1_peer_certificate(stream.native_handle());
+    const auto key = pinnedKeyOf(peer, leaf);
+    X509_free(leaf);
+    if (!key) {
+        why = "the server's key is not the linked server's";
+        return Dial::TryNext;
+    }
+    if (const auto hex = dc::toHex(key->spkiSha256);
+        hex != peer.spki_sha256 && !db::query::peer::Peers::promoteNext(peer.id, hex)) {
+        why = "the announced key is no longer this link's";
+        return Dial::TryNext;
+    }
+    return Dial::Ok;
+}
+
+}
+
 FetchResult fetch(const Record& peer, const Address& what, const FetchOptions& options, const Sink& sink) {
     FetchResult out;
     if (!options.tls) {
@@ -223,85 +312,15 @@ FetchResult fetch(const Record& peer, const Address& what, const FetchOptions& o
 
     for (const auto& endpoint : peer.endpoints) {
         Connection conn(options);
-        const auto fail = [&](const std::string& why) { lastError = toString(endpoint) + ": " + why; };
-
-        // Resolve and connect.
-        Step resolved;
-        tcp::resolver::results_type results;
-        conn.resolver().async_resolve(endpoint.host, std::to_string(endpoint.port),
-                                      [&](const boost::system::error_code& ec, tcp::resolver::results_type r) {
-                                          resolved.ec = ec;
-                                          results = std::move(r);
-                                          resolved.done = true;
-                                      });
-        if (!conn.drive(resolved.done)) {
-            if (conn.cancelledByCaller()) return {.status = FetchStatus::Cancelled, .error = "cancelled"};
-            fail("timed out resolving");
-            break;
-        }
-        if (resolved.ec) {
-            fail("cannot resolve: " + resolved.ec.message());
+        std::string why;
+        const auto dialed = dialPinned(conn, endpoint, peer, why);
+        if (dialed == Dial::Cancelled) return {.status = FetchStatus::Cancelled, .error = "cancelled"};
+        if (dialed != Dial::Ok) {
+            lastError = toString(endpoint) + ": " + why;
+            if (dialed == Dial::StopAll) break;
             continue;
         }
-        Step connected;
-        conn.arm();
-        beast::get_lowest_layer(conn.stream()).async_connect(results, [&](const boost::system::error_code& ec,
-                                                                          const tcp::endpoint&) {
-            connected.ec = ec;
-            connected.done = true;
-        });
-        if (!conn.drive(connected.done)) {
-            if (conn.cancelledByCaller()) return {.status = FetchStatus::Cancelled, .error = "cancelled"};
-            fail("timed out connecting");
-            break;
-        }
-        if (connected.ec) {
-            fail("cannot connect: " + connected.ec.message());
-            continue;
-        }
-        boost::system::error_code ignored;
-        beast::get_lowest_layer(conn.stream()).socket().set_option(tcp::no_delay(true), ignored);
-
-        // TLS 1.3 with the pin: the row's key or the one it announced, never the trust store.
         auto& stream = conn.stream();
-        if (!isIpLiteral(endpoint.host) && !SSL_set_tlsext_host_name(stream.native_handle(), endpoint.host.c_str())) {
-            fail("cannot set the server name");
-            continue;
-        }
-        stream.set_verify_mode(ssl::verify_peer);
-        stream.set_verify_callback([&peer](bool, ssl::verify_context& ctx) {
-            X509_STORE_CTX* store = ctx.native_handle();
-            if (X509_STORE_CTX_get_error_depth(store) > 0) return true;
-            return pinnedKeyOf(peer, X509_STORE_CTX_get_current_cert(store)).has_value();
-        });
-        Step shaken;
-        conn.arm();
-        stream.async_handshake(ssl::stream_base::client, [&](const boost::system::error_code& ec) {
-            shaken.ec = ec;
-            shaken.done = true;
-        });
-        if (!conn.drive(shaken.done)) {
-            if (conn.cancelledByCaller()) return {.status = FetchStatus::Cancelled, .error = "cancelled"};
-            fail("timed out in the TLS handshake");
-            break;
-        }
-        if (shaken.ec) {
-            fail("TLS handshake failed: " + shaken.ec.message());
-            continue;
-        }
-        // Whatever the callback saw, the certificate the session ended up with is checked again.
-        X509* leaf = SSL_get1_peer_certificate(stream.native_handle());
-        const auto key = pinnedKeyOf(peer, leaf);
-        X509_free(leaf);
-        if (!key) {
-            fail("the server's key is not the linked server's");
-            continue;
-        }
-        if (const auto hex = dc::toHex(key->spkiSha256);
-            hex != peer.spki_sha256 && !db::query::peer::Peers::promoteNext(peer.id, hex)) {
-            fail("the announced key is no longer this link's");
-            continue;
-        }
         out.address = toString(endpoint);
 
         // From here on the server was reached: a failure is an interruption (resume), not an unreachable link.
@@ -427,6 +446,104 @@ FetchResult fetch(const Record& peer, const Address& what, const FetchOptions& o
         }
         if (options.offset + out.received != total) return interrupted("the transfer ended early");
         out.status = FetchStatus::Complete;
+        return out;
+    }
+    out.status = FetchStatus::Unreachable;
+    out.error = lastError.empty() ? "no endpoint answered" : lastError;
+    return out;
+}
+
+FetchResult put(const Record& peer, const Address& what, const PutFacts& facts, const PutOptions& options,
+               const std::string& sealedPath) {
+    FetchResult out;
+    if (!options.tls) {
+        out.error = "no TLS context";
+        return out;
+    }
+    if (peer.endpoints.empty()) {
+        out.error = "no endpoints known for " + peer.name;
+        return out;
+    }
+    const FetchOptions connection{.tls = options.tls, .deadline = options.deadline, .ioTimeout = options.ioTimeout,
+                                  .cancelled = options.cancelled};
+    const auto path = target(what);
+    std::string lastError;
+    for (const auto& endpoint : peer.endpoints) {
+        Connection conn(connection);
+        std::string why;
+        const auto dialed = dialPinned(conn, endpoint, peer, why);
+        if (dialed == Dial::Cancelled) return {.status = FetchStatus::Cancelled, .error = "cancelled"};
+        if (dialed != Dial::Ok) {
+            lastError = toString(endpoint) + ": " + why;
+            if (dialed == Dial::StopAll) break;
+            continue;
+        }
+        auto& stream = conn.stream();
+        out.address = toString(endpoint);
+        const auto interrupted = [&](const std::string& reason) {
+            out.status = conn.cancelledByCaller() ? FetchStatus::Cancelled : FetchStatus::Interrupted;
+            out.error = toString(endpoint) + ": " + reason;
+            return out;
+        };
+
+        bhttp::request<bhttp::file_body> req{bhttp::verb::put, path, 11};
+        boost::system::error_code openEc;
+        req.body().open(sealedPath.c_str(), beast::file_mode::scan, openEc);
+        if (openEc) {
+            out.status = FetchStatus::Refused;
+            out.code = "not_held";
+            out.error = "cannot open the sealed bytes: " + openEc.message();
+            return out;
+        }
+        req.set(bhttp::field::host, endpoint.host);
+        req.set(bhttp::field::user_agent, std::string("vaulthalla-server/") + VH_VERSION);
+        req.set(bhttp::field::content_type, "application/octet-stream");
+        req.set(bhttp::field::connection, "close");
+        req.set(std::string(kSizeHeader), std::to_string(facts.plaintext_size));
+        req.set(std::string(kContentHashHeader), facts.content_hash);
+        req.set(std::string(kKeyVersionHeader), std::to_string(facts.key_version));
+        req.prepare_payload();
+
+        // The body at the network's pace, each step bounded by the inactivity timeout.
+        bhttp::request_serializer<bhttp::file_body> serializer{req};
+        while (!serializer.is_done()) {
+            Step written;
+            conn.arm();
+            bhttp::async_write_some(stream, serializer, [&](const boost::system::error_code& ec, std::size_t) {
+                written.ec = ec;
+                written.done = true;
+            });
+            if (!conn.drive(written.done)) return interrupted(conn.cancelledByCaller() ? "cancelled" : "timed out sending");
+            if (written.ec) return interrupted("the transfer broke off: " + written.ec.message());
+        }
+
+        beast::flat_buffer buffer;
+        bhttp::response_parser<bhttp::string_body> parser;
+        parser.body_limit(kErrorBodyLimit);
+        Step answered;
+        conn.arm();
+        bhttp::async_read(stream, buffer, parser, [&](const boost::system::error_code& ec, std::size_t) {
+            answered.ec = ec;
+            answered.done = true;
+        });
+        if (!conn.drive(answered.done)) return interrupted(conn.cancelledByCaller() ? "cancelled" : "timed out waiting");
+        if (answered.ec) return interrupted("no answer: " + answered.ec.message());
+        const auto& res = parser.get();
+        out.http_status = res.result_int();
+        if (res.result() == bhttp::status::created || res.result() == bhttp::status::ok) {
+            out.status = FetchStatus::Complete;
+            out.received = 0;
+            return out;
+        }
+        out.status = FetchStatus::Refused;
+        try {
+            const auto j = nlohmann::json::parse(res.body());
+            out.code = j.value("code", std::string());
+            out.error = j.value("error", std::string());
+        } catch (const std::exception&) {
+        }
+        if (out.code.empty()) out.code = "http_" + std::to_string(out.http_status);
+        if (out.error.empty()) out.error = fmt::format("HTTP {}", out.http_status);
         return out;
     }
     out.status = FetchStatus::Unreachable;

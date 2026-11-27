@@ -115,6 +115,10 @@ public:
     // The live entry named `name` in folder `parentId`.
     [[nodiscard]] static std::optional<uint32_t> named(pqxx::work& txn, uint32_t parentId, const std::string& name);
     [[nodiscard]] static uint64_t childCount(pqxx::work& txn, uint32_t dirId);
+    // Whether a live entry holds this inode (one that stepped aside within the transaction keeps its own).
+    [[nodiscard]] static bool inodeTaken(pqxx::work& txn, uint64_t inode);
+    // The live entries directly in folder `dirId`.
+    [[nodiscard]] static std::vector<uint32_t> children(pqxx::work& txn, uint32_t dirId);
     // `entryId` is `ancestorId` or somewhere under it.
     [[nodiscard]] static bool within(pqxx::work& txn, uint32_t entryId, uint32_t ancestorId);
     // Folders between the entry and the vault's root (0 directly under the root).

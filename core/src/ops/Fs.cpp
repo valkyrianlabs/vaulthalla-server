@@ -10,9 +10,11 @@
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
 #include "mirror/access/Access.hpp"
+#include "mirror/submit/Local.hpp"
 #include "protocols/http/upload/CreateClaim.hpp"
 #include "rbac/fs/Placement.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
+#include "rbac/resolver/PeerVault.hpp"
 #include "rbac/resolver/vault/all.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
@@ -36,6 +38,23 @@
 // Inside vh::ops::fs a bare `fs::` is this namespace: the filesystem layer is always vh::fs, and every other subsystem
 // is named from vh:: too (vh::ops has its own audit, config and recovery namespaces).
 namespace vh::ops::fs {
+
+namespace {
+
+const PeerSubmission::View*& opsFsPeerSubmission() {
+    thread_local const PeerSubmission::View* current = nullptr;
+    return current;
+}
+
+}
+
+PeerSubmission::PeerSubmission(View view) : view_(std::move(view)), outer_(opsFsPeerSubmission()) {
+    opsFsPeerSubmission() = &view_;
+}
+
+PeerSubmission::~PeerSubmission() { opsFsPeerSubmission() = outer_; }
+
+const PeerSubmission::View* PeerSubmission::current() noexcept { return opsFsPeerSubmission(); }
 
 namespace {
 
@@ -69,6 +88,15 @@ void require(const Actor& actor, const EnginePtr& engine, const std::filesystem:
              const std::string_view error) {
     requireActor(actor);
     if (!engine || !engine->vault) throw std::runtime_error("Internal server error: Storage engine not available");
+    // A change a linked server submitted: its vault role is the ceiling, and (no per-account rules yet) the decision.
+    if (const auto* peer = PeerSubmission::current(); peer && peer->vault_id == engine->vault->id) {
+        const auto entry = vh::runtime::Deps::get().fsCache->getEntry(engine->vaultPathToFusePath(path));
+        // A target that does not exist yet is what the action creates: a folder for Touch, a file otherwise.
+        const bool isDirectory = entry ? entry->isDirectory() : action == FsAction::Touch;
+        if (!vh::rbac::resolver::PeerVault::may(peer->peer_id, peer->vault_id, action, path, !!entry, isDirectory))
+            throw Denied(std::string(error) + " (the linked server's role on this vault does not allow it)");
+        return;
+    }
     if (allowedAt(actor, engine, path, action)) return;
     // Only an action on an existing entry can be refused because the entry is missing; creating one (Write, Touch,
     // Link) where nothing is yet is refused for what the caller may do there.
@@ -100,6 +128,12 @@ void require(const Actor& actor, const EnginePtr& engine, const std::filesystem:
 void auditFs(const Actor& actor, const EnginePtr& engine, const std::string& action, const std::string& verb,
              const std::optional<uint64_t> entryId, nlohmann::json details = nlohmann::json::object()) {
     if (!actor) return;
+    // A change a linked server submitted names the peer and its request as well as the person.
+    if (const auto* peer = PeerSubmission::current(); peer && peer->vault_id == engine->vault->id) {
+        details["peer_id"] = peer->peer_id;
+        details["peer_node"] = peer->peer_node;
+        details["origin"] = peer->request_id;
+    }
     vh::audit::record({.action = action, .actor_id = actor->id, .actor = actor->name(), .vault_id = engine->vault->id,
                        .entry_id = entryId, .details = std::move(details)},
                       "[fs] " + actor->name() + " " + verb + " entry " +
@@ -171,6 +205,8 @@ void requireCreateAtDestination(const Actor& actor, const EnginePtr& engine, con
 
     require(actor, engine, to, vh::rbac::fs::placement::createAction(*source),
             "Permission denied: User cannot create " + to.string() + " in the vault");
+    // A linked server's role has no path overrides: what it may create at the destination it may create under it.
+    if (PeerSubmission::current() && PeerSubmission::current()->vault_id == engine->vault->id) return;
     if (const auto refused = vh::rbac::fs::placement::firstRefusedDescendant(actor, source,
                                                                              engine->vaultPathToFusePath(to)))
         throw Denied("Permission denied: User cannot create " + engine->fusePathToVaultPath(*refused).string() +
@@ -206,22 +242,28 @@ enum class Transfer { Move, Rename };
 void transfer(const Actor& actor, const uint32_t vaultId, const std::filesystem::path& from,
               const std::filesystem::path& to, const Transfer kind) {
     requireActor(actor);
-    const auto engine = engineFor(vaultId);
     const bool isMove = kind == Transfer::Move;
+    const auto engine = engineFor(vaultId);
 
     require(actor, engine, from, isMove ? FsAction::Move : FsAction::Rename,
             isMove ? "Permission denied: User does not have move permission for the source path in the vault"
                    : "Permission denied: User does not have rename permission for the source path in the vault");
     vh::mirror::access::requireWritable(engine->vault->id, isMove ? "fs.entry.move" : "fs.entry.rename");  // mirror gate
+    vh::mirror::submit::Local pending(actor, vaultId, isMove ? "move" : "rename");
     requireCreateAtDestination(actor, engine, from, to);
     requireTransferEndpoints(engine, from, to);
+    if (pending.active() && existsAt(engine, to)) throw Conflict("already exists: " + to.string());
+    pending.on(from, true);   // a folder re-stamps what is under it
+    pending.into(to);
 
     const auto entryId = entryIdAt(engine, from);
     auto operation = startOperation(engine, from, to, actor->id,
                                     isMove ? SyncOperation::Op::Move : SyncOperation::Op::Rename);
     try {
-        if (isMove) engine->move(from, to, actor);
-        else engine->rename(from, to, actor);
+        pending.run([&] {
+            if (isMove) engine->move(from, to, actor);
+            else engine->rename(from, to, actor);
+        });
         finishOperation(operation, SyncOperation::Status::Success);
         auditFs(actor, engine, isMove ? "fs.move" : "fs.rename", isMove ? "moved" : "renamed", entryId);
     } catch (const std::exception& e) {
@@ -240,13 +282,15 @@ void mkdir(const Actor& actor, const uint32_t vaultId, const std::filesystem::pa
     require(actor, engine, path, FsAction::Touch,
             "Permission denied: User does not have create-directory permission for this path in the vault");
     vh::mirror::access::requireWritable(engine->vault->id, "fs.dir.create");  // mirror gate
+    vh::mirror::submit::Local pending(actor, vaultId, "mkdir");
 
     // The engine refuses both with one untyped error; tell them apart first (same text) so the answer is typed.
     if (existsAt(engine, path)) throw Conflict("Failed to create directory: " + path.string());
     if (const auto parent = path.parent_path(); !parent.empty() && !existsAt(engine, parent))
         throw NotFound("Failed to create directory: " + path.string());
 
-    engine->mkdir(path, actor);
+    (void)pending.creates(path);
+    pending.run([&] { engine->mkdir(path, actor); });
     auditFs(actor, engine, "fs.mkdir", "created folder", entryIdAt(engine, path));
     syncSoon(vaultId);
 }
@@ -269,7 +313,18 @@ void copy(const Actor& actor, const uint32_t vaultId, const std::filesystem::pat
     require(actor, engine, from, FsAction::Copy,
             "Permission denied: User does not have copy permission for the source path in the vault");
     vh::mirror::access::requireWritable(engine->vault->id, "fs.entry.copy");  // mirror gate
+    vh::mirror::submit::Local pending(actor, vaultId, "copy");
     requireTransferEndpoints(engine, from, to);
+
+    // On a mirror a copy is the core's to make: its new entries come back in the log with the core's uids.
+    if (pending.active()) {
+        if (existsAt(engine, to)) throw Conflict("already exists: " + to.string());
+        pending.on(from, false);
+        pending.into(to);
+        pending.submitOnly();
+        pending.run([] {});
+        return;
+    }
 
     // Every copied entry passes the checks a single one would (#167), before anything is written: Copy on the source,
     // Read on a source file (the copy is readable wherever it lands, so it must not route around a download deny),
@@ -306,9 +361,14 @@ void remove(const Actor& actor, const uint32_t vaultId, const std::filesystem::p
     require(actor, engine, path, FsAction::Delete,
             "Permission denied: User does not have delete permission for this path in the vault");
     vh::mirror::access::requireWritable(engine->vault->id, "fs.entry.delete");  // mirror gate
+    // An upload's staging file is this server's scratch on a mirror (vh::fs::isUploadStagingName): never a change.
+    const bool staging = vh::fs::isUploadStagingName(path.filename().string());
+    const vh::mirror::submit::Scratch scratch(staging ? vaultId : 0);
+    vh::mirror::submit::Local pending(actor, staging ? 0 : vaultId, "remove");
 
     const auto removedId = entryIdAt(engine, path);
-    engine->remove(path, actor->id);
+    pending.on(path, true);
+    pending.run([&] { engine->remove(path, actor->id); });
     auditFs(actor, engine, "fs.delete", "deleted", removedId);
     syncSoon(vaultId);
 }
@@ -352,6 +412,10 @@ void setAttributes(const Actor& actor, const uint32_t vaultId, const std::filesy
     require(actor, engine, path, FsAction::Write,
             "Permission denied: User does not have write permission for this path in the vault");
     vh::mirror::access::requireWritable(engine->vault->id, "a setattr");  // mirror gate
+    // An upload's staging file is this server's scratch on a mirror (vh::fs::isUploadStagingName): never a change.
+    const bool staging = vh::fs::isUploadStagingName(path.filename().string());
+    const vh::mirror::submit::Scratch scratch(staging ? vaultId : 0);
+    vh::mirror::submit::Local pending(actor, staging ? 0 : vaultId, "setattr");
 
     const auto& cache = vh::runtime::Deps::get().fsCache;
     const auto entry = cache->getEntry(engine->vaultPathToFusePath(path));
@@ -361,11 +425,20 @@ void setAttributes(const Actor& actor, const uint32_t vaultId, const std::filesy
                               (attrs.group_gid && attrs.group_gid != entry->group_gid);
     if (ownerChanges && !actor->isSuperAdmin())
         throw Denied("Permission denied: only a super admin may change an entry's owner or group");
+    // An owner is a Linux account of the host that holds the copy: on a mirror it is the core's, never changed here.
+    if (ownerChanges && pending.active())
+        throw Denied("Permission denied: an entry's owner on a mirrored vault is its core server's");
 
     const vh::db::query::fs::Entry::Attributes rowAttrs{.mode = attrs.mode, .owner_uid = attrs.owner_uid,
                                                        .group_gid = attrs.group_gid, .mtime_us = attrs.mtime_us};
-    if (!vh::db::query::fs::Entry::setAttributes(entry->id, rowAttrs, actor->id))
-        throw NotFound("no such entry: " + path.string());
+    if (pending.active()) {
+        pending.on(path, false);
+        if (attrs.mode) pending.arg("mode", *attrs.mode);
+        if (attrs.mtime_us) pending.arg("mtime_us", *attrs.mtime_us);
+    }
+    bool changed = true;
+    pending.run([&] { changed = vh::db::query::fs::Entry::setAttributes(entry->id, rowAttrs, actor->id); });
+    if (!changed) throw NotFound("no such entry: " + path.string());
 
     // The cache answers getattr: the row as it is now, replacing the cached entry (a reader holding the old one keeps
     // it whole).

@@ -89,4 +89,30 @@ using Sink = std::function<void(std::span<const uint8_t>)>;
 
 [[nodiscard]] std::string_view toString(FetchStatus s);
 
+// The other way (design/peers/mirror.md "A change made on the mirror" step 2): PUT on the same address sends one file
+// generation's sealed bytes, as they are, to the vault's core, which verifies them and keeps them staged for the
+// change that commits them. The facts travel as headers: X-VH-Size (the plaintext size), X-VH-Content-Hash (BLAKE2b
+// of the sealed bytes, as files.content_hash holds it) and X-VH-Key-Version. Complete means the core answered 201 (it
+// holds them, verified); Refused carries its code; Interrupted and Unreachable are worth repeating later.
+struct PutFacts {
+    uint64_t plaintext_size{};
+    std::string content_hash{};
+    uint32_t key_version{};
+};
+
+struct PutOptions {
+    std::shared_ptr<boost::asio::ssl::context> tls{};
+    std::chrono::steady_clock::time_point deadline{};
+    std::chrono::milliseconds ioTimeout{std::chrono::seconds(30)};
+    std::function<bool()> cancelled{};
+};
+
+inline constexpr std::string_view kSizeHeader = "X-VH-Size";
+inline constexpr std::string_view kContentHashHeader = "X-VH-Content-Hash";
+inline constexpr std::string_view kKeyVersionHeader = "X-VH-Key-Version";
+
+// Sends the file at `sealedPath` (its whole length).
+[[nodiscard]] FetchResult put(const Record& peer, const Address& what, const PutFacts& facts, const PutOptions& options,
+                              const std::string& sealedPath);
+
 }

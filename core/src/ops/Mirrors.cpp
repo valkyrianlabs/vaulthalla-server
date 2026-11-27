@@ -2,10 +2,15 @@
 
 #include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
+#include "db/query/mirror/Pending.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "identities/User.hpp"
+#include "mirror/access/Access.hpp"
+#include "mirror/follow/Follower.hpp"
 #include "mirror/start/Start.hpp"
+#include "mirror/submit/Contents.hpp"
+#include "mirror/submit/Local.hpp"
 #include "ops/PeerPolicy.hpp"
 #include "ops/Peers.hpp"
 #include "rbac/permission/admin/Vaults.hpp"
@@ -353,6 +358,88 @@ nlohmann::json toJson(const db::query::mirror::AcceptVaults& a, const vh::peer::
             {"enabled", a.enabled},
             {"set_by", opt(a.set_by)},
             {"set_at", optTime(a.set_at)}};
+}
+
+// ---- held changes ------------------------------------------------------------------------------------------------------
+
+std::vector<db::query::mirror::HeldChange> held(const Actor& actor, const std::optional<uint32_t> vaultId,
+                                                const bool all) {
+    ops_mirrors_detail::requireSuperAdmin(actor, "list held changes");
+    std::vector<db::query::mirror::HeldChange> out;
+    for (const auto& m : db::query::mirror::MirrorVaults::list()) {
+        if (m.role == "core" || (vaultId && m.vault_id != *vaultId)) continue;
+        for (auto& h : db::query::mirror::Pending::heldChanges(m.vault_id, all)) out.push_back(std::move(h));
+    }
+    return out;
+}
+
+db::query::mirror::HeldChange discardHeld(const Actor& actor, const uint64_t id) {
+    ops_mirrors_detail::requireSuperAdmin(actor, "discard a held change");
+    const auto h = db::query::mirror::Pending::heldChange(id);
+    if (!h) throw NotFound("no held change " + std::to_string(id));
+    if (!db::query::mirror::Pending::resolveHeld(id, "discarded", actor->id))
+        throw Conflict("held change " + std::to_string(id) + " is " + h->state + " already");
+    // The person's sealed bytes go with it (the person's own act).
+    vh::mirror::submit::contents::dropBlob(vh::mirror::submit::contents::heldBlob(h->vault_id, id));
+    audit::record({.action = "mirror.held.discard", .actor_id = actor->id, .actor = actor->name(), .vault_id = h->vault_id,
+                   .details = {{"held", id}, {"kind", h->kind}, {"op", h->op}, {"reason_code", h->reason_code}}},
+                  fmt::format("[mirror] {} discarded held change {} ({}) of vault {}", actor->name(), id, h->op,
+                              h->vault_id));
+    return *db::query::mirror::Pending::heldChange(id);
+}
+
+db::query::mirror::HeldChange retryHeld(const Actor& actor, const uint64_t id) {
+    ops_mirrors_detail::requireSuperAdmin(actor, "retry a held change");
+    const auto h = db::query::mirror::Pending::heldChange(id);
+    if (!h) throw NotFound("no held change " + std::to_string(id));
+    if (h->kind != "held") throw Invalid("a conflict copy is in the vault already; there is nothing to retry");
+    if (h->state != "open") throw Conflict("held change " + std::to_string(id) + " is " + h->state + " already");
+    if (!h->entry_uid) throw Invalid("held change " + std::to_string(id) + " names no entry");
+    if (vh::mirror::access::state(h->vault_id) != vh::mirror::access::State::Live)
+        throw Refused("mirror_read_only", "the vault is read-only on this server now: " +
+                                              vh::mirror::access::reason(h->vault_id));
+    {
+        std::scoped_lock local(vh::mirror::submit::vaultMutex(h->vault_id));
+        if (!db::query::mirror::Pending::resolveHeld(id, "retried", actor->id))
+            throw Conflict("held change " + std::to_string(id) + " is not open any more");
+        db::query::mirror::NewPending change;
+        change.vault_id = h->vault_id;
+        change.request_id = vh::mirror::submit::newRequestId();
+        change.entry_uid = *h->entry_uid;
+        change.op = h->op;
+        change.args = h->args;
+        change.actor = h->actor;
+        // Submitted only: nothing of it is applied here first, and it holds no entry dirty.
+        const auto row = db::query::mirror::Pending::open(change, {}, {});
+        // A write's sealed bytes go with it to the new change (and back to a held change if it is refused again).
+        vh::mirror::submit::contents::moveBlob(vh::mirror::submit::contents::heldBlob(h->vault_id, id),
+                                               vh::mirror::submit::contents::pendingBlob(h->vault_id, row.id));
+        db::query::mirror::Pending::ready(row.id);
+    }
+    vh::mirror::follow::Follower::instance()->wake(h->vault_id);
+    audit::record({.action = "mirror.held.retry", .actor_id = actor->id, .actor = actor->name(), .vault_id = h->vault_id,
+                   .details = {{"held", id}, {"op", h->op}, {"reason_code", h->reason_code}}},
+                  fmt::format("[mirror] {} retried held change {} ({}) of vault {}", actor->name(), id, h->op,
+                              h->vault_id));
+    return *db::query::mirror::Pending::heldChange(id);
+}
+
+nlohmann::json toJson(const db::query::mirror::HeldChange& h) {
+    nlohmann::json out{{"id", h.id},
+                       {"vault_id", h.vault_id},
+                       {"kind", h.kind},
+                       {"op", h.op},
+                       {"entry_uid", h.entry_uid ? nlohmann::json(*h.entry_uid) : nlohmann::json(nullptr)},
+                       {"path", h.path ? nlohmann::json(*h.path) : nlohmann::json(nullptr)},
+                       {"name", h.args.value("name", std::string{})},
+                       {"copy_name", h.copy_name ? nlohmann::json(*h.copy_name) : nlohmann::json(nullptr)},
+                       {"person", {{"node", h.actor.node}, {"id", h.actor.id}}},
+                       {"reason_code", h.reason_code},
+                       {"reason", h.reason},
+                       {"state", h.state},
+                       {"created_at", h.created_at},
+                       {"resolved_at", h.resolved_at ? nlohmann::json(*h.resolved_at) : nlohmann::json(nullptr)}};
+    return out;
 }
 
 }

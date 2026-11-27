@@ -152,6 +152,9 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("mirror.get", &handler::Mirrors::get);
     r->registerPayload("mirror.accept_all.set", &handler::Mirrors::acceptAllSet);
     r->registerPayload("mirror.keep_removed.set", &handler::Mirrors::keepRemovedSet);
+    r->registerPayload("mirror.held.list", &handler::Mirrors::heldList);
+    r->registerPayload("mirror.held.discard", &handler::Mirrors::heldDiscard);
+    r->registerPayload("mirror.held.retry", &handler::Mirrors::heldRetry);
     r->registerPayload("peer.mirror.offer", &handler::Mirrors::offer);
     r->registerPayload("peer.mirror.answer", &handler::Mirrors::answer);
     r->registerPayload("peer.mirror.keys", &handler::Mirrors::keys);
@@ -164,6 +167,8 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("peer.mirror.log", &handler::MirrorFollow::log);
     r->registerPayload("peer.mirror.ack", &handler::MirrorFollow::ack);
     r->registerPayload("peer.mirror.notify", &handler::MirrorFollow::notify);
+    // A change made on the mirror (wave 4 piece B; design/peers/mirror.md "As built: a change made on the mirror").
+    r->registerPayload("peer.mirror.submit", &handler::MirrorFollow::submit);
 }
 
 void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {

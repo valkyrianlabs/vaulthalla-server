@@ -14,6 +14,7 @@
 #include "log/Registry.hpp"
 #include "log/Redact.hpp"
 #include "mirror/access/Access.hpp"
+#include "mirror/submit/Local.hpp"
 #include "ops/Error.hpp"
 #include "ops/Fs.hpp"
 #include "fs/cache/Registry.hpp"
@@ -219,7 +220,8 @@ void setattr(const fuse_req_t req, const fuse_ino_t ino,
             if (const auto* fh = fi ? reinterpret_cast<FileHandle*>(fi->fh) : nullptr; fh && fh->copy) {
                 copies.truncate(workingHandle(*fh), attr->st_size, userIdOf(resolved.user));
             } else {
-                auto handle = copies.open(ino, std::static_pointer_cast<File>(resolved.entry), O_RDWR);
+                auto handle = copies.open(ino, std::static_pointer_cast<File>(resolved.entry), O_RDWR,
+                                          userIdOf(resolved.user));
                 try {
                     copies.truncate(handle, attr->st_size, userIdOf(resolved.user));
                 } catch (...) {
@@ -464,7 +466,8 @@ void create(const fuse_req_t req, const fuse_ino_t parent, const char* name, con
     WorkingCopies::Handle handle;
     try {
         handle = WorkingCopies::instance().open(
-            *newEntry->inode, std::static_pointer_cast<File>(newEntry), fi->flags & ~(O_CREAT | O_EXCL));
+            *newEntry->inode, std::static_pointer_cast<File>(newEntry), fi->flags & ~(O_CREAT | O_EXCL),
+            userIdOf(resolved.user));
     } catch (const std::exception& e) {
         log::Registry::fuse()->error("[create] Could not open {}: {}", log::file(newEntry->id, newEntry->fuse_path), e.what());
         replyError(req, timer, errnoFrom(e));
@@ -568,7 +571,8 @@ void open(const fuse_req_t req, const fuse_ino_t ino, fuse_file_info* fi) {
 
     WorkingCopies::Handle handle;
     try {
-        handle = WorkingCopies::instance().open(ino, std::static_pointer_cast<File>(resolved.entry), fi->flags);
+        handle = WorkingCopies::instance().open(ino, std::static_pointer_cast<File>(resolved.entry), fi->flags,
+                                                userIdOf(resolved.user));
     } catch (const std::exception& e) {
         log::Registry::fuse()->error("[open] Could not open {}: {}", log::file(resolved.entry->id, resolved.entry->fuse_path), e.what());
         replyError(req, timer, errnoFrom(e));
@@ -898,60 +902,75 @@ void unlink(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
         return;
     }
 
-    if (entry->isSymlink()) {
-        const auto link = std::static_pointer_cast<Symlink>(entry);
-        db::query::fs::Symlink::deleteSymlink(link);
+    // A vault held here as a Live mirror: the delete is a pending change (applied here, submitted to the core); an
+    // upload's staging file is this server's scratch (never submitted).
+    const auto entryVault = static_cast<uint32_t>(entry->vault_id.value_or(0));
+    const vh::mirror::submit::Scratch scratch(isHttpUploadTemp ? entryVault : 0);
+    vh::mirror::submit::Local pending(resolved.user, isHttpUploadTemp ? 0 : entryVault, "remove");
+    if (pending.active()) pending.on(entry->path, false);
 
-        if (::unlink(entry->backing_path.c_str()) < 0)
-            log::Registry::fuse()->debug("[unlink] Failed to remove backing symlink: {}: {}", log::file(entry->id, entry->backing_path), strerror(errno));
+    const auto removeIt = [&] {
+        if (entry->isSymlink()) {
+            const auto link = std::static_pointer_cast<Symlink>(entry);
+            db::query::fs::Symlink::deleteSymlink(link);
 
-        runtime::Deps::get().fsCache->evictPath(entry->fuse_path);
+            if (::unlink(entry->backing_path.c_str()) < 0)
+                log::Registry::fuse()->debug("[unlink] Failed to remove backing symlink: {}: {}", log::file(entry->id, entry->backing_path), strerror(errno));
+
+            runtime::Deps::get().fsCache->evictPath(entry->fuse_path);
+            if (entry->parent_id) runtime::Deps::get().fsCache->refreshDirStats(*entry->parent_id);
+            return;
+        }
+
+        if (isHttpUploadTemp) {
+            db::query::fs::File::deleteFile(resolved.user->id, std::static_pointer_cast<File>(entry));
+
+            if (::unlink(entry->backing_path.c_str()) < 0)
+                log::Registry::fuse()->debug("[unlink] Failed to remove backing upload temp file: {}: {}", log::file(entry->id, entry->backing_path), strerror(errno));
+
+            runtime::Deps::get().fsCache->evictPath(entry->fuse_path);
+            if (entry->parent_id) runtime::Deps::get().fsCache->refreshDirStats(*entry->parent_id);
+            return;
+        }
+
+        {
+            // Local versioning keeps the file's last generation (a link, staged before the row goes); the backing
+            // file is unlinked only after the trash committed. Under the file's content lock, with the row re-read: a
+            // seal (or overwrite, rotation) renaming new bytes over the backing file since the lookup would otherwise
+            // be linked under the old IV. The lock is held until the backing file and the cache entry are gone, so a
+            // seal that waited for it finds nothing to write back to.
+            std::scoped_lock contentLock(vh::fs::Filesystem::contentWriteMutex(entry->id));
+            const auto current = db::query::fs::File::getFileById(entry->id);
+            auto kept = resolved.engine && current
+                ? vh::recovery::local::versions::retain(*resolved.engine, *current, vh::recovery::local::Reason::Delete,
+                                                        {.actor = resolved.user->id})
+                : vh::recovery::local::versions::Pending{};
+            vh::db::Transactions::exec("fuse::unlink", [&](pqxx::work& txn) {
+                kept.attach(txn);
+                db::query::fs::File::markFileAsTrashed(txn, resolved.user->id,
+                                                       static_cast<unsigned int>(*entry->vault_id), entry->path,
+                                                       entry->backing_path);
+            });
+            kept.committed();
+
+            if (::unlink(entry->backing_path.c_str()) < 0)
+                log::Registry::fuse()->debug("[unlink] Failed to remove backing file: {}: {}", log::file(entry->id, entry->backing_path), strerror(errno));
+            runtime::Deps::get().fsCache->evictPath(entry->fuse_path);
+        }
+
+        // The file id ended with the trash: drop its sealed derived artifacts (best effort, never throws).
+        if (resolved.engine) resolved.engine->purgeDerivedArtifacts(entry->id);
+
+        // The folder stays (#168); its cached totals (what fs.dir.list shows) follow the delete.
         if (entry->parent_id) runtime::Deps::get().fsCache->refreshDirStats(*entry->parent_id);
-        replyOk(req, timer);
+    };
+    try {
+        pending.run(removeIt);
+    } catch (const std::exception& e) {
+        log::Registry::fuse()->error("[unlink] Failed for {}: {}", log::file(entry->id, entry->backing_path), e.what());
+        replyError(req, timer, EIO);
         return;
     }
-
-    if (isHttpUploadTemp) {
-        db::query::fs::File::deleteFile(resolved.user->id, std::static_pointer_cast<File>(entry));
-
-        if (::unlink(entry->backing_path.c_str()) < 0)
-            log::Registry::fuse()->debug("[unlink] Failed to remove backing upload temp file: {}: {}", log::file(entry->id, entry->backing_path), strerror(errno));
-
-        runtime::Deps::get().fsCache->evictPath(entry->fuse_path);
-        if (entry->parent_id) runtime::Deps::get().fsCache->refreshDirStats(*entry->parent_id);
-        replyOk(req, timer);
-        return;
-    }
-
-    {
-        // Local versioning keeps the file's last generation (a link, staged before the row goes); the backing file
-        // is unlinked only after the trash committed. Under the file's content lock, with the row re-read: a seal
-        // (or overwrite, rotation) renaming new bytes over the backing file since the lookup would otherwise be linked
-        // under the old IV. The lock is held until the backing file and the cache entry are gone, so a seal that
-        // waited for it finds nothing to write back to.
-        std::scoped_lock contentLock(vh::fs::Filesystem::contentWriteMutex(entry->id));
-        const auto current = db::query::fs::File::getFileById(entry->id);
-        auto kept = resolved.engine && current
-            ? vh::recovery::local::versions::retain(*resolved.engine, *current, vh::recovery::local::Reason::Delete,
-                                                    {.actor = resolved.user->id})
-            : vh::recovery::local::versions::Pending{};
-        vh::db::Transactions::exec("fuse::unlink", [&](pqxx::work& txn) {
-            kept.attach(txn);
-            db::query::fs::File::markFileAsTrashed(txn, resolved.user->id, static_cast<unsigned int>(*entry->vault_id),
-                                                   entry->path, entry->backing_path);
-        });
-        kept.committed();
-
-        if (::unlink(entry->backing_path.c_str()) < 0)
-            log::Registry::fuse()->debug("[unlink] Failed to remove backing file: {}: {}", log::file(entry->id, entry->backing_path), strerror(errno));
-        runtime::Deps::get().fsCache->evictPath(entry->fuse_path);
-    }
-
-    // The file id ended with the trash: drop its sealed derived artifacts (best effort, never throws).
-    if (resolved.engine) resolved.engine->purgeDerivedArtifacts(entry->id);
-
-    // The folder stays (#168); its cached totals (what fs.dir.list shows) follow the delete.
-    if (entry->parent_id) runtime::Deps::get().fsCache->refreshDirStats(*entry->parent_id);
     replyOk(req, timer);
 }
 
@@ -978,9 +997,22 @@ void rmdir(const fuse_req_t req, const fuse_ino_t parent, const char* name) {
         return;
     }
 
+    // A vault held here as a Live mirror: the delete is a pending change (applied here, submitted to the core).
+    vh::mirror::submit::Local pending(resolved.user, static_cast<uint32_t>(resolved.entry->vault_id.value_or(0)),
+                                      "remove");
+    if (pending.active()) pending.on(resolved.entry->path, false);
     // Something is still under it (possibly entries this caller can't see): refuse instead of dropping it all.
-    if (!db::query::fs::Directory::deleteEmptyDirectory(resolved.entry->id)) {
+    struct NotEmpty {};
+    try {
+        pending.run([&] {
+            if (!db::query::fs::Directory::deleteEmptyDirectory(resolved.entry->id)) throw NotEmpty{};
+        });
+    } catch (const NotEmpty&) {
         replyError(req, timer, ENOTEMPTY);
+        return;
+    } catch (const std::exception& e) {
+        log::Registry::fuse()->error("[rmdir] Failed: {}", e.what());
+        replyError(req, timer, EIO);
         return;
     }
 

@@ -38,9 +38,21 @@ Then 7, a whole mirror (design/peers/mirror.md, waves 1 to 3), with no row writt
      digests and the same tree, acknowledged on A; what A deleted is gone on B, a trashed file has nothing pending;
   f. access on B: its super admin reads within the grant, is refused a write, and is refused after A's `vh peer policy
      set none`;
-  h. strict mode on B (wave 4): with a grant that allows every file operation (power_user), every write through B's
-     mount (create, overwrite, mkdir, rename, delete, chmod, touch) is refused with EROFS and `vh fs put` with exit code
-     69 and the reason, B's vault is unchanged, A's writes still arrive, and B's super admin still reads within the grant;
+  h. strict mode on B (wave 4): with a grant that allows every file operation (power_user) and A stopped (the link
+     down), every write through B's mount (create, overwrite, mkdir, rename, delete, chmod, touch) is refused with EROFS
+     and `vh fs put` with exit code 69 and the reason (mirror_link_down), B's vault is unchanged; once A is back its
+     writes arrive, and B's super admin reads within the grant;
+  i. changes made on B while the link is up (wave 4 piece B): folders, a rename, a move and a delete through B's mount
+     appear on A under the uids B chose and come back confirmed (equal digests, nothing pending on B);
+  j. a file written through B's mount, one put with `vh fs put` and an overwrite arrive on A with B's bytes, confirmed,
+     with nothing fetched back and no sealed copy left;
+  k. a change A refuses (B's role narrowed on A while the change waited): held on B with the reason, its sealed bytes
+     kept, B's entry back at A's state;
+  l. a folder named on both sides: A's keeps the name, B's becomes its conflict copy with what B put in it;
+  m. A stopped while a file is open for writing on B: a new write is refused, the open file is sealed and kept as
+     pending, and arrives on A with its bytes once A is back;
+  n. B restarted with three changes pending (held back by VH_TEST_FAULT_DIR/mirror-submit-hold, test instances only):
+     they survive and are submitted and executed in order;
   g. B killed while A changes the vault: it comes back, catches up from its position (equal digests, live), and its
      change journal shows each change once.
 8, ending a mirror (owner's rule, 2026-11-26): rotation refused on A; B's own cancel of a live mirror refused; A's
@@ -275,7 +287,7 @@ def _diag(a: Node, va: int, b: Node, vb: int) -> dict:
     ha, hb = set(ta.split("\n")[0].split(",")), set(tb.split("\n")[0].split(","))
     na, nb = set(ta.split("\n")[1].split(",")), set(tb.split("\n")[1].split(","))
     return {"a": _mv(a, va), "b": _mv(b, vb),
-            "b_stop": _sql(b, f"SELECT COALESCE(stop_detail::text, '') FROM mirror_vault WHERE vault_id = {vb}")[:600],
+            "b_stop": _sql(b, f"SELECT COALESCE(stop_detail::text, '') FROM mirror_vault WHERE vault_id = {vb}")[:6000],
             "a_unnumbered": _sql(a, f"SELECT count(*) FROM vault_replication_log WHERE vault_id = {va} AND seq IS NULL"),
             "hash_only_a": sorted(ha - hb)[:6], "hash_only_b": sorted(hb - ha)[:6],
             "named_only_a": sorted(na - nb)[:6], "named_only_b": sorted(nb - na)[:6]}
@@ -288,7 +300,7 @@ def _wait_synced(a: Node, va: int, b: Node, vb: int, what: str, timeout: float =
         if got:
             return got
         time.sleep(1)
-    raise DrillError(f"timed out waiting for {what}: {json.dumps(_diag(a, va, b, vb))[:2500]}")
+    raise DrillError(f"timed out waiting for {what}: {json.dumps(_diag(a, va, b, vb))[:9000]}")
 
 
 def _plain(node: Node, rel: str) -> str:
@@ -450,14 +462,15 @@ def _whole_mirror(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, re
                  f"ls: {listing.stdout[-200:]} stat: {(root.stdout + root.stderr)[-200:]}")
     a.vh("peer", "policy", "set", node_b, "reader")
 
-    # ---- 7h. Strict mode on B (wave 4 piece A): a copy of A's vault is read-only on B whatever A grants it. With a
-    # grant that allows every file operation (power_user), RBAC would let B's super admin write; the gate refuses every
-    # write with its reason.
+    # ---- 7h. Strict mode on B (wave 4): a copy of A's vault is read-only on B whenever its link is down, whatever A
+    # grants it. With a grant that allows every file operation (power_user), RBAC would let B's super admin write; with
+    # A stopped the gate refuses every write with its reason. (With the link up B's writes are pending changes: 7i on.)
     a.vh("peer", "policy", "set", node_b, "power_user")
     _wait("B's grant (power_user)",
           lambda: (_mirror_info(b, vb).get("grant") or {}).get("role_name") == "power_user" or None, timeout=30)
     entries_b = _sql(b, f"SELECT count(*) FROM fs_entry WHERE vault_id = {vb}")
     top_b = _plain(b, "whole/top.txt")
+    _stop(a, b, node_a)
     for label, line in (("a new file", "printf no > MNT/whole/other/gate.txt"),
                         ("an overwrite", "printf no > MNT/whole/top.txt"),
                         ("a folder", "mkdir MNT/whole/gate_dir"),
@@ -467,26 +480,29 @@ def _whole_mirror(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, re
                         ("a touch", "touch -d 2001-01-01 MNT/whole/top.txt")):
         cp = subprocess.run(["runuser", "-u", b.admin, "--", "timeout", "30", "sh", "-c",
                              line.replace("MNT", str(b.inst.mount))], capture_output=True, text=True)
-        report.check(f"7h: B's mount refuses {label} with EROFS (Read-only file system)",
+        report.check(f"7h: with the link down, B's mount refuses {label} with EROFS (Read-only file system)",
                      cp.returncode != 0 and "Read-only file system" in (cp.stdout + cp.stderr),
                      (cp.stdout + cp.stderr)[-200:])
-    env = [f"VAULTHALLA_CLI_SOCKET={b.inst.socket_path}", "VAULTHALLA_NONINTERACTIVE=1", "PATH=/usr/bin:/bin"]
     for args in (("fs", "put", str(vb), "-", "/other/gate_cli.txt"),
                  ("fs", "put", str(vb), "-", "/top.txt", "--overwrite")):
-        cp = subprocess.run(["runuser", "-u", b.admin, "--", "env", "-i", *env, b.cli, *args], input="from the cli\n",
-                            capture_output=True, text=True, timeout=60, cwd=str(b.private))
-        report.check(f"7h: `vh {' '.join(args)}` on B is refused with the read-only exit code (69) and the reason",
-                     cp.returncode == 69 and "mirror_writes_not_built" in (cp.stdout + cp.stderr),
+        cp = _put(b, args, "from the cli\n")
+        report.check(f"7h: with the link down, `vh {' '.join(args)}` on B is refused with the read-only exit code (69) "
+                     "and the reason", cp.returncode == 69 and "mirror_link_down" in (cp.stdout + cp.stderr),
                      f"exit {cp.returncode}: {(cp.stdout + cp.stderr)[-300:]}")
     report.check("7h: nothing changed on B: its entries, and the overwritten file's bytes",
                  _sql(b, f"SELECT count(*) FROM fs_entry WHERE vault_id = {vb}") == entries_b
-                 and _plain(b, "whole/top.txt") == top_b)
-    a.sh("printf 'written on A while B is read-only\\n' > MNT/whole/other/from_a.txt")
-    ok = _wait_synced(a, va, b, vb, "A's write arriving on B while B refuses its own")
-    report.check("7h: A's writes still arrive on B (equal digests, acknowledged)", bool(ok), json.dumps(ok)[:300])
-    report.check("7h: B's super admin still reads within the grant", _wait(
+                 and _plain(b, "whole/top.txt") == top_b
+                 and _sql(b, f"SELECT count(*) FROM mirror_pending WHERE vault_id = {vb}") == "0")
+    _start(a, b, node_a, node_b)
+    a.sh("printf 'written on A after the link came back\\n' > MNT/whole/other/from_a.txt")
+    ok = _wait_synced(a, va, b, vb, "A's write arriving on B once the link is back")
+    report.check("7h: A's writes arrive on B (equal digests, acknowledged)", bool(ok), json.dumps(ok)[:300])
+    report.check("7h: B's super admin reads within the grant", _wait(
         "A's new file readable on B", lambda: _plain(b, "whole/other/from_a.txt") == _plain(a, "whole/other/from_a.txt")
         or None, timeout=60) is not None)
+
+    _changes_on_the_mirror(a, va, b, vb, faults_b, node_a, node_b, report)
+
     a.vh("peer", "policy", "set", node_b, "reader")
     _wait("B's grant (reader) again", lambda: (_mirror_info(b, vb).get("grant") or {}).get("role_name") == "reader"
           or None, timeout=30)
@@ -501,6 +517,235 @@ def _whole_mirror(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, re
     report.check("7g: nothing applied twice: B's change journal has one create of the file written while it was down",
                  _sql(b, f"SELECT count(*) FROM fs_change_log WHERE vault_id = {vb} AND kind = 'create' "
                          "AND name = 'offline.txt'") == "1")
+
+
+def _put(node: Node, args: tuple, text: str) -> subprocess.CompletedProcess:
+    """`vh fs put ... -` on `node` with `text` on stdin (its own exit code, not checked)."""
+    env = [f"VAULTHALLA_CLI_SOCKET={node.inst.socket_path}", "VAULTHALLA_NONINTERACTIVE=1", "PATH=/usr/bin:/bin"]
+    return subprocess.run(["runuser", "-u", node.admin, "--", "env", "-i", *env, node.cli, *args], input=text,
+                          capture_output=True, text=True, timeout=60, cwd=str(node.private))
+
+
+def _http_upload(node: Node, vault_id: int, path: str, data: bytes) -> dict:
+    """The console's HTTP upload lane on `node` (staged as `.upload-http-*.part` next to the target, through the mount on
+    Linux, then committed): as a web account of this node made for the drill (role unprivileged, power_user on the vault), its
+    generated password kept in memory only. Returns {path: error or None}."""
+    import asyncio
+    import re
+    import vhh._repo  # noqa: F401 - tools.lab importable
+    from tools.lab.pentest.client import Target as NetTarget, Ws, ok as ws_ok, upload_files
+
+    name = "drill_web"
+    password = getattr(node, "_drill_web_password", None)
+    if password is None:
+        env = [f"VAULTHALLA_CLI_SOCKET={node.inst.socket_path}", "VAULTHALLA_NONINTERACTIVE=1", "PATH=/usr/bin:/bin"]
+        cp = subprocess.run(["runuser", "-u", node.admin, "--", "env", "-i", *env, node.cli, "user", "create", name,
+                             "--role", "unprivileged", "--email", f"{name}@drill.invalid"],
+                            capture_output=True, text=True, timeout=60, cwd=str(node.private))
+        m = re.search(r"^Password:\s*(\S+)\s*$", cp.stdout, re.M)
+        if cp.returncode != 0 or not m:
+            raise DrillError(f"user create {name} failed (exit {cp.returncode}; output withheld: it may hold a secret)")
+        password = m.group(1)
+        node._drill_web_password = password
+    vault, owner = _sql(node, f"SELECT v.name || '|' || u.name FROM vault v JOIN users u ON u.id = v.owner_id "
+                              f"WHERE v.id = {vault_id}").split("|", 1)
+    node.vh("vault", "role", "assign", vault, "power_user", "-u", name, "--owner", owner, check=False)
+    target = NetTarget(hostname="127.0.0.1", connect_ip="127.0.0.1", ws_port=node.inst.target.ws_port,
+                       http_port=node.inst.target.http_port)
+
+    async def go() -> dict:
+        async with Ws(target) as ws:
+            res = await ws.sign_in(name, password)
+            if not ws_ok(res):
+                return {path: f"sign-in: {res.get('status')} {res.get('error')}"}
+            return upload_files(target, ws.cookie_header(), vault_id, [(path, data)])
+
+    return asyncio.run(go())
+
+
+def _stop(a: Node, b: Node, node_a: str) -> None:
+    """A stops (killed): B's link to its core is down."""
+    a.close()
+    a.inst.proc.kill()
+    a.inst.proc.wait(timeout=30)
+    _wait("B sees the link down", lambda: not _connected(b, node_a) or None, timeout=120)
+
+
+def _start(a: Node, b: Node, node_a: str, node_b: str) -> None:
+    a.inst.restart(kill=True)
+    _wait("the link back on A", lambda: _connected(a, node_b), timeout=180)
+    _wait("the link back on B", lambda: _connected(b, node_a), timeout=60)
+
+
+def _pending_rows(b: Node, vb: int) -> int:
+    return int(_sql(b, f"SELECT count(*) FROM mirror_pending WHERE vault_id = {vb}"))
+
+
+def _changes_on_the_mirror(a: Node, va: int, b: Node, vb: int, faults_b: Path, node_a: str, node_b: str,
+                           report: Report) -> None:
+    """7i to 7o (wave 4 piece B): a change made on B, A's mirror, while the link is up: applied on B at once, submitted
+    to A, executed there as B's person, and confirmed when it comes back in A's log (nothing pending on B, equal
+    digests); a refusal kept as a held change, a clash as a conflict copy, a file open when the link drops kept, pending
+    changes surviving B's restart in order. `vh` has no mkdir, rename, move or delete: those go through B's mount."""
+    hold = faults_b / "mirror-submit-hold"
+
+    def settled(what: str, timeout: float = 120):
+        ok = _wait_synced(a, va, b, vb, what, timeout=timeout)
+        ok = ok and _wait(f"{what}: nothing pending on B", lambda: _pending_rows(b, vb) == 0 or None, timeout=60)
+        return _wait_synced(a, va, b, vb, what, timeout=timeout) if ok else None
+
+    def on_a(rel: str) -> bool:
+        return (a.inst.mount / "whole" / rel).exists()
+
+    # ---- 7i. Folders and names through B's mount
+    b.sh("mkdir MNT/whole/from_b && mkdir MNT/whole/from_b/inner")
+    ok = settled("B's folders on A")
+    report.check("7i: folders made through B's mount appear on A and come back confirmed (equal digests, nothing "
+                 "pending on B)", bool(ok) and on_a("from_b/inner"), json.dumps(ok)[:300])
+    uid_b = _sql(b, "SELECT d.uid FROM fs_entry e JOIN directories d ON d.fs_entry_id = e.id "
+                    f"WHERE e.vault_id = {vb} AND e.path = '/from_b'")
+    report.check("7i: A holds them under the uids B chose",
+                 _sql(a, f"SELECT count(*) FROM directories WHERE uid = '{uid_b}'") == "1")
+    b.sh("mv MNT/whole/from_b/inner MNT/whole/from_b/renamed")
+    ok = settled("B's rename on A")
+    report.check("7i: a rename on B appears on A, confirmed", bool(ok) and on_a("from_b/renamed"), json.dumps(ok)[:300])
+    b.sh("mv MNT/whole/from_b/renamed MNT/whole/docs/renamed_from_b")
+    ok = settled("B's move on A")
+    report.check("7i: a move on B appears on A, confirmed", bool(ok) and on_a("docs/renamed_from_b"),
+                 json.dumps(ok)[:300])
+    b.sh("rmdir MNT/whole/docs/renamed_from_b")
+    ok = settled("B's delete on A")
+    report.check("7i: a delete on B is a delete on A, confirmed", bool(ok) and not on_a("docs/renamed_from_b"),
+                 json.dumps(ok)[:300])
+
+    # ---- 7j. Contents: a file written through B's mount, one put with `vh fs put`, an overwrite of A's file
+    b.sh("head -c 200000 /dev/urandom > MNT/whole/from_b/written.bin")
+    cp = _put(b, ("fs", "put", str(vb), "-", "/from_b/put.txt"), "put on B with vh fs put\n")
+    report.check("7j: `vh fs put` on B stores the file", cp.returncode == 0, (cp.stdout + cp.stderr)[-300:])
+    b.sh("printf 'top, overwritten on B\\n' > MNT/whole/top.txt")
+    ok = settled("B's files on A")
+    same = ok and all(_plain(a, f"whole/{f}") == _plain(b, f"whole/{f}")
+                      for f in ("from_b/written.bin", "from_b/put.txt", "top.txt"))
+    report.check("7j: the files written on B (mount, vh fs put, an overwrite) arrive on A with B's bytes and come back "
+                 "confirmed", bool(same), json.dumps(ok)[:300])
+    report.check("7j: B fetched nothing for its own files (the same generation is on its disk) and keeps no sealed copy",
+                 _sql(b, f"SELECT count(*) FROM mirror_content_pending WHERE vault_id = {vb}") == "0"
+                 and not any((b.inst.backing / ".vh-mirror-pending" / str(vb)).glob("*"))
+                 if (b.inst.backing / ".vh-mirror-pending").exists() else True)
+
+    # ---- 7j. An HTTP upload's staging file (.upload-http-*.part, staged next to the target through the mount on Linux)
+    # is never content, in either direction. On A: the console's HTTP lane (a web account of A's). On B: the same staging
+    # file through B's mount (create, write, seal, remove: the lane's own steps there) around the commit's write (`vh fs
+    # put`), since on a mirrored vault only B's super admins have access and the drill's super admin has no web password
+    # (it is bound to its Linux account): B's staging file is B's scratch, never submitted, and the write is one change.
+    staging_b = "from_b/.upload-http-drill0b-f0.part"
+    b.sh(f"head -c 150000 /dev/urandom > MNT/whole/{staging_b}")
+    staged_rows = _pending_rows(b, vb)
+    cp = _put(b, ("fs", "put", str(vb), "-", "/from_b/uploaded_on_b.txt"), "committed from B's staging\n")
+    b.sh(f"rm MNT/whole/{staging_b}")
+    report.check("7j: B's staging file through the mount is scratch (nothing pending for it); its commit is stored",
+                 staged_rows == 0 and cp.returncode == 0, f"pending {staged_rows}; {(cp.stdout + cp.stderr)[-200:]}")
+    body_a = os.urandom(120_000)
+    errors = _http_upload(a, va, "/docs/uploaded_on_a.bin", body_a)
+    report.check("7j: an HTTP upload on A stores the file", errors == {"/docs/uploaded_on_a.bin": None}, json.dumps(errors))
+    ok = settled("the uploads on both sides")
+    on_b = b.inst.mount / "whole" / "docs" / "uploaded_on_a.bin"
+    report.check("7j: both arrive and come back confirmed",
+                 bool(ok) and _plain(a, "whole/from_b/uploaded_on_b.txt") == _plain(b, "whole/from_b/uploaded_on_b.txt")
+                 and on_b.is_file() and on_b.read_bytes() == body_a, json.dumps(ok)[:300])
+    report.check("7j: B's upload was exactly one change submitted to A (its write), no staging file among them",
+                 _sql(a, f"SELECT count(*) FROM mirror_submission WHERE vault_id = {va} "
+                         "AND payload -> 'args' ->> 'name' = 'uploaded_on_b.txt'") == "1"
+                 and _sql(a, f"SELECT count(*) FROM mirror_submission WHERE vault_id = {va} "
+                             "AND payload::text LIKE '%.upload-http-%'") == "0")
+    report.check("7j: no staging file in A's replication log, on B, or held on B",
+                 _sql(a, f"SELECT count(*) FROM vault_replication_log WHERE vault_id = {va} "
+                         "AND (name LIKE '.upload-http-%' OR state::text LIKE '%.upload-http-%')") == "0"
+                 and _sql(b, f"SELECT count(*) FROM fs_entry WHERE vault_id = {vb} AND name LIKE '.upload-http-%'") == "0"
+                 and _sql(b, f"SELECT count(*) FROM mirror_held WHERE vault_id = {vb} "
+                             "AND args::text LIKE '%.upload-http-%'") == "0")
+
+    # ---- 7k. A refusal: a change submitted after A narrowed what B may do is kept on B as a held change
+    hold.write_text("drill")
+    b.sh("printf 'refused on A\\n' > MNT/whole/from_b/refused.txt")
+    _wait("B's write pending", lambda: _pending_rows(b, vb) >= 1 or None, timeout=30)
+    a.vh("peer", "policy", "set", node_b, "reader")
+    _wait("B's grant (reader)", lambda: (_mirror_info(b, vb).get("grant") or {}).get("role_name") == "reader"
+          or None, timeout=30)
+    hold.unlink()
+    ok = settled("B back at A's state after the refusal")
+    held = [h for h in (_json(b, "mirror", "held")[1].get("held") or [])
+            if h.get("op") == "write" and h.get("state") == "open"]
+    report.check("7k: A refuses it (B's role on the vault): B keeps it as a held change with the reason, its entry back at "
+                 "A's state (the file gone on B), equal digests",
+                 bool(ok) and bool(held) and all(h.get("reason_code") == "denied" for h in held)
+                 and not (b.inst.mount / "whole" / "from_b" / "refused.txt").exists(), json.dumps(held)[:400])
+    report.check("7k: nothing is lost: the held change keeps the person's sealed bytes",
+                 any((b.inst.backing / ".vh-mirror-held" / str(vb) / str(h["id"])).is_file() for h in held),
+                 json.dumps(held)[:400])
+    a.vh("peer", "policy", "set", node_b, "power_user")
+    _wait("B's grant (power_user) again",
+          lambda: (_mirror_info(b, vb).get("grant") or {}).get("role_name") == "power_user" or None, timeout=30)
+
+    # ---- 7l. A name clash: the same name made on both sides; B's becomes its conflict copy
+    hold.write_text("drill")
+    b.sh("mkdir MNT/whole/clash && printf 'mine\\n' > MNT/whole/clash/mine.txt")
+    a.sh("mkdir MNT/whole/clash")
+    hold.unlink()
+    ok = settled("the clash settled")
+    names = _sql(b, f"SELECT string_agg(name, ',' ORDER BY name) FROM fs_entry WHERE vault_id = {vb} "
+                    "AND parent_id = (SELECT id FROM fs_entry WHERE vault_id = " + str(vb) + " AND path = '/') "
+                    "AND name LIKE 'clash%'")
+    report.check("7l: a folder named on both sides: A's keeps the name, B's is its conflict copy with what B put in it, "
+                 "on both servers, equal digests",
+                 bool(ok) and names.startswith("clash,clash (conflict ") and on_a(names.split(",")[1] + "/mine.txt"),
+                 names)
+
+    # ---- 7m. The link drops while a file is open for writing on B: it is kept, and arrives once the link is back
+    script = ("import os, sys, time\n"
+              "f = open(sys.argv[1], 'w')\n"
+              "f.write('written before the link dropped\\n')\n"
+              "f.flush()\n"
+              "while not os.path.exists(sys.argv[2]):\n"
+              "    time.sleep(0.2)\n"
+              "f.close()\n")
+    release = b.private / "close-the-file"
+    release.unlink(missing_ok=True)
+    writer = subprocess.Popen(["runuser", "-u", b.admin, "--", "python3", "-c", script,
+                               str(b.inst.mount / "whole" / "from_b" / "open.txt"), str(release)],
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    _wait("the file open on B", lambda: (b.inst.mount / "whole" / "from_b" / "open.txt").exists() or None, timeout=30)
+    _stop(a, b, node_a)
+    cp = subprocess.run(["runuser", "-u", b.admin, "--", "timeout", "30", "sh", "-c",
+                         f"printf no > '{b.inst.mount}/whole/from_b/new_while_down.txt'"], capture_output=True, text=True)
+    report.check("7m: with the link down a new write on B is refused (EROFS)",
+                 cp.returncode != 0 and "Read-only file system" in (cp.stdout + cp.stderr), (cp.stdout + cp.stderr)[-200:])
+    release.write_text("now")
+    out, _ = writer.communicate(timeout=60)
+    release.unlink(missing_ok=True)
+    report.check("7m: the file open for writing when the link dropped is sealed and kept as pending on B",
+                 writer.returncode == 0 and _pending_rows(b, vb) >= 1, f"exit {writer.returncode}: {out[-200:]}")
+    _start(a, b, node_a, node_b)
+    ok = settled("the kept file arriving on A")
+    report.check("7m: once the link is back it arrives on A with its bytes, confirmed",
+                 bool(ok) and _plain(a, "whole/from_b/open.txt") == _plain(b, "whole/from_b/open.txt"),
+                 json.dumps(ok)[:300])
+
+    # ---- 7n. B restarts with pending changes: they survive and go in order
+    hold.write_text("drill")
+    b.sh("mkdir MNT/whole/order && mkdir MNT/whole/order/second && printf 'third\\n' > MNT/whole/order/second/third.txt")
+    _wait("B's three changes pending", lambda: _pending_rows(b, vb) >= 3 or None, timeout=30)
+    b.close()
+    b.inst.restart(kill=True)
+    _wait("the link back on B", lambda: _connected(b, node_a), timeout=180)
+    report.check("7n: B's pending changes survived its restart", _pending_rows(b, vb) >= 3)
+    hold.unlink()
+    ok = settled("B's pending changes after its restart")
+    report.check("7n: then they are submitted in order and confirmed (the folder before what is in it)",
+                 bool(ok) and on_a("order/second/third.txt"), json.dumps(ok)[:300])
+    report.check("7n: A executed them in the order B made them",
+                 _sql(a, f"SELECT string_agg(payload ->> 'op', ',' ORDER BY seq) FROM mirror_submission WHERE vault_id = {va} "
+                         "AND payload -> 'args' ->> 'name' IN ('order', 'second', 'third.txt')").startswith("mkdir,mkdir,write"))
 
 
 def _down_and_back(a: Node, b: Node, node_a: str, node_b: str, change) -> None:

@@ -1,5 +1,5 @@
-// ws book: peer.mirror.tree, peer.mirror.log, peer.mirror.ack, peer.mirror.notify (core/src/protocols/ws/handler/
-// MirrorFollow.cpp; mirror::follow::Protocol; design/peers/mirror.md "As built: following the core"). The server
+// ws book: peer.mirror.tree, peer.mirror.log, peer.mirror.ack, peer.mirror.notify, peer.mirror.submit
+// (core/src/protocols/ws/handler/MirrorFollow.cpp; mirror::follow::Protocol; design/peers/mirror.md "As built: following the core"). The server
 // mirror's data plane, between the two linked servers of a mirrored vault only ("peer": a linked server's own Peer
 // session). Experimental: refused with peers_experimental while peers.experimental is off. A vault the caller is not
 // the linked server of (or no such vault) answers not_found, exactly as the sealed lane does. Every answer stays under
@@ -37,7 +37,10 @@ std::vector<WsField> mfGroupFields() {
                                                               "vault", "key", "history"}),
                                              str("uid").nullable(), str("type").nullable(), object("state"),
                                              str("entry_hash").nullable(), str("prev_hash").nullable(),
-                                             object("actor", "", {str("node"), uinteger("id")}).nullable()}))
+                                             object("actor", "", {str("node"), uinteger("id")}).nullable(),
+                                             str("origin").nullable().desc(
+                                                 "The mirror's request id when the change was one it submitted "
+                                                 "(peer.mirror.submit).")}))
                 .desc("The group's log rows in order (vault_replication_log: state documents, 64-hex hashes).")};
 }
 
@@ -110,6 +113,53 @@ std::vector<WsCommandUsage> mirrorFollowCommands() {
         .payload = {mfVaultUid(), mfTerm(), mfSeq()},
         .response = {},
         .refusal_codes = mfRefusals(),
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "peer.mirror.submit",
+        .description = "A change made on the mirror, submitted to the core, which executes it as that person (the "
+                       "linked server's vault role is the ceiling) and logs it with the request id in `origin`. "
+                       "Answered at once: a new request is queued and executed in order on the core; asked again with "
+                       "the same request id, the core answers what it did the first time (never twice): running, "
+                       "executed with the number of groups it logged, or refused with the code (conflict: the name "
+                       "was taken; anything else is kept on the mirror as a held change).",
+        .auth = "peer",
+        .payload = {mfVaultUid(),
+                    str("request_id").gen(gen::ref("mirror.submit", {"request_id"}))
+                        .desc("The mirror's id for the change (8-64 lower-case letters, digits or -)."),
+                    object("person", "", {str("node").desc("The mirror's node id."),
+                                          uinteger("id").desc("The person's account id on the mirror.")})
+                        .gen(gen::ref("mirror.person", {"node", "id"})),
+                    mfPosition("at").gen(gen::ref("mirror.position", {"term", "seq"}))
+                        .desc("The position the mirror had applied when it submitted."),
+                    str("op").oneOf({"mkdir", "move", "rename", "remove", "copy", "write", "setattr"}),
+                    str("entry_uid").gen(gen::ref("mirror.entry", {"uid"}))
+                        .desc("The entry the change is on (UUID text); a created folder's uid, chosen by the mirror."),
+                    object("args", "", {str("uid").opt().desc("The entry's uid, as entry_uid."),
+                                        str("parent_uid").opt().desc("The destination folder's uid (the vault's uid "
+                                                                     "for its root)."),
+                                        str("name").opt().desc("The entry's name there."),
+                                        boolean("replace").opt().desc("move, rename: an entry at the destination goes "
+                                                                      "first (rename(2) over it)."),
+                                        str("base").opt().desc("write: the generation a replacement was based on "
+                                                               "(absent: a create)."),
+                                        str("generation").opt().desc("write: the new generation (its sealed bytes "
+                                                                     "were PUT on the sealed lane first)."),
+                                        uinteger("key_version").opt(), uinteger("size").opt().desc("write: plaintext."),
+                                        str("content_hash").opt().desc("write: BLAKE2b of the sealed bytes."),
+                                        str("mime").opt(),
+                                        uinteger("mode").opt().desc("setattr: the permission bits."),
+                                        integer("mtime_us").opt().desc("setattr: the modification time.")})
+                        .opt().desc("Where the entry goes (mkdir, move, rename, copy), a write's contents, "
+                                    "setattr's values."),
+                    str("base_generation").opt().desc("The generation the change was based on (contents).")},
+        .response = {str("status").oneOf({"queued", "running", "executed", "refused"}),
+                     uinteger("groups").opt().desc("executed: the groups the core logged for it."),
+                     str("code").opt().desc("refused (or executed in part): the refusal's code."),
+                     str("error").opt(), mfCoreState()},
+        .refusal_codes = {"denied", "invalid", "not_found", "unauthorized", "peers_experimental", "peer_revoked",
+                          "mirror_not_live", "contents_missing"},
         .client_timeout = kDefaultTimeout,
     });
 

@@ -116,9 +116,9 @@ std::string_view to_string(const State state) noexcept {
 }
 
 bool acceptsLocalChanges() noexcept {
-    // Piece A: a mirror is strictly read-only until piece B builds the pending path (applied locally, sent to the core,
-    // confirmed through the log or reverted and kept). Piece B flips this.
-    return false;
+    // Piece B: a Live mirror's changes are applied here as pending, sent to the core, and confirmed through the log or
+    // reverted and kept (mirror::submit).
+    return true;
 }
 
 std::optional<Facts> facts(const uint32_t vaultId) {

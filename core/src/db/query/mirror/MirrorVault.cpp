@@ -321,6 +321,11 @@ bool MirrorVaults::remove(const uint32_t vaultId) {
         txn.exec("DELETE FROM vault_replication_log WHERE vault_id = $1", pqxx::params{vaultId});
         txn.exec("DELETE FROM mirror_entry_hash WHERE vault_id = $1", pqxx::params{vaultId});
         txn.exec("DELETE FROM mirror_baseline WHERE vault_id = $1", pqxx::params{vaultId});
+        // Migration 166: the core forgets what its mirror submitted; a mirror's changes still pending become ordinary
+        // changes of the vault (nothing is dirty any more); held changes stay listed until discarded.
+        txn.exec("DELETE FROM mirror_submission WHERE vault_id = $1", pqxx::params{vaultId});
+        txn.exec("DELETE FROM mirror_pending WHERE vault_id = $1", pqxx::params{vaultId});
+        txn.exec("DELETE FROM mirror_dirty WHERE vault_id = $1", pqxx::params{vaultId});
         return gone > 0;
     }));
 }

@@ -8,6 +8,7 @@
 #include "db/query/fs/Entry.hpp"
 #include "db/query/mirror/Apply.hpp"
 #include "db/query/mirror/Contents.hpp"
+#include "db/query/mirror/Pending.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
@@ -16,6 +17,8 @@
 #include "fuse/WorkingCopies.hpp"
 #include "log/Registry.hpp"
 #include "mirror/access/Access.hpp"
+#include "mirror/submit/Contents.hpp"
+#include "mirror/submit/Local.hpp"
 #include "ops/Error.hpp"
 #include "paths.h"
 #include "runtime/Deps.hpp"
@@ -68,12 +71,19 @@ struct Change {
     std::optional<vh::mirror::Hash> expect;       // the compare-and-set (none: nothing recorded)
     std::optional<vh::mirror::Hash> resultHash;   // the core's hash of the result (Live, Trashed)
     std::optional<vh::mirror::Hash> lastHash;     // within a group: the hash the chain is at
+    // Not the core's change but this server's own entry brought into line (a change made here and still pending:
+    // mirror::submit). revert: back to the state the core last confirmed for it (mirror_dirty), its hash the one
+    // recorded; aside: renamed to its conflict name so that the core's entry can take the name (its fields, hash and
+    // digest untouched: it stays pending).
+    bool revert{false};
+    bool aside{false};
 };
 
 struct Batch {
     bool copy{false};
     std::vector<Change> changes;
     std::vector<json> vaultDocs, keyDocs;
+    std::optional<std::string> origin;   // the request id of a change this group carries out for a mirror
 };
 
 // Thrown inside the transaction: everything rolls back, then the vault stops (Diverged, Stopped with a state) or the
@@ -127,6 +137,7 @@ struct Effects {
     std::vector<uint32_t> createdDirs;
     std::vector<uint32_t> contentChanged;
     std::vector<uint32_t> live;
+    std::vector<uint64_t> confirmed;   // pending changes confirmed: their sealed bytes leave the pending store
     bool vaultChanged{false};
 };
 
@@ -203,6 +214,7 @@ Batch fromGroup(const LogGroup& g) {
     Batch b;
     std::map<std::string, std::size_t> index;
     for (const auto& row : g.rows) {
+        if (row.origin && !b.origin) b.origin = row.origin;
         if (row.op == "vault") {
             b.vaultDocs.push_back(row.state);
             continue;
@@ -215,6 +227,7 @@ Batch fromGroup(const LogGroup& g) {
             row.op != "delete")
             throw Halt{Status::Stopped, "stopped", "mirror_unknown_op",
                        {{"op", row.op}, {"seq", row.seq}, {"why", "this server cannot apply this kind of change"}}};
+        if (row.origin && !b.origin) b.origin = row.origin;
         if (!row.uid) diverge("mirror_log_malformed", {{"seq", row.seq}, {"why", "a change without an entry uid"}});
         auto [it, fresh] = index.emplace(*row.uid, b.changes.size());
         if (fresh) {
@@ -274,9 +287,395 @@ struct Run {
     const Batch* batch{};
     const TreePage* page{};
     const LogGroup* group{};
+    // Settling entries a pending change held (mirror::submit): no order, no position, no digest moves.
+    const std::vector<std::string>* settle{};
+    const std::function<void(pqxx::work&)>* also{};
     std::map<std::string, Before> before;
     ta::Target target;
 };
+
+// Where one change's entry is in this transaction, and what is left to do for it.
+struct Work {
+    std::optional<ta::Located> cur;
+    std::optional<uint32_t> liveId;
+    bool remove{false}, place{false}, parked{false}, created{false};
+};
+
+// One transaction's changes: the batch's, then this server's own entries brought into line as the work needs them
+// (reverts, entries set aside), in one list so the placement loop sees them all.
+struct Pass {
+    pqxx::work& txn;
+    Run& run;
+    Accounts& accounts;
+    uint32_t root{};
+    Effects& fx;
+    std::vector<Change> changes;
+    std::vector<Work> work;
+    std::map<std::string, vh::mirror::Hash> recorded;
+    std::map<std::string, mq::DirtyEntry> dirty;
+    std::set<std::string> listed;   // uids in `changes`
+    std::vector<std::size_t> placed;
+
+    Pass(pqxx::work& t, Run& r, Accounts& a, const uint32_t rootId, Effects& effects)
+        : txn(t), run(r), accounts(a), root(rootId), fx(effects) {}
+
+    [[nodiscard]] std::optional<vh::mirror::Hash> recordedOf(const std::string& uid) const {
+        const auto it = recorded.find(uid);
+        return it == recorded.end() ? std::nullopt : std::optional<vh::mirror::Hash>(it->second);
+    }
+};
+
+ta::Located::Kind kindOfType(const std::string& type) {
+    return type == "directory" ? ta::Located::Kind::Directory
+           : type == "symlink" ? ta::Located::Kind::Symlink
+                               : ta::Located::Kind::File;
+}
+
+std::string typeOfKind(const ta::Located::Kind k) {
+    return k == ta::Located::Kind::Directory ? "directory" : k == ta::Located::Kind::Symlink ? "symlink" : "file";
+}
+
+// Where change `i` stands now, and the trash rows it ends, updates or writes; what is left to remove or place.
+std::size_t setUp(Pass& p, const std::size_t i) {
+    const auto& c = p.changes[i];
+    auto& w = p.work[i];
+    const auto vaultId = p.run.vaultId;
+    w.cur = ta::locate(p.txn, vaultId, c.uid);
+    const bool held = p.recorded.contains(c.uid);
+    // A change made here and still pending may have created, removed or trashed the entry: its tables are this
+    // server's own until the core's state replaces them.
+    if (held != w.cur.has_value() && !p.dirty.contains(c.uid) && !c.aside)
+        diverge(held ? "mirror_entry_missing" : "mirror_entry_unrecorded",
+                {{"uid", c.uid},
+                 {"why", held ? "the entry this server recorded is not in its tables"
+                              : "this server's tables hold an entry it never recorded"}});
+    if (w.cur && !w.cur->trashed) {
+        w.liveId = w.cur->id;
+        if (c.outcome == Outcome::Live && kindOfType(c.type) != w.cur->kind)
+            diverge("mirror_type_mismatch", {{"uid", c.uid}, {"type", c.type}});
+    }
+    const bool live = w.cur && !w.cur->trashed;
+    const bool trashed = w.cur && w.cur->trashed;
+    if (live && c.outcome != Outcome::Live) w.remove = true;
+    if (trashed && c.outcome == Outcome::Gone) mq::ApplyRows::endTrash(p.txn, w.cur->id);
+    if (trashed && c.outcome == Outcome::Trashed) mq::ApplyRows::updateTrash(p.txn, w.cur->id, trashOf(vaultId, c, p.accounts));
+    if (!w.cur && c.outcome == Outcome::Trashed) {
+        auto t = trashOf(vaultId, c, p.accounts);
+        t.alias = freshAlias(t.path + ":" + c.uid);
+        mq::ApplyRows::insertTrash(p.txn, t);
+    }
+    if (c.outcome == Outcome::Live) {
+        if (!live) {
+            if (trashed) mq::ApplyRows::endTrash(p.txn, w.cur->id);   // restored: its trash row ends
+            w.place = w.created = true;
+        } else if (w.cur->parent_uid != text(c.state, "parent") || w.cur->name != text(c.state, "name")) {
+            w.place = true;
+        }
+    }
+    return (w.remove ? 1 : 0) + (w.place ? 1 : 0);
+}
+
+// This server's entry `uid`, held dirty by a pending change and not part of the work yet, back to the state the core
+// last confirmed for it. False when it is not dirty or already listed. `setUpNow`: the placement loop is running (it
+// counts what is left in `pending`); otherwise the next placeAll sets it up.
+bool addRevert(Pass& p, const std::string& uid, std::size_t& pending, const bool setUpNow = true) {
+    if (p.listed.contains(uid)) return false;
+    const auto d = p.dirty.find(uid);
+    if (d == p.dirty.end()) return false;
+    for (const auto& [u, h] : mq::ApplyRows::recordedHashes(p.txn, p.run.vaultId, {uid})) p.recorded[u] = h;
+    Change c;
+    c.uid = uid;
+    c.revert = true;
+    c.outcome = d->second.kind == "live" ? Outcome::Live : d->second.kind == "trashed" ? Outcome::Trashed : Outcome::Gone;
+    c.state = d->second.confirmed.is_object() ? d->second.confirmed : json{{"uid", uid}};
+    const auto now = ta::locate(p.txn, p.run.vaultId, uid);
+    c.type = c.state.value("type", now ? typeOfKind(now->kind) : std::string("file"));
+    c.expect = p.recordedOf(uid);
+    c.resultHash = p.recordedOf(uid);
+    p.changes.push_back(std::move(c));
+    p.work.emplace_back();
+    p.listed.insert(uid);
+    if (setUpNow) pending += setUp(p, p.changes.size() - 1);
+    return true;
+}
+
+// This server's entry `occupantId` (dirty, pending here, not part of the work) holds the name the core's entry needs:
+// it steps aside to its conflict name in the same folder and stays pending (the core will refuse its change for the
+// name, and mirror::submit then resubmits it under this name).
+bool setAside(Pass& p, const uint32_t occupantId, std::size_t& pending) {
+    const auto uid = mq::Pending::uidOfEntry(p.txn, occupantId);
+    if (!uid || p.listed.contains(*uid) || !p.dirty.contains(*uid)) return false;
+    const auto now = ta::locate(p.txn, p.run.vaultId, *uid);
+    if (!now || now->trashed || !now->parent_uid) return false;
+    const auto aside = vh::mirror::submit::conflictName(now->name, *uid, now->kind == ta::Located::Kind::Directory);
+    if (aside == now->name || mq::ApplyRows::named(p.txn, *now->parent_id, aside)) return false;
+    Change c;
+    c.uid = *uid;
+    c.aside = true;
+    c.outcome = Outcome::Live;
+    c.type = typeOfKind(now->kind);
+    c.state = {{"uid", *uid}, {"type", c.type}, {"parent", *now->parent_uid}, {"name", aside}};
+    p.changes.push_back(std::move(c));
+    p.work.emplace_back();
+    p.listed.insert(*uid);
+    pending += setUp(p, p.changes.size() - 1);
+    return true;
+}
+
+// Removes and places every change from `from` on, repeating until done; a swap or a cycle of names goes through a
+// temporary name; this server's pending entries in the way are brought back or set aside.
+void placeAll(Pass& p, const std::size_t from) {
+    auto& txn = p.txn;
+    const auto vaultId = p.run.vaultId;
+    std::size_t pending = 0;
+    for (std::size_t i = from; i < p.changes.size(); ++i) pending += setUp(p, i);
+
+    const auto parentIdFor = [&](const json& state) -> std::optional<uint32_t> {
+        const auto parent = text(state, "parent");
+        if (!parent) return std::nullopt;
+        if (*parent == p.run.vaultUid) return p.root;
+        const auto at = ta::locate(txn, vaultId, *parent);
+        if (!at || at->trashed || at->kind != ta::Located::Kind::Directory) return std::nullopt;
+        return at->id;
+    };
+    const auto indexOfLive = [&](const uint32_t id) -> std::optional<std::size_t> {
+        for (std::size_t j = from; j < p.work.size(); ++j)
+            if (p.work[j].liveId == id) return j;
+        return std::nullopt;
+    };
+
+    while (pending > 0) {
+        bool progress = false;
+        for (std::size_t i = from; i < p.changes.size(); ++i) {
+            // `p.changes` grows inside the loop (reverts, entries set aside): after one is added, `c` is not used again.
+            const auto& c = p.changes[i];
+            if (p.work[i].remove) {
+                if (c.type == "directory" && mq::ApplyRows::childCount(txn, *p.work[i].liveId) > 0) {
+                    // Entries made or moved in here by a change still pending here go back to where the core has them.
+                    for (const auto child : mq::ApplyRows::children(txn, *p.work[i].liveId))
+                        if (const auto uid = mq::Pending::uidOfEntry(txn, child))
+                            progress = addRevert(p, *uid, pending) || progress;
+                    continue;
+                }
+                auto& w = p.work[i];
+                const auto& b = p.run.before[c.uid];
+                const auto parent = w.cur->parent_id;
+                std::filesystem::path backing;
+                if (b.entry && b.located && b.located->id == *w.liveId) backing = b.entry->backing_path;
+                mq::ApplyRows::removeEntry(txn, *w.liveId);
+                if (c.outcome == Outcome::Trashed) {
+                    auto t = trashOf(vaultId, c, p.accounts);
+                    t.backing_path = backing.string();
+                    t.alias = w.cur->base32_alias.empty() ? freshAlias(t.path + ":" + c.uid) : w.cur->base32_alias;
+                    mq::ApplyRows::insertTrash(txn, t);
+                }
+                p.fx.removed.push_back({.id = *w.liveId, .kind = w.cur->kind, .backing = backing, .path = w.cur->path,
+                                        .parent = parent});
+                w.liveId.reset();
+                w.remove = false;
+                --pending;
+                progress = true;
+            } else if (p.work[i].place) {
+                const auto pid = parentIdFor(c.state);
+                if (!pid) {
+                    // Its folder was removed here by a change still pending: the folder comes back as the core has it.
+                    if (const auto parent = text(c.state, "parent")) progress = addRevert(p, *parent, pending) || progress;
+                    continue;
+                }
+                const auto name = text(c.state, "name").value_or("");
+                if (name.empty()) diverge("mirror_tree_malformed", {{"uid", c.uid}, {"why", "an entry without a name"}});
+                const auto occupant = mq::ApplyRows::named(txn, *pid, name);
+                if (occupant && occupant != p.work[i].liveId) {
+                    if (!c.aside && !c.revert && !indexOfLive(*occupant)) progress = setAside(p, *occupant, pending) || progress;
+                    continue;
+                }
+                auto& w = p.work[i];
+                if (w.created) {
+                    const auto path = joinVaultPath(mq::ApplyRows::pathOf(txn, *pid), name);
+                    mq::NewEntry e{.vault_id = vaultId,
+                                   .parent_id = *pid,
+                                   .name = name,
+                                   .path = path,
+                                   .type = c.type,
+                                   .uid = c.uid,
+                                   .alias = freshAlias(name),
+                                   .fields = fieldsOf(c.state, p.accounts)};
+                    // The cache hands out inodes by path: an entry that stepped aside from this path in this
+                    // transaction still holds the one it had, and this one is given its own after the commit.
+                    if (p.run.target.cache)
+                        if (const auto inode = p.run.target.cache->assignInode(p.run.target.fuse(path));
+                            !mq::ApplyRows::inodeTaken(txn, inode))
+                            e.inode = inode;
+                    w.liveId = mq::ApplyRows::insertEntry(txn, e);
+                    if (c.type == "directory") p.fx.createdDirs.push_back(*w.liveId);
+                } else {
+                    if (c.type == "directory" && mq::ApplyRows::within(txn, *pid, *w.liveId)) continue;
+                    mq::ApplyRows::moveEntry(txn, *w.liveId, *pid, name);
+                }
+                p.placed.push_back(i);
+                w.place = false;
+                --pending;
+                progress = true;
+            }
+        }
+        if (progress || pending == 0) continue;
+        // A swap or a cycle of names: one entry that is in the way and moves (or goes) in this group steps aside.
+        for (std::size_t i = from; i < p.changes.size() && !progress; ++i) {
+            if (!p.work[i].place) continue;
+            const auto pid = parentIdFor(p.changes[i].state);
+            if (!pid) continue;
+            const auto occupant = mq::ApplyRows::named(txn, *pid, text(p.changes[i].state, "name").value_or(""));
+            if (!occupant) continue;
+            const auto j = indexOfLive(*occupant);
+            if (!j || p.work[*j].parked || !(p.work[*j].place || p.work[*j].remove)) continue;
+            const auto parent = db::query::fs::Directory::parentIdOf(txn, *occupant);
+            if (!parent) continue;
+            mq::ApplyRows::moveEntry(txn, *occupant, *parent, ".vh-mirror-" + p.changes[*j].uid);
+            p.work[*j].parked = true;
+            p.placed.push_back(*j);
+            progress = true;
+        }
+        if (progress) continue;
+        for (std::size_t i = from; i < p.changes.size(); ++i)
+            if (p.work[i].place || p.work[i].remove)
+                diverge("mirror_cannot_apply",
+                        {{"uid", p.changes[i].uid},
+                         {"why", p.work[i].remove ? "a folder the core removed still holds entries here"
+                                                  : "the entry's place does not exist here or is taken by an entry the "
+                                                    "change does not move"},
+                         {"parent", text(p.changes[i].state, "parent").value_or("")},
+                         {"name", text(p.changes[i].state, "name").value_or("")}});
+    }
+}
+
+// The replicated fields, the paths of what moved, the contents expected and each entry's hash (the core's, or the
+// vault has diverged), for every change from `from` on; the digest moves.
+void finishAll(Pass& p, const std::size_t from, vh::mirror::Digest& digest) {
+    auto& txn = p.txn;
+    const auto vaultId = p.run.vaultId;
+    for (std::size_t i = from; i < p.changes.size(); ++i) {
+        const auto& c = p.changes[i];
+        if (c.aside || c.outcome != Outcome::Live || !p.work[i].liveId) continue;
+        mq::ApplyRows::updateEntry(txn, *p.work[i].liveId, c.type, fieldsOf(c.state, p.accounts));
+    }
+    std::vector<std::pair<uint32_t, uint32_t>> byDepth;   // (depth, id)
+    std::set<uint32_t> seen;
+    for (const auto i : p.placed)
+        if (i >= from && p.work[i].liveId && seen.insert(*p.work[i].liveId).second)
+            byDepth.emplace_back(mq::ApplyRows::depthOf(txn, *p.work[i].liveId), *p.work[i].liveId);
+    std::ranges::sort(byDepth);
+    for (const auto& [depth, id] : byDepth) mq::ApplyRows::rewritePath(txn, id);
+    for (std::size_t i = from; i < p.changes.size(); ++i) {
+        const auto& c = p.changes[i];
+        const auto& w = p.work[i];
+        if (!w.cur || w.cur->trashed || !w.liveId) continue;
+        if (w.cur->parent_id && seen.contains(*w.liveId)) {
+            const auto& b = p.run.before[c.uid];
+            if (b.entry && b.located && b.located->id == *w.liveId)
+                p.fx.moved.push_back({.id = *w.liveId, .kind = w.cur->kind, .oldBacking = b.entry->backing_path,
+                                      .oldPath = w.cur->path, .oldParent = w.cur->parent_id});
+        }
+    }
+
+    // ---- contents: a generation this server does not hold is expected (wave 2's lane fetches it)
+    for (std::size_t i = from; i < p.changes.size(); ++i) {
+        const auto& c = p.changes[i];
+        const auto& w = p.work[i];
+        if (c.type != "file" || c.aside) continue;
+        const auto objectUid = vh::crypto::id::fromUuid(c.uid);
+        if (c.outcome != Outcome::Live) {
+            vh::db::query::mirror::PendingContents::forget(txn, vaultId, objectUid);
+            continue;
+        }
+        const auto generation = text(c.state, "generation").value_or("");
+        // The bytes on this disk are those of the entry as it was before this transaction (a revert or a pending entry
+        // may have moved it within it).
+        const auto b = p.run.before.find(c.uid);
+        const auto& was = b != p.run.before.end() && b->second.located ? b->second.located : w.cur;
+        const bool wasLive = was && !was->trashed;
+        if (wasLive && was->generation == generation) continue;   // the same bytes
+        mq::Expected e;
+        e.vault_id = vaultId;
+        e.object_uid = objectUid;
+        e.generation = generation;
+        e.key_version = static_cast<uint32_t>(integer(c.state, "key_version").value_or(0));
+        e.size_bytes = static_cast<uint64_t>(integer(c.state, "size").value_or(0));
+        e.content_hash = text(c.state, "content_hash").value_or("");
+        e.mtime_us = integer(c.state, "modified_at").value_or(0);
+        try {
+            vh::db::query::mirror::PendingContents::expect(txn, e);
+        } catch (const ops::Invalid& why) {
+            throw Halt{Status::Stopped, "stopped", "mirror_content_unexpected",
+                       {{"uid", c.uid}, {"why", why.what()}}};
+        }
+        if (wasLive && w.liveId) p.fx.contentChanged.push_back(*w.liveId);
+    }
+
+    // ---- each entry's hash from this server's own tables: the core's, or the vault has diverged
+    for (std::size_t i = from; i < p.changes.size(); ++i) {
+        const auto& c = p.changes[i];
+        const auto& w = p.work[i];
+        if (c.aside) {
+            if (w.liveId) p.fx.live.push_back(*w.liveId);
+            continue;
+        }
+        std::optional<vh::mirror::Hash> own;
+        if (c.outcome == Outcome::Live && w.liveId) own = mq::ApplyRows::liveHash(txn, *w.liveId);
+        else if (c.outcome == Outcome::Trashed) own = mq::ApplyRows::trashHash(txn, vaultId, c.uid);
+        if (own != c.resultHash)
+            diverge(c.revert ? "mirror_revert_mismatch" : "mirror_apply_mismatch",
+                    {{"uid", c.uid}, {"core_hash", hexOr(c.resultHash)}, {"mirror_hash", hexOr(own)},
+                     {"core_state", c.state},
+                     {"mirror_state", w.liveId ? mq::ApplyRows::liveState(txn, *w.liveId) : json(nullptr)},
+                     {"why", c.revert ? "this server's entry did not come back to the state the core last confirmed"
+                                      : "this server's copy of the entry is not what the core holds after the change"}});
+        if (const auto prior = p.recordedOf(c.uid)) digest.remove(*prior);
+        if (own) digest.add(*own);
+        mq::ApplyRows::setRecordedHash(txn, vaultId, c.uid, own);
+        if (own) p.recorded[c.uid] = *own;
+        else p.recorded.erase(c.uid);
+        // What the core confirmed for an entry a pending change holds: the state it now comes back to.
+        if (!c.revert && p.dirty.contains(c.uid)) {
+            const std::string kind = c.outcome == Outcome::Live ? "live" : c.outcome == Outcome::Trashed ? "trashed" : "none";
+            const auto state = kind == "none" ? json(nullptr) : c.state;
+            mq::Pending::confirm(txn, vaultId, c.uid, kind, state);
+            p.dirty[c.uid].kind = kind;
+            p.dirty[c.uid].confirmed = state;
+        }
+        if (w.liveId) p.fx.live.push_back(*w.liveId);
+    }
+}
+
+// The entries of a settled change (confirmed, refused, or executed with nothing to apply) that no other pending change
+// holds: each back to what the core confirmed, where its tables differ from it, then clean.
+void settleAll(Pass& p, const std::vector<std::string>& uids, const uint64_t settledId, vh::mirror::Digest& digest) {
+    std::vector<std::string> clean;
+    for (const auto& uid : uids)
+        if (p.dirty.contains(uid) && !mq::Pending::held(p.txn, p.run.vaultId, uid, settledId)) clean.push_back(uid);
+    if (clean.empty()) return;
+    const auto from = p.changes.size();
+    std::size_t ignored = 0;
+    for (const auto& uid : clean) {
+        // Listed already in this transaction (the group just applied it): its tables are the core's state now.
+        if (p.listed.contains(uid)) continue;
+        for (const auto& [u, h] : mq::ApplyRows::recordedHashes(p.txn, p.run.vaultId, {uid})) p.recorded[u] = h;
+        const auto at = ta::locate(p.txn, p.run.vaultId, uid);
+        std::optional<vh::mirror::Hash> own;
+        if (at && !at->trashed) own = mq::ApplyRows::liveHash(p.txn, at->id);
+        else if (at) own = mq::ApplyRows::trashHash(p.txn, p.run.vaultId, uid);
+        if (own == p.recordedOf(uid)) continue;
+        (void)addRevert(p, uid, ignored, false);
+    }
+    if (p.changes.size() > from) {
+        placeAll(p, from);
+        finishAll(p, from, digest);
+    }
+    for (const auto& uid : clean) {
+        if (mq::Pending::held(p.txn, p.run.vaultId, uid, settledId)) continue;
+        mq::Pending::clean(p.txn, p.run.vaultId, uid);
+        p.dirty.erase(uid);
+    }
+}
 
 Committed applyInTransaction(pqxx::work& txn, Run& run) {
     Committed out;
@@ -294,9 +693,11 @@ Committed applyInTransaction(pqxx::work& txn, Run& run) {
     result.at = mv->position();
     result.digest = mv->digest;
 
-    // ---- the order: the next page or group, exactly once
+    // ---- the order: the next page or group, exactly once (a settle has none)
     uint64_t lastOrd = mv->copy_cursor;
-    if (batch.copy) {
+    if (run.settle) {
+        if (!mv->copy_finished) throw Halt{Status::NotNext, "", "mirror_copy_unfinished", json::object()};
+    } else if (batch.copy) {
         if (mv->copy_finished) throw Halt{Status::AlreadyApplied, "", "mirror_copy_finished", json::object()};
         const auto& page = *run.page;
         if (!page.items.empty() && page.items.front().ord > mv->copy_cursor + 1)
@@ -325,19 +726,26 @@ Committed applyInTransaction(pqxx::work& txn, Run& run) {
             throw Halt{Status::NotNext, "", "mirror_group_gap", {{"last_seq", mv->last_seq}, {"first_seq", g.first_seq}}};
     }
 
-    // ---- the compare-and-set, per uid against the hash this server recorded
+    Accounts accounts(txn, run.ownNode);
+    const auto root = mq::ApplyRows::rootOf(txn, vaultId);
+    if (!root) throw Halt{Status::Gone, "", "mirror_vault_root_missing", json::object()};
+    Pass p(txn, run, accounts, *root, fx);
+    p.changes = batch.changes;
+    p.work.resize(p.changes.size());
+    for (const auto& c : p.changes) p.listed.insert(c.uid);
+
+    // ---- the compare-and-set, per uid against the hash this server recorded (what the core last confirmed: a
+    // change made here and still pending never moves it)
     std::vector<std::string> uids, fileUids;
-    for (const auto& c : batch.changes) {
+    for (const auto& c : p.changes) {
         uids.push_back(c.uid);
         if (c.type == "file") fileUids.push_back(c.uid);
     }
     std::ranges::sort(fileUids);
     mq::ApplyRows::lockPending(txn, vaultId, fileUids);
-    const auto recorded = mq::ApplyRows::recordedHashes(txn, vaultId, uids);
-    for (const auto& c : batch.changes) {
-        const auto it = recorded.find(c.uid);
-        const std::optional<vh::mirror::Hash> held = it == recorded.end() ? std::nullopt
-                                                                          : std::optional<vh::mirror::Hash>(it->second);
+    p.recorded = mq::ApplyRows::recordedHashes(txn, vaultId, uids);
+    for (const auto& c : p.changes) {
+        const auto held = p.recordedOf(c.uid);
         if (held != c.expect)
             diverge("mirror_compare_mismatch",
                     {{"uid", c.uid}, {"expected", hexOr(c.expect)}, {"found", hexOr(held)},
@@ -352,7 +760,7 @@ Committed applyInTransaction(pqxx::work& txn, Run& run) {
                        {{"version", version ? json(*version) : json(nullptr)},
                         {"why", "the core uses a key version this server does not hold"}}};
     }
-    for (const auto& c : batch.changes)
+    for (const auto& c : p.changes)
         if (c.outcome == Outcome::Live && c.type == "file" && !text(c.state, "generation").value_or("").empty()) {
             const auto version = integer(c.state, "key_version").value_or(0);
             if (!mq::ApplyRows::keyHeld(txn, vaultId, static_cast<uint32_t>(version)))
@@ -361,235 +769,32 @@ Committed applyInTransaction(pqxx::work& txn, Run& run) {
                             {"why", "a file is sealed under a key version this server does not hold"}}};
         }
 
-    Accounts accounts(txn, run.ownNode);
-    const auto root = mq::ApplyRows::rootOf(txn, vaultId);
-    if (!root) throw Halt{Status::Gone, "", "mirror_vault_root_missing", json::object()};
+    // ---- the entries changes made here and still pending hold, with what the core last confirmed for each
+    if (mv->copy_finished) p.dirty = mq::Pending::dirty(txn, vaultId);
 
-    // ---- where each entry is now (in this transaction), against what was recorded
-    struct Work {
-        std::optional<ta::Located> cur;
-        std::optional<uint32_t> liveId;
-        bool remove{false}, place{false}, parked{false}, created{false};
-    };
-    std::vector<Work> work(batch.changes.size());
-    for (std::size_t i = 0; i < batch.changes.size(); ++i) {
-        const auto& c = batch.changes[i];
-        auto& w = work[i];
-        w.cur = ta::locate(txn, vaultId, c.uid);
-        const bool held = recorded.contains(c.uid);
-        if (held != w.cur.has_value())
-            diverge(held ? "mirror_entry_missing" : "mirror_entry_unrecorded",
-                    {{"uid", c.uid},
-                     {"why", held ? "the entry this server recorded is not in its tables"
-                                  : "this server's tables hold an entry it never recorded"}});
-        if (w.cur && !w.cur->trashed) {
-            w.liveId = w.cur->id;
-            const auto kind = c.type == "directory" ? ta::Located::Kind::Directory
-                              : c.type == "symlink" ? ta::Located::Kind::Symlink
-                                                    : ta::Located::Kind::File;
-            if (c.outcome == Outcome::Live && kind != w.cur->kind)
-                diverge("mirror_type_mismatch", {{"uid", c.uid}, {"type", c.type}});
-        }
-    }
-
-    const auto parentIdFor = [&](const json& state) -> std::optional<uint32_t> {
-        const auto parent = text(state, "parent");
-        if (!parent) return std::nullopt;
-        if (*parent == run.vaultUid) return root;
-        const auto p = ta::locate(txn, vaultId, *parent);
-        if (!p || p->trashed || p->kind != ta::Located::Kind::Directory) return std::nullopt;
-        return p->id;
-    };
-
-    // ---- the trash rows, and what has to be removed or placed
-    std::size_t pending = 0;
-    for (std::size_t i = 0; i < batch.changes.size(); ++i) {
-        const auto& c = batch.changes[i];
-        auto& w = work[i];
-        const bool live = w.cur && !w.cur->trashed;
-        const bool trashed = w.cur && w.cur->trashed;
-        if (live && c.outcome != Outcome::Live) w.remove = true;
-        if (trashed && c.outcome == Outcome::Gone) mq::ApplyRows::endTrash(txn, w.cur->id);
-        if (trashed && c.outcome == Outcome::Trashed) mq::ApplyRows::updateTrash(txn, w.cur->id, trashOf(vaultId, c, accounts));
-        if (!w.cur && c.outcome == Outcome::Trashed) {
-            auto t = trashOf(vaultId, c, accounts);
-            t.alias = freshAlias(t.path + ":" + c.uid);
-            mq::ApplyRows::insertTrash(txn, t);
-        }
-        if (c.outcome == Outcome::Live) {
-            if (!live) {
-                if (trashed) mq::ApplyRows::endTrash(txn, w.cur->id);   // restored: its trash row ends
-                w.place = w.created = true;
-            } else if (w.cur->parent_uid != text(c.state, "parent") || w.cur->name != text(c.state, "name")) {
-                w.place = true;
-            }
-        }
-        pending += (w.remove ? 1 : 0) + (w.place ? 1 : 0);
-    }
-
-    const auto indexOfLive = [&](const uint32_t id) -> std::optional<std::size_t> {
-        for (std::size_t j = 0; j < work.size(); ++j)
-            if (work[j].liveId == id) return j;
-        return std::nullopt;
-    };
-
-    std::vector<std::size_t> placed;
-    while (pending > 0) {
-        bool progress = false;
-        for (std::size_t i = 0; i < batch.changes.size(); ++i) {
-            const auto& c = batch.changes[i];
-            auto& w = work[i];
-            if (w.remove) {
-                if (c.type == "directory" && mq::ApplyRows::childCount(txn, *w.liveId) > 0) continue;
-                const auto& b = run.before[c.uid];
-                const auto parent = w.cur->parent_id;
-                std::filesystem::path backing;
-                if (b.entry && b.located && b.located->id == *w.liveId) backing = b.entry->backing_path;
-                mq::ApplyRows::removeEntry(txn, *w.liveId);
-                if (c.outcome == Outcome::Trashed) {
-                    auto t = trashOf(vaultId, c, accounts);
-                    t.backing_path = backing.string();
-                    t.alias = w.cur->base32_alias.empty() ? freshAlias(t.path + ":" + c.uid) : w.cur->base32_alias;
-                    mq::ApplyRows::insertTrash(txn, t);
-                }
-                fx.removed.push_back({.id = *w.liveId, .kind = w.cur->kind, .backing = backing, .path = w.cur->path,
-                                      .parent = parent});
-                w.liveId.reset();
-                w.remove = false;
-                --pending;
-                progress = true;
-            } else if (w.place) {
-                const auto pid = parentIdFor(c.state);
-                if (!pid) continue;
-                const auto name = text(c.state, "name").value_or("");
-                if (name.empty()) diverge("mirror_tree_malformed", {{"uid", c.uid}, {"why", "an entry without a name"}});
-                const auto occupant = mq::ApplyRows::named(txn, *pid, name);
-                if (occupant && occupant != w.liveId) continue;
-                if (w.created) {
-                    const auto path = joinVaultPath(mq::ApplyRows::pathOf(txn, *pid), name);
-                    mq::NewEntry e{.vault_id = vaultId,
-                                   .parent_id = *pid,
-                                   .name = name,
-                                   .path = path,
-                                   .type = c.type,
-                                   .uid = c.uid,
-                                   .alias = freshAlias(name),
-                                   .fields = fieldsOf(c.state, accounts)};
-                    if (run.target.cache) e.inode = run.target.cache->assignInode(run.target.fuse(path));
-                    w.liveId = mq::ApplyRows::insertEntry(txn, e);
-                    if (c.type == "directory") fx.createdDirs.push_back(*w.liveId);
-                } else {
-                    if (c.type == "directory" && mq::ApplyRows::within(txn, *pid, *w.liveId)) continue;
-                    mq::ApplyRows::moveEntry(txn, *w.liveId, *pid, name);
-                }
-                placed.push_back(i);
-                w.place = false;
-                --pending;
-                progress = true;
-            }
-        }
-        if (progress || pending == 0) continue;
-        // A swap or a cycle of names: one entry that is in the way and moves (or goes) in this group steps aside.
-        for (std::size_t i = 0; i < batch.changes.size() && !progress; ++i) {
-            if (!work[i].place) continue;
-            const auto pid = parentIdFor(batch.changes[i].state);
-            if (!pid) continue;
-            const auto occupant = mq::ApplyRows::named(txn, *pid, text(batch.changes[i].state, "name").value_or(""));
-            if (!occupant) continue;
-            const auto j = indexOfLive(*occupant);
-            if (!j || work[*j].parked || !(work[*j].place || work[*j].remove)) continue;
-            const auto parent = db::query::fs::Directory::parentIdOf(txn, *occupant);
-            if (!parent) continue;
-            mq::ApplyRows::moveEntry(txn, *occupant, *parent, ".vh-mirror-" + batch.changes[*j].uid);
-            work[*j].parked = true;
-            placed.push_back(*j);
-            progress = true;
-        }
-        if (progress) continue;
-        for (std::size_t i = 0; i < batch.changes.size(); ++i)
-            if (work[i].place || work[i].remove)
-                diverge("mirror_cannot_apply",
-                        {{"uid", batch.changes[i].uid},
-                         {"why", work[i].remove ? "a folder the core removed still holds entries here"
-                                                : "the entry's place does not exist here or is taken by an entry the "
-                                                  "change does not move"},
-                         {"parent", text(batch.changes[i].state, "parent").value_or("")},
-                         {"name", text(batch.changes[i].state, "name").value_or("")}});
-    }
-
-    // ---- the replicated fields of every live result, the paths of what moved (folders first)
-    for (std::size_t i = 0; i < batch.changes.size(); ++i) {
-        const auto& c = batch.changes[i];
-        if (c.outcome != Outcome::Live || !work[i].liveId) continue;
-        mq::ApplyRows::updateEntry(txn, *work[i].liveId, c.type, fieldsOf(c.state, accounts));
-    }
-    std::vector<std::pair<uint32_t, uint32_t>> byDepth;   // (depth, id)
-    std::set<uint32_t> seen;
-    for (const auto i : placed)
-        if (work[i].liveId && seen.insert(*work[i].liveId).second)
-            byDepth.emplace_back(mq::ApplyRows::depthOf(txn, *work[i].liveId), *work[i].liveId);
-    std::ranges::sort(byDepth);
-    for (const auto& [depth, id] : byDepth) mq::ApplyRows::rewritePath(txn, id);
-    for (std::size_t i = 0; i < batch.changes.size(); ++i) {
-        const auto& c = batch.changes[i];
-        const auto& w = work[i];
-        if (!w.cur || w.cur->trashed || !w.liveId) continue;
-        if (w.cur->parent_id && seen.contains(*w.liveId)) {
-            const auto& b = run.before[c.uid];
-            if (b.entry && b.located && b.located->id == *w.liveId)
-                fx.moved.push_back({.id = *w.liveId, .kind = w.cur->kind, .oldBacking = b.entry->backing_path,
-                                    .oldPath = w.cur->path, .oldParent = w.cur->parent_id});
-        }
-    }
-
-    // ---- contents: a generation this server does not hold is expected (wave 2's lane fetches it)
-    for (std::size_t i = 0; i < batch.changes.size(); ++i) {
-        const auto& c = batch.changes[i];
-        const auto& w = work[i];
-        if (c.type != "file") continue;
-        const auto objectUid = vh::crypto::id::fromUuid(c.uid);
-        if (c.outcome != Outcome::Live) {
-            vh::db::query::mirror::PendingContents::forget(txn, vaultId, objectUid);
-            continue;
-        }
-        const auto generation = text(c.state, "generation").value_or("");
-        const bool wasLive = w.cur && !w.cur->trashed;
-        if (wasLive && w.cur->generation == generation) continue;   // the same bytes
-        mq::Expected e;
-        e.vault_id = vaultId;
-        e.object_uid = objectUid;
-        e.generation = generation;
-        e.key_version = static_cast<uint32_t>(integer(c.state, "key_version").value_or(0));
-        e.size_bytes = static_cast<uint64_t>(integer(c.state, "size").value_or(0));
-        e.content_hash = text(c.state, "content_hash").value_or("");
-        e.mtime_us = integer(c.state, "modified_at").value_or(0);
-        try {
-            vh::db::query::mirror::PendingContents::expect(txn, e);
-        } catch (const ops::Invalid& why) {
-            throw Halt{Status::Stopped, "stopped", "mirror_content_unexpected",
-                       {{"uid", c.uid}, {"why", why.what()}}};
-        }
-        if (wasLive) fx.contentChanged.push_back(*w.liveId);
-    }
-
-    // ---- each entry's hash from this server's own tables: the core's, or the vault has diverged
     auto digest = mv->digest;
-    for (std::size_t i = 0; i < batch.changes.size(); ++i) {
-        const auto& c = batch.changes[i];
-        const auto& w = work[i];
-        std::optional<vh::mirror::Hash> own;
-        if (c.outcome == Outcome::Live && w.liveId) own = mq::ApplyRows::liveHash(txn, *w.liveId);
-        else if (c.outcome == Outcome::Trashed) own = mq::ApplyRows::trashHash(txn, vaultId, c.uid);
-        if (own != c.resultHash)
-            diverge("mirror_apply_mismatch",
-                    {{"uid", c.uid}, {"core_hash", hexOr(c.resultHash)}, {"mirror_hash", hexOr(own)},
-                     {"core_state", c.state},
-                     {"mirror_state", w.liveId ? mq::ApplyRows::liveState(txn, *w.liveId) : json(nullptr)},
-                     {"why", "this server's copy of the entry is not what the core holds after the change"}});
-        if (const auto it = recorded.find(c.uid); it != recorded.end()) digest.remove(it->second);
-        if (own) digest.add(*own);
-        mq::ApplyRows::setRecordedHash(txn, vaultId, c.uid, own);
-        if (w.liveId) fx.live.push_back(*w.liveId);
+    placeAll(p, 0);
+    finishAll(p, 0, digest);
+
+    // ---- a group that carries out one of this server's pending changes: confirmed once all of its groups are here
+    // (the change is not applied a second time: the group's result is what the tables now hold), and the entries it
+    // held settle
+    if (run.group && batch.origin)
+        if (const auto mine = mq::Pending::countApplied(txn, vaultId, *batch.origin); mine && mine->confirmed()) {
+            mq::Pending::remove(txn, mine->id);
+            fx.confirmed.push_back(mine->id);
+            settleAll(p, mine->uids, mine->id, digest);
+        }
+    // ---- settling a change (refused, or executed with nothing to apply here)
+    if (run.settle) {
+        if (run.also && *run.also) (*run.also)(txn);
+        settleAll(p, *run.settle, 0, digest);
+        if (digest != mv->digest)
+            diverge("mirror_settle_moved_digest",
+                    {{"why", "bringing this server's own entries back to the core's state changed the digest"}});
+        result.status = Status::Applied;
+        result.digest = digest;
+        return out;
     }
 
     // ---- the vault's settings (recorded; name, description, quota and owner applied)
@@ -707,6 +912,8 @@ void afterCommit(const Run& run, const Effects& fx) {
         if (const auto e = db::query::fs::Entry::getFSEntryById(id)) ta::ensureBackingDirectory(e->backing_path);
     for (const auto id : fx.contentChanged) t.engine->purgeDerivedArtifacts(id);
     for (const auto id : fx.live) ta::cacheFresh(t, id);
+    for (const auto id : fx.confirmed)
+        vh::mirror::submit::contents::dropBlob(vh::mirror::submit::contents::pendingBlob(run.vaultId, id));
     if (fx.vaultChanged)
         if (const auto& deps = runtime::Deps::get(); deps.storageManager)
             if (const auto v = db::query::vault::Vault::getVault(run.vaultId)) {
@@ -729,11 +936,16 @@ bool openNow(const Options& options, const ta::Target& target, const Before& b) 
     return vh::fuse::WorkingCopies::instance().isOpen(*inode);
 }
 
-Result run(const uint32_t vaultId, const TreePage* page, const LogGroup* group, const Options& options) {
+Result run(const uint32_t vaultId, const TreePage* page, const LogGroup* group, const Options& options,
+           const std::vector<std::string>* settle = nullptr, const std::function<void(pqxx::work&)>* also = nullptr) {
+    // A change made here and a page or group from the core never interleave (mirror::submit::Local holds it too).
+    std::scoped_lock local(vh::mirror::submit::vaultMutex(vaultId));
     Run r;
     r.vaultId = vaultId;
     r.page = page;
     r.group = group;
+    r.settle = settle;
+    r.also = also;
     const auto vaultUid = mq::MirrorVaults::vaultUidOf(vaultId);
     if (!vaultUid) return {.status = Status::Gone, .reason = "mirror_gone"};
     r.vaultUid = *vaultUid;
@@ -749,7 +961,7 @@ Result run(const uint32_t vaultId, const TreePage* page, const LogGroup* group, 
         if (page) {
             const auto mv = mq::MirrorVaults::get(vaultId);
             batch = fromPage(*page, mv ? mv->copy_cursor : 0);
-        } else {
+        } else if (group) {
             batch = fromGroup(*group);
         }
     } catch (const Halt& h) {
@@ -769,6 +981,14 @@ Result run(const uint32_t vaultId, const TreePage* page, const LogGroup* group, 
             return {.status = Status::Deferred, .reason = "mirror_file_open",
                     .detail = {{"uid", c.uid}, {"path", b.located->path}}};
         r.before.emplace(c.uid, std::move(b));
+    }
+    // The entries changes made here still hold: the apply may bring them back to the core's state or set them aside.
+    for (const auto& uid : mq::Pending::dirtyUids(vaultId)) {
+        if (r.before.contains(uid)) continue;
+        Before b;
+        b.located = ta::locate(vaultId, uid);
+        if (b.located && !b.located->trashed) b.entry = db::query::fs::Entry::getFSEntryById(b.located->id);
+        r.before.emplace(uid, std::move(b));
     }
 
     Committed done;
@@ -803,6 +1023,10 @@ Result applyTreePage(const uint32_t vaultId, const TreePage& page, const Options
 
 Result applyGroup(const uint32_t vaultId, const LogGroup& group, const Options& options) {
     return mirror_apply_detail::run(vaultId, nullptr, &group, options);
+}
+
+Result settle(const uint32_t vaultId, const std::vector<std::string>& uids, const std::function<void(pqxx::work&)>& also) {
+    return mirror_apply_detail::run(vaultId, nullptr, nullptr, {}, &uids, &also);
 }
 
 }

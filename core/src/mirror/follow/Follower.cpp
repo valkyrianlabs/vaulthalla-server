@@ -6,7 +6,13 @@
 #include "mirror/Contents.hpp"
 #include "mirror/follow/Protocol.hpp"
 #include "mirror/start/Start.hpp"
+#include "mirror/submit/Contents.hpp"
+#include "mirror/submit/Submit.hpp"
+#include "crypto/id/ObjectUid.hpp"
+#include "db/query/peer/Peer.hpp"
 #include "peer/Links.hpp"
+#include "peer/ObjectClient.hpp"
+#include "peer/Peer.hpp"
 
 #include <paths.h>
 
@@ -78,6 +84,29 @@ StepResult followCoreDiverged(const uint32_t vaultId) {
     return {.step = Step::Stopped, .detail = "mirror_core_diverged"};
 }
 
+}
+
+Transport::Sent Transport::sendContent(const uint32_t peerId, const Content& content) {
+    const auto links = vh::peer::linkService();
+    const auto peer = vh::db::query::peer::Peers::byId(peerId);
+    if (!links || !peer) return {.ok = false, .retry = true, .error = "no link"};
+    vh::peer::object::PutOptions options;
+    options.tls = links->clientTls();
+    options.deadline = SteadyClock::now() + std::chrono::minutes(30);
+    const vh::peer::object::Address address{.vault = vh::crypto::id::fromUuid(content.vault_uid),
+                                            .object = vh::crypto::id::fromUuid(content.object_uid),
+                                            .generation = content.generation};
+    const auto r = vh::peer::object::put(*peer, address,
+                                         {.plaintext_size = content.size, .content_hash = content.content_hash,
+                                          .key_version = content.key_version},
+                                         options, content.path);
+    if (r.status == vh::peer::object::FetchStatus::Complete) return {.ok = true};
+    // Refused for the bytes themselves: never worth sending again (the change is kept as held). Anything else: later.
+    if (r.status == vh::peer::object::FetchStatus::Refused &&
+        (r.code == "invalid_contents" || r.code == "format_not_portable" || r.code == "key_version_missing" ||
+         r.code == "invalid" || r.code == "denied" || r.code == "over_quota" || r.code == "no_space"))
+        return {.ok = false, .retry = false, .code = r.code, .error = r.error};
+    return {.ok = false, .retry = true, .code = r.code, .error = r.error};
 }
 
 std::shared_ptr<Transport> linkTransport() {
@@ -234,6 +263,9 @@ StepResult Follower::step(const uint32_t vaultId, Transport& transport, const ap
         return {.step = Step::Progress, .applied = out.applied};
     }
 
+    // ---- this server's own changes, in order, before the log: their confirmations come back in it
+    const auto own = vh::mirror::submit::submitPending(vaultId, transport, deadline);
+
     // ---- the log
     bool appliedAny = false;
     bool more = true;
@@ -307,8 +339,21 @@ StepResult Follower::step(const uint32_t vaultId, Transport& transport, const ap
                                         vaultId, mv->term, mv->last_seq, mv->digest.hex(), mv->digest.entries);
         (void)acknowledge(transport, *mv, *uid, mv->position(), mv->digest);
     }
-    out.step = appliedAny ? Step::Progress : Step::Idle;
+    out.step = appliedAny || own.submitted > 0 ? Step::Progress : own.waiting ? Step::Waiting : Step::Idle;
+    if (own.waiting) out.detail = own.detail;
     return out;
+}
+
+std::size_t Follower::housekeep(const SteadyClock::time_point now) {
+    const bool startup = !housekept_;
+    if (!startup && now - *housekept_ < kHousekeeping) return 0;
+    housekept_ = now;
+    try {
+        return vh::mirror::submit::contents::housekeeping(startup);
+    } catch (const std::exception& e) {
+        log::Registry::sync()->warn("[MirrorFollower] Housekeeping of sealed bytes failed: {}", e.what());
+        return 0;
+    }
 }
 
 void Follower::onStop() {
@@ -321,6 +366,7 @@ void Follower::runLoop() {
     while (!shouldStop()) {
         auto wait = std::chrono::milliseconds(250);
         try {
+            (void)housekeep(SteadyClock::now());   // first pass and hourly, the switch on or off
             if (!followExperimental()) {
                 lazySleep(std::chrono::seconds(1));
                 continue;

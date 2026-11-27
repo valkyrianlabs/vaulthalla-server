@@ -2482,4 +2482,90 @@ TEST_F(SqlDeployerHistoryDb, PeerVaultRoleMigration162IsAdditiveAndIdempotent) {
     });
 }
 
+
+// Migration 166 (a change made on the mirror): on an upgraded database with a mirrored vault in it, the pending,
+// dirty, held and submission tables are added empty, nothing existing changes, and a second run of the file changes
+// nothing.
+TEST_F(SqlDeployerHistoryDb, MirrorPendingMigration166IsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        const std::string file = "166_mirror_pending.sql";
+        const auto count = [&](const std::string& q) { return txn.exec(q).one_field_ref().as<int64_t>(); };
+
+        // ---- back to the 165 schema: no tables of 166, and 160's and 164's functions as those migrations left them
+        txn.exec("DROP TABLE IF EXISTS mirror_pending, mirror_dirty, mirror_held, mirror_submission");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
+        const auto definition = [](const std::string& migration, const std::string& name) {
+            const auto text = migseed::readFileToString(repoPsqlDir() / migration);
+            const auto at = text.find("CREATE OR REPLACE FUNCTION " + name + "(");
+            const auto end = at == std::string::npos ? at : text.find("\n$$ LANGUAGE", at);
+            const auto semi = end == std::string::npos ? end : text.find(';', end);
+            EXPECT_NE(semi, std::string::npos) << name << " in " << migration;
+            return semi == std::string::npos ? std::string{} : text.substr(at, semi + 1 - at);
+        };
+        const std::vector<std::pair<std::string, std::string>> replaced{
+            {"164_mirror_follow.sql", "vh_mirror_entry_state"}, {"164_mirror_follow.sql", "vh_mirror_tree_states"},
+            {"160_replication_log.sql", "vh_mirror_log_state"}, {"160_replication_log.sql", "vh_mirror_track_trash"}};
+        for (const auto& [migration, name] : replaced) txn.exec(definition(migration, name));
+        txn.exec("DROP FUNCTION IF EXISTS vh_mirror_upload_staging(text)");
+        const auto excludesStaging = [&](const std::string& name) {
+            return txn.exec("SELECT pg_get_functiondef(p.oid) LIKE '%vh_mirror_upload_staging%' FROM pg_proc p "
+                            "WHERE p.proname = $1",
+                            pqxx::params{name}).one_field_ref().as<bool>();
+        };
+        for (const auto& [migration, name] : replaced) ASSERT_FALSE(excludesStaging(name)) << name << " as " << migration;
+
+        // ---- what an upgraded install holds: a vault mirrored with a linked server
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_166_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES "
+                                    "('claude_test_166', $1, 'local', 'claude_test_166', gen_random_uuid()) RETURNING id",
+                                    pqxx::params{owner}).one_field_ref().as<int>();
+        const auto peer = txn.exec("INSERT INTO peer (node_id, name, spki_sha256, wrap_public_key) "
+                                   "VALUES ('claude-166-node', 'vps', repeat('cd', 32), decode(repeat('00', 32), 'hex')) "
+                                   "RETURNING id")
+                              .one_field_ref().as<int>();
+        txn.exec("INSERT INTO mirror_vault (vault_id, peer_id, role) VALUES ($1, $2, 'core')", pqxx::params{vault, peer});
+        const auto rows = [&] {
+            return txn.exec("SELECT md5(string_agg(t, ',' ORDER BY t)) FROM ("
+                            "  SELECT (vault_id, peer_id, role, term, last_seq, digest, state)::text AS t "
+                            "  FROM mirror_vault) x").one_field_ref().as<std::string>();
+        };
+        const auto rowsBefore = rows();
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, file));
+        EXPECT_EQ(report.applied.size(), 1u) << "only 166 was missing";
+        EXPECT_EQ(recordedHash(txn, file), currentHash(file));
+        for (const auto* t : {"mirror_pending", "mirror_dirty", "mirror_held", "mirror_submission"})
+            EXPECT_TRUE(columnExists(txn, t, "vault_id")) << t;
+        for (const auto* t : {"mirror_pending", "mirror_dirty", "mirror_held", "mirror_submission"})
+            EXPECT_EQ(count(std::string("SELECT count(*) FROM ") + t), 0) << t;
+        EXPECT_EQ(rows(), rowsBefore) << "existing mirror rows untouched";
+        // An HTTP upload's staging file is never content (the log, the tree, the trash): the four functions replaced.
+        for (const auto& [migration, name] : replaced) EXPECT_TRUE(excludesStaging(name)) << name;
+        EXPECT_TRUE(txn.exec("SELECT vh_mirror_upload_staging('.upload-http-0a1b-2.part')").one_field_ref().as<bool>());
+        for (const auto* name : {"upload-http-0a1b-2.part", ".upload-http-0a1b-2.txt", "a.part", ".upload-https-x.part"})
+            EXPECT_FALSE(txn.exec("SELECT vh_mirror_upload_staging($1)", pqxx::params{std::string(name)})
+                             .one_field_ref().as<bool>())
+                << name;
+
+        // A second run of the file, and of the deployer, changes nothing.
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / file)));
+        EXPECT_EQ(rows(), rowsBefore);
+
+        // A vault that goes takes its pending, dirty and held rows with it.
+        txn.exec("INSERT INTO mirror_pending (vault_id, request_id, entry_uid, op, actor_node, actor_id) "
+                 "VALUES ($1, 'claude166request', gen_random_uuid(), 'mkdir', 'n', 1)", pqxx::params{vault});
+        txn.exec("INSERT INTO mirror_dirty (vault_id, entry_uid, confirmed_kind) VALUES ($1, gen_random_uuid(), 'none')",
+                 pqxx::params{vault});
+        txn.exec("DELETE FROM mirror_vault WHERE vault_id = $1", pqxx::params{vault});
+        txn.exec("DELETE FROM vault WHERE id = $1", pqxx::params{vault});
+        EXPECT_EQ(count("SELECT count(*) FROM mirror_pending") + count("SELECT count(*) FROM mirror_dirty"), 0);
+    });
+}
+
 } // namespace vh_sql_deployer_history_test

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "DBPool.hpp"
+#include "db/SessionSettings.hpp"
 #include "log/Registry.hpp"
 #include "ops/Error.hpp"
 
@@ -72,6 +73,9 @@ namespace vh::db {
             }
 
             try {
+                // A scope on this thread (a mirror's pending change, a submitted change on the core) carries its
+                // transaction-local settings into every transaction it begins.
+                if (SessionSettings::active()) SessionSettings::apply(*txn);
                 if constexpr (std::is_void_v<ReturnT>) {
                     func(*txn);
                     txn->commit();

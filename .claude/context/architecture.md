@@ -508,7 +508,7 @@ the console reads to leave the Linked servers page out (`web-client.md`, "Linked
   pairing refuses a key in `peer`, `peer.pair.request` a key in `devices`. HTTP lanes answer 403 to a peer key; the
   sealed lane (`/peer/object/…`, below) is the one HTTP route it gets, and nobody else does (404).
 - **What a peer session runs:** `Router::isPeerWireCommand` (peer.hello, peer.ping, peer.endpoints,
-  peer.identity.rotate, peer.unlinked, and piece A's peer.mirror.offer|answer|keys|begin|grant|cancel) plus meta.hello / meta.contract.get; anything else `Deny` (fail closed). A
+  peer.identity.rotate, peer.unlinked, peer.mirror.offer|answer|keys|begin|grant|cancel|tree|log|ack|notify|submit) plus meta.hello / meta.contract.get; anything else `Deny` (fail closed). A
   pairing connection this server dialled (`Principal::pairing`) runs nothing. The wire set and `peer.pair.*` are
   refused on every other session kind; `peer.pair.*` runs on pairing-only connections. Answers on a Peer session
   (frames with `status`) go to the link's pending table (`PeerHooks::onResponse`), never to the router; an unknown one
@@ -675,7 +675,7 @@ Phase 2 wave 4 piece A: a vault held here as another server's copy (`mirror_vaul
 through nothing but its core's log.
 - **`vh::mirror::access`** (`core/include/mirror/access/Access.hpp`): `state` NotMirrored | Live | ReadOnly, `reason`,
   `requireWritable(vault, op)` (throws `MirrorReadOnly`: `ops::ReadOnly`, code `read_only`, `reason`),
-  `acceptsLocalChanges()` (false until piece B), `refuseIfHeld` (`mirror_core_owned`: settings, remote). In memory
+  `acceptsLocalChanges()` (true: piece B takes a Live mirror's changes as pending), `refuseIfHeld` (`mirror_core_owned`: settings, remote). In memory
   behind a shared lock (one atomic load while nothing is held): loaded in `wireStorage()` after `rbac::mirrored`
   (failure stops startup), republished by `MirrorVaults` writes, `createMirrorVault` and the applier's first-copy
   finish, link state from `peer::LinkService::adopt|connectionClosed`, reconciled each pass of
@@ -696,6 +696,46 @@ through nothing but its core's log.
   (Allowed | Denied | Missing, no existence oracle), `createFile(overwrite=false)` refuses EEXIST, the CLI socket bound
   under a private name and renamed into place.
 - Tests: `MirrorGateDbTest.*` (`test_mirror_gate_db.cpp`), `ShellServerTest.*`, `vhh drill peers` 7h.
+
+### A change made on the mirror (`mirror/submit`, `db::query::mirror::Pending`, migration 166)
+
+Phase 2 wave 4 piece B (`design/peers/mirror.md` "As built: a change made on the mirror"); piece A's gate
+(`mirror/access`, `requireWritable`) decides whether a write may happen at all; this is what happens to one it lets
+through on a Live mirror.
+- **Local (`mirror::submit::Local`, in `ops::fs` after the gate's line):** mkdir, move, rename, remove applied here as
+  pending under the vault's local-change lock (`submit::vaultMutex`, also taken by `mirror::apply::run`): `mirror_pending`
+  (state local, then pending) and `mirror_dirty` (each touched entry's last confirmed state) first, then the mutation with
+  `vh.mirror_local`/`vh.mirror_request` in every transaction (`db::SessionSettings`, applied by `Transactions::exec`); a
+  created entry's uid chosen first (`db::query::fs::AssignedUid`, read by the Directory/File/Symlink inserts). Every
+  surface: `vh::fs::Filesystem`'s mutators (mkdir, rename, remove, copy, both createFiles), FUSE unlink/rmdir and
+  `WorkingCopies::seal` (`Local::Mode::Seal`: also while the link is down) build a `Local` too (inert under an outer
+  one of the same vault). Ops: mkdir, move, rename, remove, copy (submitted only), write, setattr (mode, time; owner
+  refused). `mirror_entry_hash` and the digest never move for a pending change.
+- **Contents (`mirror/submit/Contents`):** a write's sealed bytes linked into the pending store
+  (`.vh-mirror-pending/<vault>/<row>` under the backing root); `peer::object::put` sends them before the submit;
+  the core's sealed lane takes PUT (`peer_object::beginPut|finishPut`, `http::Session::handle_peer_object_put`),
+  refuses a mirror whose role writes no file (403 `denied`) or bytes over the quota (413), verifies (size, BLAKE2b,
+  `verifyFd`) and stages them with the verified facts (`.vh-mirror-staged/<vault>/<uuid>.<gen>` + `.facts`);
+  `submitExecuteWrite` commits from them (`ops::fs::commitSealed`) with the mirror's uid and the verified facts (a
+  submit claiming others: `invalid_contents`). Held bytes: `.vh-mirror-held/<vault>/<id>` (go with a discard, move
+  with a retry). `contents::housekeeping` (follower loop, startup + hourly) sweeps what nothing names; a removed vault
+  drops all three directories; an orphaned copy's pending changes become held (`submit::orphaned`). A not-received
+  file renames as metadata (`handleRename`). An HTTP upload's staging file is never content: 166 leaves
+  `.upload-http-*.part` out of the log and tree (`vh_mirror_upload_staging` = `vh::fs::isUploadStagingName`), and on a
+  mirror it is scratch (`submit::Scratch`: past the backstop, no pending row).
+- **Submit (`mirror::submit::submitPending`, from `Follower::step` before the log):** `peer.mirror.submit` (peer wire
+  set), one change at a time per vault in order. Core: `serveSubmit` answers at once from `mirror_submission` (queued,
+  running, executed with groups, refused with code: never executed twice) and `drain`s on the sync pool, one vault's in
+  order, as the remote account for the person inside `ops::fs::PeerSubmission` (ceiling `PeerVault::may` is the whole
+  check for now; audit details `peer_id`, `peer_node`, `origin`), with `vh.mirror_origin` and `vh.actor` set.
+- **Confirm/settle (`mirror::apply`):** log rows carry `origin`; a group of a pending request counts
+  (`groups_applied` vs the answer's `groups_expected`), confirmation drops the row and settles its entries in the same
+  transaction; dirty entries are applied from where they stand (no second apply), set aside to `name (conflict <uid8>)`
+  when they hold a name the core's entry needs, reverted when in the way; `apply::settle` reverts on refusal.
+  Refusals: `conflict` for mkdir/move/rename resubmits under the conflict name (record kind conflict in `mirror_held`),
+  anything else is a held change (`mirror_held` kind held, entries reverted); `ops::mirrors::held|discardHeld|
+  retryHeld` (ws `mirror.held.list|discard|retry`, `vh mirror held|discard|retry`), super admins, audited.
+- Tests: `MirrorSubmitDbTest.*` (`test_mirror_submit_db.cpp`: both servers in one database, the inactive one parked).
 
 ### A linked server's vault role and mirrored vaults (migration 162; `design/peers/identity.md`)
 

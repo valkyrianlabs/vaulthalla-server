@@ -23,12 +23,43 @@
 // (the name is taken), Invalid (into itself), ContentConflict below. Anything else is a fault.
 //
 // Every operation that changes the vault refuses first, after its permission check, for a vault held here as another
-// server's copy (vh::mirror::access::requireWritable: MirrorReadOnly, ws code "read_only" with its reason).
+// server's copy that is not Live (vh::mirror::access::requireWritable: MirrorReadOnly, ws code "read_only" with its
+// reason). On a Live mirror, mkdir, move, rename and remove are applied here at once as pending changes and submitted
+// to the core (mirror::submit::Local, right after the gate's line); copy is submitted only (its new entries come back
+// from the core). The person sees the change at once; the core executes it as that person, and the change is
+// confirmed through the log, or reverted and kept (a conflict copy or a held change) when the core refuses.
 //
 // Callers today: the ws fs.* handlers (protocols/ws/handler/fs/Storage.cpp, Upload.cpp) and FUSE setattr. The HTTP
 // lanes, text save, `vh fs put`, shares, the S3 gateway and the rest of FUSE still have their own paths to
 // vh::fs::Filesystem (which refuses for such a vault too).
 namespace vh::ops::fs {
+
+// A change a linked server submitted for a vault this server is the core of (mirror::submit; design/peers/mirror.md
+// "A change made on the mirror" step 4). While one is alive on this thread, the ops run as the person the mirror named
+// (a remote account, which never authorizes on its own) and are authorized for vault `vault_id` by that linked server's
+// vault role, the ceiling (rbac::resolver::PeerVault::may: the role's base permissions, no path overrides), not by the
+// person's own RBAC; per-account rules for the mirror's people are a later piece, so for now the ceiling alone decides.
+// The audit event names the peer and the request. Other vaults resolve as always.
+class PeerSubmission {
+public:
+    struct View {
+        uint32_t peer_id{};
+        uint32_t vault_id{};
+        std::string request_id{};
+        std::string peer_node{};
+    };
+    explicit PeerSubmission(View view);
+    ~PeerSubmission();
+    PeerSubmission(const PeerSubmission&) = delete;
+    PeerSubmission& operator=(const PeerSubmission&) = delete;
+
+    // This thread's submission, nullptr without one.
+    [[nodiscard]] static const View* current() noexcept;
+
+private:
+    View view_;
+    const View* outer_;
+};
 
 // A sealed commit was based on a generation the file no longer has (or the file is gone, or open through the mount).
 // Nothing was written. ws code "conflict", like the name clash it is told apart from by type.

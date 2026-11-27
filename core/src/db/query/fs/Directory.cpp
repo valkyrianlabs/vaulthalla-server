@@ -1,4 +1,5 @@
 #include "db/query/fs/Directory.hpp"
+#include "db/query/fs/AssignedUid.hpp"
 #include "db/Transactions.hpp"
 #include "fs/model/Directory.hpp"
 #include "crypto/id/ObjectUid.hpp"
@@ -39,6 +40,9 @@ unsigned int Directory::upsertDirectory(const DirPtr& directory) {
         p.append(directory->size_bytes);
         p.append(directory->file_count);
         p.append(directory->subdirectory_count);
+        // A uid chosen before the creation (a mirror's pending change, its execution on the core) for a new folder.
+        if (!directory->uid && directory->vault_id)
+            directory->uid = AssignedUid::forPath(static_cast<uint32_t>(*directory->vault_id), directory->path);
         p.append(vh::crypto::id::toUuid(directory->uid.value_or(vh::crypto::id::newObjectUid())));
 
         const auto row = txn.exec(pqxx::prepped{"upsert_directory"}, p).one_row();
