@@ -161,7 +161,7 @@ std::vector<WsCommandUsage> mirrorFollowCommands() {
         .refusal_codes = [] {
             auto r = mfRefusals();
             for (const auto* c : {"peer_revoked", "conflict", "mirror_not_live", "mirror_switch_running",
-                                  "mirror_submissions_queued", "mirror_has_remote"})
+                                  "mirror_submissions_queued", "mirror_has_remote", "mirror_vault_deleting"})
                 r.emplace_back(c);
             return r;
         }(),

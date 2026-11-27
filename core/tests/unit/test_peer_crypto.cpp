@@ -414,6 +414,8 @@ std::vector<std::string> peerWireSet() {
             "peer.mirror.tree",  "peer.mirror.log",    "peer.mirror.ack",  "peer.mirror.notify",
             // a change made on the mirror (wave 4 piece B)
             "peer.mirror.submit",
+            // leaving a mirror (wave 5 piece A)
+            "peer.mirror.detached", "peer.mirror.deleting",
             // resync (wave 5 piece B)
             "peer.mirror.resync",
             // the planned switch (wave 5 piece B)

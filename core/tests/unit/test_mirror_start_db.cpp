@@ -1149,6 +1149,8 @@ TEST_F(MirrorStartDbTest, UnlinkingBeforeAQueuedRemovalIsDeliveredDropsItAndKeep
     }
 }
 
+// Wave 5: on the core the delete takes the choice for the mirror's copy (MirrorLeaveDbTest covers it); without one it is
+// refused while a start runs and while mirrored, and the vault is free once the mirror ended.
 TEST_F(MirrorStartDbTest, DeletingAMirroredVaultIsRefusedUntilItsMirrorEnded) {
     const auto peer = newPeer(false);
     const auto remove = [](const uint32_t v) {
@@ -1157,9 +1159,9 @@ TEST_F(MirrorStartDbTest, DeletingAMirroredVaultIsRefusedUntilItsMirrorEnded) {
     {   // The core: while a start runs, while mirrored; free once ended.
         const auto v = coreVault();
         (void)ops::mirrors::add(superUser, {.vault_id = v, .peer = std::to_string(peer.id)});
-        EXPECT_EQ(remove(v), "vault_mirrored");
+        EXPECT_EQ(remove(v), "mirror_copy_choice_required");
         (void)MirrorVaults::startCore(v, peer.id);
-        EXPECT_EQ(remove(v), "vault_mirrored");
+        EXPECT_EQ(remove(v), "mirror_copy_choice_required");
         (void)ops::mirrors::cancel(superUser, {.vault_id = v});
         EXPECT_EQ(remove(v), "") << "the mirror ended: an ordinary vault again";
     }

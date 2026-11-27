@@ -67,6 +67,9 @@ model::preview::Response errorFor(const request& req, const std::exception& e) {
     if (dynamic_cast<const storage::ContentUnavailable*>(&e)) {
         // A mirror's file that has not arrived from its core (design/peers/mirror.md "Contents") says why.
         const auto mirrorCode = ::vh::mirror::contents::reasonCodeIn(e.what());
+        // A detached vault's file whose contents never arrived: they never will here (no retry).
+        if (mirrorCode && *mirrorCode == "mirror_contents_missing")
+            return jsonError(req, status::gone, *mirrorCode, e.what());
         auto res = jsonError(req, status::service_unavailable, mirrorCode ? *mirrorCode : "content_unavailable",
                              e.what());
         std::get<string_response>(res).set(field::retry_after, "30");

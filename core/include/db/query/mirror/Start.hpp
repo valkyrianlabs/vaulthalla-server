@@ -48,11 +48,13 @@ struct Offer {
     std::optional<OfferedRole> role{};
     // core: offered | accepted | keys_acked | started | declined | cancelled | expired | failed
     // mirror: pending | accepted | installed | started | declined | cancelled | expired | failed | orphaned (the core
-    // ended a finished mirror and the copy was kept here)
+    // ended a finished mirror and the copy was kept here) | detached (this server detached its copy: told to the core
+    // with peer.mirror.detached while `notify`; wave 5)
     std::string state{};
     bool notify{false};
     bool remove_copy{false};                 // core: what its cancel asked of the mirror's copy
-    std::optional<std::string> copy_outcome{};  // core: what the mirror said it did (removed | kept | none)
+    std::optional<std::string> copy_outcome{};  // core: what the mirror said it did (removed | kept | none), or
+                                                // detached (it left with its copy: peer.mirror.detached, wave 5)
     std::optional<std::string> reason{}, detail{};
     std::optional<uint32_t> started_by{}, decided_by{};
     uint32_t attempts{};
@@ -145,7 +147,7 @@ public:
     static std::optional<Offer> transition(uint32_t id, const std::vector<std::string>& from, const Change& change);
     // The other server was told the offer's state `state` (nothing changes when it moved on meanwhile).
     static bool told(uint32_t id, const std::string& state);
-    // What the mirror answered it did with its copy (removed | kept | none). False without such an offer.
+    // What the mirror answered it did with its copy (removed | kept | none | detached). False without such an offer.
     static bool recordCopyOutcome(uint32_t id, const std::string& outcome);
     // The other server can no longer be told (its link was unlinked): queued notices of its offers are dropped.
     static std::size_t dropNotices(uint32_t peerId);

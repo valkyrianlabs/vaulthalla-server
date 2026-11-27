@@ -456,12 +456,13 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         // Assigning a vault role names a linked server too (migration 162): the same two refusals there.
         if (code == "peers_experimental" || code == "peer_forbidden")
             return command.starts_with("peer.") || command.starts_with("mirror.") || command == "role.vault.assign" ||
-                   command == "role.vault.unassign";
+                   command == "role.vault.unassign" || command == "storage.vault.remove";
         // Starting a mirror (ops::mirrors, mirror::start): each refusal on the commands that send it.
         static const std::map<std::string, std::set<std::string>> kMirrorCodes{
             {"peer_revoked", {"peer.mirror.offer", "peer.mirror.answer", "peer.mirror.keys", "peer.mirror.begin",
-                              "peer.mirror.grant", "peer.mirror.cancel", "peer.mirror.submit", "peer.mirror.resync",
-                              "peer.mirror.switch.request", "peer.mirror.switch.prepare", "peer.mirror.switch.commit"}},
+                              "peer.mirror.grant", "peer.mirror.cancel", "peer.mirror.submit", "peer.mirror.detached",
+                              "peer.mirror.deleting", "peer.mirror.resync", "peer.mirror.switch.request",
+                              "peer.mirror.switch.prepare", "peer.mirror.switch.commit"}},
             {"mirror_already", {"mirror.add"}}, {"mirror_start_running", {"mirror.add"}},
             {"vault_replicated", {"mirror.add"}}, {"vault_attach_running", {"mirror.add"}},
             {"vault_detach_running", {"mirror.add"}}, {"layout_migration_running", {"mirror.add"}},
@@ -480,10 +481,15 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"mirror_keys_refused", {"peer.mirror.keys"}}, {"mirror_offer_not_accepted", {"peer.mirror.keys"}},
             {"mirror_offer_not_installed", {"peer.mirror.begin"}},
             {"vault_mirrored", {"storage.vault.remove"}}, {"vault_orphaned_copy", {"storage.vault.remove"}},
+            {"mirror_copy_choice_required", {"storage.vault.remove"}},
             // A change made on the mirror (wave 4 piece B, mirror::submit).
             {"mirror_not_live", {"peer.mirror.submit", "mirror.switch", "peer.mirror.switch.request",
                                  "peer.mirror.switch.prepare"}}, {"mirror_read_only", {"mirror.held.retry"}},
             {"contents_missing", {"peer.mirror.submit"}},
+            // Leaving a mirror (wave 5 piece A, mirror::leave).
+            {"mirror_not_held", {"mirror.detach", "mirror.detach.preview", "mirror.versions.set"}},
+            {"too_large", {"mirror.held.get"}},
+            {"mirror_detached_copy", {"mirror.add", "mirror.accept", "peer.mirror.keys"}},
             // Resync (wave 5 piece B, mirror::resync).
             {"mirror_not_stopped", {"mirror.resync"}}, {"mirror_core_unreachable", {"mirror.resync", "mirror.switch"}},
             {"mirror_core_gone", {"mirror.resync", "mirror.switch"}}, {"mirror_resync_refused", {"mirror.resync"}},
@@ -491,6 +497,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"mirror_resync_failed", {"mirror.resync", "peer.mirror.resync"}},
             // The planned switch (wave 5 piece B, mirror::switching).
             {"mirror_switch_running", {"mirror.switch", "peer.mirror.switch.request"}},
+            {"mirror_vault_deleting", {"mirror.switch", "peer.mirror.switch.request"}},
             {"mirror_submissions_queued", {"mirror.switch", "peer.mirror.switch.request"}},
             {"mirror_has_remote", {"mirror.switch", "peer.mirror.switch.request"}},
             {"mirror_pending_changes", {"mirror.switch", "peer.mirror.switch.prepare"}},

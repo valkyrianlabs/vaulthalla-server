@@ -191,7 +191,8 @@ CommandResult handle_vault_delete(const CommandCall& call) {
         .now = hasFlag(call, "now"),
         .delete_upstream = deleteUp ? std::optional<bool>(true) : keepUp ? std::optional<bool>(false) : std::nullopt,
         .confirm_now = yes,
-        .accept_key_loss = hasFlag(call, "accept-key-loss")
+        .accept_key_loss = hasFlag(call, "accept-key-loss"),
+        .mirror_copy = optVal(call, "mirror-copy")
     };
 
     const auto vLkp = resolveVault(call, call.positionals[0], usage, kDeleteErr);
@@ -204,6 +205,17 @@ CommandResult handle_vault_delete(const CommandCall& call) {
             pending = ops::vaults::findDeleted(call.user, call.positionals[0], ownerId);
         } catch (const std::exception&) {
             return invalid(vLkp.error);
+        }
+        // A mirrored vault's choice for its mirror's copy changes during the window (--mirror-copy alone).
+        if (!req.now && req.mirror_copy && pending->state == ::vh::vault::model::DeletionState::Pending) {
+            req.id = pending->vault_id;
+            try {
+                (void)ops::vaults::remove(call.user, req);
+                return ok("Deleted vault " + std::to_string(pending->vault_id) + ": when it is purged, its mirror's copy is " +
+                          (*req.mirror_copy == "remove" ? std::string("removed") : std::string("left, orphaned")) + ".\n");
+            } catch (const ops::Error& e) {
+                return invalid(std::string(kDeleteErr) + ": " + e.what());
+            }
         }
         if (!req.now || pending->state == ::vh::vault::model::DeletionState::Purged)
             return invalid(std::string(kDeleteErr) + ": vault '" + pending->vault_name + "' (ID " + std::to_string(pending->vault_id) +

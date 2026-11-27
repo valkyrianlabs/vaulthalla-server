@@ -203,20 +203,49 @@ void refuseIfMirrored(const uint32_t vaultId, const std::string& what) {
                                                      vaultId, what, vaultId));
 }
 
-void refuseDeletionIfMirrored(const uint32_t vaultId) {
+// A copy held here is never deleted as a vault: detached first (it becomes this server's), or removed through vh mirror
+// cancel when it is orphaned.
+void refuseDeletingAHeldCopy(const uint32_t vaultId) {
     const auto row = vh::db::query::mirror::MirrorVaults::get(vaultId);
     if (row && row->role == "orphaned")
         throw ops::Refused("vault_orphaned_copy",
                            fmt::format("vault {} is an orphaned copy of another server's vault: remove it with vh mirror "
-                                       "cancel {}", vaultId, vaultId));
+                                       "cancel {}, or detach it to keep it as this server's (vh mirror detach {})",
+                                       vaultId, vaultId, vaultId));
     if (row && row->role == "mirror")
         throw ops::Refused("vault_mirrored", fmt::format("vault {} is another server's vault, held here as its mirror: "
-                                                         "only that server (its core) ends the mirror", vaultId));
+                                                         "detach it to make it this server's (vh mirror detach {}), or "
+                                                         "its core ends the mirror", vaultId, vaultId));
+}
+
+void refuseDeletionIfMirrored(const uint32_t vaultId) {
+    refuseDeletingAHeldCopy(vaultId);
     if (mirroredOrStarting(vaultId))
         throw ops::Refused("vault_mirrored", fmt::format("vault {} is mirrored with a linked server (or a mirror of it is "
-                                                         "starting): end the mirror first: vh mirror cancel {} "
-                                                         "[--remove-copy]", vaultId, vaultId));
+                                                         "starting): delete it saying what happens to the mirror's copy "
+                                                         "(vh vault delete {} --mirror-copy remove|leave), or end the "
+                                                         "mirror first (vh mirror cancel {} [--remove-copy])",
+                                                         vaultId, vaultId, vaultId));
 }
+
+std::optional<MirrorCopy> mirrorCopyFrom(const std::optional<std::string>& text) {
+    if (!text || text->empty()) return std::nullopt;
+    if (*text == "remove") return MirrorCopy::Remove;
+    if (*text == "leave") return MirrorCopy::Leave;
+    throw ops::Invalid("mirror_copy is remove or leave");
+}
+
+bool deletionEndsMirror(const uint32_t vaultId, const std::optional<MirrorCopy>& choice) {
+    refuseDeletingAHeldCopy(vaultId);
+    if (!mirroredOrStarting(vaultId)) return false;
+    if (!choice)
+        throw ops::Refused("mirror_copy_choice_required",
+                           fmt::format("vault {} is mirrored with a linked server: say what happens to its copy there "
+                                       "(--mirror-copy remove: the mirror removes it unless it keeps the vaults this "
+                                       "server removes; leave: it keeps it, orphaned)", vaultId));
+    return true;
+}
+
 
 void checkLink(const vh::peer::Record& peer) {
     if (peer.revoked()) throw ops::Refused("peer_not_linked", "server '" + peer.name + "' is unlinked: link it again first");

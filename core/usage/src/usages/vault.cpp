@@ -277,6 +277,14 @@ static const auto acceptKeyLossFlag = Flag::Alias(
     "that data can never be decrypted again: export it first (vh vault keys export).",
     "accept-key-loss");
 
+static const auto mirrorCopyOpt = Optional::ManyToOne(
+    "mirror_copy",
+    "A vault this server mirrors to a linked server: what happens to its copy there. remove: the mirror removes it "
+    "(unless it keeps the vaults this server removes); leave: it keeps it, orphaned. Required for a mirrored vault; "
+    "applied when the vault is purged (the mirror is read-only until then, and follows again if the vault is "
+    "restored). On a deleted vault it changes the choice.",
+    {"mirror-copy"}, "remove|leave").withGen("remove|leave", contract::gen::constant("leave"));
+
 static std::shared_ptr<CommandUsage> remove(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"delete", "remove", "del", "rm"};
@@ -285,13 +293,14 @@ static std::shared_ptr<CommandUsage> remove(const std::weak_ptr<CommandUsage>& p
                        "vaults.retention_window ends; then its data is purged. Its encryption key is kept for the key "
                        "retention window. In a terminal it asks how to delete; S3 vaults are asked about their upstream data.";
     cmd->positionals = {vaultPos};
-    cmd->optional = {owner};
+    cmd->optional = {owner, mirrorCopyOpt};
     cmd->optional_flags = {deleteNowFlag, deleteUpstreamFlag, keepUpstreamFlag, deleteYesFlag, acceptKeyLossFlag};
     cmd->examples = {
         {"vh vault delete 42", "Delete the vault with ID 42 (restorable until the retention window ends)."},
         {"vh vault delete myvault --owner alice", "Delete the vault named 'myvault' owned by user 'alice'."},
         {"vh vault delete 42 --now --yes", "Delete vault 42 and purge its data right away, without asking."},
-        {"vh vault delete 7 --delete-upstream --yes", "Delete S3 vault 7 and the objects in its bucket when it is purged."}
+        {"vh vault delete 7 --delete-upstream --yes", "Delete S3 vault 7 and the objects in its bucket when it is purged."},
+        {"vh vault delete 3 --mirror-copy remove", "Delete mirrored vault 3 and ask the linked server to remove its copy."}
     };
     return cmd;
 }

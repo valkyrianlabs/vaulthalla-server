@@ -1,4 +1,5 @@
 #include "mirror/switching/Switch.hpp"
+#include "mirror/leave/Leave.hpp"
 
 #include "audit/Trail.hpp"
 #include "db/query/device/Device.hpp"
@@ -232,6 +233,11 @@ mq::Switch begin(const uint32_t vaultId, const mq::SwitchAsked& asked, vh::mirro
                  const bool acceptNoAccess) {
     const auto mv = mq::MirrorVaults::get(vaultId);
     if (!mv || mv->role != "core") throw vh::ops::NotFound("this server is not the vault's core");
+    // A vault this server is deleting (its retention window): nothing moves the core role (wave 5, the mirror follows
+    // the window and the purge ends it here).
+    if (!vh::mirror::leave::deletionOf(vaultId).is_null())
+        throw vh::ops::Refused("mirror_vault_deleting", "this server, the vault's core, is deleting it: a switch is "
+                                                        "refused until the vault is restored");
     if (!transport.connected(mv->peer_id))
         throw vh::ops::Refused("peer_link_down", "the link to the vault's mirror is down; a switch needs it up");
     return switchBegin(vaultId, asked, std::nullopt, acceptNoAccess);
@@ -457,6 +463,10 @@ json request(const uint32_t vaultId, const uint32_t actorId, const std::string& 
     if (!mv) throw vh::ops::NotFound("vault " + std::to_string(vaultId) + " is not mirrored");
     if (mv->role == "orphaned")
         throw vh::ops::Refused("mirror_orphaned", "this copy's core ended the mirror; there is no core to switch with");
+    if (mv->role == "mirror" && !vh::mirror::leave::deletionOf(vaultId).is_null())
+        throw vh::ops::Refused("mirror_vault_deleting", "the vault's core is deleting it: a switch is refused until the "
+                                                        "core restores the vault (vh mirror info shows when it is "
+                                                        "purged)");
     const mq::SwitchAsked asked{.on = mv->role == "core" ? "core" : "mirror",
                                 .by = mq::Account{.node = vh::db::query::device::Devices::nodeId(), .id = actorId},
                                 .name = actorName};

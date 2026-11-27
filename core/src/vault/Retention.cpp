@@ -1,4 +1,5 @@
 #include "vault/Retention.hpp"
+#include "mirror/leave/Leave.hpp"
 #include "crypto/secrets/Dependents.hpp"
 
 #include "db/query/upstream/Bucket.hpp"
@@ -145,6 +146,9 @@ bool purgeUpstreamPass(const model::Deletion& d, const model::S3Vault& s3Vault,
 enum class PurgeOutcome { Purged, Deferred };
 
 PurgeOutcome purgeOne(const model::Deletion& d, const std::function<bool()>& stopRequested) {
+    // A mirrored vault's mirror ends now, with the choice recorded at the deletion (never earlier: a restore within the
+    // window kept it). The mirror is told when it is reachable, as for mirror.cancel.
+    vh::mirror::leave::endForPurge(d.vault_id);
     std::optional<std::string> note;
     if (d.delete_upstream && d.isS3() && !d.upstream_purged_at) {
         std::shared_ptr<model::S3Vault> s3;
@@ -238,6 +242,7 @@ DeletionPtr schedule(const unsigned int vaultId, const std::optional<unsigned in
 
 std::shared_ptr<model::Vault> restore(const unsigned int vaultId) {
     if (!DeletionQuery::restore(vaultId)) return nullptr;
+    vh::mirror::leave::restored(vaultId);   // a mirror paused for the deletion follows again where it was
     auto vault = runtime::Deps::get().storageManager->reinstateVault(vaultId);
     log::Registry::audit()->info("[VaultRetention] Vault {} ('{}') restored", vaultId, vault ? vault->name : "?");
     return vault;

@@ -46,6 +46,7 @@ inline constexpr std::string_view kDiverged = "mirror_diverged";          // sto
 inline constexpr std::string_view kExpired = "mirror_expired";            // stopped: behind retention, or core gone
 inline constexpr std::string_view kStopped = "mirror_stopped";            // stopped: a key missing, an unknown op
 inline constexpr std::string_view kPaused = "mirror_paused";              // following is paused
+inline constexpr std::string_view kCoreDeleting = "mirror_core_deleting"; // paused: the core is deleting the vault
 inline constexpr std::string_view kPeersOff = "mirror_peers_off";         // peers.experimental is off here
 inline constexpr std::string_view kLinkDown = "mirror_link_down";         // the link to the core is down
 inline constexpr std::string_view kWritesNotBuilt = "mirror_writes_not_built";  // Live, but piece B is not built

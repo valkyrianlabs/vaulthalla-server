@@ -122,6 +122,8 @@ public:
     // Ends the vault's mirror record on this server and drops its log, entry hashes and baseline. False when there was
     // none.
     static bool remove(uint32_t vaultId);
+    // The same in the caller's transaction (wave 5, detach); the caller republishes once it commits.
+    static bool remove(pqxx::work& txn, uint32_t vaultId);
 
     // Core: the mirror acknowledged every row up to `at`. Never moves backwards, never past what was numbered.
     // False (nothing changed) otherwise or when this server is not the vault's core.

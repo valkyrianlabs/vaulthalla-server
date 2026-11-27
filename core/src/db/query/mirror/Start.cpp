@@ -226,7 +226,8 @@ bool MirrorStart::told(const uint32_t id, const std::string& state) {
 }
 
 bool MirrorStart::recordCopyOutcome(const uint32_t id, const std::string& outcome) {
-    if (outcome != "removed" && outcome != "kept" && outcome != "none") throw ops::Invalid("unknown copy outcome");
+    if (outcome != "removed" && outcome != "kept" && outcome != "none" && outcome != "detached")
+        throw ops::Invalid("unknown copy outcome");
     return Transactions::exec("mirror::MirrorStart::recordCopyOutcome", [&](pqxx::work& txn) {
         return txn.exec("UPDATE mirror_offer SET copy_outcome = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1",
                         pqxx::params{id, outcome})

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "db/query/mirror/Detach.hpp"
 #include "db/query/mirror/MirrorVault.hpp"
 #include "db/query/mirror/Pending.hpp"
 #include "db/query/mirror/Start.hpp"
@@ -74,6 +75,9 @@ struct Mirrored {
     std::optional<db::query::mirror::MirrorVault> row{};
     std::optional<vh::peer::Record> peer{};
     std::optional<Offer> start{};        // the latest offer of the vault on this side
+    // Wave 5: the vault's detach not followed by a re-key (side mirror: it was detached here and shares its uid and keys
+    // with the original; side core: this server's mirror left with a copy). Role "detached" when it has no row.
+    std::optional<db::query::mirror::DetachRecord> detached{};
 };
 [[nodiscard]] std::vector<Mirrored> list(const Actor& actor);
 [[nodiscard]] Mirrored get(const Actor& actor, uint32_t vaultId);

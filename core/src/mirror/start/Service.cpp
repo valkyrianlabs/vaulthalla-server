@@ -5,6 +5,7 @@
 #include "db/query/mirror/MirrorVault.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "log/Registry.hpp"
+#include "mirror/leave/Leave.hpp"
 #include "ops/Error.hpp"
 #include "peer/Links.hpp"
 
@@ -167,6 +168,8 @@ void Service::tick() {
         }
     }
     syncGrants();
+    // A vault this server is deleting (its retention window): its mirror is told, and told again after a link-up.
+    vh::mirror::leave::syncDeletionNotices();
 }
 
 void Service::step(const Offer& o) {
@@ -289,6 +292,11 @@ void Service::step(const Offer& o) {
         const auto a = ask("peer.mirror.cancel", cancelPayload(), std::chrono::seconds(15));
         if (ok(a) || (a && codeOf(*a) == "not_found")) (void)Q::told(o.id, o.state);
     }
+    // This server detached its copy (wave 5): the core is told, not asked; whatever it answers, it was told.
+    if (o.state == "detached" && o.notify) {
+        const auto a = ask("peer.mirror.detached", vh::mirror::leave::detachedPayload(o), std::chrono::seconds(15));
+        if (ok(a) || (a && codeOf(*a) == "not_found")) (void)Q::told(o.id, o.state);
+    }
 }
 
 void Service::syncGrants() {
@@ -302,7 +310,8 @@ void Service::syncGrants() {
         const auto up = t.upSince(row.peer_id);
         if (!up) continue;
         const auto facts = Q::facts(row.vault_id);
-        if (!facts) continue;
+        // A vault being deleted keeps the grant the mirror holds (its copy stays readable for the window).
+        if (!facts || facts->deleted) continue;
         const auto grant = grantFor(row.peer_id, row.vault_id);
         const auto fingerprint = grant.dump();
         {

@@ -28,6 +28,7 @@ namespace vh::rbac::role {
         permission::admin::Stats stats{};
         permission::admin::Upstream upstream{};
         permission::admin::Cloud cloud{};
+        permission::admin::Mirror mirror{};
         permission::admin::VaultGlobals vGlobals{};
 
         Admin() = default;
@@ -97,7 +98,8 @@ namespace vh::rbac::role {
             std::optional<permission::admin::VaultGlobals> vGlobals = std::nullopt,
             permission::admin::Stats stats = permission::admin::Stats::None(),
             permission::admin::Upstream upstream = permission::admin::Upstream::None(),
-            permission::admin::Cloud cloud = permission::admin::Cloud::None()
+            permission::admin::Cloud cloud = permission::admin::Cloud::None(),
+            permission::admin::Mirror mirror = permission::admin::Mirror::None()
         ) {
             return make(
                 std::move(name),
@@ -113,6 +115,7 @@ namespace vh::rbac::role {
                 std::move(stats),
                 std::move(upstream),
                 std::move(cloud),
+                std::move(mirror),
                 std::move(vGlobals).value_or(permission::admin::VaultGlobals::NoneIfBound(userId))
             );
         }
@@ -132,6 +135,7 @@ namespace vh::rbac::role {
             permission::admin::Stats stats,
             permission::admin::Upstream upstream,
             permission::admin::Cloud cloud,
+            permission::admin::Mirror mirror,
             permission::admin::VaultGlobals vGlobals
         ) {
             Admin a;
@@ -149,6 +153,7 @@ namespace vh::rbac::role {
             a.stats = std::move(stats);
             a.upstream = std::move(upstream);
             a.cloud = std::move(cloud);
+            a.mirror = std::move(mirror);
             a.vGlobals = std::move(vGlobals);
 
             return a;

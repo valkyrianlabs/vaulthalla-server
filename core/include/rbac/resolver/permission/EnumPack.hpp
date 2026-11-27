@@ -24,6 +24,7 @@ struct PermissionResolverEnumPack<std::shared_ptr<role::Admin>> {
             permission::admin::StatsPermissions,
             permission::admin::UpstreamPermissions,
             permission::admin::CloudPermissions,
+            permission::admin::MirrorPermissions,
             permission::admin::roles::RolesPermissions
         >;
     };

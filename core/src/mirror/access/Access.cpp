@@ -82,6 +82,7 @@ std::string readOnlyReason(const HeldVault& v, const bool linkUp) {
     if (v.state == "switching") return std::string(kSwitching);
     if (v.state == "diverged") return std::string(kDiverged);
     if (v.state == "expired") return std::string(kExpired);
+    if (v.state == "paused" && v.stop_reason && *v.stop_reason == kCoreDeleting) return std::string(kCoreDeleting);
     if (v.state == "paused") return std::string(kPaused);
     if (v.state != "live") return std::string(kStopped);
     if (!v.copy_finished) return std::string(kFirstCopy);
@@ -182,6 +183,10 @@ std::string sentence(const std::string_view code) {
         return "This copy fell behind what its core server keeps, or the core no longer mirrors it; it is read-only";
     if (code == kStopped) return "This copy stopped following its core server; it is read-only";
     if (code == kPaused) return "Following this vault's core server is paused; the copy is read-only";
+    if (code == kCoreDeleting)
+        return "This vault's core server is deleting it: the copy is read-only until the core's restore window ends, "
+               "when it is removed here or kept as an orphaned copy (vh mirror info shows which, and when), unless the "
+               "core restores the vault; to keep it as this server's own vault, detach it (vh mirror detach)";
     if (code == kPeersOff)
         return "Linked servers are switched off on this server (peers.experimental); a mirrored copy is read-only";
     if (code == kLinkDown)

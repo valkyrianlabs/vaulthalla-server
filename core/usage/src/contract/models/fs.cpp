@@ -62,6 +62,9 @@ std::vector<WsModel> fsModels() {
     entry.push_back(uinteger("file_count").opt().desc("Directories."));
     entry.push_back(uinteger("subdirectory_count").opt().desc("Directories."));
     entry.push_back(str("target").opt().desc("Symlinks: the link target."));
+    entry.push_back(boolean("contents_missing").opt().desc(
+        "Files of a vault detached from its mirror whose contents never arrived (server mirror, wave 5): listed with "
+        "their size, but opening one fails (mirror_contents_missing). Sent only when true."));
     out.push_back(model("FsEntry",
         "A directory listing's entry: fs::model::to_json(std::vector<std::shared_ptr<Entry>>) dispatches to the File, "
         "Directory or Symlink serializer (core/src/fs/model/*.cpp), so `type` says which members follow.",

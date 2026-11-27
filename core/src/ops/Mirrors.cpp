@@ -2,12 +2,16 @@
 
 #include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
+#include "crypto/id/ObjectUid.hpp"
+#include "db/query/mirror/Detach.hpp"
 #include "db/query/mirror/Pending.hpp"
 #include "db/query/peer/Peer.hpp"
+#include "db/query/vault/Deletion.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "identities/User.hpp"
 #include "mirror/access/Access.hpp"
 #include "mirror/follow/Follower.hpp"
+#include "mirror/leave/Leave.hpp"
 #include "mirror/resync/Resync.hpp"
 #include "mirror/start/Start.hpp"
 #include "mirror/submit/Contents.hpp"
@@ -31,6 +35,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <map>
+#include <set>
 
 namespace vh::ops::mirrors {
 
@@ -93,6 +98,10 @@ Offer add(const Actor& actor, const AddRequest& request) {
     if (request.peer.empty()) throw Invalid("a linked server is required (--to <server>)");
     const auto peer = peers::resolveRef(request.peer);
     if (peer.revoked()) throw Refused("peer_not_linked", "server '" + peer.name + "' is unlinked: link it again first");
+    // Detached between these two servers and not re-keyed since: the same uid and keys on both (wave 5).
+    if (vault->uid)
+        if (const auto refusal = vh::mirror::leave::offerRefusal(vh::crypto::id::toUuid(*vault->uid), peer.id))
+            throw Refused(refusal->first, refusal->second);
     // Preconditions before the step-up: a refusal is said without asking for anything.
     vh::mirror::start::checkLink(peer);
     (void)vh::mirror::start::checkVault(vault->id);
@@ -169,7 +178,8 @@ Cancelled cancel(const Actor& actor, const CancelRequest& request) {
         if (row && row->role != "core")
             throw Refused("mirror_detach_required",
                           "this server holds the vault as another server's mirror: removing it here would destroy a copy "
-                          "of its data, so it is refused; the core can cancel it, and detach comes later");
+                          "of its data, so it is refused; leave with it as this server's vault (vh mirror detach), or "
+                          "the core ends the mirror");
         throw NotFound("no mirror or start of that vault here");
     }
     const bool hadVault = offer->state == "installed";
@@ -184,12 +194,24 @@ std::vector<Mirrored> list(const Actor& actor) {
     std::map<uint32_t, std::size_t> byVault;
     for (const auto& row : MirrorVaults::list()) {
         Mirrored m{.vault_id = row.vault_id, .role = row.role, .row = row};
-        if (const auto v = db::query::vault::Vault::getVault(row.vault_id)) {
+        auto v = db::query::vault::Vault::getVault(row.vault_id);
+        if (!v) v = db::query::vault::Deletion::getDeletedVault(row.vault_id);   // being deleted: its mirror stays
+        if (v) {
             m.vault_name = v->name;
             if (v->uid) m.start = Q::latestOffer(*v->uid, row.role == "core" ? "core" : "mirror");
         }
         m.peer = db::query::peer::Peers::byId(row.peer_id);
         byVault[row.vault_id] = out.size();
+        out.push_back(std::move(m));
+    }
+    // Vaults detached here (wave 5): standalone now, sharing the original's uid and keys until the re-key pass.
+    for (const auto& d : db::query::mirror::MirrorDetach::list()) {
+        if (d.side != "mirror" || d.rekeyed_at || byVault.contains(d.vault_id)) continue;
+        const auto v = db::query::vault::Vault::getVault(d.vault_id);
+        if (!v) continue;
+        Mirrored m{.vault_id = d.vault_id, .vault_name = v->name, .role = "detached", .detached = d};
+        m.peer = db::query::peer::Peers::byId(d.peer_id);
+        byVault[d.vault_id] = out.size();
         out.push_back(std::move(m));
     }
     // Starts that have no mirror row yet (an offer on either side).
@@ -205,7 +227,9 @@ std::vector<Mirrored> list(const Actor& actor) {
 Mirrored get(const Actor& actor, const uint32_t vaultId) {
     using namespace ops_mirrors_detail;
     requireMirrorPerson(actor, "see a vault's mirror");
-    const auto vault = liveVault(vaultId);
+    // A vault this server is deleting (its retention window) keeps its mirror until the purge: still shown.
+    auto vault = vaultId ? db::query::vault::Deletion::getDeletedVault(vaultId) : nullptr;
+    if (!vault) vault = liveVault(vaultId);
     const auto row = MirrorVaults::get(vaultId);
     const auto side = row && row->role != "core" ? "mirror" : "core";
     if (!actor->isSuperAdmin()) {
@@ -218,6 +242,13 @@ Mirrored get(const Actor& actor, const uint32_t vaultId) {
     if (m.start && !row && !m.start->finished()) m.role = "starting";
     if (row) m.peer = db::query::peer::Peers::byId(row->peer_id);
     else if (m.start) m.peer = db::query::peer::Peers::byId(m.start->peer_id);
+    m.detached = db::query::mirror::MirrorDetach::forVault(vaultId);
+    if (m.detached && !row && m.detached->side == "mirror") {
+        m.role = "detached";
+        m.peer = db::query::peer::Peers::byId(m.detached->peer_id);
+        // The vault's own offer on this side was the mirror's (it ended detached).
+        if (vault->uid) m.start = Q::latestOffer(*vault->uid, "mirror");
+    }
     return m;
 }
 
@@ -346,6 +377,12 @@ nlohmann::json toJson(const Mirrored& m) {
         j["created_at"] = nullptr;
     }
     j["start"] = m.start ? toJson(*m.start) : nlohmann::json(nullptr);
+    j["detached"] = m.detached ? vh::mirror::leave::toJson(*m.detached) : nlohmann::json(nullptr);
+    j["rekey_recommended"] = m.detached && m.detached->side == "mirror" && !m.detached->rekeyed_at;
+    // Wave 5: the vault's pending deletion (core: from its deletion; mirror: what the core said): the date its purge
+    // is due and what it does to the copy, or null.
+    j["deleting"] = m.row ? vh::mirror::leave::deletionOf(m.vault_id) : nlohmann::json(nullptr);
+    j["stop_reason"] = m.row && m.row->stop_reason ? nlohmann::json(*m.row->stop_reason) : nlohmann::json(nullptr);
     return j;
 }
 
@@ -386,10 +423,15 @@ std::vector<db::query::mirror::HeldChange> held(const Actor& actor, const std::o
                                                 const bool all) {
     ops_mirrors_detail::requireSuperAdmin(actor, "list held changes");
     std::vector<db::query::mirror::HeldChange> out;
-    for (const auto& m : db::query::mirror::MirrorVaults::list()) {
-        // A core holds the changes it held while it was the mirror (a planned switch since): still listed.
-        if (vaultId && m.vault_id != *vaultId) continue;
-        for (auto& h : db::query::mirror::Pending::heldChanges(m.vault_id, all)) out.push_back(std::move(h));
+    std::set<uint32_t> vaults;
+    // Every row: a core holds the changes it held while it was the mirror (a planned switch since).
+    for (const auto& m : db::query::mirror::MirrorVaults::list()) vaults.insert(m.vault_id);
+    // A detached vault's held changes stay listed until discarded (wave 5).
+    for (const auto& d : db::query::mirror::MirrorDetach::list())
+        if (d.side == "mirror") vaults.insert(d.vault_id);
+    for (const auto v : vaults) {
+        if (vaultId && v != *vaultId) continue;
+        for (auto& h : db::query::mirror::Pending::heldChanges(v, all)) out.push_back(std::move(h));
     }
     return out;
 }
