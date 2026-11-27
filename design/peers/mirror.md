@@ -1325,7 +1325,11 @@ instruction to build without waiting for review); each is listed for confirmatio
   open fails with `mirror_contents_missing` (`mirror::contents::Reason::Missing`, `ENODATA` on the mount, HTTP 410), never
   empty and never another generation's bytes (an older generation's bytes left on disk are not read); nothing ever fetches
   them (`outstanding` takes waiting rows, failed ones only when asked). A new version written here supersedes the row (it
-  names the old generation). `MirrorDetach::missing` lists them exactly, before and after.
+  names the old generation). `MirrorDetach::missing` lists them exactly, before and after. **This is the rule** (owner
+  decision 1 of the wave 5 hand-off, confirmed by the lead's review): and listings say so without opening anything,
+  `fs.dir.list` entries carry `contents_missing: true` (`PendingContents::missingFileIds`, no query for a vault that
+  never had a content row), `vh fs ls` shows their type as `missing`, and the console shows "Contents missing" in place
+  of the size.
 - **The core is told, not asked** (`peer.mirror.detached {offer_uid, vault_uid, at, missing}`, sent by the start service
   for the mirror's `detached` offer while `notify`, dropped by `dropNotices` on unlink like every notice; an orphaned copy's
   core ended the mirror already and is not told). The core (`leave::detachedReceived`) takes it only from the server it

@@ -4823,6 +4823,14 @@
           "types": [
             "string"
           ]
+        },
+        {
+          "description": "Files of a vault detached from its mirror whose contents never arrived (server mirror, wave 5): listed with their size, but opening one fails (mirror_contents_missing). Sent only when true.",
+          "name": "contents_missing",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
         }
       ],
       "name": "FsEntry"
@@ -24427,7 +24435,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9",
+  "models_hash": "340de841a7a45bc8da2d720dd791cb0e378bf45cdf8f66ae7b484ce08837aa0c",
   "protocol": {
     "min": 1,
     "version": 1
@@ -41360,6 +41368,58 @@
               "types": [
                 "boolean"
               ]
+            },
+            {
+              "description": "The vault's core is deleting it (its retention window): when the purge is due and what it does to the copy (mirror: `here`, what this server will do by its keep setting). null: not deleting.",
+              "fields": [
+                {
+                  "name": "deleting",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "name": "purge_after",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "remove",
+                    "leave"
+                  ],
+                  "name": "copy",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "here",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "deleting",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "Why the copy is not live (mirror_core_deleting while its core deletes the vault).",
+              "name": "stop_reason",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
             }
           ],
           "name": "vault",
@@ -41581,7 +41641,7 @@
       "client_timeout_ms": 15000,
       "command": "mirror.held.get",
       "confirmations": [],
-      "description": "A held write's bytes: the person's version, decrypted, inline (base64) up to 8 MiB; a larger one is refused too_large (vh mirror held get streams it). Nothing in the vault changes. Super admins (whoever may list held changes).",
+      "description": "A held write's bytes: the person's version, decrypted, inline (base64) up to 8 MiB; a larger one is refused too_large (vh mirror save streams it). Nothing in the vault changes. Super admins (whoever may list held changes).",
       "effect": "read",
       "input": "payload",
       "operation": null,
@@ -43021,6 +43081,58 @@
               "required": true,
               "types": [
                 "boolean"
+              ]
+            },
+            {
+              "description": "The vault's core is deleting it (its retention window): when the purge is due and what it does to the copy (mirror: `here`, what this server will do by its keep setting). null: not deleting.",
+              "fields": [
+                {
+                  "name": "deleting",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "name": "purge_after",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "remove",
+                    "leave"
+                  ],
+                  "name": "copy",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "here",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "deleting",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "Why the copy is not live (mirror_core_deleting while its core deletes the vault).",
+              "name": "stop_reason",
+              "required": true,
+              "types": [
+                "string",
+                "null"
               ]
             }
           ],
@@ -45751,6 +45863,106 @@
             "none"
           ],
           "name": "copy",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.deleting",
+      "confirmations": [],
+      "description": "The core says whether it is deleting a mirrored vault (its retention window): deleting with the date the purge is due and what it does to the copy (remove | leave, the mirror's keep setting deciding on its side), or not (restored). The mirror pauses its copy (read-only, reason mirror_core_deleting) or follows again where it was. Sent again on every link-up and whenever it changes. Only from the vault's core (not_found otherwise).",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "peer.mirror.deleting",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "deleting",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "purge_after"
+            ],
+            "entity": "peer.mirror.deleting",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "purge_after",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "enum": [
+            "remove",
+            "leave"
+          ],
+          "name": "copy",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked"
+      ],
+      "response": [
+        {
+          "name": "recorded",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "state",
           "required": true,
           "types": [
             "string"
@@ -63645,7 +63857,7 @@
           "description": "Deleting now skips the restore window: resend with confirm_now."
         }
       ],
-      "description": "Delete a vault: restorable until the retention window ends, or purged on the next pass with `now`. Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or 'vault_delete_now' (resend with confirm_now). A vault this server mirrors to a linked server takes mirror_copy (remove | leave: what happens to the mirror's copy, as mirror.cancel [remove_copy]; mirror_copy_choice_required without it), ends the mirror and is then deleted as any vault; a copy held here is refused (vault_mirrored: detach it; vault_orphaned_copy: remove it with mirror.cancel).",
+      "description": "Delete a vault: restorable until the retention window ends, or purged on the next pass with `now`. Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or 'vault_delete_now' (resend with confirm_now). A vault this server mirrors to a linked server takes mirror_copy (remove | leave: what happens to the mirror's copy, as mirror.cancel [remove_copy]; mirror_copy_choice_required without it), recorded with the deletion: the mirror is read-only for the retention window and ends with that choice at the purge (a restore keeps it; on a deleted vault, mirror_copy alone changes the choice); a copy held here is refused (vault_mirrored: detach it; vault_orphaned_copy: remove it with mirror.cancel).",
       "effect": "destructive",
       "input": "payload",
       "operation": "vaults.delete",
@@ -69911,5 +70123,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "e116ce6a24effc0d721988fc61c2768eb55638607ad115f4962a167198c7092b"
+  "ws_hash": "54bbc83fb0bac76284b431b8c8859277f023eada4f1353b538883eafc3310924"
 }

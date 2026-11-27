@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'e116ce6a24effc0d721988fc61c2768eb55638607ad115f4962a167198c7092b'
+export const WS_CONTRACT_HASH = '54bbc83fb0bac76284b431b8c8859277f023eada4f1353b538883eafc3310924'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = 'a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9'
+export const WS_MODELS_HASH = '340de841a7a45bc8da2d720dd791cb0e378bf45cdf8f66ae7b484ce08837aa0c'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -723,6 +723,7 @@ export interface WsModels {
     file_count?: number
     subdirectory_count?: number
     target?: string
+    contents_missing?: boolean
   }
   /**
    * The listed directory or looked-up entry itself (`entry` of fs.dir.list / fs.metadata):
@@ -5838,6 +5839,8 @@ export interface WsContract {
           rekey_recommended: boolean
         } | null
         rekey_recommended: boolean
+        deleting: { deleting: boolean; purge_after: number; copy: 'remove' | 'leave'; here?: string } | null
+        stop_reason: string | null
       }
     }
   }
@@ -5868,8 +5871,8 @@ export interface WsContract {
   }
   /**
    * A held write's bytes: the person's version, decrypted, inline (base64) up to 8 MiB; a larger one is
-   * refused too_large (vh mirror held get streams it). Nothing in the vault changes. Super admins (whoever
-   * may list held changes).
+   * refused too_large (vh mirror save streams it). Nothing in the vault changes. Super admins (whoever may
+   * list held changes).
    */
   'mirror.held.get': {
     payload: { id: number }
@@ -6033,6 +6036,8 @@ export interface WsContract {
           rekey_recommended: boolean
         } | null
         rekey_recommended: boolean
+        deleting: { deleting: boolean; purge_after: number; copy: 'remove' | 'leave'; here?: string } | null
+        stop_reason: string | null
       }[]
     }
   }
@@ -6336,6 +6341,17 @@ export interface WsContract {
   'peer.mirror.cancel': {
     payload: { offer_uid?: string | null; vault_uid: string; reason?: string; remove_copy?: boolean }
     response: { cancelled: boolean; copy: 'removed' | 'kept' | 'none' }
+  }
+  /**
+   * The core says whether it is deleting a mirrored vault (its retention window): deleting with the date the
+   * purge is due and what it does to the copy (remove | leave, the mirror's keep setting deciding on its
+   * side), or not (restored). The mirror pauses its copy (read-only, reason mirror_core_deleting) or follows
+   * again where it was. Sent again on every link-up and whenever it changes. Only from the vault's core
+   * (not_found otherwise).
+   */
+  'peer.mirror.deleting': {
+    payload: { vault_uid: string; deleting: boolean; purge_after?: number; copy?: 'remove' | 'leave' }
+    response: { recorded: boolean; state: string }
   }
   /**
    * The mirror detached its copy of a vault (told, not asked): the core ends the mirror on its side as a
@@ -8554,8 +8570,10 @@ export interface WsContract {
    * Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or 'vault_delete_now'
    * (resend with confirm_now). A vault this server mirrors to a linked server takes mirror_copy (remove |
    * leave: what happens to the mirror's copy, as mirror.cancel [remove_copy]; mirror_copy_choice_required
-   * without it), ends the mirror and is then deleted as any vault; a copy held here is refused
-   * (vault_mirrored: detach it; vault_orphaned_copy: remove it with mirror.cancel).
+   * without it), recorded with the deletion: the mirror is read-only for the retention window and ends with
+   * that choice at the purge (a restore keeps it; on a deleted vault, mirror_copy alone changes the choice);
+   * a copy held here is refused (vault_mirrored: detach it; vault_orphaned_copy: remove it with
+   * mirror.cancel).
    */
   'storage.vault.remove': {
     payload: {
@@ -9506,6 +9524,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.mirror.answer',
   'peer.mirror.begin',
   'peer.mirror.cancel',
+  'peer.mirror.deleting',
   'peer.mirror.detached',
   'peer.mirror.grant',
   'peer.mirror.keys',
@@ -10002,6 +10021,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.mirror.answer': 15000,
   'peer.mirror.begin': 15000,
   'peer.mirror.cancel': 15000,
+  'peer.mirror.deleting': 15000,
   'peer.mirror.detached': 15000,
   'peer.mirror.grant': 15000,
   'peer.mirror.keys': 60000,

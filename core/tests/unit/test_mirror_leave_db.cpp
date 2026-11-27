@@ -433,6 +433,22 @@ TEST_F(MirrorLeaveDbTest, EveryKindOfHeldCopyBecomesAWritableLocalVaultWithTheEx
         EXPECT_EQ(missing[0].path, "/b.txt");
         EXPECT_EQ(missing[0].state, "missing");
         EXPECT_TRUE(mq::PendingContents::outstanding(h.vaultId, 10, true).empty()) << "nothing is ever fetched for it";
+        // Listings say which files are missing without opening them (the console's fs.dir.list, vh fs ls).
+        {
+            auto session = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
+            session->user = superUser;
+            const auto listed = protocols::ws::handler::fs::Storage::listDir({{"vault_id", h.vaultId}, {"path", "/"}},
+                                                                             session);
+            bool sawMissing = false;
+            for (const auto& f : listed.at("files")) {
+                const bool missingHere = f.value("contents_missing", false);
+                EXPECT_EQ(missingHere, f.value("name", "") == "b.txt") << f.dump();
+                sawMissing = sawMissing || missingHere;
+            }
+            EXPECT_TRUE(sawMissing);
+            EXPECT_TRUE(mq::PendingContents::missingFileIds(h.vaultId).contains(
+                db::query::fs::File::getFileByPath(h.vaultId, "/b.txt")->id));
+        }
 
         // Writable here, by every surface, with nothing pending.
         write(engineOf(h.vaultId), "/new.txt", "written after the detach");

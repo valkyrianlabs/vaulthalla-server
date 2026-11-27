@@ -312,4 +312,19 @@ bool PendingContents::mayHavePending(const uint32_t vaultId) {
     }
 }
 
+std::set<uint32_t> PendingContents::missingFileIds(const uint32_t vaultId) {
+    if (!mayHavePending(vaultId)) return {};
+    return Transactions::exec("mirror::PendingContents::missingFileIds", [&](pqxx::work& txn) {
+        std::set<uint32_t> out;
+        for (const auto row : txn.exec("SELECT e.id FROM mirror_content_pending p "
+                                       "JOIN files f ON f.object_uid = p.object_uid "
+                                       "  AND COALESCE(f.encryption_iv, '') = p.generation "
+                                       "JOIN fs_entry e ON e.id = f.fs_entry_id AND e.vault_id = p.vault_id "
+                                       "WHERE p.vault_id = $1 AND p.state = 'missing'",
+                                       pqxx::params{vaultId}))
+            out.insert(row[0].as<uint32_t>());
+        return out;
+    });
+}
+
 }

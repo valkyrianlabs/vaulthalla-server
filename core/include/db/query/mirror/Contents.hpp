@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <ctime>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -109,6 +110,10 @@ public:
     // a vault the moment it gets one. A database that cannot answer gives false (asked again next time), so the open
     // path never fails on this check.
     [[nodiscard]] static bool mayHavePending(uint32_t vaultId);
+    // The entry ids (fs_entry.id) of a vault's files whose contents are missing for good (a detached vault's, state
+    // missing, at the file's current generation): listings mark them. Empty, without a query, for a vault that never
+    // had a content row (mayHavePending).
+    [[nodiscard]] static std::set<uint32_t> missingFileIds(uint32_t vaultId);
 };
 
 }
