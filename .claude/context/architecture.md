@@ -669,6 +669,34 @@ that a `mirror` row exists (`MirrorVaults::startMirror`) and that `MirrorVaults:
 - Tests: `MirrorFollowDbTest.*` (`test_mirror_follow_db.cpp`: capture and replay, serving, retention, the per-vault
   baseline, the deadlock); contracts as for 160; `SqlDeployerHistoryDb.*` for 164.
 
+### The mirror's write gate (`mirror/access`, migration 165; `design/peers/mirror.md` "As built: the gate")
+
+Phase 2 wave 4 piece A: a vault held here as another server's copy (`mirror_vault.role` mirror or orphaned) changes
+through nothing but its core's log.
+- **`vh::mirror::access`** (`core/include/mirror/access/Access.hpp`): `state` NotMirrored | Live | ReadOnly, `reason`,
+  `requireWritable(vault, op)` (throws `MirrorReadOnly`: `ops::ReadOnly`, code `read_only`, `reason`),
+  `acceptsLocalChanges()` (false until piece B), `refuseIfHeld` (`mirror_core_owned`: settings, remote). In memory
+  behind a shared lock (one atomic load while nothing is held): loaded in `wireStorage()` after `rbac::mirrored`
+  (failure stops startup), republished by `MirrorVaults` writes, `createMirrorVault` and the applier's first-copy
+  finish, link state from `peer::LinkService::adopt|connectionClosed`, reconciled each pass of
+  `rbac::mirrored::Watcher` ("MirrorAccessWatcher"). Tests reset it with `rbac::mirrored` (`resetIdKeyedState`).
+- **Callers:** `fuse::Resolver::enforceMirrorGate` (mutating actions: EROFS), `WorkingCopies::seal` (refused: kept
+  unsaved), `ops::fs` (a `// mirror gate` line after each permission check), `vh::fs::Filesystem` mutators (-EROFS or
+  throw), `http::access::requireUserAction` (Write/Overwrite; `handler::errorFor` and the resumable lane answer 503
+  read_only with Retry-After 30), the upload sessions' share lane, `vh fs put` (exit 69, `transfer::exitcode::kReadOnly`),
+  ws `share.upload.start`, `ObjectStore::requireS3Writable` (503 ServiceUnavailable), `ops::recovery::restore`,
+  `ops::vaults::update|updateSync`, `ops::recovery::update`, `ops::vault_remote::attach`. ws refusals carry
+  `{code: read_only, reason}` (`ws/core/Refusal.hpp`).
+- **Backstop (165):** `vh_mirror_gate()` BEFORE triggers on the entry tables and files_trashed; passes with
+  `vh.mirror_apply` / `vh.mirror_local` (`db::query::mirror::Log::markMirrorApply|markMirrorLocal`, the only setters:
+  replication-log contract), the vault root, folder mtime alone, non-replicated columns and a vault removed whole.
+- **Background skips:** sync::Local (wave 3), `vault::conversion::convertVault`, `recovery::local::versions::retain`
+  and `maintain`, `mirror::start::refuseIfMirrored` (a held vault's rotation and salvage even under the test switch).
+- Also wave 4: FUSE setattr through `ops::fs::setAttributes` (`db::query::fs::Entry::setAttributes`), `ops::fs::check`
+  (Allowed | Denied | Missing, no existence oracle), `createFile(overwrite=false)` refuses EEXIST, the CLI socket bound
+  under a private name and renamed into place.
+- Tests: `MirrorGateDbTest.*` (`test_mirror_gate_db.cpp`), `ShellServerTest.*`, `vhh drill peers` 7h.
+
 ### A linked server's vault role and mirrored vaults (migration 162; `design/peers/identity.md`)
 
 The mirror server's permissions as a role it holds, a ceiling (phase 2 wave 2). Storage, resolver and management
@@ -693,7 +721,8 @@ server's vault role".
   admins View/ViewStats only), `fs::visibility::seesWholeSubtree`, the S3 policy evaluator and
   `ObjectStore::requireRbacPermission`, `ops::s3_gateway` principal checks, `ops::vaults::listAccessible`; the access
   listing shows the grant (`subject_type: server`, `owned_by`, `editable: false`) and local rows `in_effect: false`;
-  assignment and override writes refuse (`conflict`). Not FUSE's own root shortcuts (`fuse/Resolver.cpp`).
+  assignment and override writes refuse (`conflict`). FUSE's root shortcuts too since wave 4 (`fuse/Resolver.cpp`
+  `canExposeVaultRoot`, the mount root's listing).
 - **Hot path and invalidation:** `rbac::mirrored::find` = one atomic load while nothing is held, else an immutable
   snapshot lookup. Loaded in `wireStorage()` before engines serve (failure stops startup); republished by every
   `MirrorVaults` write that changes a held row or grant before it returns; runtime service "MirrorAccessWatcher"
