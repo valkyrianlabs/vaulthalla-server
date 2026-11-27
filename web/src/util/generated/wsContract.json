@@ -5998,6 +5998,125 @@
       "name": "MfaFactor"
     },
     {
+      "description": "A mirrored vault's first copy (ops::mirrors::toJson(Status)): on the mirror, how far it got; on the core, whether its mirror acknowledged it (the core can't tell how many entries arrived).",
+      "fields": [
+        {
+          "name": "finished",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "mirror: the baseline entries applied so far; core: null.",
+          "name": "entries_copied",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The baseline's entries while it is kept; null once dropped.",
+          "name": "entries_total",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "name": "MirrorFirstCopy"
+    },
+    {
+      "description": "The settings that apply to a mirrored vault's row (ops::mirrors::toJson(Status)): on a mirror, the versions it keeps of what its core replaces or deletes; for the row's linked server, this server's link settings.",
+      "fields": [
+        {
+          "description": "A mirror row only (mirror.versions.set); null on the core.",
+          "fields": [
+            {
+              "name": "enabled",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "keep_last",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "max_age_days",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "quota_bytes",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "set_by",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "set_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "versions",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "This server accepts every vault the linked server offers (mirror.accept_all.set).",
+          "name": "accept_all",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "This server keeps the vaults the linked server removes (mirror.keep_removed.set).",
+          "name": "keep_removed",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "This server, as core, offers the linked server every vault (mirror.mirror_all.set).",
+          "name": "mirror_all",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "name": "MirrorSettings"
+    },
+    {
       "description": "Filesystem operation queue and share upload figures, one vault or the system (core/src/stats/model/OperationStats.cpp to_json).",
       "fields": [
         {
@@ -24435,7 +24554,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "340de841a7a45bc8da2d720dd791cb0e378bf45cdf8f66ae7b484ce08837aa0c",
+  "models_hash": "22ee63a7649f4d3e730bfe38c9e071777204f292e084265c7a867a3729b941e6",
   "protocol": {
     "min": 1,
     "version": 1
@@ -41579,6 +41698,52 @@
                 "string",
                 "null"
               ]
+            },
+            {
+              "description": "mirror: changes made here the core has not confirmed yet; core: changes numbered here the mirror has not acknowledged (in this term). 0 without a mirror row.",
+              "minimum": 0,
+              "name": "pending_changes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "null without a mirror row.",
+              "model": "MirrorFirstCopy",
+              "name": "first_copy",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "The link to the row's linked server is up now.",
+              "name": "link_up",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "When the last position was acknowledged (core: by its mirror; mirror: to its core).",
+              "name": "confirmed_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "null without a linked server.",
+              "model": "MirrorSettings",
+              "name": "settings",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
             }
           ],
           "name": "vault",
@@ -43452,6 +43617,52 @@
                 "string",
                 "null"
               ]
+            },
+            {
+              "description": "mirror: changes made here the core has not confirmed yet; core: changes numbered here the mirror has not acknowledged (in this term). 0 without a mirror row.",
+              "minimum": 0,
+              "name": "pending_changes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "null without a mirror row.",
+              "model": "MirrorFirstCopy",
+              "name": "first_copy",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "The link to the row's linked server is up now.",
+              "name": "link_up",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "When the last position was acknowledged (core: by its mirror; mirror: to its core).",
+              "name": "confirmed_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "null without a linked server.",
+              "model": "MirrorSettings",
+              "name": "settings",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
             }
           ],
           "items": "object",
@@ -43463,6 +43674,127 @@
         }
       ],
       "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.mirror_all.set",
+      "confirmations": [],
+      "description": "On the core: whether this server mirrors every vault it owns to a linked server, new ones included (default off). When on, the start service offers each vault that is not mirrored yet and each new one as it is created (an offer the other server declined, or that ended, is not made again until the setting is turned on again); with the other server's accept_all on it is fully automatic. A vault whose preconditions refuse it waits until they pass. Super admins, a person only; turning it on asks the keys step-up in the console (every vault's keys go there). Audited mirror.mirror_all.set.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "peer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "peer",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "peer_not_linked",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "peer_not_linked",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "peer",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "set_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "set_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "keys",
       "untyped_refusals": [],
       "variants": []
     },
@@ -47144,6 +47476,183 @@
       "response": [
         {
           "name": "recorded",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 30000,
+      "command": "peer.mirror.key",
+      "confirmations": [],
+      "description": "A key rotation on the core of a mirrored vault, before anything is sealed under the new version: that version as a KEV1 envelope (suite X25519) to the receiver's peer wrap key, the core's key check over its vault id and its attestation. The receiver (the vault's mirror for this very server) proves it against the attestation keys it pinned at pairing and holds it sealed under its own vault master with its origin; it becomes the current version there when the core's log names it. The same key again: the same answer. Refused (mirror_key_refused) when unprovable or when this server holds that version with another key; nothing is written.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "peer.mirror.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "core_vault_id"
+            ],
+            "entity": "peer.mirror.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "core_vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "version"
+            ],
+            "entity": "peer.mirror.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 1,
+          "name": "version",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "KEV1, standard base64.",
+          "generator": {
+            "attrs": [
+              "envelope"
+            ],
+            "entity": "peer.mirror.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "envelope",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "32 hex digits, over the core's vault id.",
+          "generator": {
+            "attrs": [
+              "key_check"
+            ],
+            "entity": "peer.mirror.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "key_check",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "key_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "signature",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "public_key",
+              "required": false,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "attestation"
+            ],
+            "entity": "peer.mirror.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "attestation",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked",
+        "mirror_key_refused"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked",
+        "mirror_key_refused"
+      ],
+      "response": [
+        {
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "version",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "installed",
           "required": true,
           "types": [
             "boolean"
@@ -71843,5 +72352,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "c5ab5edde934cfbd3210345d8ecfe878320a3f4f549a3051b0aa33c294fb0b55"
+  "ws_hash": "bf56105a8e7c4c54fadd8d0bf654c141186acea84089ff889b0e0069b99a8933"
 }

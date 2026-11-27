@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'c5ab5edde934cfbd3210345d8ecfe878320a3f4f549a3051b0aa33c294fb0b55'
+export const WS_CONTRACT_HASH = 'bf56105a8e7c4c54fadd8d0bf654c141186acea84089ff889b0e0069b99a8933'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '340de841a7a45bc8da2d720dd791cb0e378bf45cdf8f66ae7b484ce08837aa0c'
+export const WS_MODELS_HASH = '22ee63a7649f4d3e730bfe38c9e071777204f292e084265c7a867a3729b941e6'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -906,6 +906,29 @@ export interface WsModels {
     transports?: string[]
     aaguid?: string | null
     allowed?: boolean
+  }
+  /**
+   * A mirrored vault's first copy (ops::mirrors::toJson(Status)): on the mirror, how far it got; on the core,
+   * whether its mirror acknowledged it (the core can't tell how many entries arrived).
+   */
+  'MirrorFirstCopy': { finished: boolean; entries_copied: number | null; entries_total: number | null }
+  /**
+   * The settings that apply to a mirrored vault's row (ops::mirrors::toJson(Status)): on a mirror, the
+   * versions it keeps of what its core replaces or deletes; for the row's linked server, this server's link
+   * settings.
+   */
+  'MirrorSettings': {
+    versions: {
+      enabled: boolean
+      keep_last: number | null
+      max_age_days: number | null
+      quota_bytes: number | null
+      set_by: number | null
+      set_at: number | null
+    } | null
+    accept_all: boolean
+    keep_removed: boolean
+    mirror_all: boolean
   }
   /**
    * Filesystem operation queue and share upload figures, one vault or the system
@@ -5858,6 +5881,11 @@ export interface WsContract {
         rekey_recommended: boolean
         deleting: { deleting: boolean; purge_after: number; copy: 'remove' | 'leave'; here?: string } | null
         stop_reason: string | null
+        pending_changes: number
+        first_copy: WsModels['MirrorFirstCopy'] | null
+        link_up: boolean
+        confirmed_at: number | null
+        settings: WsModels['MirrorSettings'] | null
       }
     }
   }
@@ -6072,7 +6100,29 @@ export interface WsContract {
         rekey_recommended: boolean
         deleting: { deleting: boolean; purge_after: number; copy: 'remove' | 'leave'; here?: string } | null
         stop_reason: string | null
+        pending_changes: number
+        first_copy: WsModels['MirrorFirstCopy'] | null
+        link_up: boolean
+        confirmed_at: number | null
+        settings: WsModels['MirrorSettings'] | null
       }[]
+    }
+  }
+  /**
+   * On the core: whether this server mirrors every vault it owns to a linked server, new ones included
+   * (default off). When on, the start service offers each vault that is not mirrored yet and each new one as
+   * it is created (an offer the other server declined, or that ended, is not made again until the setting is
+   * turned on again); with the other server's accept_all on it is fully automatic. A vault whose
+   * preconditions refuse it waits until they pass. Super admins, a person only; turning it on asks the keys
+   * step-up in the console (every vault's keys go there). Audited mirror.mirror_all.set.
+   */
+  'mirror.mirror_all.set': {
+    payload: { peer: string; enabled: boolean }
+    response: {
+      peer: { id: number; node_id: string; name: string }
+      enabled: boolean
+      set_by: number | null
+      set_at: number | null
     }
   }
   /**
@@ -6475,6 +6525,26 @@ export interface WsContract {
       grant: { role_name: string; files: number; directories: number; sync: number; roles: number } | null
     }
     response: { recorded: boolean }
+  }
+  /**
+   * A key rotation on the core of a mirrored vault, before anything is sealed under the new version: that
+   * version as a KEV1 envelope (suite X25519) to the receiver's peer wrap key, the core's key check over its
+   * vault id and its attestation. The receiver (the vault's mirror for this very server) proves it against
+   * the attestation keys it pinned at pairing and holds it sealed under its own vault master with its origin;
+   * it becomes the current version there when the core's log names it. The same key again: the same answer.
+   * Refused (mirror_key_refused) when unprovable or when this server holds that version with another key;
+   * nothing is written.
+   */
+  'peer.mirror.key': {
+    payload: {
+      vault_uid: string
+      core_vault_id: number
+      version: number
+      envelope: string
+      key_check: string
+      attestation: { key_id: number; signature: string; public_key?: string }
+    }
+    response: { vault_uid: string; version: number; installed: boolean }
   }
   /**
    * Every key version the vault needs: each a KEV1 envelope (suite X25519) to the receiver's peer wrap key,
@@ -9675,6 +9745,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'mirror.held.retry',
   'mirror.keep_removed.set',
   'mirror.list',
+  'mirror.mirror_all.set',
   'mirror.pending',
   'mirror.resync',
   'mirror.switch',
@@ -9695,6 +9766,7 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.mirror.deleting',
   'peer.mirror.detached',
   'peer.mirror.grant',
+  'peer.mirror.key',
   'peer.mirror.keys',
   'peer.mirror.log',
   'peer.mirror.notify',
@@ -9986,6 +10058,7 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'group.remove': 'identity.admin',
   'mirror.add': 'keys',
   'mirror.cancel': 'data.destroy',
+  'mirror.mirror_all.set': 'keys',
   'mirror.takeover': 'data.destroy',
   'peer.link.start': 'device.trust',
   'peer.pairing.approve': 'device.trust',
@@ -10179,6 +10252,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'mirror.held.retry': 15000,
   'mirror.keep_removed.set': 15000,
   'mirror.list': 15000,
+  'mirror.mirror_all.set': 15000,
   'mirror.pending': 15000,
   'mirror.resync': 15000,
   'mirror.switch': 60000,
@@ -10199,6 +10273,7 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'peer.mirror.deleting': 15000,
   'peer.mirror.detached': 15000,
   'peer.mirror.grant': 15000,
+  'peer.mirror.key': 30000,
   'peer.mirror.keys': 60000,
   'peer.mirror.log': 15000,
   'peer.mirror.notify': 15000,
