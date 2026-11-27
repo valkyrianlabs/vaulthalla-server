@@ -68,6 +68,11 @@ void checkFsModels(Checker& c) {
 
     const std::vector<std::shared_ptr<fs::model::Entry>> listing{file, step, bare, dir, link};
     for (const auto& entry : json(listing)) c.check(entry, "FsEntry", "fs.dir.list files[] (" + entry.value("name", "") + ")");
+    // A detached vault's file whose contents never arrived: fs.dir.list adds the flag to the entry it lists
+    // (protocols/ws/handler/fs/Storage.cpp; MirrorLeaveDbTest proves which files get it).
+    auto missing = json(listing).at(0);
+    missing["contents_missing"] = true;
+    c.check(missing, "FsEntry", "fs.dir.list files[] (contents missing)");
 
     // `entry` is the Entry base serializer whatever the entry's kind.
     c.check(json(static_cast<const fs::model::Entry&>(*dir)), "FsEntryBase", "fs.dir.list entry (directory)");
