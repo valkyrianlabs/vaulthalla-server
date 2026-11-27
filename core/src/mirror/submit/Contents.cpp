@@ -252,4 +252,100 @@ void dropStagedOf(const uint32_t vaultId) noexcept {
     std::filesystem::remove_all(submitContentsRoot(".vh-mirror-staged") / std::to_string(vaultId), ec);
 }
 
+namespace {
+
+std::optional<uint32_t> submitContentsVaultDir(const std::filesystem::directory_entry& d) {
+    std::error_code ec;
+    if (!d.is_directory(ec)) return std::nullopt;
+    const auto name = d.path().filename().string();
+    if (name.empty() || name.size() > 9 || !std::ranges::all_of(name, [](const char c) { return c >= '0' && c <= '9'; }))
+        return std::nullopt;
+    return static_cast<uint32_t>(std::stoul(name));
+}
+
+std::optional<uint64_t> submitContentsNumberedFile(const std::filesystem::directory_entry& f) {
+    std::error_code ec;
+    if (!f.is_regular_file(ec)) return std::nullopt;
+    const auto name = f.path().filename().string();
+    if (name.empty() || name.size() > 19 || !std::ranges::all_of(name, [](const char c) { return c >= '0' && c <= '9'; }))
+        return std::nullopt;
+    return std::stoull(name);
+}
+
+bool submitContentsVaultExists(const uint32_t vaultId) {
+    return vh::db::Transactions::exec("mirror::submit::contents vault", [&](pqxx::work& txn) {
+        return !txn.exec("SELECT 1 FROM vault WHERE id = $1", pqxx::params{vaultId}).empty();
+    });
+}
+
+}
+
+std::size_t housekeeping(const bool startup) {
+    std::size_t n = 0;
+    std::error_code ec;
+    // Partial receptions a stop interrupted (a PUT's body is never resumed: the mirror sends it again).
+    if (startup) {
+        const auto root = submitContentsRoot(".vh-mirror-staged");
+        if (std::filesystem::exists(root, ec))
+            for (auto it = std::filesystem::recursive_directory_iterator(root, ec);
+                 !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+                if (it->path().filename().string().starts_with(".receiving-")) {
+                    std::error_code e2;
+                    if (std::filesystem::remove(it->path(), e2)) ++n;
+                }
+    }
+    n += sweep(std::chrono::hours(24));
+
+    // Staged bytes of a vault that is not this server's core (any more).
+    if (const auto root = submitContentsRoot(".vh-mirror-staged"); std::filesystem::exists(root, ec))
+        for (const auto& d : std::filesystem::directory_iterator(root, ec))
+            if (const auto v = submitContentsVaultDir(d)) {
+                const auto mv = vh::db::query::mirror::MirrorVaults::get(*v);
+                if (!mv || mv->role != "core") {
+                    std::error_code e2;
+                    n += static_cast<std::size_t>(std::filesystem::remove_all(d.path(), e2));
+                }
+            }
+
+    // A copy whose core ended its mirror: its pending changes are kept as held ones (and their bytes with them).
+    for (const auto& m : vh::db::query::mirror::MirrorVaults::list())
+        if (m.role == "orphaned" && !vh::db::query::mirror::Pending::list(m.vault_id).empty())
+            n += vh::mirror::submit::orphaned(m.vault_id);
+
+    // Pending bytes of a change that is gone; held bytes of a held change no longer open; a vault that is gone.
+    for (const auto* area : {".vh-mirror-pending", ".vh-mirror-held"}) {
+        const bool held = std::string_view(area) == ".vh-mirror-held";
+        const auto root = submitContentsRoot(area);
+        if (!std::filesystem::exists(root, ec)) continue;
+        for (const auto& d : std::filesystem::directory_iterator(root, ec)) {
+            const auto v = submitContentsVaultDir(d);
+            if (!v) continue;
+            std::error_code e2;
+            if (!submitContentsVaultExists(*v)) {
+                n += static_cast<std::size_t>(std::filesystem::remove_all(d.path(), e2));
+                continue;
+            }
+            // Under the vault's change lock: a blob moves (pending to held, held to pending) with its row under it.
+            const std::scoped_lock local(vh::mirror::submit::vaultMutex(*v));
+            for (const auto& f : std::filesystem::directory_iterator(d.path(), e2)) {
+                const auto id = submitContentsNumberedFile(f);
+                if (!id) continue;
+                bool keep = false;
+                if (held) {
+                    const auto h = vh::db::query::mirror::Pending::heldChange(*id);
+                    keep = h && h->vault_id == *v && h->state == "open";
+                } else {
+                    const auto p = vh::db::query::mirror::Pending::get(*id);
+                    keep = p && p->vault_id == *v;
+                }
+                if (!keep) {
+                    std::error_code e3;
+                    if (std::filesystem::remove(f.path(), e3)) ++n;
+                }
+            }
+        }
+    }
+    return n;
+}
+
 }

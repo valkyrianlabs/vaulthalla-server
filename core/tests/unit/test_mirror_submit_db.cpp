@@ -1140,6 +1140,59 @@ TEST_F(MirrorSubmitDbTest, TheCoreCommitsAWriteWithTheFactsItVerifiedAndRefusesA
     toMirror(s);
 }
 
+TEST_F(MirrorSubmitDbTest, HousekeepingSweepsWhatAStopLeftAndWhatNothingNamesAndRunsFromTheFollowersLoop) {
+    auto s = begin([](const EnginePtr& e) { e->mkdir("/docs", superUser); });
+    Wire wire(s);
+    followAll(wire, s);
+    toCore(s);
+    const auto put = [&](const std::string& uid, const std::string& generation) {
+        const auto received = ms::contents::receivingPath(s.coreId);
+        vh::fs::ops::writeFileExclusive(received, {}, 0600);
+        EXPECT_TRUE(ms::contents::keepVerified(s.coreId, uid, {.generation = generation}, received).ok);
+        return ms::contents::stagedPath(s.coreId, uid, generation);
+    };
+    const auto fresh = put("00000000-0000-4000-8000-0000000000c1", "fresh");
+    const auto old = put("00000000-0000-4000-8000-0000000000c2", "old");
+    const auto twoDaysAgo = std::filesystem::file_time_type::clock::now() - std::chrono::hours(48);
+    for (const auto& p : {old, std::filesystem::path(old.string() + ".facts")}) std::filesystem::last_write_time(p, twoDaysAgo);
+    // A vault that is not a core here (any more), with bytes still staged.
+    const auto notCore = ms::contents::stagedPath(s.mirrorId + 100000, "00000000-0000-4000-8000-0000000000c3", "g");
+    std::filesystem::create_directories(notCore.parent_path());
+    vh::fs::ops::writeFileExclusive(notCore, {}, 0600);
+    // A pending blob of a change that is gone, and a held one of a vault that is gone.
+    toMirror(s);
+    const auto strayPending = ms::contents::pendingBlob(s.mirrorId, 999'999'999);
+    std::filesystem::create_directories(strayPending.parent_path());
+    vh::fs::ops::writeFileExclusive(strayPending, {}, 0600);
+    const auto goneVault = ms::contents::heldBlob(999'999'000, 1);
+    std::filesystem::create_directories(goneVault.parent_path());
+    vh::fs::ops::writeFileExclusive(goneVault, {}, 0600);
+    write(s.mirror, "/docs/kept.txt", "a pending change's bytes are named: kept");
+    const auto named = ms::contents::pendingBlob(s.mirrorId, mq::Pending::list(s.mirrorId).at(0).id);
+
+    // The loop runs it at its first pass and every hour after (whatever ran before in this process).
+    const auto at = std::chrono::steady_clock::now() + std::chrono::hours(10'000);
+    EXPECT_GT(mf::Follower::instance()->housekeep(at), 0u);
+    EXPECT_EQ(mf::Follower::instance()->housekeep(at + std::chrono::minutes(59)), 0u) << "not again within the hour";
+    EXPECT_FALSE(std::filesystem::exists(old)) << "staged a day ago and never committed";
+    EXPECT_FALSE(std::filesystem::exists(old.string() + ".facts"));
+    EXPECT_TRUE(std::filesystem::exists(fresh)) << "a change may still name it";
+    EXPECT_FALSE(std::filesystem::exists(notCore.parent_path())) << "not this server's core: nothing will commit it";
+    EXPECT_FALSE(std::filesystem::exists(strayPending)) << "no change names it";
+    EXPECT_FALSE(std::filesystem::exists(goneVault.parent_path())) << "the vault is gone";
+    EXPECT_TRUE(std::filesystem::exists(named));
+    // A partial reception is swept at startup (nothing resumes one: the mirror sends the bytes again).
+    toCore(s);
+    const auto interrupted = ms::contents::receivingPath(s.coreId);   // a PUT a stop broke off
+    vh::fs::ops::writeFileExclusive(interrupted, {}, 0600);
+    toMirror(s);
+    EXPECT_GE(ms::contents::housekeeping(true), 1u);
+    EXPECT_FALSE(std::filesystem::exists(interrupted));
+    EXPECT_TRUE(std::filesystem::exists(fresh));
+    followAll(wire, s);
+    expectSettled(s);
+}
+
 // ---- refusals ------------------------------------------------------------------------------------------------------------
 
 TEST_F(MirrorSubmitDbTest, ARefusalByTheCeilingIsHeldAndTheEntryComesBackToTheCoresState) {

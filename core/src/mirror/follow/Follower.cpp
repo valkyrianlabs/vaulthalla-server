@@ -6,6 +6,7 @@
 #include "mirror/Contents.hpp"
 #include "mirror/follow/Protocol.hpp"
 #include "mirror/start/Start.hpp"
+#include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Submit.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "db/query/peer/Peer.hpp"
@@ -343,6 +344,18 @@ StepResult Follower::step(const uint32_t vaultId, Transport& transport, const ap
     return out;
 }
 
+std::size_t Follower::housekeep(const SteadyClock::time_point now) {
+    const bool startup = !housekept_;
+    if (!startup && now - *housekept_ < kHousekeeping) return 0;
+    housekept_ = now;
+    try {
+        return vh::mirror::submit::contents::housekeeping(startup);
+    } catch (const std::exception& e) {
+        log::Registry::sync()->warn("[MirrorFollower] Housekeeping of sealed bytes failed: {}", e.what());
+        return 0;
+    }
+}
+
 void Follower::onStop() {
     cv_.notify_all();
 }
@@ -353,6 +366,7 @@ void Follower::runLoop() {
     while (!shouldStop()) {
         auto wait = std::chrono::milliseconds(250);
         try {
+            (void)housekeep(SteadyClock::now());   // first pass and hourly, the switch on or off
             if (!followExperimental()) {
                 lazySleep(std::chrono::seconds(1));
                 continue;

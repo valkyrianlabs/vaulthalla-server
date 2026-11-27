@@ -81,4 +81,11 @@ void dropVault(uint32_t vaultId) noexcept;
 // The vault is no longer this server's core with a mirror: what its mirror sent and never committed goes.
 void dropStagedOf(uint32_t vaultId) noexcept;
 
+// What a stop left and what nothing refers to any more: partial receptions at startup (`startup`), staged bytes older
+// than a day, staged bytes of a vault that is not this server's core, pending bytes of a change that is gone, held
+// bytes of a held change that is discarded, retried or gone, the directories of a vault that is gone; and a copy whose
+// core ended its mirror keeps its pending changes as held ones (mirror::submit::orphaned). Returns what it removed.
+// Run by the follower's loop (MirrorFollower) at its start and every hour.
+std::size_t housekeeping(bool startup);
+
 }

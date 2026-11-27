@@ -792,7 +792,10 @@ review); each is listed for confirmation in the hand-off:
   never what the submit claims of them: a submit whose facts are not those of its bytes is refused `invalid_contents`
   (held, never retried). So both servers hold the same bytes and the confirmation fetches nothing; a create never
   replaces what is there (a conflict), a replacement is the compare-and-swap on the generation it was based on
-  (`content_conflict`). Staged bytes never committed are swept after a day (each drain).
+  (`content_conflict`). **Housekeeping** (`contents::housekeeping`, from the follower's loop at its first pass and
+  every hour, the switch on or off): partial receptions a stop left (`.receiving-*`, at the first pass), staged bytes
+  never committed after a day, staged bytes of a vault that is not this server's core, pending bytes no change names,
+  held bytes of a held change no longer open, and the directories of a vault that is gone.
   The pending store's link goes when the change is confirmed; a held change keeps it as `.vh-mirror-held/<vault>/<id>`.
   Bytes are sent without a transfer slot (known limit: the four slots per peer of wave 2 are for fetches).
 - **When a vault's copy or mirror ends**, deliberately: a held change discarded takes its bytes; a retried one moves

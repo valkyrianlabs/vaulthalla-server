@@ -120,6 +120,11 @@ public:
     // Core side: the sequencer numbered groups of `vaultId` through `last` (coalesced; sent from this service).
     void numbered(uint32_t vaultId, vh::db::query::mirror::Position last);
 
+    // The loop's housekeeping of the mirror's and the core's sealed bytes (mirror::submit::contents::housekeeping): at
+    // its first pass (with the startup sweep) and every kHousekeeping after. Returns what it removed (tests call it).
+    static constexpr std::chrono::hours kHousekeeping{1};
+    std::size_t housekeep(std::chrono::steady_clock::time_point now);
+
     // Tests: the transport the loop uses (null: the link service's).
     void setTransportForTesting(std::shared_ptr<Transport> transport);
     // Tests: the notices waiting to be sent, then sent through `transport`; how many were sent.
@@ -152,6 +157,7 @@ private:
     std::map<uint32_t, Partial> partials_;
     std::map<uint32_t, Schedule> schedule_;
     std::shared_ptr<Transport> testTransport_;
+    std::optional<std::chrono::steady_clock::time_point> housekept_;
 };
 
 }
