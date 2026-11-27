@@ -1,6 +1,7 @@
 #include "mirror/access/Access.hpp"
 
 #include "config/Registry.hpp"
+#include "db/query/mirror/Copy.hpp"
 #include "db/query/mirror/MirrorVault.hpp"
 #include "log/Registry.hpp"
 #include "peer/Links.hpp"
@@ -10,6 +11,7 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <set>
 #include <shared_mutex>
 #include <utility>
 
@@ -29,6 +31,8 @@ struct Gate {
     std::shared_mutex mutex;
     std::map<uint32_t, HeldVault> vaults;   // only vaults held here as another server's copy
     std::map<uint32_t, bool> links;         // peer id -> up; no entry: down
+    std::set<uint32_t> copyTargets;         // the new vaults running copies write, as mirror_copy says
+    std::set<uint32_t> copyStarted;         // the same, from the copy itself before its row says so
     std::mutex publishMutex;                // one reader of the table publishes at a time
 };
 
@@ -38,6 +42,29 @@ Gate& gate() {
 }
 
 std::atomic<bool> anyHeld{false};
+std::atomic<bool> anyCopyTarget{false};
+thread_local uint32_t copyWriterVault = 0;
+
+// Caller holds the gate's lock (unique).
+void publishAnyCopyTarget(const Gate& g) {
+    anyCopyTarget.store(!g.copyTargets.empty() || !g.copyStarted.empty(), std::memory_order_release);
+}
+
+// Publishes the running copies' vaults from the database; true when they changed.
+bool publishCopyTargets() {
+    const auto rows = vh::db::query::mirror::MirrorCopies::writingTargets();
+    std::set<uint32_t> next(rows.begin(), rows.end());
+    auto& g = gate();
+    std::unique_lock lock(g.mutex);
+    if (next == g.copyTargets) return false;
+    g.copyTargets = std::move(next);
+    publishAnyCopyTarget(g);
+    return true;
+}
+
+bool anyGated() {
+    return anyHeld.load(std::memory_order_acquire) || anyCopyTarget.load(std::memory_order_acquire);
+}
 
 std::map<uint32_t, HeldVault> heldFrom(const std::vector<vh::db::query::mirror::MirrorVault>& rows) {
     std::map<uint32_t, HeldVault> out;
@@ -100,9 +127,11 @@ struct Judged {
 };
 
 Judged judge(const uint32_t vaultId) {
-    if (!anyHeld.load(std::memory_order_acquire)) return {};
+    if (!anyGated()) return {};
     auto& g = gate();
     std::shared_lock lock(g.mutex);
+    if (copyWriterVault != vaultId && (g.copyTargets.contains(vaultId) || g.copyStarted.contains(vaultId)))
+        return {.state = State::ReadOnly, .reason = std::string(kCopyWriting)};
     const auto it = g.vaults.find(vaultId);
     if (it == g.vaults.end()) return {};
     const auto link = g.links.find(it->second.peer_id);
@@ -207,6 +236,9 @@ std::string sentence(const std::string_view code) {
     if (code == kSwitching)
         return "This vault's core role is moving between its two linked servers (a planned switch); it is read-only "
                "until the switch ends, which takes moments: try again shortly";
+    if (code == kCopyWriting)
+        return "This vault is being written as a copy of a mirrored vault; it is read-only until the copy finishes "
+               "(vh mirror detach <vault> --copy --status shows its progress)";
     if (code == kWritesNotBuilt)
         return "This vault is a mirror of another server's vault; changes are made on its core server (this server "
                "does not take changes to a mirror yet)";
@@ -218,7 +250,7 @@ MirrorReadOnly::MirrorReadOnly(const uint32_t vaultId, std::string reasonCode, c
       vault_id(vaultId) {}
 
 void requireWritable(const uint32_t vaultId, const std::string_view operation) {
-    if (!mirror_access_detail::anyHeld.load(std::memory_order_acquire)) return;
+    if (!mirror_access_detail::anyGated()) return;
     if (auto why = refusalReason(vaultId)) throw MirrorReadOnly(vaultId, std::move(*why), operation);
 }
 
@@ -233,6 +265,7 @@ void reload() {
     const std::scoped_lock lock(g.publishMutex);
     (void)mirror_access_detail::publishHeld(mirror_access_detail::heldFrom(vh::db::query::mirror::MirrorVaults::list()),
                                             true);
+    (void)mirror_access_detail::publishCopyTargets();
 }
 
 bool reconcile() {
@@ -242,6 +275,7 @@ bool reconcile() {
         const std::scoped_lock lock(g.publishMutex);
         changed = mirror_access_detail::publishHeld(
             mirror_access_detail::heldFrom(vh::db::query::mirror::MirrorVaults::list()), false);
+        changed = mirror_access_detail::publishCopyTargets() || changed;
     }
     if (changed)
         vh::log::Registry::sync()->info("[mirror::access] The vaults held here as another server's copy changed outside the "
@@ -287,11 +321,35 @@ std::vector<uint32_t> heldVaults() {
     return out;
 }
 
+void beginCopyTarget(const uint32_t vaultId) {
+    auto& g = mirror_access_detail::gate();
+    std::unique_lock lock(g.mutex);
+    g.copyStarted.insert(vaultId);
+    mirror_access_detail::publishAnyCopyTarget(g);
+}
+
+void endCopyTarget(const uint32_t vaultId) {
+    auto& g = mirror_access_detail::gate();
+    std::unique_lock lock(g.mutex);
+    g.copyStarted.erase(vaultId);
+    g.copyTargets.erase(vaultId);
+    mirror_access_detail::publishAnyCopyTarget(g);
+}
+
+CopyWriter::CopyWriter(const uint32_t vaultId) noexcept : previous_(mirror_access_detail::copyWriterVault) {
+    mirror_access_detail::copyWriterVault = vaultId;
+}
+
+CopyWriter::~CopyWriter() { mirror_access_detail::copyWriterVault = previous_; }
+
 void resetForTesting() noexcept {
     auto& g = mirror_access_detail::gate();
     std::unique_lock lock(g.mutex);
     g.vaults.clear();
     g.links.clear();
+    g.copyTargets.clear();
+    g.copyStarted.clear();
+    mirror_access_detail::anyCopyTarget.store(false, std::memory_order_release);
     mirror_access_detail::anyHeld.store(false, std::memory_order_release);
 }
 

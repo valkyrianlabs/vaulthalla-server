@@ -1,6 +1,7 @@
 #include "protocols/ws/handler/MirrorLeave.hpp"
 
 #include "db/query/peer/Peer.hpp"
+#include "mirror/copy/Copy.hpp"
 #include "mirror/leave/Leave.hpp"
 #include "ops/Error.hpp"
 #include "ops/MirrorLeave.hpp"
@@ -68,6 +69,24 @@ json MirrorLeave::detach(const json& payload, const std::shared_ptr<Session>& se
                                                 .owner = leaveOptionalText(payload, "owner"),
                                                 .confirm_name = leaveOptionalText(payload, "confirm_name")};
     return {{"detached", vh::mirror::leave::toJson(::vh::ops::mirrors::detach(leaveActorOf(session), req))}};
+}
+
+json MirrorLeave::detachCopy(const json& payload, const std::shared_ptr<Session>& session) {
+    using namespace ws_mirror_leave_detail;
+    const ::vh::ops::mirrors::CopyRequest req{.vault_id = leaveVaultId(payload), .name = leaveOptionalText(payload, "name"),
+                                              .owner = leaveOptionalText(payload, "owner")};
+    return {{"copy", vh::mirror::copy::toJson(::vh::ops::mirrors::detachCopy(leaveActorOf(session), req))}};
+}
+
+json MirrorLeave::detachCopyGet(const json& payload, const std::shared_ptr<Session>& session) {
+    using namespace ws_mirror_leave_detail;
+    const auto job = ::vh::ops::mirrors::copyStatus(leaveActorOf(session), leaveVaultId(payload));
+    return {{"copy", job ? vh::mirror::copy::toJson(*job) : json(nullptr)}};
+}
+
+json MirrorLeave::detachCopyCancel(const json& payload, const std::shared_ptr<Session>& session) {
+    using namespace ws_mirror_leave_detail;
+    return {{"copy", vh::mirror::copy::toJson(::vh::ops::mirrors::cancelCopy(leaveActorOf(session), leaveVaultId(payload)))}};
 }
 
 json MirrorLeave::versionsSet(const json& payload, const std::shared_ptr<Session>& session) {

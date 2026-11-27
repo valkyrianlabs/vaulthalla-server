@@ -179,6 +179,9 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     // Leaving a mirror (wave 5 piece A; design/peers/mirror.md "As built: leaving a mirror").
     r->registerPayload("mirror.detach.preview", &handler::MirrorLeave::detachPreview);
     r->registerPayload("mirror.detach", &handler::MirrorLeave::detach);
+    r->registerPayload("mirror.detach.copy", &handler::MirrorLeave::detachCopy);
+    r->registerPayload("mirror.detach.copy.get", &handler::MirrorLeave::detachCopyGet);
+    r->registerPayload("mirror.detach.copy.cancel", &handler::MirrorLeave::detachCopyCancel);
     r->registerPayload("mirror.versions.set", &handler::MirrorLeave::versionsSet);
     r->registerPayload("mirror.held.get", &handler::MirrorLeave::heldGet);
     r->registerPayload("peer.mirror.detached", &handler::MirrorLeave::detached);

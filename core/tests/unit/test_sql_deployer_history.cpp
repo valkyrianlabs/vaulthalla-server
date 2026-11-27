@@ -2376,6 +2376,9 @@ TEST_F(SqlDeployerHistoryDb, PeerVaultRoleMigration162IsAdditiveAndIdempotent) {
                               "granted_sync_permissions", "granted_roles_permissions", "granted_by_node", "granted_at"})
             txn.exec(std::string("ALTER TABLE mirror_vault DROP COLUMN IF EXISTS ") + c);
         txn.exec("ALTER TABLE vault_role_assignments DROP CONSTRAINT vault_role_assignments_subject_type_check");
+        // A 161 schema holds no linked server's assignment; suites sharing this database (the mirror ones) may have
+        // left some, which the old CHECK would refuse (rolled back with the rest).
+        txn.exec("DELETE FROM vault_role_assignments WHERE subject_type NOT IN ('user', 'group')");
         txn.exec("ALTER TABLE vault_role_assignments ADD CONSTRAINT vault_role_assignments_subject_type_check "
                  "CHECK (subject_type IN ('user', 'group'))");
         txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
@@ -2645,6 +2648,62 @@ TEST_F(SqlDeployerHistoryDb, MirrorSwitchMigration168IsAdditiveAndIdempotent) {
     });
 }
 
+// Migration 169 (detach a copy, wave 5 piece C): on an upgraded database with a mirrored vault in it, mirror_copy is
+// added empty with its checks and its one-running-copy indexes, nothing existing changes, and a second run changes
+// nothing.
+TEST_F(SqlDeployerHistoryDb, MirrorCopyMigration169IsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        const std::string file = "169_mirror_copy.sql";
+        const auto count = [&](const std::string& q) { return txn.exec(q).one_field_ref().as<int64_t>(); };
+        // ---- back to the schema before 169
+        txn.exec("DROP TABLE IF EXISTS mirror_copy");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
+
+        // ---- an upgraded install: a vault held as a linked server's mirror
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_169_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES "
+                                    "('claude_test_169', $1, 'local', 'claude_test_169', gen_random_uuid()) RETURNING id",
+                                    pqxx::params{owner}).one_field_ref().as<int>();
+        const auto peer = txn.exec("INSERT INTO peer (node_id, name, spki_sha256, wrap_public_key) "
+                                   "VALUES ('claude-169-node', 'vps', repeat('cf', 32), decode(repeat('00', 32), 'hex')) "
+                                   "RETURNING id").one_field_ref().as<int>();
+        txn.exec("INSERT INTO mirror_vault (vault_id, peer_id, role, term, last_seq) VALUES ($1, $2, 'mirror', 2, 5)",
+                 pqxx::params{vault, peer});
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, file));
+        EXPECT_EQ(report.applied.size(), 1u) << "only 169 was missing";
+        EXPECT_EQ(recordedHash(txn, file), currentHash(file));
+        for (const auto* c : {"source_vault_id", "vault_id", "state", "entries_done", "bytes_done", "skipped",
+                              "cancel_requested", "attempts"})
+            EXPECT_TRUE(columnExists(txn, "mirror_copy", c)) << c;
+        EXPECT_EQ(count("SELECT count(*) FROM mirror_copy"), 0);
+        EXPECT_EQ(count("SELECT last_seq FROM mirror_vault WHERE vault_id = " + std::to_string(vault)), 5)
+            << "the row is untouched";
+        // One running copy per held vault; a finished one says when.
+        txn.exec("INSERT INTO mirror_copy (source_vault_id, name, owner_id) VALUES ($1, 'a copy', $2)",
+                 pqxx::params{vault, owner});
+        EXPECT_ANY_THROW(txn.exec("SAVEPOINT s169; INSERT INTO mirror_copy (source_vault_id, name, owner_id) "
+                                  "VALUES (" + std::to_string(vault) + ", 'b copy', " + std::to_string(owner) + ")"));
+        txn.exec("ROLLBACK TO SAVEPOINT s169");
+        EXPECT_ANY_THROW(txn.exec("SAVEPOINT s169b; UPDATE mirror_copy SET state = 'finished'"));
+        txn.exec("ROLLBACK TO SAVEPOINT s169b");
+        EXPECT_NO_THROW(txn.exec("UPDATE mirror_copy SET state = 'finished', finished_at = now()"));
+        // The vault it read goes: the record stays, without it.
+        txn.exec("DELETE FROM mirror_vault WHERE vault_id = $1", pqxx::params{vault});
+        txn.exec("DELETE FROM vault WHERE id = $1", pqxx::params{vault});
+        EXPECT_EQ(count("SELECT count(*) FROM mirror_copy WHERE source_vault_id IS NULL"), 1);
+
+        // A second run of the file, and of the deployer, changes nothing.
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / file)));
+    });
+}
+
 // Migration 170 (mirror every vault to a linked server): on an upgraded database with a linked server, the three
 // peer.mirror_vaults columns are added off, the row is untouched, and a second run changes nothing.
 TEST_F(SqlDeployerHistoryDb, MirrorAllMigration170IsAdditiveAndIdempotent) {
@@ -2699,6 +2758,10 @@ TEST_F(SqlDeployerHistoryDb, MirrorLeaveMigration167MatchesFreshSeedAndIsAdditiv
         const std::string file = "167_mirror_leave.sql";
         const auto count = [&](const std::string& q) { return txn.exec(q).one_field_ref().as<int64_t>(); };
 
+        // Rows another suite of this shard left (a detached offer, missing contents) would not fit the 166 checks put
+        // back below: gone for this transaction, which rolls back.
+        txn.exec("DELETE FROM mirror_offer");
+        txn.exec("DELETE FROM mirror_content_pending");
         // ---- back to the 166 schema
         txn.exec("DROP TABLE IF EXISTS mirror_detached");
         txn.exec("ALTER TABLE admin_role DROP COLUMN IF EXISTS mirror_permissions");
@@ -2708,9 +2771,6 @@ TEST_F(SqlDeployerHistoryDb, MirrorLeaveMigration167MatchesFreshSeedAndIsAdditiv
         for (const auto* c : {"mirror_offer_state_check", "mirror_offer_copy_outcome_check", "mirror_offer_side_state_check",
                               "mirror_offer_finished_check"})
             txn.exec(std::string("ALTER TABLE mirror_offer DROP CONSTRAINT IF EXISTS ") + c);
-        // Rows only 167 allows, left in this database by a suite that ran before (a detach): a 166 install holds none.
-        txn.exec("DELETE FROM mirror_offer WHERE state = 'detached' OR copy_outcome = 'detached'");
-        txn.exec("DELETE FROM mirror_content_pending WHERE state NOT IN ('waiting', 'failed')");
         txn.exec("ALTER TABLE mirror_offer ADD CHECK (state IN ('offered', 'pending', 'accepted', 'keys_acked', "
                  "'installed', 'started', 'declined', 'cancelled', 'expired', 'failed', 'orphaned'))");
         txn.exec("ALTER TABLE mirror_offer ADD CHECK (copy_outcome IS NULL OR copy_outcome IN ('removed', 'kept', 'none'))");

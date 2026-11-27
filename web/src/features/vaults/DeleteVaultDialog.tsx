@@ -1,6 +1,7 @@
 'use client'
 
 import React, { useEffect, useId, useState } from 'react'
+import Link from 'next/link'
 import { Dialog, DialogContent } from '@/components/ui/Dialog'
 import { Button } from '@/components/ui/Button'
 import { Checkbox } from '@/components/ui/Choice'
@@ -14,10 +15,41 @@ import { isWsError } from '@/lib/ws/errors'
 import type { VaultDeletion, VaultRemovalPlan } from '@/models/vaultDeletion'
 import { cn } from '@/util/cn'
 import { CommandCopy } from '@/features/vaults/CommandCopy'
+import { usePeersAvailability } from '@/features/peers/signal'
+import { MIRROR_COPY } from '@/features/mirrors/copy'
+import { ChoiceCards } from '@/features/mirrors/parts'
 
 // Safe deletion (#162), one dialog: what happens and for how long, the upstream choice for S3 vaults, the key
 // warning, then Delete (restorable) or Delete now (one more typed confirmation). Keys are exported from a terminal
 // only; the plan is re-read when the window regains focus, so exporting the key elsewhere clears the warning.
+// A vault this server mirrors to a linked server also asks what happens to the copy there (mirror_copy: remove or
+// leave), when mirror.get says it is this server's (core) or the server refuses with mirror_copy_choice_required; a
+// copy held here can't be deleted (the server refuses vault_mirrored / vault_orphaned_copy), so the dialog says so.
+
+const MIRROR_CHOICE_REQUIRED = 'mirror_copy_choice_required'
+
+type MirrorCopy = 'remove' | 'leave'
+
+const MirrorCopyChoice = ({ peer, value, onChange }: { peer: string | null; value: MirrorCopy | null; onChange: (v: MirrorCopy) => void }) => {
+  const name = useId()
+  const C = MIRROR_COPY
+  return (
+    <div className="mt-4">
+      <ChoiceCards
+        name={name}
+        legend={peer ? C.deleteMirrorLegend(peer) : C.deleteMirrorLegendUnknown}
+        value={value}
+        onChange={onChange}
+        testId="vault-delete-mirror-copy"
+        options={[
+          { value: 'leave', title: C.deleteMirrorLeave, hint: C.deleteMirrorLeaveHint },
+          { value: 'remove', title: C.deleteMirrorRemove, hint: C.deleteMirrorRemoveHint },
+        ]}
+      />
+      <p className="text-fg-subtle mt-2 text-xs">{C.deleteMirrorReadOnly}</p>
+    </div>
+  )
+}
 
 const UpstreamChoice = ({
   plan,
@@ -85,9 +117,17 @@ export const DeleteVaultDialog = ({
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState<null | 'delete' | 'now'>(null)
   const [error, setError] = useState<unknown>(null)
+  const [mirrorCopy, setMirrorCopy] = useState<MirrorCopy | null>(null)
+  const [choiceRequired, setChoiceRequired] = useState(false)
+  // Whether the vault is mirrored (super admins on a server with linked servers on; anyone else learns it from the
+  // refusal, which names the choice).
+  const peers = usePeersAvailability()
+  const mirror = useWs('mirror.get', { vault_id: vault.id }, { enabled: open && peers.enabled, retry: false, staleTime: 0, select: d => d.vault })
 
   useEffect(() => {
     if (!open) return
+    setMirrorCopy(null)
+    setChoiceRequired(false)
     setDeleteUpstream(false)
     setAcceptKeyLoss(false)
     setStep('choose')
@@ -98,7 +138,11 @@ export const DeleteVaultDialog = ({
   const p = plan.data
   const isS3 = p?.type === 's3'
   const keyAtRisk = Boolean(p && isS3 && p.encrypted_upstream && !deleteUpstream && !p.key_exported)
-  const blocked = !p || (keyAtRisk && !acceptKeyLoss)
+  const role = mirror.data?.role
+  const mirrorPeer = mirror.data?.peer?.name || null
+  const needsMirrorChoice = role === 'core' || choiceRequired
+  const heldCopy = role === 'mirror' || role === 'orphaned'
+  const blocked = !p || (keyAtRisk && !acceptKeyLoss) || (needsMirrorChoice && !mirrorCopy) || heldCopy
 
   const submit = async (now: boolean) => {
     if (!p) return
@@ -111,6 +155,7 @@ export const DeleteVaultDialog = ({
         confirm_now: now,
         ...(isS3 ? { delete_upstream: deleteUpstream } : {}),
         ...(keyAtRisk ? { accept_key_loss: acceptKeyLoss } : {}),
+        ...(needsMirrorChoice && mirrorCopy ? { mirror_copy: mirrorCopy } : {}),
       })
       await invalidate('storage.vault.list', 'storage.vault.deleted.list', 'stats.system.storage')
       notify.success(
@@ -122,6 +167,11 @@ export const DeleteVaultDialog = ({
     } catch (e) {
       // The facts changed underneath (a key export, another admin): show the server's reason with fresh facts.
       if (isWsError(e, 'needs_confirmation')) void plan.refetch()
+      if (isWsError(e) && e.code === MIRROR_CHOICE_REQUIRED) {
+        // The vault is mirrored after all: ask, then the person sends it again.
+        setChoiceRequired(true)
+        void mirror.refetch()
+      }
       setError(e)
       if (now) setStep('choose')
     } finally {
@@ -190,6 +240,19 @@ export const DeleteVaultDialog = ({
             </p>
 
             {isS3 ? <UpstreamChoice plan={p} deleteUpstream={deleteUpstream} onChange={setDeleteUpstream} /> : null}
+
+            {heldCopy ?
+              <div className="border-warn-line bg-warn-soft mt-4 rounded-control border p-3 text-sm" role="alert" data-testid="vault-delete-mirror-held">
+                <p className="text-fg-muted">
+                  {role === 'orphaned' ? MIRROR_COPY.deleteOrphan : MIRROR_COPY.deleteHeldCopy(mirrorPeer ?? MIRROR_COPY.unnamedServer)}
+                </p>
+                <Link href={`/linked-servers/mirrors/${vault.id}`} className="text-accent-text mt-1.5 inline-block text-sm hover:underline">
+                  {MIRROR_COPY.deleteOpenMirror}
+                </Link>
+              </div>
+            : needsMirrorChoice ?
+              <MirrorCopyChoice peer={mirrorPeer} value={mirrorCopy} onChange={setMirrorCopy} />
+            : null}
 
             {keyAtRisk ?
               <div className="border-danger-line bg-danger-soft mt-4 rounded-control border p-3" data-testid="vault-delete-key-loss" role="alert">
