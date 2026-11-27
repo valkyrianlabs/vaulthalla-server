@@ -40787,7 +40787,9 @@
                 "diverged",
                 "expired",
                 "stopped",
-                "switching"
+                "switching",
+                "rejoining",
+                "forked"
               ],
               "name": "state",
               "required": true,
@@ -41229,6 +41231,159 @@
               "required": true,
               "types": [
                 "object",
+                "null"
+              ]
+            },
+            {
+              "description": "The vault's latest planned switch here.",
+              "fields": [
+                {
+                  "name": "switch_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "enum": [
+                    "core",
+                    "mirror"
+                  ],
+                  "name": "side",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "enum": [
+                    "requested",
+                    "draining",
+                    "preparing",
+                    "prepared",
+                    "switched",
+                    "abandoned"
+                  ],
+                  "name": "phase",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "reason",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "created_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "ended_at",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "switch",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "A take over here still waiting for its old core to return.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "fork",
+                  "required": true,
+                  "types": [
+                    "object"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "peer_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "contents_missing",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "created_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "takeover",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "What a person does next when the vault waits on the other server.",
+              "name": "advice",
+              "required": true,
+              "types": [
+                "string",
                 "null"
               ]
             },
@@ -42505,7 +42660,9 @@
                 "diverged",
                 "expired",
                 "stopped",
-                "switching"
+                "switching",
+                "rejoining",
+                "forked"
               ],
               "name": "state",
               "required": true,
@@ -42947,6 +43104,159 @@
               "required": true,
               "types": [
                 "object",
+                "null"
+              ]
+            },
+            {
+              "description": "The vault's latest planned switch here.",
+              "fields": [
+                {
+                  "name": "switch_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "enum": [
+                    "core",
+                    "mirror"
+                  ],
+                  "name": "side",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "enum": [
+                    "requested",
+                    "draining",
+                    "preparing",
+                    "prepared",
+                    "switched",
+                    "abandoned"
+                  ],
+                  "name": "phase",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "reason",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "created_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "ended_at",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "switch",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "A take over here still waiting for its old core to return.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "fork",
+                  "required": true,
+                  "types": [
+                    "object"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "peer_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "contents_missing",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "created_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "takeover",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "What a person does next when the vault waits on the other server.",
+              "name": "advice",
+              "required": true,
+              "types": [
+                "string",
                 "null"
               ]
             },
@@ -43983,6 +44293,275 @@
         }
       ],
       "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.takeover",
+      "confirmations": [],
+      "description": "On a mirror whose core is gone or cannot be reached: take over as the vault's core. This server records the next term with itself as the core, the last change it applied from the old core as the fork point and its tree as the old core last confirmed it as the fork base (kept for the old core's return); changes made here and still pending become ordinary changes, held ones stay listed. Refused while the core answers (mirror_core_reachable: use mirror.switch). Also the way out of a planned switch whose core never came back. `confirm` is the vault's name, typed. Super admins, or holders of admin.mirror.takeover (Take over as core); the data.destroy step-up in the console; audited mirror.takeover.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The vault's name, typed exactly.",
+          "generator": {
+            "attrs": [
+              "name"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "confirm",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_not_mirror",
+        "mirror_orphaned",
+        "mirror_first_copy",
+        "mirror_diverged",
+        "mirror_core_reachable",
+        "mirror_name_mismatch",
+        "step_up_required"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_not_mirror",
+        "mirror_orphaned",
+        "mirror_first_copy",
+        "mirror_diverged",
+        "mirror_core_reachable",
+        "mirror_name_mismatch",
+        "step_up_required"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The old core.",
+          "minimum": 0,
+          "name": "peer_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "from_term",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "This server's term as the core.",
+          "minimum": 0,
+          "name": "term",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The fork point: the last change applied from the old core, and the digest there.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "seq",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "fork",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Entries in the fork base.",
+          "minimum": 0,
+          "name": "fork_rows",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "pending_made_local",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "held",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "Files whose contents never arrived here.",
+          "minimum": 0,
+          "name": "contents_missing",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "by",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "created_at",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "settled_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "settled_how",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The fork base's own digest and whether it is the fork point's.",
+          "name": "detail",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "name": "warning",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "fork_base_matches",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -47255,7 +47834,9 @@
             "diverged",
             "expired",
             "stopped",
-            "switching"
+            "switching",
+            "rejoining",
+            "forked"
           ],
           "name": "core_state",
           "required": false,
@@ -47681,6 +48262,176 @@
           "required": true,
           "types": [
             "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.promoted",
+      "confirmations": [],
+      "description": "The new core tells its old core it took over (mirror.takeover), on every pass while the link is up until answered: the new term, the fork point and its digest, and the new core's digest at (term, 0). The old core stops taking changes for the vault at once (read-only) and answers pending until it decided: following (it committed nothing after the fork point: the vault's mirror in the new term), rejoining (it did: read-only with them until the merge; changes is their count) or forced (it had taken over too: both read-only until an operator picks one).",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
+          "generator": {
+            "attrs": [
+              "uid"
+            ],
+            "entity": "mirror.vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The new term.",
+          "generator": {
+            "attrs": [
+              "term"
+            ],
+            "entity": "mirror.position",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "term",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The last position the new core applied from the old one, and its digest there.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "seq",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "fork"
+            ],
+            "entity": "mirror.takeover",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "fork",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "The new core's digest at (term, 0).",
+          "fields": [
+            {
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "baseline"
+            ],
+            "entity": "mirror.takeover",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "baseline",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked",
+        "mirror_term_stale"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked",
+        "mirror_term_stale"
+      ],
+      "response": [
+        {
+          "enum": [
+            "pending",
+            "following",
+            "rejoining",
+            "forced"
+          ],
+          "name": "outcome",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "rejoining: the old core's changes past the fork point.",
+          "minimum": 0,
+          "name": "changes",
+          "required": false,
+          "types": [
+            "integer"
           ]
         }
       ],
@@ -48124,7 +48875,9 @@
             "diverged",
             "expired",
             "stopped",
-            "switching"
+            "switching",
+            "rejoining",
+            "forked"
           ],
           "name": "core_state",
           "required": false,
@@ -48909,7 +49662,9 @@
             "diverged",
             "expired",
             "stopped",
-            "switching"
+            "switching",
+            "rejoining",
+            "forked"
           ],
           "name": "core_state",
           "required": false,
@@ -71088,5 +71843,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "fd188f2489ad6cb105150128a52f288aab24e4f04d04699966c1c4b0136607b8"
+  "ws_hash": "c5ab5edde934cfbd3210345d8ecfe878320a3f4f549a3051b0aa33c294fb0b55"
 }
