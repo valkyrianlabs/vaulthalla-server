@@ -1133,6 +1133,11 @@ def _leaving(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, report:
     va = int(_sql(a, "SELECT id FROM vault WHERE name = 'whole' AND deleted_at IS NULL"))
     uid = _sql(a, f"SELECT uid FROM vault WHERE id = {va}")
     vb = int(_sql(b, f"SELECT id FROM vault WHERE uid = '{uid}'"))
+    # 7q left B the mirror again after a resync, its grant from A not yet sent back: wait for it (B's super admin reads
+    # the copy by it) before anything here reads the vault on B.
+    a.vh("peer", "policy", "set", node_b, "power_user")
+    _wait("B's grant (power_user) before 9", lambda: (_mirror_info(b, vb).get("grant") or {}).get("role_name")
+          == "power_user" or None, timeout=60)
 
     # ---- 9a. B keeps versions of what A replaces or deletes
     code, out, text = _json(b, "mirror", "versions", str(vb), "on", "--keep-last", "3")
@@ -1205,8 +1210,9 @@ def _leaving(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, report:
                  and _pending_rows(b, vb) == 0, wrote)
     code, held, text = _json(b, "mirror", "held", "--vault", str(vb))
     # 7k's refused file: the mount's create, truncate and write each held (in that order); the last holds the bytes.
-    writes = sorted((h for h in held.get("held") or [] if h.get("op") == "write" and h.get("state") == "open"),
-                    key=lambda h: h["id"])
+    # (7q's resync held more writes since: pick 7k's, the refused file's.)
+    writes = sorted((h for h in held.get("held") or [] if h.get("op") == "write" and h.get("state") == "open"
+                     and "refused.txt" in json.dumps(h)), key=lambda h: h["id"])
     saved = ""
     if writes:
         b.vh("mirror", "save", str(writes[-1]["id"]), "saved_refused.txt")
