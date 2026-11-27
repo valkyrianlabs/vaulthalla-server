@@ -9,6 +9,7 @@
 #include "device/ServerIdentity.hpp"
 #include "fs/ops/file.hpp"
 #include "log/Registry.hpp"
+#include "mirror/access/Access.hpp"
 #include "ops/Error.hpp"
 #include "peer/Crypto.hpp"
 #include "peer/Keys.hpp"
@@ -715,6 +716,8 @@ bool LinkService::adopt(const std::shared_ptr<Connection>& conn) {
         }
     }
     if (loser) loser->session->closeAfterReply();
+    // The write gate of the vaults this server holds as that server's copies (mirror::access): the link is up.
+    if (kept) vh::mirror::access::linkChanged(conn->principal->peer_id, true);
     if (up) auditConnection(conn->principal->peer_id, conn->principal->node_id, true, conn->principal->address);
     return kept;
 }
@@ -733,6 +736,7 @@ void LinkService::connectionClosed(const std::shared_ptr<Connection>& conn) {
             }
     }
     conn->rpc->failAll();
+    if (down) vh::mirror::access::linkChanged(conn->principal->peer_id, false);
     if (down) auditConnection(conn->principal->peer_id, conn->principal->node_id, false, conn->principal->address);
 }
 

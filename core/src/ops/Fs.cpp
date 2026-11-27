@@ -1,6 +1,7 @@
 #include "ops/Fs.hpp"
 
 #include "audit/Trail.hpp"
+#include "db/query/fs/Entry.hpp"
 #include "db/query/sync/Operation.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
@@ -72,7 +73,17 @@ using SyncOperation = vh::sync::model::Operation;
     return engineFor(vaultId, "No storage engine found for vault with ID: " + std::to_string(vaultId));
 }
 
-// The filesystem permission `action` at `path` (vault-relative), as the vault's RBAC resolves it.
+[[nodiscard]] bool allowedAt(const Actor& actor, const EnginePtr& engine, const std::filesystem::path& path,
+                             const FsAction action) {
+    return vh::rbac::resolver::Vault::has<FsAction>({.user = actor,
+                                                     .permission = action,
+                                                     .vault_id = engine->vault->id,
+                                                     .path = engine->vaultPathToFusePath(path)});
+}
+
+// The filesystem permission `action` at `path` (vault-relative), as the vault's RBAC resolves it. A refusal for an
+// entry that is not there is NotFound to a caller who may list the nearest folder that is (they could see it is
+// missing anyway), Denied to anyone else (no existence oracle): ops::fs::check.
 void require(const Actor& actor, const EnginePtr& engine, const std::filesystem::path& path, const FsAction action,
              const std::string_view error) {
     requireActor(actor);
@@ -86,11 +97,19 @@ void require(const Actor& actor, const EnginePtr& engine, const std::filesystem:
             throw Denied(std::string(error) + " (the linked server's role on this vault does not allow it)");
         return;
     }
-    if (!vh::rbac::resolver::Vault::has<FsAction>({.user = actor,
-                                                   .permission = action,
-                                                   .vault_id = engine->vault->id,
-                                                   .path = engine->vaultPathToFusePath(path)}))
-        throw Denied(std::string(error));
+    if (allowedAt(actor, engine, path, action)) return;
+    // Only an action on an existing entry can be refused because the entry is missing; creating one (Write, Touch,
+    // Link) where nothing is yet is refused for what the caller may do there.
+    const bool creates = action == FsAction::Write || action == FsAction::Touch || action == FsAction::Link;
+    if (!creates && !vh::fs::Filesystem::exists(engine->vaultPathToFusePath(path))) {
+        auto ancestor = path.lexically_normal().parent_path();
+        while (!ancestor.empty() && ancestor != ancestor.root_path() &&
+               !vh::fs::Filesystem::exists(engine->vaultPathToFusePath(ancestor)))
+            ancestor = ancestor.parent_path();
+        if (ancestor.empty()) ancestor = "/";
+        if (allowedAt(actor, engine, ancestor, FsAction::List)) throw NotFound("no such entry: " + path.string());
+    }
+    throw Denied(std::string(error));
 }
 
 [[nodiscard]] bool existsAt(const EnginePtr& engine, const std::filesystem::path& path) {
@@ -224,13 +243,13 @@ void transfer(const Actor& actor, const uint32_t vaultId, const std::filesystem:
               const std::filesystem::path& to, const Transfer kind) {
     requireActor(actor);
     const bool isMove = kind == Transfer::Move;
-    vh::mirror::access::requireWritable(vaultId, isMove ? "fs.move" : "fs.rename");
-    vh::mirror::submit::Local pending(actor, vaultId, isMove ? "move" : "rename");
     const auto engine = engineFor(vaultId);
 
     require(actor, engine, from, isMove ? FsAction::Move : FsAction::Rename,
             isMove ? "Permission denied: User does not have move permission for the source path in the vault"
                    : "Permission denied: User does not have rename permission for the source path in the vault");
+    vh::mirror::access::requireWritable(engine->vault->id, isMove ? "fs.entry.move" : "fs.entry.rename");  // mirror gate
+    vh::mirror::submit::Local pending(actor, vaultId, isMove ? "move" : "rename");
     requireCreateAtDestination(actor, engine, from, to);
     requireTransferEndpoints(engine, from, to);
     if (pending.active() && existsAt(engine, to)) throw Conflict("already exists: " + to.string());
@@ -258,12 +277,12 @@ void transfer(const Actor& actor, const uint32_t vaultId, const std::filesystem:
 
 void mkdir(const Actor& actor, const uint32_t vaultId, const std::filesystem::path& path) {
     requireActor(actor);
-    vh::mirror::access::requireWritable(vaultId, "fs.mkdir");
-    vh::mirror::submit::Local pending(actor, vaultId, "mkdir");
     const auto engine = engineFor(vaultId);
 
     require(actor, engine, path, FsAction::Touch,
             "Permission denied: User does not have create-directory permission for this path in the vault");
+    vh::mirror::access::requireWritable(engine->vault->id, "fs.dir.create");  // mirror gate
+    vh::mirror::submit::Local pending(actor, vaultId, "mkdir");
 
     // The engine refuses both with one untyped error; tell them apart first (same text) so the answer is typed.
     if (existsAt(engine, path)) throw Conflict("Failed to create directory: " + path.string());
@@ -289,12 +308,12 @@ void rename(const Actor& actor, const uint32_t vaultId, const std::filesystem::p
 void copy(const Actor& actor, const uint32_t vaultId, const std::filesystem::path& from,
           const std::filesystem::path& to) {
     requireActor(actor);
-    vh::mirror::access::requireWritable(vaultId, "fs.copy");
-    vh::mirror::submit::Local pending(actor, vaultId, "copy");
     const auto engine = engineFor(vaultId);
 
     require(actor, engine, from, FsAction::Copy,
             "Permission denied: User does not have copy permission for the source path in the vault");
+    vh::mirror::access::requireWritable(engine->vault->id, "fs.entry.copy");  // mirror gate
+    vh::mirror::submit::Local pending(actor, vaultId, "copy");
     requireTransferEndpoints(engine, from, to);
 
     // On a mirror a copy is the core's to make: its new entries come back in the log with the core's uids.
@@ -337,12 +356,12 @@ void copy(const Actor& actor, const uint32_t vaultId, const std::filesystem::pat
 void remove(const Actor& actor, const uint32_t vaultId, const std::filesystem::path& path) {
     requireActor(actor);
     if (actor->id == 0) throw Denied("not authenticated");
-    vh::mirror::access::requireWritable(vaultId, "fs.delete");
-    vh::mirror::submit::Local pending(actor, vaultId, "remove");
     const auto engine = engineFor(vaultId);
 
     require(actor, engine, path, FsAction::Delete,
             "Permission denied: User does not have delete permission for this path in the vault");
+    vh::mirror::access::requireWritable(engine->vault->id, "fs.entry.delete");  // mirror gate
+    vh::mirror::submit::Local pending(actor, vaultId, "remove");
 
     const auto removedId = entryIdAt(engine, path);
     pending.on(path, true);
@@ -353,11 +372,11 @@ void remove(const Actor& actor, const uint32_t vaultId, const std::filesystem::p
 
 EnginePtr authorizeUpload(const Actor& actor, const uint32_t vaultId, const std::filesystem::path& path) {
     requireActor(actor);
-    vh::mirror::access::requireWritable(vaultId, "fs.upload");
     vh::mirror::submit::requireSupported(vaultId, "fs.upload");   // contents on a mirror: not built yet
     auto engine = engineFor(vaultId, "Unknown storage engine");
     require(actor, engine, path, FsAction::Write,
             "Permission denied: User does not have upload permission for this path in the vault");
+    vh::mirror::access::requireWritable(engine->vault->id, "fs.upload");  // mirror gate
     return engine;
 }
 
@@ -370,9 +389,54 @@ void commitStaged(const Actor& actor, const StagedCommit& commit) {
                                  std::strerror(err));
 }
 
+Access check(const Actor& actor, const uint32_t vaultId, const std::filesystem::path& path,
+             const vh::rbac::permission::vault::FilesystemAction action) {
+    requireActor(actor);
+    const auto engine = engineFor(vaultId);
+    try {
+        require(actor, engine, path, action, "denied");
+        return Access::Allowed;
+    } catch (const NotFound&) {
+        return Access::Missing;
+    } catch (const Denied&) {
+        return Access::Denied;
+    }
+}
+
+void setAttributes(const Actor& actor, const uint32_t vaultId, const std::filesystem::path& path,
+                   const Attributes& attrs) {
+    requireActor(actor);
+    const auto engine = engineFor(vaultId);
+    require(actor, engine, path, FsAction::Write,
+            "Permission denied: User does not have write permission for this path in the vault");
+    vh::mirror::access::requireWritable(engine->vault->id, "a setattr");  // mirror gate
+
+    const auto& cache = vh::runtime::Deps::get().fsCache;
+    const auto entry = cache->getEntry(engine->vaultPathToFusePath(path));
+    if (!entry) throw NotFound("no such entry: " + path.string());
+
+    const bool ownerChanges = (attrs.owner_uid && attrs.owner_uid != entry->owner_uid) ||
+                              (attrs.group_gid && attrs.group_gid != entry->group_gid);
+    if (ownerChanges && !actor->isSuperAdmin())
+        throw Denied("Permission denied: only a super admin may change an entry's owner or group");
+
+    const vh::db::query::fs::Entry::Attributes rowAttrs{.mode = attrs.mode, .owner_uid = attrs.owner_uid,
+                                                       .group_gid = attrs.group_gid, .mtime_us = attrs.mtime_us};
+    if (!vh::db::query::fs::Entry::setAttributes(entry->id, rowAttrs, actor->id))
+        throw NotFound("no such entry: " + path.string());
+
+    // The cache answers getattr: the row as it is now, replacing the cached entry (a reader holding the old one keeps
+    // it whole).
+    if (const auto fresh = vh::db::query::fs::Entry::getFSEntryById(entry->id)) cache->cacheEntry(fresh);
+
+    if (ownerChanges)
+        auditFs(actor, engine, "fs.chown", "changed the owner of", entry->id,
+                {{"owner_uid", attrs.owner_uid ? nlohmann::json(*attrs.owner_uid) : nlohmann::json(nullptr)},
+                 {"group_gid", attrs.group_gid ? nlohmann::json(*attrs.group_gid) : nlohmann::json(nullptr)}});
+}
+
 std::shared_ptr<vh::fs::model::File> commitSealed(const Actor& actor, const SealedCommit& commit) {
     requireActor(actor);
-    vh::mirror::access::requireWritable(commit.vault_id, "fs.commit");
     vh::mirror::submit::requireSupported(commit.vault_id, "fs.commit");   // contents on a mirror: not built yet
     if (!commit.sealed) throw Invalid("a sealed commit needs its sealed content");
     const auto& path = commit.path;
@@ -381,9 +445,15 @@ std::shared_ptr<vh::fs::model::File> commitSealed(const Actor& actor, const Seal
 
     const auto engine = engineFor(commit.vault_id);
     const bool replace = commit.base.has_value();
-    require(actor, engine, path, replace ? FsAction::Overwrite : FsAction::Write,
-            replace ? "Permission denied: User does not have overwrite permission for this path in the vault"
-                    : "Permission denied: User does not have upload permission for this path in the vault");
+    try {
+        require(actor, engine, path, replace ? FsAction::Overwrite : FsAction::Write,
+                replace ? "Permission denied: User does not have overwrite permission for this path in the vault"
+                        : "Permission denied: User does not have upload permission for this path in the vault");
+    } catch (const NotFound&) {
+        // A replacement of a file that is gone, to a caller who may know it is: the base moved on (as below).
+        throw ContentConflict("The file no longer exists: " + path.string());
+    }
+    vh::mirror::access::requireWritable(engine->vault->id, "fs.commit");  // mirror gate
 
     const auto parent = parentFolder(path);
     if (!existsAt(engine, parent)) throw NotFound("destination folder does not exist: " + parent.string());

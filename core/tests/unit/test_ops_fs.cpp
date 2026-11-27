@@ -213,9 +213,9 @@ TEST_F(OpsFsDbTest, RefusalsAreTypedAndChangeNothing) {
     EXPECT_EQ(content("/src/a.txt"), "alpha\n");
     EXPECT_EQ(content("/open/a.txt"), "other\n");
 
-    // A missing source: the vault's RBAC refuses an action on an entry that is not there (nothing is revealed to
-    // whoever may not see it), so only an account the check passes for learns that it is missing.
-    EXPECT_THROW(ops::fs::move(actor, vaultId, "/src/none.txt", "/open/none.txt"), ops::Denied);
+    // A missing source: NotFound to an account that may list the folder it would be in (it could see that anyway;
+    // wave 4, ops::fs::check), Denied to anyone else (MirrorGateDbTest.MissingIsToldApartFromNoPermission...).
+    EXPECT_THROW(ops::fs::move(actor, vaultId, "/src/none.txt", "/open/none.txt"), ops::NotFound);
     EXPECT_THROW(ops::fs::move(superUser, vaultId, "/src/none.txt", "/open/none.txt"), ops::NotFound);
     EXPECT_THROW(ops::fs::move(actor, vaultId, "/src/a.txt", "/missing/a.txt"), ops::NotFound);
     EXPECT_THROW(ops::fs::move(actor, vaultId, "/src", "/src/dir/src"), ops::Invalid);
@@ -302,11 +302,11 @@ TEST_F(OpsFsDbTest, AReplacementNeedsItsBaseGeneration) {
     EXPECT_EQ(content("/src/a.txt"), "beta\n");
     EXPECT_EQ(generation("/src/a.txt"), current);
 
-    // A base for a file that is not there any more: Overwrite on a missing entry is refused by the vault's RBAC for
-    // an account it applies to; one it passes for (the super admin) gets the ContentConflict.
+    // A base for a file that is not there any more: the ContentConflict, for an account that may know it is gone (it
+    // may list its folder; wave 4) as for the super admin.
     EXPECT_THROW((void)ops::fs::commitSealed(actor, {.vault_id = vaultId, .path = "/src/gone.txt", .base = base,
                                                      .sealed = sealed("gamma\n")}),
-                 ops::Denied);
+                 ops::fs::ContentConflict);
     EXPECT_THROW((void)ops::fs::commitSealed(superUser, {.vault_id = vaultId, .path = "/src/gone.txt", .base = base,
                                                          .sealed = sealed("gamma\n")}),
                  ops::fs::ContentConflict);

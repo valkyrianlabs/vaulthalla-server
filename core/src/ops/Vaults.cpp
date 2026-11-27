@@ -1,5 +1,6 @@
 #include "mirror/start/Guard.hpp"
 #include "ops/Vaults.hpp"
+#include "mirror/access/Access.hpp"
 #include "ops/CloudStorage.hpp"
 #include "sync/vault_manifest/Replicas.hpp"
 #include "db/query/sync/ManifestApply.hpp"
@@ -433,6 +434,9 @@ VaultPtr create(const Actor& actor, const Create& req) {
 VaultPtr update(const Actor& actor, const Update& req) {
     requireActor(actor);
     const auto existing = requireVault(req.id);
+    // A copy's settings are its core's: said to whoever may see the vault (a copy's admin rights here are View only, so
+    // after the Edit check this would never be reached).
+    if (canOnVault(actor, VaultPerm::View, existing->id)) vh::mirror::access::refuseIfHeld(existing->id, "vault.update");
     if (!canOnVault(actor, VaultPerm::Edit, existing->id)) throw Denied("you do not have permission to edit this vault");
 
     auto staged = copyOf(existing);
@@ -845,6 +849,7 @@ PolicyPtr updateSync(const Actor& actor, const unsigned int vaultId, const SyncP
     if (!rbac::resolver::Vault::has<SyncConfigPerm>({.user = actor, .permission = SyncConfigPerm::Edit, .vault_id = vaultId}))
         throw Denied("you do not have permission to change this vault's sync settings");
     if (patch.empty()) throw Invalid("no sync settings to change");
+    vh::mirror::access::refuseIfHeld(vaultId, "vault.sync.update");   // a copy's settings are its core's
 
     auto policy = copyPolicy(currentPolicy(vaultId), vault->type);
     refuseMirrorOnReplica(vaultId, patch);

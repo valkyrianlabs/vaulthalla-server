@@ -3,6 +3,7 @@
 // primitives beneath (recovery::provider::policy, recovery::cost, db::query) never authorize.
 
 #include "ops/Recovery.hpp"
+#include "mirror/access/Access.hpp"
 #include "auth/stepup/StepUp.hpp"
 
 #include "db/query/recovery/Generation.hpp"
@@ -594,6 +595,7 @@ Status update(const Actor& actor, const uint32_t vaultId, const Update& req) {
     requireActor(actor);
     const auto vault = polRequireVault(vaultId);
     polRequireSync(actor, vaultId, PolSyncPerm::Edit, vault->name);
+    vh::mirror::access::refuseIfHeld(vaultId, "vault.recovery.update");   // a copy's recovery policy is its core's
 
     auto row = rq::Policy::get(vaultId);
     const auto before = row;

@@ -171,6 +171,8 @@ private:
                                   rbac::permission::vault::FilesystemAction action);
     static void requireS3Permission(const ResolvedBucket& bucket, const std::filesystem::path& vaultPath,
                                     rbac::s3::policy::S3Action action);
+    // A write to a vault held here as another server's copy: 503 ServiceUnavailable (mirror::access).
+    static void requireS3Writable(const ResolvedBucket& bucket, rbac::s3::policy::S3Action action);
     static bool isDirectoryMarker(const std::string& key);
     static bool credentialAllows(const GatewayAccessContext& access,
                                  const std::shared_ptr<identities::User>& principal,

@@ -12,6 +12,7 @@
 #include "fs/model/Path.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "mirror/access/Access.hpp"
 #include "log/Redact.hpp"
 #include "ops/Error.hpp"
 #include "ops/S3Gateway.hpp"
@@ -906,6 +907,7 @@ void ObjectStore::requireS3Permission(
         const auto fsAction = rbac::s3::policy::Evaluator::filesystemActionFor(action, objectExists, isDirectory);
         if (!fsAction) throw accessDenied(fusePath.string());
         requireRbacPermission(bucket, vaultPath, *fsAction);
+        requireS3Writable(bucket, action);
         return;
     }
 
@@ -922,6 +924,29 @@ void ObjectStore::requireS3Permission(
         .target_user_id = std::nullopt
     });
     if (!decision.allowed) throw accessDenied(fusePath.string());
+    requireS3Writable(bucket, action);
+}
+
+// The server mirror's gate (mirror/access/Access.hpp): a vault held here as another server's copy takes no write
+// through the gateway, from anyone (a super admin included), after the permission check so nothing is revealed to a
+// caller without access. 503 ServiceUnavailable, so clients back off and retry (design/peers/mirror.md "The gate").
+void ObjectStore::requireS3Writable(const ResolvedBucket& bucket, const rbac::s3::policy::S3Action action) {
+    using A = rbac::s3::policy::S3Action;
+    switch (action) {
+    case A::PutObject:
+    case A::DeleteObject:
+    case A::DeleteObjects:
+    case A::CopyObjectDestination:
+    case A::CreateMultipartUpload:
+    case A::UploadPart:
+    case A::CompleteMultipartUpload:
+        break;
+    default:
+        return;
+    }
+    if (const auto why = vh::mirror::access::refusalReason(bucket.vault_id))
+        throw S3Error{"ServiceUnavailable", vh::mirror::access::sentence(*why) + " (" + *why + ")",
+                      http::status::service_unavailable, bucket.bucket_name};
 }
 
 bool ObjectStore::credentialAllows(

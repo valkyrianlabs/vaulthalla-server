@@ -45,6 +45,7 @@
 #include "ops/Users.hpp"
 #include "ops/Vaults.hpp"
 #include "peer/Keys.hpp"
+#include "mirror/access/Access.hpp"
 #include "rbac/Mirrored.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
 #include "rbac/resolver/vault/all.hpp"
@@ -171,6 +172,7 @@ protected:
         mirror::contents::setSourceFactoryForTesting({});
         config::Registry::set(savedConfig);
         rbac::mirrored::resetForTesting();
+        vh::mirror::access::resetForTesting();
         tearDownDbSuite();
     }
 

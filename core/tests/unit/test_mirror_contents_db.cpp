@@ -15,6 +15,7 @@
 #include "db/Transactions.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/mirror/Contents.hpp"
+#include "db/query/mirror/Log.hpp"
 #include "db/query/mirror/MirrorVault.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "fs/Filesystem.hpp"
@@ -197,9 +198,13 @@ protected:
         h.plaintext.resize(size);
         std::mt19937 rng(static_cast<unsigned>(size) + static_cast<unsigned>(path.size()));
         for (auto& b : h.plaintext) b = static_cast<uint8_t>(rng());
+        // The row is written as the log applier would have written it: here a local write, made while the vault is
+        // briefly not held as a mirror (a mirror refuses every local write, wave 4: mirror::access, migration 165).
+        EXPECT_TRUE(db::query::mirror::MirrorVaults::remove(engine->vault->id));
         (void)fs::Filesystem::createFile({.path = path, .fuse_path = engine->vaultPathToFusePath(path),
                                           .buffer = h.plaintext, .engine = engine, .user = superUser,
                                           .overwrite = true});
+        (void)db::query::mirror::MirrorVaults::startMirror(engine->vault->id, core.id);
         h.file = db::query::fs::File::getFileByPath(engine->vault->id, path);
         h.sealed = readFile(h.file->backing_path);
         std::filesystem::remove(h.file->backing_path);
@@ -355,6 +360,7 @@ TEST_F(MirrorContentsDbTest, ARowThatChangedWhileTheTransferRanIsNeverLinked) {
         std::array<uint8_t, 32> salt{};
         salt.fill(0x3c);
         db::Transactions::exec("row moves on", [&](pqxx::work& txn) {
+            db::query::mirror::Log::markMirrorApply(txn);   // as the follower writes it (a mirror refuses other writes)
             txn.exec("UPDATE files SET encryption_iv = $1 WHERE fs_entry_id = $2",
                      pqxx::params{vh::vault::content::generationOf(salt), h.file->id});
         });

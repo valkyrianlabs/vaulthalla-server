@@ -48,6 +48,8 @@ inline constexpr int kCantCreat = 73;   // EX_CANTCREAT: the vault path exists (
 inline constexpr int kIoErr = 74;       // EX_IOERR: reading or writing a local file failed
 inline constexpr int kTempFail = 75;    // EX_TEMPFAIL: too many transfers in flight, or the connection dropped
 inline constexpr int kNoPerm = 77;      // EX_NOPERM: RBAC said no (also when revoked mid-transfer)
+inline constexpr int kReadOnly = 69;    // EX_UNAVAILABLE: the vault is read-only here (a copy of another server's
+                                        // vault: the server mirror's gate); the message says why
 }
 
 namespace detail {

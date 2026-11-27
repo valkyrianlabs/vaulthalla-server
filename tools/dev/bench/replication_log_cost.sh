@@ -4,7 +4,7 @@
 #   sudo -n true   # needs passwordless sudo: it runs psql and pgbench as postgres
 #   bash tools/dev/bench/replication_log_cost.sh [transactions per run, default 3000] [runs, default 3]
 #
-# Builds a scratch database vh_bench_rl_<pid>_test from deploy/psql (dropped at exit), with two local vaults of 200
+# Builds a scratch database vh_bench_rl_<pid>_test from deploy/psql (dropped at exit), with three local vaults of 200
 # files under a folder chain of depth 3: one mirrored (this server its core, the baseline taken as startCore takes it)
 # and one not. Each pgbench transaction is one FUSE seal's statements (Filesystem::updateFile: the files row, the
 # entry's mtime and modifier, the ancestors' totals and mtimes) on a random file. Reported: the median over the runs
@@ -14,6 +14,9 @@
 #   none mirrored       everything installed, no vault mirrored anywhere (every server today)
 #   not mirrored        everything installed, a vault that is not mirrored while another one is
 #   mirrored            everything installed, the mirrored vault
+#   held elsewhere      everything installed, no vault mirrored, a third vault held as another server's copy (the
+#                       backstop of migration 165 then looks the row's vault up)
+#   without 165         no vault mirrored and 165's triggers dropped (what the backstop costs every server today)
 # and the sequencer's cost per row numbered. Touches nothing but its own database.
 set -euo pipefail
 
@@ -47,7 +50,7 @@ DECLARE
     owner INTEGER := (SELECT id FROM users WHERE name = 'bench_owner');
     v INTEGER; parent INTEGER; e INTEGER; i INTEGER; d INTEGER;
 BEGIN
-    FOR v IN 1..2 LOOP
+    FOR v IN 1..3 LOOP
         INSERT INTO vault (name, owner_id, type, mount_point, uid)
         VALUES ('bench_' || v, owner, 'local', 'bench_' || v, gen_random_uuid()) RETURNING id INTO v;
         INSERT INTO fs_entry (vault_id, name, path) VALUES (v, '', '/') RETURNING id INTO parent;
@@ -69,7 +72,8 @@ END $$;
 SQL
 
 MIRRORED="$(q -c "SELECT min(id) FROM vault WHERE name LIKE 'bench_%'")"
-PLAIN="$(q -c "SELECT max(id) FROM vault WHERE name LIKE 'bench_%'")"
+HELD="$(q -c "SELECT max(id) FROM vault WHERE name LIKE 'bench_%'")"
+PLAIN="$(q -c "SELECT id FROM vault WHERE name LIKE 'bench_%' AND id NOT IN ($MIRRORED, $HELD)")"
 # startCore's baseline (MirrorVaults::startCore), without its table lock: nothing else writes here.
 q >/dev/null <<SQL
 INSERT INTO mirror_vault (vault_id, peer_id, role) SELECT $MIRRORED, id, 'core' FROM peer;
@@ -121,6 +125,9 @@ q -c "VACUUM ANALYZE" >/dev/null
 # Every server today: no vault mirrored anywhere.
 q -c "DELETE FROM mirror_vault" >/dev/null
 none_mirrored="$(latency "$SEAL_PLAIN")"
+q -c "INSERT INTO mirror_vault (vault_id, peer_id, role) SELECT $HELD, id, 'mirror' FROM peer" >/dev/null
+held_elsewhere="$(latency "$SEAL_PLAIN")"
+q -c "DELETE FROM mirror_vault" >/dev/null
 q -c "INSERT INTO mirror_vault (vault_id, peer_id, role, digest, digest_entries)
       SELECT $MIRRORED, p.id, 'core', d.g, d.n FROM peer p,
              (SELECT vh_mirror_digest(entry_hash) AS g, count(*) AS n FROM mirror_entry_hash WHERE vault_id = $MIRRORED) d" >/dev/null
@@ -145,6 +152,9 @@ SQL
 seq_ns=$(( $(date +%s%N) - start ))
 mirror_rows="$(q -c "SELECT count(*) FROM vault_replication_log")"
 
+q -c "DELETE FROM mirror_vault" >/dev/null
+drop_triggers 'vh\_mirror\_gate%'
+without_165="$(latency "$SEAL_PLAIN")"
 drop_triggers 'vh\_mirror\_track%'
 journal_only="$(latency "$SEAL_PLAIN")"
 drop_triggers 'vh\_fs\_change\_track%'
@@ -160,6 +170,10 @@ printf '  not mirrored    %8s ms   (log triggers on a vault not mirrored, anothe
   "$(awk -v a="$not_mirrored" -v b="$journal_only" 'BEGIN {printf "%+.3f", a - b}')"
 printf '  mirrored        %8s ms   (log triggers on a mirrored vault: %s ms)\n' "$mirrored" \
   "$(awk -v a="$mirrored" -v b="$journal_only" 'BEGIN {printf "%+.3f", a - b}')"
+printf '  held elsewhere  %8s ms   (no vault mirrored, a copy held elsewhere; the backstop: %s ms over none mirrored)\n' \
+  "$held_elsewhere" "$(awk -v a="$held_elsewhere" -v b="$none_mirrored" 'BEGIN {printf "%+.3f", a - b}')"
+printf '  without 165     %8s ms   (none mirrored, 165 dropped; the backstop on every server: %s ms)\n' "$without_165" \
+  "$(awk -v a="$none_mirrored" -v b="$without_165" 'BEGIN {printf "%+.3f", a - b}')"
 printf '  log rows per seal: %s; sequencer: %s rows numbered in %s ms (%s us per row)\n' \
   "$(awk -v r="$mirror_rows" -v t="$((TX * RUNS))" 'BEGIN {printf "%.2f", r / t}')" "$rows" \
   "$(awk -v n="$seq_ns" 'BEGIN {printf "%.1f", n / 1e6}')" \

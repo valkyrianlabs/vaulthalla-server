@@ -189,6 +189,11 @@ std::atomic<bool>& rotationAllowedForTesting() {
 void allowRotationOnMirroredForTesting(const bool allow) { start_core_detail::rotationAllowedForTesting().store(allow); }
 
 void refuseIfMirrored(const uint32_t vaultId, const std::string& what) {
+    // The mirror's side (wave 4): a copy of another server's vault never mints a key version here, whatever a test
+    // allows for a core: its keys are its core's (design/peers/mirror.md "Key rotation").
+    if (const auto row = vh::db::query::mirror::MirrorVaults::get(vaultId); row && row->role != "core")
+        throw ops::Refused("vault_mirrored", fmt::format("vault {} is a copy of another server's vault: {} is refused "
+                                                         "here; its keys are its core's", vaultId, what));
     if (start_core_detail::rotationAllowedForTesting().load()) return;
     if (!mirroredOrStarting(vaultId)) return;
     throw ops::Refused("vault_mirrored", fmt::format("vault {} is mirrored with a linked server (or a mirror of it is "

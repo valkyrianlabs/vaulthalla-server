@@ -110,7 +110,7 @@ protected:
             for (const auto& m : mq::MirrorVaults::list()) (void)mq::MirrorVaults::remove(m.vault_id);
         ms::setInlineForTesting(false);
         ms::setPollPauseForTesting(100ms);
-        vh::mirror::access::clearForTesting();
+        vh::mirror::access::linkChanged(corePeer, false);
         setExperimental(false);
         tearDownDbSuite();
     }
@@ -347,7 +347,7 @@ protected:
         });
         (void)mq::MirrorVaults::startMirror(s.mirrorId, corePeer);
         EXPECT_TRUE(mq::MirrorVaults::recordGrant(s.mirrorId, grantOf(rbac::role::Vault::Full(), coreNode)));
-        vh::mirror::access::setLinkUpForTesting(s.mirrorId, true);
+        vh::mirror::access::linkChanged(corePeer, true);
         return s;
     }
 
@@ -837,11 +837,11 @@ TEST_F(MirrorSubmitDbTest, WithTheLinkDownNothingIsAcceptedAndNothingIsPending) 
     } catch (const vh::mirror::access::MirrorReadOnly& e) {
         EXPECT_EQ(e.reason, "mirror_contents_not_built");
     }
-    vh::mirror::access::setLinkUpForTesting(s.mirrorId, false);
+    vh::mirror::access::linkChanged(corePeer, false);
     EXPECT_THROW(ops::fs::mkdir(superUser, s.mirrorId, "/docs/no"), vh::mirror::access::MirrorReadOnly);
     EXPECT_FALSE(pathsOf(s.mirrorId).contains("/docs/no"));
     EXPECT_TRUE(mq::Pending::list(s.mirrorId).empty());
-    vh::mirror::access::setLinkUpForTesting(s.mirrorId, true);
+    vh::mirror::access::linkChanged(corePeer, true);
 }
 
 TEST_F(MirrorSubmitDbTest, TheWireAnswersNotFoundToAnyoneButTheVaultsMirrorAndRefusesAnotherServersPerson) {

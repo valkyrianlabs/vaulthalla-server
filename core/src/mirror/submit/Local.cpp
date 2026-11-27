@@ -102,8 +102,8 @@ bool supportsLocally(const std::string_view operation) {
 }
 
 void requireSupported(const uint32_t vaultId, const std::string_view operation) {
-    if (!vh::rbac::mirrored::find(vaultId) || supportsLocally(operation)) return;
-    throw vh::mirror::access::MirrorReadOnly("mirror_contents_not_built");
+    if (!vh::mirror::access::held(vaultId) || supportsLocally(operation)) return;
+    throw vh::mirror::access::MirrorReadOnly(vaultId, std::string(vh::mirror::access::kContentsNotBuilt), operation);
 }
 
 Local::Local(const vh::ops::Actor& actor, const uint32_t vaultId, std::string op)

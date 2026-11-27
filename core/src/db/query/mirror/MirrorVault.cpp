@@ -3,6 +3,7 @@
 #include "db/Transactions.hpp"
 #include "db/query/device/Device.hpp"
 #include "ops/Error.hpp"
+#include "mirror/access/Access.hpp"
 #include "rbac/Mirrored.hpp"
 
 #include <pqxx/pqxx>
@@ -77,10 +78,19 @@ MirrorVault mirrorVaultFrom(const pqxx::row_ref row) {
     return m;
 }
 
-// Whoever may resolve a permission on the vault sees the change before the write returns (rbac::mirrored).
+// Whoever may resolve a permission on the vault sees the change before the write returns (rbac::mirrored), and every
+// write surface its gate (mirror::access).
 template <class T>
 T mirrorAccessRepublished(T result) {
     vh::rbac::mirrored::reload();
+    vh::mirror::access::reload();
+    return result;
+}
+
+// A held row's state or stop changed: the write gate sees it before the write returns.
+template <class T>
+T mirrorGateRepublished(T result) {
+    vh::mirror::access::reload();
     return result;
 }
 
@@ -329,7 +339,7 @@ bool MirrorVaults::acknowledge(const uint32_t vaultId, const Position at) {
 bool MirrorVaults::setState(const uint32_t vaultId, const std::string& state) {
     if (state != "live" && state != "paused" && state != "diverged" && state != "expired" && state != "stopped")
         throw ops::Invalid("unknown mirror state: " + state);
-    return Transactions::exec("mirror::MirrorVaults::setState", [&](pqxx::work& txn) {
+    return mirrorGateRepublished(Transactions::exec("mirror::MirrorVaults::setState", [&](pqxx::work& txn) {
         return txn.exec("UPDATE mirror_vault SET state = $2, updated_at = CURRENT_TIMESTAMP, "
                         "  stop_reason = CASE WHEN $2 = 'live' THEN NULL ELSE stop_reason END, "
                         "  stop_detail = CASE WHEN $2 = 'live' THEN NULL ELSE stop_detail END, "
@@ -337,7 +347,7 @@ bool MirrorVaults::setState(const uint32_t vaultId, const std::string& state) {
                         "WHERE vault_id = $1 AND state <> 'starting'",
                         pqxx::params{vaultId, state})
                    .affected_rows() > 0;
-    });
+    }));
 }
 
 std::optional<MirrorVault> MirrorVaults::byVaultUid(const std::string& vaultUuid) {
@@ -372,13 +382,13 @@ bool MirrorVaults::stop(const uint32_t vaultId, const std::string& state, const 
         throw ops::Invalid("a mirror stops as diverged, expired or stopped, not " + state);
     auto text = detail.dump();
     if (text.size() > 16 * 1024) text = nlohmann::json{{"truncated", true}}.dump();
-    return Transactions::exec("mirror::MirrorVaults::stop", [&](pqxx::work& txn) {
+    return mirrorGateRepublished(Transactions::exec("mirror::MirrorVaults::stop", [&](pqxx::work& txn) {
         return txn.exec("UPDATE mirror_vault SET state = $2, stop_reason = $3, stop_detail = $4::jsonb, "
                         "  stopped_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP "
                         "WHERE vault_id = $1 AND state <> 'starting'",
                         pqxx::params{vaultId, state, reason.substr(0, 200), text})
                    .affected_rows() > 0;
-    });
+    }));
 }
 
 namespace {

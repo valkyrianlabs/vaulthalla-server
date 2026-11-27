@@ -19,6 +19,7 @@
 #include "fs/cache/Registry.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
+#include "mirror/access/Access.hpp"
 #include "rbac/Mirrored.hpp"
 #include "runtime/Deps.hpp"
 #include "seed/include/init_db_tables.hpp"
@@ -53,6 +54,7 @@ inline bool available() {
 inline void resetIdKeyedState(const bool seeded = true) {
     // Vaults held as another server's copy, by vault id (rbac::mirrored): a fresh schema holds none.
     vh::rbac::mirrored::resetForTesting();
+    vh::mirror::access::resetForTesting();   // and their write gate (mirror::access)
     auto& deps = vh::runtime::Deps::get();
     deps.fsCache = seeded ? std::make_shared<vh::fs::cache::Registry>() : nullptr;
     if (deps.storageManager) deps.storageManager->initStorageEngines();

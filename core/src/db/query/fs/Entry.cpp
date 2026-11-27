@@ -48,6 +48,24 @@ void Entry::updateFSEntry(const EntryPtr& entry) {
     });
 }
 
+bool Entry::setAttributes(const unsigned int entryId, const Attributes& attrs, const std::optional<unsigned int> actorId) {
+    if (attrs.empty()) return true;
+    return Transactions::exec("Entry::setAttributes", [&](pqxx::work& txn) {
+        txn.exec("SELECT set_config('vh.keep_mtime', 'on', true)");
+        if (actorId) txn.exec("SELECT set_config('vh.actor', $1, true)", pqxx::params{std::to_string(*actorId)});
+        const std::optional<int64_t> mode =
+            attrs.mode ? std::optional<int64_t>(static_cast<int64_t>(*attrs.mode & 07777u)) : std::nullopt;
+        const std::optional<double> mtime =
+            attrs.mtime_us ? std::optional<double>(static_cast<double>(*attrs.mtime_us) / 1e6) : std::nullopt;
+        return !txn.exec("UPDATE fs_entry SET mode = COALESCE($2::integer, mode), "
+                         "  owner_uid = COALESCE($3::integer, owner_uid), group_gid = COALESCE($4::integer, group_gid), "
+                         "  updated_at = COALESCE(to_timestamp($5::double precision), updated_at) "
+                         "WHERE id = $1 RETURNING id",
+                         pqxx::params{entryId, mode, attrs.owner_uid, attrs.group_gid, mtime})
+                    .empty();
+    });
+}
+
 Entry::EntryPtr Entry::getFSEntry(const std::string& base32) {
     return Transactions::exec("Entry::getFSEntry", [&](pqxx::work& txn) -> Entry::EntryPtr {
         const auto fileRes = txn.exec(pqxx::prepped{"get_file_by_base32_alias"}, base32);

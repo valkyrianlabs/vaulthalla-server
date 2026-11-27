@@ -4,8 +4,9 @@ Status: design, phase 0 of the server mirror plan (2026-11-25). Built so far: pe
 migrations 158/159), the core side of the replication log (phase 2 piece 1, migration 160; "As built: the
 replication log" below) and the sealed contents lane with the mirror's receive path (phase 2 wave 2, migration 161;
 "As built: sealed contents" below) and following the core (phase 2 wave 3 piece B, migration 164; "As built: following
-the core" below), and changes made on the mirror without contents (wave 4 piece B, migration 166; "As built: a change
-made on the mirror" below). The rest is not implemented. It covers how a vault
+the core" below), the write gate (phase 2 wave 4 piece A, migration 165; "As built: the gate" below) and changes made
+on the mirror without contents (wave 4 piece B, migration 166; "As built: a change made on the mirror" below). The rest
+is not implemented. It covers how a vault
 is kept identical on two linked servers: the core role, the replication log, applying it, changes made on the
 mirror, behaviour while the link is down, moving the core, leaving a mirror, and vaults that also have a remote. The
 link is in [`link.md`](link.md); accounts, ownership and audits are in [`identity.md`](identity.md). Section "What
@@ -253,7 +254,7 @@ Deviations from the sketch above, forced by the code or decided while building i
    modification time and last modifier (existing behaviour), so a folder move is one group with a row per entry under
    it, not one row.
 
-**Known limit (not fixed here): FUSE `utimens`, `chmod` and `chown` never reach the database.** `fuse::setattr`
+**Known limit (fixed in wave 4, "As built: the gate"): FUSE `utimens`, `chmod` and `chown` never reached the database.** `fuse::setattr`
 (`core/src/fuse/Bridge.cpp`, the `FUSE_SET_ATTR_ATIME`/`MTIME` branch) sets the backing file's times with
 `utimensat` and re-stats it for the reply; mode, uid and gid only log "no-op" (`warnSetattrMetadataNoOpOncePerMinute`).
 No row changes, so no trigger fires: neither the journal nor the replication log sees a `touch -d` or a `chmod`
@@ -526,8 +527,8 @@ building (owner's instruction to build without waiting for review):
   vault off with jitter from 5 s to 10 min; a file fails for good after three attempts, so failed rows never keep it
   busy. It runs nothing with the link down or the switch off.
 
-**What still treats the mirror's vault as an ordinary local vault** (found while building; the write gate and the
-remaining background-job skips are wave 4): a super admin with a granted role that writes can write through every
+**What still treated the mirror's vault as an ordinary local vault** (found while building; all of it closed in wave 4,
+"As built: the gate"): a super admin with a granted role that writes can write through every
 surface (no gate yet; a reader grant is refused writes by RBAC, `vhh drill peers` 7f); local versioning and its
 retention (`recovery/local/Versions.cpp`) run on its writes; the format conversion service would visit it (a mirror
 holds only VHF1, so it finds nothing). The local sync task (FSTask) now runs none of its content-changing jobs (the
@@ -660,8 +661,8 @@ without waiting for review); each is listed for confirmation in the hand-off:
 - **Retention** moves once the mirror acknowledges and never past it; a mirror that stops acknowledging holds the log
   (known limit, as before) (`AcknowledgementsCompareDigestsAndRetentionFollowsThem`).
 
-Not built here: resynchronising a diverged or expired vault, the strict-mode gate (a local write on the mirror is not
-refused yet), submitting the mirror's changes, history.
+Not built here: resynchronising a diverged or expired vault, the strict-mode gate (wave 4, "As built: the gate"),
+submitting the mirror's changes, history.
 
 **At the join with piece A** (wave 3 merge, 2026-11-26):
 
@@ -881,6 +882,135 @@ are discarded, as an interrupted upload's are today.
 For a mirrored vault the mirror runs none of the jobs that change vault content: trash purge, key rotation, the
 at-rest repair, format conversion, version retention. Their results arrive from the core. The working-copy retry
 loop holds its files while the vault is read-only.
+
+### As built: the gate (phase 2 wave 4, piece A, migration 165)
+
+The mirror is read-only: every write surface, the database backstop and the background jobs. On this piece's branch a
+mirror is **strictly** read-only, link up or down: piece B (the mirror's own changes, pending and submitted to the
+core) lets writes through while the state is `live`. Decided while building (owner's instruction to build without
+waiting for review; each is listed for confirmation in the hand-off):
+
+- **`vh::mirror::access`** (`core/include/mirror/access/Access.hpp`, the interface piece B builds on): `state(vault)`
+  is `NotMirrored` (no row here, or this server is the core), `Live` (role `mirror`, `copy_finished`, state `live`,
+  `peers.experimental` on, the link up) or `ReadOnly`; `reason(vault)` is the code `requireWritable` refuses with
+  (`""` when it lets the write through); `requireWritable(vault, operation)` throws `MirrorReadOnly` (an
+  `ops::ReadOnly`, itself an `ops::Refused` with code `read_only` and a `reason` member); `acceptsLocalChanges()` is
+  false. Reasons, in the order they are judged: `mirror_orphaned`, `mirror_diverged`, `mirror_expired`,
+  `mirror_paused`, `mirror_stopped` (any other state, with `stop_reason` kept in `facts()`), `mirror_first_copy`,
+  `mirror_peers_off` (the switch off here: the follower does not run), `mirror_link_down`, and for a `Live` vault
+  `mirror_writes_not_built` while `acceptsLocalChanges()` is false. Each has a sentence (`sentence()`), with no path,
+  name or key material. **`mirror_core_owned`** (added): what is never a local change on a held vault, `Live` or not:
+  its name, description, quota, owner, sync and recovery settings and a remote (`refuseIfHeld`).
+- **In memory, never waiting on the database:** a map of the held rows (peer, role, state, `copy_finished`,
+  `stop_reason`) and of each peer's link, behind a shared lock; one atomic load while nothing is held. Published
+  by `reload()` at startup in `wireStorage()` before any engine serves (a failure stops startup, as for
+  `rbac::mirrored`), by every `MirrorVaults` write that changes a held row (`startMirror`, `recordGrant`, `clearGrant`,
+  `remove`, `orphan`, `setState`, `stop`) and `createMirrorVault` before they return, by the applier when a first copy
+  finishes, and by `peer::LinkService` when a link is kept (`adopt`) or closes. **The periodic reconcile rides on the
+  existing watcher** (`rbac::mirrored::Watcher`, 1 s; no second worker): the rows, and each held peer's link from
+  `LinkService::connected`. An unreadable database keeps what memory held.
+- **The surfaces**, each after its own permission check (so a caller without access learns nothing about the vault):
+  - FUSE: `fuse::Resolver::enforceMirrorGate`, after `enforcePermissions`, for every mutating action (Write, Touch,
+    Overwrite, Rename, Delete, Move, Copy, Link; so create, mkdir, symlink, rename, unlink, rmdir, write, setattr,
+    fsync, `open` for writing and `access(W_OK)`): `EROFS`. **`statfs` cannot say read-only per vault:** the kernel
+    takes a mount's read-only flag from the mount, not from the statfs reply, and one mount serves every vault. A
+    vault's subtree answers `EROFS` to every write instead.
+  - `ops::fs`: one line after the permission check of each mutating operation (`mkdir`, `move`, `rename`, `copy`,
+    `remove`, `authorizeUpload` (so the ws upload start and finish), `commitSealed`, `setAttributes`), marked
+    `// mirror gate`; piece B's hand-over goes after it. ws answers `{code: "read_only", reason}`
+    (`protocols/ws/core/Refusal.hpp`).
+  - `vh::fs::Filesystem`'s mutating calls (the layer under every surface: `mkdir` when something is to be created,
+    `copy`, `rename`, `remove`, both `createFile`s, `createSymlink`): `-EROFS`, or `MirrorReadOnly` for the throwing
+    ones. Nothing of the follower or the receive path goes through them.
+  - The HTTP lanes: `http::access::requireUserAction` for Write and Overwrite (upload content, text save, the resumable
+    sessions, the upload sessions' human lane, and `vh fs put`'s checks), plus the share lanes of the upload sessions
+    and the resumable commit; `handler::errorFor`, the resumable lane's `errorFor` and the upload router answer
+    **503** `{code: "read_only", reason}` with `Retry-After: 30`. A resumable file refused at its commit fails with
+    `read_only` and its spool is discarded, as an interrupted upload's is.
+  - `vh fs put`: refused before staging (through `http::access`) and again after the transfer, before the commit,
+    with **exit code 69** (`EX_UNAVAILABLE`, `transfer::exitcode::kReadOnly`) and `read-only (<reason>): <sentence>`.
+  - Share uploads (ws `share.upload.start`, the upload sessions' share lane): refused after the share's own scope
+    check; the commit refuses through `Filesystem`. Shares cannot overwrite (no share lane edits a file).
+  - The S3 gateway: `ObjectStore::requireS3Writable` after every permission check of PutObject, DeleteObject(s),
+    CopyObject's destination, CreateMultipartUpload, UploadPart, CompleteMultipartUpload: **503
+    `ServiceUnavailable`**, super admins included (the open question "503 over 403" taken as proposed).
+  - Recovery restore (`ops::recovery::restore`): refused before the plan starts. Vault settings (`ops::vaults::update`,
+    `updateSync`), the recovery policy (`ops::recovery::update`) and `vault.remote.attach`: `mirror_core_owned`.
+  - Trash restore and purge have no person's command on a local vault (the purge is the sync pass's, skipped; a
+    restore is the manifest applier's, which a local mirror never runs). Snapshot creation is **not** refused: it reads
+    the copy and changes nothing in it (history of a copy is phase 3; decision recorded).
+- **The backstop (migration 165)**: BEFORE triggers on `fs_entry` (insert, delete, and an update of a replicated
+  column: 160's list), `files` (insert, delete, a content update), `directories` (insert, delete), `symlinks`
+  (insert, delete, a target update) and `files_trashed` (insert, delete, any update) raise `mirror_read_only` for a
+  vault whose role here is `mirror` or `orphaned`, unless the transaction set `vh.mirror_apply` (the follower,
+  `Log::markMirrorApply`) or `vh.mirror_local` (piece B, `Log::markMirrorLocal`, added; nothing calls it on this
+  branch but tests). Never refused: the vault root (created with the vault, re-parented on a soft delete; not
+  replicated), a folder's modification time alone (the totals, the follower's after its commit too), totals, inodes,
+  aliases and paths, and **the rows of a vault removed as a whole** (its `vault` row is already gone when the cascade
+  reaches them). So **creating the mirror's vault sets no flag** (its root is exempt; the row comes last) and **removing
+  a copy sets no flag** (`storage::Manager::removeVault`, which the ending rule, `removeOrphaned` and every rollback
+  use; deleting a held vault is refused above it, `refuseDeletionIfMirrored`). The contract
+  (`test_replication_log_contract.py`) now also keeps `vh.mirror_local` to `db::query::mirror` and checks the triggers'
+  table set.
+- **Background work** on a held vault changes nothing: the local sync task (wave 3: at-rest repair, trash purge,
+  rotation), format conversion (`convertVault` reports `blocked`; the service skips the vault), local versioning
+  (`versions::retain` captures nothing, `versions::maintain`'s retention skips it), key rotation and salvage
+  (`refuseIfMirrored` refuses on a mirror or orphaned copy even where a test lets a core rotate), deletion and its
+  retention (refused, wave 3), the working-copy retry (below). No scheduled job writes into a vault otherwise.
+- **What strict mode cannot refuse, on this branch:** a handle already open for writing when the vault became
+  read-only. On this branch a mirror is read-only from its creation, so no such handle can exist; the seal is gated
+  anyway (`WorkingCopies::seal`): the seal is refused (`EROFS` from flush and fsync), **nothing is sealed over the
+  core's content and no byte of the vault changes**, and the copy is kept unsaved as a failed seal is (the bytes stay
+  in this process, encrypted under its key; reopening the file shows them; the background retry holds them while the
+  vault is read-only; a daemon stop logs them as lost). Known limit: an unsaved copy counts as open, so the follower's
+  group that would change that file waits for it (the deferral rule of wave 3). **Piece B takes over at that line:**
+  such a copy is sealed and kept as pending.
+- **The mount's own shortcut is gone:** a held vault's root is shown and listed through `rbac::mirrored` like every
+  other surface (no super-admin, owner or admin-view shortcut in `canExposeVaultRoot`; a super admin's listing of the
+  mount root leaves out a copy whose grant shows nothing).
+- **Cost** (`tools/dev/bench/replication_log_cost.sh`, which now also measures "held elsewhere" and "without 165").
+  On a server that holds no copy the triggers read one empty partial index (`mirror_vault_held_idx`) per row; with a
+  copy held elsewhere one more indexed lookup of the row's vault. Measured on the dev VM, 2026-11-26, PostgreSQL 16,
+  3,000 seals per run, while the other wave 4 piece built on the same VM (load about 2.7), two runs back to back:
+
+  | Per seal | run 1 (3 runs, median) | run 2 (5 runs, median) |
+  |---|---|---|
+  | No vault mirrored, 165 dropped | 0.536 ms | 0.832 ms |
+  | No vault mirrored, with 165 (every server today) | 0.826 ms | 0.736 ms |
+  | No vault mirrored, a copy held elsewhere | 0.821 ms | 0.817 ms |
+  | This vault mirrored (core, 2 log rows per seal) | 1.400 ms | 1.375 ms |
+
+  The backstop's difference is +0.29 ms in one run and -0.10 ms in the other: inside this VM's noise (in run 1 "no
+  triggers" even measured slower than "journal only"). Nothing measurable on a loaded VM; a quiet host would give a
+  sharper figure (not run).
+
+Carried fixes (each with a test that failed before it):
+
+- **FUSE `setattr` reaches the row** (the known limit of 160): `chmod`, `chown` and a new modification time go
+  through `ops::fs::setAttributes`, one transaction (`db::query::fs::Entry::setAttributes`, with `vh.keep_mtime` so
+  a mode change never moves the time, and `vh.actor` for the log), Write at the path; an owner or group that differs
+  needs a super admin (as chown needs root; decision), audited `fs.chown`; mode and times are not audited (`cp -p`
+  sets them on every file). The journal records the mode (it never journals times or owners); the replication log
+  records all of them. `touch` (UTIME_NOW) is honoured. The access time stays the backing file's only.
+- **A create never returns what is there:** `Filesystem::createFile` with `overwrite = false` refuses an existing
+  file with `EEXIST` (it returned it silently), so `vh fs put` reports "created by someone else meanwhile" instead of
+  "stored"; the provider restore and share uploads map it to their conflict.
+- **Missing is told from no permission:** `ops::fs::check(actor, vault, path, action)` answers `Allowed`, `Denied` or
+  `Missing`; `Missing` only for an action on an existing entry (a create's Write, Touch or Link is judged where the
+  entry would go, as before), when nothing is at the path and the actor may List the nearest folder that exists (they
+  could see it is missing there anyway), `Denied` otherwise (no existence oracle; the HTTP lanes' rule). Every
+  `ops::fs` operation refuses the same way: `NotFound` for a missing entry the caller may know is missing (a sealed
+  commit's replacement: `ContentConflict`, its base is gone, as a super admin already got), `Denied` otherwise. Piece
+  B's "changed meanwhile" uses it.
+- **`ShellServerTest`'s race:** the CLI socket's path appeared at `bind()`, before `listen()` and before the server
+  recorded the inode it owns: a connect in that window was refused, and a stop in it left the path behind. The socket
+  now listens under a private name and is renamed onto the path once its inode is recorded, and the run loop closes
+  the listener and removes its own path whenever it ends.
+
+Proven: `MirrorGateDbTest` (`test_mirror_gate_db.cpp`), `ShellServerTest.ThePathAppearsOnlyListening...`, the
+contracts, and `vhh drill peers` step 7h (B's mount refuses create, overwrite, mkdir, rename, delete, chmod and touch
+with `EROFS`; `vh fs put` exits 69 with the reason; A's writes still arrive; B reads within the grant). The ws reply is
+proven in process (the handlers call `ops::fs`; the drill has no console session).
 
 ## Parity
 

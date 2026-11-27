@@ -1,6 +1,7 @@
 #include "ops/VaultRemote.hpp"
 
 #include "audit/Trail.hpp"
+#include "mirror/access/Access.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "db/query/cloud/Storage.hpp"
 #include "db/query/vault/APIKey.hpp"
@@ -253,6 +254,7 @@ Status attach(const Actor& actor, const AttachRequest& request) {
     if (request.api_key_id == 0) throw Invalid("an API key is required (--api-key)");
     if (request.bucket.empty()) throw Invalid("a bucket is required (--bucket)");
     d::requireAttach(actor, vault, request.api_key_id);
+    vh::mirror::access::refuseIfHeld(vault->id, "vault.remote.attach");   // remote sync runs on the core only
     d::refuseManaged(*vault);
     std::string why;
     if (!storage::upstream::validBucketName(request.bucket, why))

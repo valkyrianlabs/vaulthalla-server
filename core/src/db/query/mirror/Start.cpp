@@ -7,6 +7,7 @@
 #include "db/query/fs/Entry.hpp"
 #include "fs/model/Entry.hpp"
 #include "ops/Error.hpp"
+#include "mirror/access/Access.hpp"
 #include "rbac/Mirrored.hpp"
 #include "sync/model/LocalPolicy.hpp"
 #include "vault/Content.hpp"
@@ -542,6 +543,7 @@ uint32_t MirrorStart::createMirrorVault(const NewMirrorVault& in) {
         return in.vault_id;
     });
     vh::rbac::mirrored::reload();
+    vh::mirror::access::reload();
     return id;
 }
 

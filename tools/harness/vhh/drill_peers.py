@@ -38,6 +38,9 @@ Then 7, a whole mirror (design/peers/mirror.md, waves 1 to 3), with no row writt
      digests and the same tree, acknowledged on A; what A deleted is gone on B, a trashed file has nothing pending;
   f. access on B: its super admin reads within the grant, is refused a write, and is refused after A's `vh peer policy
      set none`;
+  h. strict mode on B (wave 4): with a grant that allows every file operation (power_user), every write through B's
+     mount (create, overwrite, mkdir, rename, delete, chmod, touch) is refused with EROFS and `vh fs put` with exit code
+     69 and the reason, B's vault is unchanged, A's writes still arrive, and B's super admin still reads within the grant;
   g. B killed while A changes the vault: it comes back, catches up from its position (equal digests, live), and its
      change journal shows each change once.
 8, ending a mirror (owner's rule, 2026-11-26): rotation refused on A; B's own cancel of a live mirror refused; A's
@@ -438,7 +441,55 @@ def _whole_mirror(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, re
                          f"{b.inst.mount}/whole/other/unread.txt"], capture_output=True, text=True)
     report.check("7f: after A's `peer policy set none`, B's super admin is refused", cp.returncode != 0,
                  (cp.stdout + cp.stderr)[-200:])
+    listing = subprocess.run(["runuser", "-u", b.admin, "--", "timeout", "30", "ls", "-1", str(b.inst.mount)],
+                             capture_output=True, text=True)
+    root = subprocess.run(["runuser", "-u", b.admin, "--", "timeout", "30", "stat", f"{b.inst.mount}/whole"],
+                          capture_output=True, text=True)
+    report.check("7f: and the mount shows B's super admin no such vault (no root shortcut for a copy: wave 4)",
+                 "whole" not in listing.stdout.split() and root.returncode != 0,
+                 f"ls: {listing.stdout[-200:]} stat: {(root.stdout + root.stderr)[-200:]}")
     a.vh("peer", "policy", "set", node_b, "reader")
+
+    # ---- 7h. Strict mode on B (wave 4 piece A): a copy of A's vault is read-only on B whatever A grants it. With a
+    # grant that allows every file operation (power_user), RBAC would let B's super admin write; the gate refuses every
+    # write with its reason.
+    a.vh("peer", "policy", "set", node_b, "power_user")
+    _wait("B's grant (power_user)",
+          lambda: (_mirror_info(b, vb).get("grant") or {}).get("role_name") == "power_user" or None, timeout=30)
+    entries_b = _sql(b, f"SELECT count(*) FROM fs_entry WHERE vault_id = {vb}")
+    top_b = _plain(b, "whole/top.txt")
+    for label, line in (("a new file", "printf no > MNT/whole/other/gate.txt"),
+                        ("an overwrite", "printf no > MNT/whole/top.txt"),
+                        ("a folder", "mkdir MNT/whole/gate_dir"),
+                        ("a rename", "mv MNT/whole/top.txt MNT/whole/top2.txt"),
+                        ("a delete", "rm MNT/whole/other/unread.txt"),
+                        ("a chmod", "chmod 600 MNT/whole/top.txt"),
+                        ("a touch", "touch -d 2001-01-01 MNT/whole/top.txt")):
+        cp = subprocess.run(["runuser", "-u", b.admin, "--", "timeout", "30", "sh", "-c",
+                             line.replace("MNT", str(b.inst.mount))], capture_output=True, text=True)
+        report.check(f"7h: B's mount refuses {label} with EROFS (Read-only file system)",
+                     cp.returncode != 0 and "Read-only file system" in (cp.stdout + cp.stderr),
+                     (cp.stdout + cp.stderr)[-200:])
+    env = [f"VAULTHALLA_CLI_SOCKET={b.inst.socket_path}", "VAULTHALLA_NONINTERACTIVE=1", "PATH=/usr/bin:/bin"]
+    for args in (("fs", "put", str(vb), "-", "/other/gate_cli.txt"),
+                 ("fs", "put", str(vb), "-", "/top.txt", "--overwrite")):
+        cp = subprocess.run(["runuser", "-u", b.admin, "--", "env", "-i", *env, b.cli, *args], input="from the cli\n",
+                            capture_output=True, text=True, timeout=60, cwd=str(b.private))
+        report.check(f"7h: `vh {' '.join(args)}` on B is refused with the read-only exit code (69) and the reason",
+                     cp.returncode == 69 and "mirror_writes_not_built" in (cp.stdout + cp.stderr),
+                     f"exit {cp.returncode}: {(cp.stdout + cp.stderr)[-300:]}")
+    report.check("7h: nothing changed on B: its entries, and the overwritten file's bytes",
+                 _sql(b, f"SELECT count(*) FROM fs_entry WHERE vault_id = {vb}") == entries_b
+                 and _plain(b, "whole/top.txt") == top_b)
+    a.sh("printf 'written on A while B is read-only\\n' > MNT/whole/other/from_a.txt")
+    ok = _wait_synced(a, va, b, vb, "A's write arriving on B while B refuses its own")
+    report.check("7h: A's writes still arrive on B (equal digests, acknowledged)", bool(ok), json.dumps(ok)[:300])
+    report.check("7h: B's super admin still reads within the grant", _wait(
+        "A's new file readable on B", lambda: _plain(b, "whole/other/from_a.txt") == _plain(a, "whole/other/from_a.txt")
+        or None, timeout=60) is not None)
+    a.vh("peer", "policy", "set", node_b, "reader")
+    _wait("B's grant (reader) again", lambda: (_mirror_info(b, vb).get("grant") or {}).get("role_name") == "reader"
+          or None, timeout=30)
 
     # ---- 7g. B is down while A changes; it catches up from where it was, nothing applied twice
     before = _mv(b, vb)
