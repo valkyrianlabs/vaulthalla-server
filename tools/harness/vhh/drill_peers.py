@@ -39,8 +39,8 @@ Then 7, a whole mirror (design/peers/mirror.md, waves 1 to 3), with no row writt
   f. access on B: its super admin reads within the grant, is refused a write, and is refused after A's `vh peer policy
      set none`;
   h. strict mode on B (wave 4): with a grant that allows every file operation (power_user), every write through B's
-     mount (create, overwrite, mkdir, rename, delete, chmod, touch) is refused with EROFS and `vh fs put` with exit code 69 and the reason, B's
-     vault is unchanged, A's writes still arrive, and B's super admin still reads within the grant;
+     mount (create, overwrite, mkdir, rename, delete, chmod, touch) is refused with EROFS and `vh fs put` with exit code
+     69 and the reason, B's vault is unchanged, A's writes still arrive, and B's super admin still reads within the grant;
   g. B killed while A changes the vault: it comes back, catches up from its position (equal digests, live), and its
      change journal shows each change once.
 8, ending a mirror (owner's rule, 2026-11-26): rotation refused on A; B's own cancel of a live mirror refused; A's
