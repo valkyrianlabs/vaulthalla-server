@@ -724,6 +724,8 @@ review); each is listed for confirmation in the hand-off:
   is answered from it and never executed twice; a `running` row a stop interrupted is executed again only if nothing of
   it reached the log (else it counts as executed). Kept 30 days after it finished (the log's own retention; swept
   when the vault's submissions are next drained).
+- **Who authorizes a change made on the mirror:** today a mirror's change is authorized by the linked server's role on
+  the vault alone; the person named in it is recorded (the log's actor, the audit event), not checked.
 - **Executing** (`mirror::submit::drain`): as the remote account for (the mirror's node id, the person's id there),
   created the first time it is named; the person must be one of the submitting server's own accounts (`invalid`
   otherwise). Through `ops::fs` inside an `ops::fs::PeerSubmission`: the linked server's vault role
