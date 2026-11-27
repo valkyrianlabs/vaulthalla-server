@@ -1363,7 +1363,12 @@ instruction to build without waiting for review); each is listed for confirmatio
   the keep setting, the queue while the mirror is down and the drop on unlink are the cancel's. Changing the choice during
   the window: `vh vault delete <id> --mirror-copy remove|leave` (or `storage.vault.remove {mirror_copy}`) on the deleted
   vault, by whoever may delete it, with the same step-up rule; it is told again. This rides on the existing retention
-  scheduler and restore (no second scheduler): the retention service's pass is the only thing that ends the mirror. On the mirror a held copy is refused with a sentence naming detach (`vault_mirrored`), an orphaned one
+  scheduler and restore (no second scheduler): the retention service's pass is the only thing that ends the mirror.
+  Fixed on the way (found by the drill): the deletion's and the restore's bookkeeping (`inode = NULL`, the root off and
+  back on the mount) ran without `vh.keep_mtime`, so every entry's modification time was stamped with the deletion's
+  time (any vault: users saw every file modified) and a mirrored vault's entries changed under its log; both keep the
+  times now. The round trip logs only the vault's own document (its soft deletion, 160's rule), which the applier
+  records and does not act on. On the mirror a held copy is refused with a sentence naming detach (`vault_mirrored`), an orphaned one
   naming `vh mirror cancel` and detach (`vault_orphaned_copy`); the S3 gateway's DeleteBucket keeps refusing a mirrored
   vault (409: no field for the choice there).
 - **Versions on the mirror** (`mirror.versions.set`, `vh mirror versions <vault> on|off [--keep-last N] [--max-age-days
@@ -1383,7 +1388,8 @@ instruction to build without waiting for review); each is listed for confirmatio
   (`MirrorSubmitDbTest.DISABLED_VersionsOnTheMirrorCostPerGroup`, dev VM, ASan build, PostgreSQL 16, 2026-11-27, load
   about 2: 100 groups each replacing one file): 12.1 ms a group off, 16.7 ms on (+4.6 ms: the hard link of the prior
   bytes, the version and blob rows under a savepoint, the per-file prune).
-- **A held change's bytes** (`mirror.held.get`, `vh mirror save <id> <dest|->`): the person's version of a held write,
+- **A held change's bytes** (`mirror.held.get`, `vh mirror save <id> <dest|->`, a leaf beside `discard` and `retry`, so
+  `vh mirror held` stays the listing leaf): the person's version of a held write,
   decrypted with the vault's key at that generation, for super admins (who may list held changes); inline base64 up to
   8 MiB on ws (`too_large` beyond), streamed with `vh fs get`'s transfer frames on the CLI (the client writes `<dest>`).
   Nothing in the vault changes; a detached vault's held changes stay listed.
