@@ -125,7 +125,8 @@ Local::Suppress::~Suppress() { submitLocalPop(vault_); }
 
 Local::Local(const vh::ops::Actor& actor, const uint32_t vaultId, std::string op, const Mode mode)
     : actor_(actor), vaultId_(vaultId), op_(std::move(op)) {
-    if (!actor_ || !vh::mirror::access::held(vaultId) || submitLocalRunningFor(vaultId)) return;
+    // A change is a local person's (a remote account names someone of another server: never this server's person).
+    if (!actor_ || actor_->remote() || !vh::mirror::access::held(vaultId) || submitLocalRunningFor(vaultId)) return;
     if (!vh::mirror::access::acceptsLocalChanges()) return;
     const auto state = vh::mirror::access::state(vaultId);
     const bool sealWhileDown = mode == Mode::Seal && state == vh::mirror::access::State::ReadOnly &&

@@ -683,16 +683,20 @@ submitting the mirror's changes, history.
 
 ### As built: a change made on the mirror (phase 2 wave 4, piece B, migration 166)
 
-Steps 1, 3, 4 and 5 of "A change made on the mirror" and "When the core refuses" for the operations without contents.
-Contents (step 2, uploads, FUSE seals, a file open for writing when the link drops, the staged bytes on the core) are
-not built: see "Not built here" below. Piece A's gate (`mirror::access`) decides whether a write may happen at all;
-everything here is behind it, entered only while the vault is `Live` here. Decided while building (owner's
-instruction to build without waiting for review); each is listed for confirmation in the hand-off:
+Steps 1 to 5 of "A change made on the mirror", "When the core refuses" and "What strict mode cannot refuse" (a file
+open for writing when the link drops). Piece A's gate (`mirror::access`, `acceptsLocalChanges()` now true) decides
+whether a write may happen at all; everything here is behind it, entered only while the vault is `Live` here (and for
+a seal, also while the link is down). Decided while building (owner's instruction to build without waiting for
+review); each is listed for confirmation in the hand-off:
 
-- **Local apply** (`mirror::submit::Local`, built by `ops::fs` right after the gate's `requireWritable` line):
-  `mkdir`, `move`, `rename` and `remove` (a file to the trash, a folder or symlink deleted, as `ops::fs::remove` does)
+- **Local apply** (`mirror::submit::Local`): `mkdir`, `move`, `rename`, `remove` (a file to the trash, a folder or
+  symlink deleted), `write` (a file's contents: a create or a replacement) and `setattr` (mode and modification time)
   are applied here at once, through the same `vh::fs` calls a local change uses, so the journal fires and this server's
-  clients see the change. Under the vault's local-change lock (`submit::vaultMutex`, also held by the applier around
+  clients see the change. **Every surface takes this path**: `ops::fs` builds a `Local` right after the gate's line
+  (the ws commands), and `vh::fs::Filesystem`'s mutators (`mkdir`, `rename`, `remove`, `copy`, both `createFile`s)
+  and FUSE `unlink` and `rmdir` build one around their bodies, so the mount, the HTTP lanes, `vh fs put`, share uploads
+  and the S3 gateway do too (a `Local` is inert when one of the same vault already runs on the thread: the outer one
+  describes the change). FUSE seals build one in `WorkingCopies::seal` (below). Under the vault's local-change lock (`submit::vaultMutex`, also held by the applier around
   every page, group and settle, so a change here and a group from the core never interleave) it first records the
   change (`mirror_pending`, state `local`) with every entry it touches as the tables hold it now (the entry and, for a
   folder, everything under it: a rename re-stamps them), then runs the mutation with `vh.mirror_local = on` (piece A's
@@ -768,15 +772,50 @@ instruction to build without waiting for review); each is listed for confirmatio
   a `submitted` row is asked again under its request id. Waits are bounded: the link's request timeout, the follower's
   3 s visit, 100 ms between asking again about a queued change.
 
-Not built here: contents (step 2: the `PUT` lane, staged bytes and their sweep, `commitSealed` from them; uploads on the
-mirror, FUSE seals, an open file kept when the link drops; until then `ops::fs::authorizeUpload` and `commitSealed`
-refuse on a vault held here with `MirrorReadOnly("mirror_contents_not_built")`, and the other content surfaces must be
-refused by piece A's gate: `mirror::submit::supportsLocally(operation)` says which operations this piece takes), restore
-and set-attributes (no surface on a local vault has them), per-account rules on the core, the two-daemon drill step.
+- **Contents** (step 2; `mirror/submit/Contents`, `peer::object::put`, `protocols::device::peer_object::beginPut|
+  finishPut`): a `write` keeps its sealed bytes in the **pending store** (`.vh-mirror-pending/<vault>/<row>` under the
+  backing root, a hard link, a copy where linking fails) the moment it is applied here, so nothing that later replaces
+  the file here (the core's state coming back) takes them before the core has them. Before its submit the follower
+  sends them: `PUT /peer/object/<vault uid>/<object uid>/<generation>` on the sealed lane, the facts as `X-VH-Size`,
+  `X-VH-Content-Hash`, `X-VH-Key-Version`. The core decides from the header (the switch, the link, this server the
+  vault's core and live, the caller its mirror, a `Content-Length` that is that generation's sealed length), streams
+  the body to a private file, then verifies (invariant 6: the size, the BLAKE2b, the header and every chunk
+  authenticated with the vault's key as that generation; the object is not bound, wave 2's rule) and keeps it
+  **staged** by generation (`.vh-mirror-staged/<vault>/<object uuid>.<generation>`): 201, else 422
+  `invalid_contents`, 409 `key_version_missing`, 404. A submit of a write whose bytes are not staged is refused
+  `contents_missing` before it is queued (not kept for the request), and the mirror sends them again. The core
+  commits the file from the staged bytes (`ops::fs::commitSealed`, a writer that links them) with the mirror's uid,
+  generation, key version, size, BLAKE2b and MIME type, so both servers hold the same bytes and the confirmation
+  fetches nothing; a create never replaces what is there (a conflict), a replacement is the compare-and-swap on the
+  generation it was based on (`content_conflict`). Staged bytes never committed are swept after a day (each drain).
+  The pending store's link goes when the change is confirmed; a held change keeps it as `.vh-mirror-held/<vault>/<id>`.
+  Bytes are sent without a transfer slot (known limit: the four slots per peer of wave 2 are for fetches).
+- **The person of a change** is a local account, always: the caller of the surface, or for a seal the one who wrote
+  to the file or opened it for writing (`WorkingCopies::open` now records the opener; never the file's last modifier,
+  which on a mirror is often the core's person, a remote account here). A `Local` refuses a remote account (inert, so
+  the gate's backstop refuses the write), and a seal with no local writer is kept unsaved. Found by the drill: a
+  truncating open sealed under the core's person was attributed on the core to this server's account of that id.
+- **A file open for writing when the link drops** is sealed and kept as pending (`Local::Mode::Seal`: taken while the
+  link is down, never in another read-only state, where piece A's rule stands: the seal is refused and the copy kept
+  unsaved), and submitted when the link returns. A new write while the link is down is refused by the gate; an upload
+  that began while `Live` is refused at its commit (piece A's line in each lane) and its staged bytes discarded.
+- **Set attributes:** a mode or a modification time is a `setattr` change (the core runs `ops::fs::setAttributes`
+  under the ceiling); **an owner change is refused on a mirror** (`Denied`: an owner is a Linux account of the host
+  holding the copy, the core's). **Symlinks made on a mirror are refused** (`EROFS`; no operation on the core makes
+  one from a submit yet). Copy stays submitted only.
+- **A replacement the core outran** (`content_conflict`): the file comes back to the core's state, and the person's
+  version becomes a new file beside it, `name (conflict <8 hex of its new uid>).ext`, made here from the pending store
+  (same bytes, generation and key version) and resubmitted as a create; recorded as a conflict. A refused creation
+  holds the later changes of the entry it would have made (its contents written afterwards) with it.
+- **A file whose contents have not arrived here** renames and moves as metadata (`Filesystem::handleRename`: with a
+  `mirror_content_pending` row and no bytes on disk, nothing is moved; the receive path links the bytes wherever the
+  file is when they come); trashing one was never refused.
 
-Known limits: a file whose contents have not arrived here yet cannot be renamed, moved or trashed here
-(`Filesystem::rename` and the trash need its backing file; the refusal is the engine's, nothing becomes pending); a
-folder change captures every entry under the folder into the pending row (a very large folder makes a large row); an
+Not built here: restore (no surface on a local vault has it), per-account rules on the core, downloading a held
+change's bytes, the held changes in the console and Desktop.
+
+Known limits: a folder change captures every entry under the folder into the pending row (a very large folder makes a
+large row); an
 unrelated core change to a pending entry shows the core's version of that entry until the person's change comes back;
 the person's change made on an orphaned copy (none can be made: read-only) or left pending when a vault stops (diverged,
 expired) stays pending until the vault is live again or detached (wave 5: pending changes become ordinary changes).

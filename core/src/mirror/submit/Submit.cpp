@@ -28,7 +28,10 @@
 
 #include <pqxx/pqxx>
 
+#include <paths.h>
+
 #include <atomic>
+#include <cstdlib>
 #include <fstream>
 #include <mutex>
 #include <regex>
@@ -488,6 +491,13 @@ void submitRefused(const mq::PendingChange& p, const std::string& code, const st
     if (code == "conflict" && submitConflictCopy(p, code, error)) return;
     if (code == "content_conflict" && submitContentConflictCopy(p, code, error)) return;
     submitHold(p, code, error);
+    // A refused creation: the later changes of the entry it would have made (its contents written afterwards, a
+    // rename) cannot succeed either; they are held with it, for the same reason, their bytes kept.
+    const bool creation = p.op == "mkdir" || (p.op == "write" && !p.args.contains("base"));
+    if (!creation) return;
+    for (const auto& later : mq::Pending::list(p.vault_id))
+        if (later.id > p.id && later.entry_uid == p.entry_uid && later.state != "executed")
+            submitHold(later, code, "the change that would have made this entry was refused: " + error);
 }
 
 }
@@ -579,6 +589,17 @@ SubmitStep submitPending(const uint32_t vaultId, vh::mirror::follow::Transport& 
     if (!mv || mv->role != "mirror" || mv->state != "live" || !mv->copy_finished) return out;
     const auto vaultUid = mq::MirrorVaults::vaultUidOf(vaultId);
     if (!vaultUid) return out;
+    // Test instances only (VH_TEST_FAULT_DIR/mirror-submit-hold): nothing is submitted, so `vhh drill peers` can make
+    // the core refuse a change, clash with it, or restart this server while changes wait. Never in a packaged daemon.
+    if (vh::paths::testMode)
+        if (const char* dir = std::getenv("VH_TEST_FAULT_DIR")) {
+            std::error_code ec;
+            if (std::filesystem::exists(std::filesystem::path(dir) / "mirror-submit-hold", ec)) {
+                out.waiting = true;
+                out.detail = "submit_held_for_testing";
+                return out;
+            }
+        }
     {
         // A local row with no change running is one a stop left: submit it (the core decides, its answer settles).
         std::scoped_lock local(vaultMutex(vaultId));

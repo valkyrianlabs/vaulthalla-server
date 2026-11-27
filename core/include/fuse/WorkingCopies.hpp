@@ -125,7 +125,10 @@ public:
 
     // `flags` are the open(2) flags the kernel passed. O_TRUNC on a writable open empties the copy. Throws
     // std::system_error (errno) on failure.
-    Handle open(uint64_t ino, const std::shared_ptr<fs::model::File>& file, int flags);
+    // `userId`: who opens it for writing (the change's person when it is sealed: a truncating open changes the file
+    // before any write does).
+    Handle open(uint64_t ino, const std::shared_ptr<fs::model::File>& file, int flags,
+                std::optional<int32_t> userId = std::nullopt);
 
     ssize_t read(const Handle& handle, char* buf, size_t size, off_t off) const;
     ssize_t write(const Handle& handle, const char* buf, size_t size, off_t off, std::optional<int32_t> userId) const;

@@ -269,7 +269,7 @@ void WorkingCopies::materialize(WorkingCopy& copy) const {
 }
 
 WorkingCopies::Handle WorkingCopies::open(const uint64_t ino, const std::shared_ptr<fs::model::File>& file,
-                                          const int flags) {
+                                          const int flags, const std::optional<int32_t> userId) {
     if (!file) throw std::system_error(ENOENT, std::generic_category(), "open working copy");
 
     std::shared_ptr<WorkingCopy> copy;
@@ -306,6 +306,7 @@ WorkingCopies::Handle WorkingCopies::open(const uint64_t ino, const std::shared_
             copy->dirty = true;
             copy->truncated = true;
         }
+        if (userId && (access != O_RDONLY || truncating)) copy->lastWriter = userId;
 
         return {copy, access | (flags & O_APPEND)};
     } catch (...) {
@@ -377,13 +378,20 @@ void WorkingCopies::seal(WorkingCopy& copy) const {
     std::optional<vh::mirror::submit::Local> pending;
     if (entry->vault_id) {
         const auto vaultId = static_cast<uint32_t>(*entry->vault_id);
-        if (vh::mirror::access::held(vaultId)) {
+        const auto state = vh::mirror::access::state(vaultId);
+        const bool takenAsPending =
+            vh::mirror::access::held(vaultId) && vh::mirror::access::acceptsLocalChanges() &&
+            (state == vh::mirror::access::State::Live ||
+             vh::mirror::access::reason(vaultId) == vh::mirror::access::kLinkDown);
+        if (takenAsPending) {
+            // The change's person: who wrote (or opened it for writing) here, a local account. Never the file's last
+            // modifier, which on a mirror may be an account of the core (a remote account names nobody here).
             std::shared_ptr<identities::User> writer;
-            const auto writerId = copy.lastWriter       ? copy.lastWriter
-                                  : entry->last_modified_by ? entry->last_modified_by
-                                                            : entry->created_by;
-            if (writerId && *writerId > 0)
-                if (const auto& ids = runtime::Deps::get().identityManager) writer = ids->user(static_cast<uint32_t>(*writerId));
+            if (copy.lastWriter && *copy.lastWriter > 0)
+                if (const auto& ids = runtime::Deps::get().identityManager)
+                    writer = ids->user(static_cast<uint32_t>(*copy.lastWriter));
+            if (!writer || writer->remote())
+                throw std::runtime_error("a change to a mirrored vault needs the local person who made it");
             pending.emplace(writer, vaultId, "write", vh::mirror::submit::Local::Mode::Seal);
             if (pending->active()) {
                 pending->on(entry->path, false);

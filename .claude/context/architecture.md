@@ -706,9 +706,17 @@ through on a Live mirror.
   pending under the vault's local-change lock (`submit::vaultMutex`, also taken by `mirror::apply::run`): `mirror_pending`
   (state local, then pending) and `mirror_dirty` (each touched entry's last confirmed state) first, then the mutation with
   `vh.mirror_local`/`vh.mirror_request` in every transaction (`db::SessionSettings`, applied by `Transactions::exec`); a
-  created entry's uid chosen first (`db::query::fs::AssignedUid`, read by the Directory/File/Symlink inserts). Copy is
-  submitted only. Contents are refused on a held vault (`submit::requireSupported`: `mirror_contents_not_built`).
-  `mirror_entry_hash` and the digest never move for a pending change.
+  created entry's uid chosen first (`db::query::fs::AssignedUid`, read by the Directory/File/Symlink inserts). Every
+  surface: `vh::fs::Filesystem`'s mutators (mkdir, rename, remove, copy, both createFiles), FUSE unlink/rmdir and
+  `WorkingCopies::seal` (`Local::Mode::Seal`: also while the link is down) build a `Local` too (inert under an outer
+  one of the same vault). Ops: mkdir, move, rename, remove, copy (submitted only), write, setattr (mode, time; owner
+  refused). `mirror_entry_hash` and the digest never move for a pending change.
+- **Contents (`mirror/submit/Contents`):** a write's sealed bytes linked into the pending store
+  (`.vh-mirror-pending/<vault>/<row>` under the backing root); `peer::object::put` sends them before the submit;
+  the core's sealed lane takes PUT (`peer_object::beginPut|finishPut`, `http::Session::handle_peer_object_put`),
+  verifies (size, BLAKE2b, `verifyFd`) and stages them (`.vh-mirror-staged/<vault>/<uuid>.<gen>`, swept after a day);
+  `submitExecuteWrite` commits from them (`ops::fs::commitSealed`) with the mirror's uid and generation. Held bytes:
+  `.vh-mirror-held/<vault>/<id>`. A not-received file renames as metadata (`handleRename`).
 - **Submit (`mirror::submit::submitPending`, from `Follower::step` before the log):** `peer.mirror.submit` (peer wire
   set), one change at a time per vault in order. Core: `serveSubmit` answers at once from `mirror_submission` (queued,
   running, executed with groups, refused with code: never executed twice) and `drain`s on the sync pool, one vault's in

@@ -220,7 +220,8 @@ void setattr(const fuse_req_t req, const fuse_ino_t ino,
             if (const auto* fh = fi ? reinterpret_cast<FileHandle*>(fi->fh) : nullptr; fh && fh->copy) {
                 copies.truncate(workingHandle(*fh), attr->st_size, userIdOf(resolved.user));
             } else {
-                auto handle = copies.open(ino, std::static_pointer_cast<File>(resolved.entry), O_RDWR);
+                auto handle = copies.open(ino, std::static_pointer_cast<File>(resolved.entry), O_RDWR,
+                                          userIdOf(resolved.user));
                 try {
                     copies.truncate(handle, attr->st_size, userIdOf(resolved.user));
                 } catch (...) {
@@ -465,7 +466,8 @@ void create(const fuse_req_t req, const fuse_ino_t parent, const char* name, con
     WorkingCopies::Handle handle;
     try {
         handle = WorkingCopies::instance().open(
-            *newEntry->inode, std::static_pointer_cast<File>(newEntry), fi->flags & ~(O_CREAT | O_EXCL));
+            *newEntry->inode, std::static_pointer_cast<File>(newEntry), fi->flags & ~(O_CREAT | O_EXCL),
+            userIdOf(resolved.user));
     } catch (const std::exception& e) {
         log::Registry::fuse()->error("[create] Could not open {}: {}", log::file(newEntry->id, newEntry->fuse_path), e.what());
         replyError(req, timer, errnoFrom(e));
@@ -569,7 +571,8 @@ void open(const fuse_req_t req, const fuse_ino_t ino, fuse_file_info* fi) {
 
     WorkingCopies::Handle handle;
     try {
-        handle = WorkingCopies::instance().open(ino, std::static_pointer_cast<File>(resolved.entry), fi->flags);
+        handle = WorkingCopies::instance().open(ino, std::static_pointer_cast<File>(resolved.entry), fi->flags,
+                                                userIdOf(resolved.user));
     } catch (const std::exception& e) {
         log::Registry::fuse()->error("[open] Could not open {}: {}", log::file(resolved.entry->id, resolved.entry->fuse_path), e.what());
         replyError(req, timer, errnoFrom(e));
