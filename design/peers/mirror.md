@@ -799,7 +799,7 @@ review); each is listed for confirmation in the hand-off:
   never committed after a day, staged bytes of a vault that is not this server's core, pending bytes no change names,
   held bytes of a held change no longer open, and the directories of a vault that is gone.
   The pending store's link goes when the change is confirmed; a held change keeps it as `.vh-mirror-held/<vault>/<id>`.
-  Bytes are sent without a transfer slot (known limit: the four slots per peer of wave 2 are for fetches).
+  Bytes are sent without a transfer slot (a known limit, below).
 - **When a vault's copy or mirror ends**, deliberately: a held change discarded takes its bytes; a retried one moves
   them to its new pending change (and back to a held change if it is refused again). A **removed copy** (the core
   asked, its first copy never finished, or the vault deleted: `storage::Manager::removeVault`) takes its rows with the
@@ -842,8 +842,11 @@ review); each is listed for confirmation in the hand-off:
 Not built here: restore (no surface on a local vault has it), per-account rules on the core, downloading a held
 change's bytes, the held changes in the console and Desktop.
 
-Known limits: a folder change captures every entry under the folder into the pending row (a very large folder makes a
-large row); an
+Known limits: **one writer at a time per mirrored vault**: the vault's local-change lock (`submit::vaultMutex`) is
+held across a seal or an upload's commit, so that vault's other writers and its applier wait for it (a large file
+sealed through the mount holds them for as long as the seal takes); **sends take no transfer slot** (the sealed
+lane's PUTs run outside the four slots per peer of wave 2, which are for fetches). A folder change captures every
+entry under the folder into the pending row (a very large folder makes a large row); an
 unrelated core change to a pending entry shows the core's version of that entry until the person's change comes back;
 a change left pending when a vault stops (diverged, expired) stays pending until the vault is live again or detached
 (wave 5: pending changes become ordinary changes); one left pending when the copy is orphaned is held (above).
