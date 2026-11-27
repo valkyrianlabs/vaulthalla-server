@@ -205,7 +205,7 @@ std::vector<Expected> PendingContents::outstanding(const uint32_t vaultId, const
     return Transactions::exec("mirror::PendingContents::outstanding", [&](pqxx::work& txn) {
         std::vector<Expected> out;
         const auto res = txn.exec(
-            selectPending("WHERE vault_id = $1 AND (state = 'waiting' OR $2) "
+            selectPending("WHERE vault_id = $1 AND (state = 'waiting' OR ($2 AND state = 'failed')) "
                           "ORDER BY state = 'failed', priority DESC, queued LIMIT $3"),
             pqxx::params{vaultId, includeFailed, static_cast<int64_t>(limit)});
         out.reserve(res.size());

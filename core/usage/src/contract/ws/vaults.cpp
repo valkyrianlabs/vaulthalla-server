@@ -120,20 +120,30 @@ std::vector<WsCommandUsage> vaultCommands() {
         .command = "storage.vault.remove",
         .description = "Delete a vault: restorable until the retention window ends, or purged on the next pass with "
                        "`now`. Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or "
-                       "'vault_delete_now' (resend with confirm_now). A mirrored vault is refused (vault_mirrored: end the "
-                       "mirror first; vault_orphaned_copy: remove it with mirror.cancel).",
+                       "'vault_delete_now' (resend with confirm_now). A vault this server mirrors to a linked server "
+                       "takes mirror_copy (remove | leave: what happens to the mirror's copy, as mirror.cancel "
+                       "[remove_copy]; mirror_copy_choice_required without it), ends the mirror and is then deleted as "
+                       "any vault; a copy held here is refused (vault_mirrored: detach it; vault_orphaned_copy: remove "
+                       "it with mirror.cancel).",
         .payload = {vaultIdPayload(),
                     boolean("now").opt(),
                     boolean("delete_upstream").opt().nullable(),
                     boolean("confirm_now").opt(),
-                    boolean("accept_key_loss").opt()},
+                    boolean("accept_key_loss").opt(),
+                    str("mirror_copy").opt().nullable().oneOf({"remove", "leave"}).desc(
+                        "A mirrored vault on its core: remove (the mirror removes its copy unless it keeps the vaults "
+                        "this server removes) or leave (it keeps it, orphaned). The data-destroy step-up binds remove.")},
         .response = {object("deletion", "VaultDeletion").nullable()},
-        // A mirrored vault is deleted only once its mirror ended (vault_mirrored); an orphaned copy through
-        // mirror.cancel (vault_orphaned_copy).
+        // A copy held here is never deleted as a vault (vault_mirrored: detach it; vault_orphaned_copy: mirror.cancel);
+        // a mirrored vault on its core needs mirror_copy (mirror_copy_choice_required), and ending its mirror is a
+        // person's (peer_forbidden, peers_experimental).
         .refusal_codes = [] {
             auto r = opsRefusals();
             r.emplace_back("vault_mirrored");
             r.emplace_back("vault_orphaned_copy");
+            r.emplace_back("mirror_copy_choice_required");
+            r.emplace_back("peer_forbidden");
+            r.emplace_back("peers_experimental");
             return r;
         }(),
         .confirmations = {{.code = "vault_upstream_key_loss",

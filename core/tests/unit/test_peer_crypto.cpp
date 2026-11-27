@@ -413,7 +413,9 @@ std::vector<std::string> peerWireSet() {
             // following the core (piece B)
             "peer.mirror.tree",  "peer.mirror.log",    "peer.mirror.ack",  "peer.mirror.notify",
             // a change made on the mirror (wave 4 piece B)
-            "peer.mirror.submit"};
+            "peer.mirror.submit",
+            // leaving a mirror (wave 5 piece A)
+            "peer.mirror.detached"};
 }
 
 // Invariant 1: a peer session can call no command outside the peer set, whatever its vault roles are.

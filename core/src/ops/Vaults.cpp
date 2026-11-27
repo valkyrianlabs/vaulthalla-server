@@ -2,6 +2,7 @@
 #include "ops/Vaults.hpp"
 #include "mirror/access/Access.hpp"
 #include "ops/CloudStorage.hpp"
+#include "ops/PeerPolicy.hpp"
 #include "sync/vault_manifest/Replicas.hpp"
 #include "db/query/sync/ManifestApply.hpp"
 #include "ops/VaultRemote.hpp"
@@ -571,8 +572,10 @@ void refuseUpstreamDeleteOfAdoptedBucket(const unsigned int vaultId, const bool 
 namespace {
 // data.destroy (#359) is bound to the vault and to what the removal does: a grant for a soft delete never purges it now
 // or takes its upstream data.
-std::string vaultRemoveStepUpTarget(const unsigned int vaultId, const bool now, const bool deleteUpstream) {
-    return "storage.vault.remove:" + std::to_string(vaultId) + (now ? ":now" : "") + (deleteUpstream ? ":upstream" : "");
+std::string vaultRemoveStepUpTarget(const unsigned int vaultId, const bool now, const bool deleteUpstream,
+                                    const bool mirrorCopy = false) {
+    return "storage.vault.remove:" + std::to_string(vaultId) + (now ? ":now" : "") + (deleteUpstream ? ":upstream" : "") +
+           (mirrorCopy ? ":mirror-copy" : "");
 }
 }
 
@@ -613,13 +616,19 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
         return db::query::vault::Deletion::get(req.id);
     }
 
-    // A mirrored vault (either role) is deleted only once its mirror ended (mirror/start/Guard.hpp). A super admin is
-    // told why even where the mirror's rule leaves no Remove permission (another server's vault, an orphaned copy).
+    // A copy held here is never deleted as a vault (detach it, or vh mirror cancel an orphaned one); a vault this server
+    // is the core of a mirror of is deleted in one step with the caller's choice for the mirror's copy, which ends the
+    // mirror first (mirror/start/Guard.hpp). A super admin is told why even where the mirror's rule leaves no Remove
+    // permission (another server's vault, an orphaned copy).
+    const auto copyChoice = vh::mirror::start::mirrorCopyFrom(req.mirror_copy);
     if (!canOnVault(actor, VaultPerm::Remove, req.id)) {
-        if (actor->isSuperAdmin()) vh::mirror::start::refuseDeletionIfMirrored(req.id);
+        if (actor->isSuperAdmin()) (void)vh::mirror::start::deletionEndsMirror(req.id, copyChoice);
         throw Denied("you do not have permission to remove this vault");
     }
-    vh::mirror::start::refuseDeletionIfMirrored(req.id);
+    const bool endsMirror = vh::mirror::start::deletionEndsMirror(req.id, copyChoice);
+    // Ending a mirror is a person's decision, never an agent's or a scoped device's (as mirror.cancel).
+    if (endsMirror) peer_policy::requirePerson(actor, "end a vault's mirror");
+    const bool removeMirrorCopy = endsMirror && copyChoice == vh::mirror::start::MirrorCopy::Remove;
     const bool isS3 = live->type == VaultType::S3;
     if (req.delete_upstream && *req.delete_upstream && !isS3) throw Invalid("only S3 vaults have upstream data to delete");
     const bool deleteUpstream = isS3 && req.delete_upstream.value_or(false);
@@ -634,7 +643,8 @@ DeletionPtr remove(const Actor& actor, const Remove& req) {
     }
     if (req.now) requireNowConfirmed(req.confirm_now, live->name);
     auth::stepup::require(auth::stepup::Family::DataDestroy,
-                          vaultRemoveStepUpTarget(req.id, req.now, deleteUpstream));
+                          vaultRemoveStepUpTarget(req.id, req.now, deleteUpstream, removeMirrorCopy));
+    if (endsMirror) vh::mirror::start::endMirrorForDeletion(req.id, *copyChoice, actor->id, actor->name());
 
     try {
         auto record = vault::retention::schedule(req.id, actor->id, req.now, deleteUpstream);

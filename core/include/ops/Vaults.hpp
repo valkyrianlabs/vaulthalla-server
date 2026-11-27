@@ -121,6 +121,11 @@ struct Remove {
     std::optional<bool> delete_upstream{};     // S3 only: delete the bucket's objects at purge time; absent = keep
     bool confirm_now = false;
     bool accept_key_loss = false;
+    // A vault this server is the core of a mirror of (wave 5): what happens to the mirror's copy, "remove" or "leave",
+    // exactly as mirror.cancel [--remove-copy]. Required for such a vault (mirror_copy_choice_required), ignored
+    // otherwise. A person only (never an agent, a scoped or relayed device: peer_forbidden); "remove" binds the
+    // data-destroy step-up to it too.
+    std::optional<std::string> mirror_copy{};
 };
 
 // What deleting this vault would do, for the delete dialogs. Nothing changes.

@@ -5,6 +5,7 @@
 #include "db/query/mirror/MirrorVault.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "log/Registry.hpp"
+#include "mirror/leave/Leave.hpp"
 #include "ops/Error.hpp"
 #include "peer/Links.hpp"
 
@@ -287,6 +288,11 @@ void Service::step(const Offer& o) {
     }
     if ((o.state == "cancelled" || o.state == "expired") && o.notify) {
         const auto a = ask("peer.mirror.cancel", cancelPayload(), std::chrono::seconds(15));
+        if (ok(a) || (a && codeOf(*a) == "not_found")) (void)Q::told(o.id, o.state);
+    }
+    // This server detached its copy (wave 5): the core is told, not asked; whatever it answers, it was told.
+    if (o.state == "detached" && o.notify) {
+        const auto a = ask("peer.mirror.detached", vh::mirror::leave::detachedPayload(o), std::chrono::seconds(15));
         if (ok(a) || (a && codeOf(*a) == "not_found")) (void)Q::told(o.id, o.state);
     }
 }

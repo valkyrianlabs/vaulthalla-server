@@ -317,6 +317,12 @@ bool MirrorVaults::clearGrant(const uint32_t vaultId) {
 
 bool MirrorVaults::remove(const uint32_t vaultId) {
     return mirrorAccessRepublished(Transactions::exec("mirror::MirrorVaults::remove", [&](pqxx::work& txn) {
+        return remove(txn, vaultId);
+    }));
+}
+
+bool MirrorVaults::remove(pqxx::work& txn, const uint32_t vaultId) {
+    {
         const auto gone = txn.exec("DELETE FROM mirror_vault WHERE vault_id = $1", pqxx::params{vaultId}).affected_rows();
         txn.exec("DELETE FROM vault_replication_log WHERE vault_id = $1", pqxx::params{vaultId});
         txn.exec("DELETE FROM mirror_entry_hash WHERE vault_id = $1", pqxx::params{vaultId});
@@ -327,7 +333,7 @@ bool MirrorVaults::remove(const uint32_t vaultId) {
         txn.exec("DELETE FROM mirror_pending WHERE vault_id = $1", pqxx::params{vaultId});
         txn.exec("DELETE FROM mirror_dirty WHERE vault_id = $1", pqxx::params{vaultId});
         return gone > 0;
-    }));
+    }
 }
 
 bool MirrorVaults::acknowledge(const uint32_t vaultId, const Position at) {

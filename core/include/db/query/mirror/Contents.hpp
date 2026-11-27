@@ -51,13 +51,14 @@ struct Expected {
     int64_t mtime_us{};            // the backing file's modification time once linked
     int16_t priority{0};           // higher first
     // Read back only:
-    std::string state{"waiting"};  // waiting | failed
+    std::string state{"waiting"};  // waiting | failed | missing (a detached vault's: never fetched, migration 167)
     uint32_t attempts{0};
     std::optional<std::string> last_error{};
     std::time_t expected_at{};
     std::optional<std::time_t> last_attempt_at{};
 
     [[nodiscard]] bool failed() const noexcept { return state == "failed"; }
+    [[nodiscard]] bool missing() const noexcept { return state == "missing"; }
 };
 
 class PendingContents {

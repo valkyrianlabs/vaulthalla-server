@@ -50,13 +50,13 @@ std::vector<WsField> mcOfferFields() {
                 .desc("The vault's owner on the core: its home server's node id and its id there."),
             mcRoleObject("role", "The role the core proposes for the mirror server; null: none."),
             str("state").oneOf({"offered", "pending", "accepted", "keys_acked", "installed", "started", "declined",
-                                "cancelled", "expired", "failed", "orphaned"}),
+                                "cancelled", "expired", "failed", "orphaned", "detached"}),
             str("step").desc("What the start is doing, in words: offering, waiting_for_answer, delivering_keys, "
                              "beginning, waiting_for_a_super_admin, answering, waiting_for_keys, waiting_for_begin, or "
                              "the state once it finished."),
             boolean("told").desc("The other server was told this state."),
             boolean("remove_copy").desc("core: its cancel asked the mirror to remove its copy."),
-            str("copy").oneOf({"removed", "kept", "none"}).nullable().desc(
+            str("copy").oneOf({"removed", "kept", "none", "detached"}).nullable().desc(
                 "core: what the mirror said it did with its copy when it was told of the cancel."),
             str("reason").nullable().desc("A decline's, cancel's or failure's code."), str("detail").nullable(),
             uinteger("attempts"), str("last_error").nullable(), uinteger("created_at"), uinteger("updated_at"),
@@ -68,7 +68,9 @@ WsField mcOfferObject(std::string name = "offer") { return object(std::move(name
 
 std::vector<WsField> mcMirroredFields() {
     return {uinteger("vault_id"), str("vault_name"),
-            str("role").oneOf({"core", "mirror", "orphaned", "starting", "none"}),
+            str("role").oneOf({"core", "mirror", "orphaned", "starting", "detached", "none"}).desc(
+                "orphaned: a copy whose core ended the mirror, kept here read-only (detach it, or remove it with "
+                "mirror.cancel); detached: a former copy, standalone here now."),
             object("peer", "", {uinteger("id"), str("node_id"), str("name"), boolean("revoked")}).nullable(),
             integer("term").nullable(), integer("last_seq").nullable(),
             str("state").oneOf({"live", "paused", "diverged"}).nullable(),
@@ -77,7 +79,18 @@ std::vector<WsField> mcMirroredFields() {
                 .nullable()
                 .desc("mirror: what the core granted this server (its super admins get exactly that); null: nothing."),
             object("acked", "", {uinteger("term"), uinteger("seq")}).nullable(), integer("created_at").nullable(),
-            object("start", "", mcOfferFields()).nullable().desc("The latest start of the vault on this side.")};
+            object("start", "", mcOfferFields()).nullable().desc("The latest start of the vault on this side."),
+            object("detached", "", {uinteger("id"), str("side").oneOf({"mirror", "core"}), uinteger("vault_id"),
+                                    uinteger("peer_id"), object("fork", "", {uinteger("term"), uinteger("seq")}),
+                                    boolean("digest_matched").nullable(), str("was_state").nullable(),
+                                    uinteger("missing"), integer("owner_id").nullable(),
+                                    integer("detached_by").nullable(), integer("detached_at"),
+                                    integer("rekeyed_at").nullable(), boolean("rekey_recommended")})
+                .nullable()
+                .desc("Wave 5: the vault's detach not followed by a re-key (side mirror: detached here; side core: "
+                      "its mirror left with a copy)."),
+            boolean("rekey_recommended").desc("The vault was detached here and shares its uid and keys with the "
+                                              "original: the re-key pass is recommended.")};
 }
 
 WsField mcVaultIdField() { return vaultId(); }
@@ -119,7 +132,7 @@ std::vector<WsCommandUsage> mirrorCommands() {
                                            "key_rotation_running", "key_salvage_running", "vault_pending_deletion",
                                            "vault_unavailable", "legacy_content", "key_version_missing",
                                            "key_version_unattested", "trashed_without_uid", "contents_not_held",
-                                           "peer_not_linked", "peer_link_down"}),
+                                           "peer_not_linked", "peer_link_down", "mirror_detached_copy"}),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -139,7 +152,7 @@ std::vector<WsCommandUsage> mirrorCommands() {
         .payload = {mcOfferRef()},
         .response = {mcOfferObject()},
         .refusal_codes = mcMirrorRefusals({"mirror_offer_not_pending", "mirror_vault_exists", "mirror_name_taken",
-                                           "mirror_no_space", "history_not_supported"}),
+                                           "mirror_no_space", "history_not_supported", "mirror_detached_copy"}),
         .client_timeout = kDefaultTimeout,
     });
 
@@ -320,7 +333,8 @@ std::vector<WsCommandUsage> mirrorCommands() {
                                                             str("public_key").opt()})})}),
         .response = {str("vault_uid"), boolean("installed")},
         .refusal_codes = mcWireRefusals({"mirror_keys_refused", "mirror_offer_not_accepted", "mirror_vault_exists",
-                                         "mirror_name_taken", "mirror_no_space", "history_not_supported"}),
+                                         "mirror_name_taken", "mirror_no_space", "history_not_supported",
+                                         "mirror_detached_copy"}),
         .client_timeout = std::chrono::milliseconds(60'000),
     });
 

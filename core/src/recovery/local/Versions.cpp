@@ -1,5 +1,6 @@
 #include "recovery/local/Versions.hpp"
 #include "mirror/access/Access.hpp"
+#include "mirror/versions/Versions.hpp"
 
 #include "db/Transactions.hpp"
 #include "db/encoding/u8.hpp"
@@ -301,9 +302,10 @@ Pending retain(const storage::Engine& engine, const fs::model::File& prior, cons
                const RetainOptions& options) {
     Pending p;
     if (!engine.vault || prior.id == 0) return p;
-    // No local versioning capture on a copy of another server's vault: its history is its core's.
-    if (vh::mirror::access::held(engine.vault->id)) return p;
-    const auto policy = versioningPolicy(engine.vault->id);
+    // No local versioning capture on a copy of another server's vault: its history is its core's, but for what the
+    // mirror's own setting keeps (mirror::versions: the applier passes that policy).
+    if (vh::mirror::access::held(engine.vault->id) && !options.held_copy_policy) return p;
+    const auto policy = options.held_copy_policy ? *options.held_copy_policy : versioningPolicy(engine.vault->id);
     if (!policy.enabled) return p;
 
     // An empty generation (or plaintext an older build left behind) has nothing a blob could hold: blobs are sealed
@@ -402,7 +404,19 @@ MaintenanceReport maintain(const std::time_t now, const bool sweepStores) {
         const auto vaultId = engine->vault->id;
         // A vault held here as another server's copy: its history is its core's (phase 3 mirrors it); retention here
         // removes nothing (design/peers/mirror.md "Background work on the mirror").
-        if (vh::mirror::access::held(vaultId)) continue;
+        if (vh::mirror::access::held(vaultId)) {
+            // ...but for the versions its mirror setting keeps (wave 5), bounded by that setting.
+            if (const auto kept = vh::mirror::versions::policyFor(vaultId)) {
+                try {
+                    const auto r = applyRetention(store::vaultRef(*engine->vault), *kept, now);
+                    report.versions_removed += r.versions_removed;
+                    report.blobs_removed += r.blobs_removed;
+                } catch (const std::exception& e) {
+                    report.errors.push_back("vault " + std::to_string(vaultId) + " mirror versions: " + e.what());
+                }
+            }
+            continue;
+        }
         try {
             const auto ref = store::vaultRef(*engine->vault);
             ++report.vaults;

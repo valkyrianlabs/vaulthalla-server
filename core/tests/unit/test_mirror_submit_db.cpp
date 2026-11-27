@@ -44,8 +44,11 @@
 #include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Local.hpp"
 #include "mirror/submit/Submit.hpp"
+#include "mirror/versions/Versions.hpp"
+#include "recovery/local/Versions.hpp"
 #include "ops/Error.hpp"
 #include "ops/Fs.hpp"
+#include "ops/MirrorLeave.hpp"
 #include "ops/Mirrors.hpp"
 #include "ops/Roles.hpp"
 #include "ops/Vaults.hpp"
@@ -61,6 +64,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <cstdint>
@@ -1421,6 +1425,84 @@ TEST_F(MirrorSubmitDbTest, TheWireAnswersNotFoundToAnyoneButTheVaultsMirrorAndRe
         EXPECT_THROW((void)ms::serveSubmit(mirrorPeer, badOp), ops::Invalid);
     }
     toMirror(s);
+}
+
+// ---- versions on the mirror (wave 5 piece A) -------------------------------------------------------------------------
+
+// The applier keeps the prior generation of what the core replaces, trashes or deletes, only while the mirror's setting
+// is on, bounded by it; the digest never moves for them and nothing of them is logged or submitted.
+TEST_F(MirrorSubmitDbTest, VersionsOnTheMirrorKeepWhatTheCoreReplacesOrDeletesOnlyWhenOnAndNeverMoveTheDigest) {
+    auto s = begin([](const EnginePtr& e) {
+        e->mkdir("/docs", superUser);
+        write(e, "/docs/a.txt", "first");
+        write(e, "/docs/b.txt", "bee");
+    });
+    Wire wire(s);
+    followAll(wire, s);
+    receiveAll(s);
+    expectSettled(s);
+    const auto versions = [&](const std::string& reason) {
+        return one<int>("SELECT count(*) FROM file_versions WHERE origin = 'version' AND vault_id = " +
+                        std::to_string(s.mirrorId) + (reason.empty() ? std::string() : " AND reason = '" + reason + "'"));
+    };
+
+    // Off (the default): the core's replacement keeps nothing here.
+    coreChange(s, [](const EnginePtr& e) { write(e, "/docs/a.txt", "second"); });
+    followAll(wire, s);
+    receiveAll(s);
+    expectSettled(s);
+    EXPECT_EQ(versions(""), 0);
+
+    (void)ops::mirrors::setVersions(superUser, {.vault_id = s.mirrorId, .enabled = true, .keep_last = 2});
+    for (const auto* text : {"third", "fourth", "fifth"}) {
+        coreChange(s, [text](const EnginePtr& e) { write(e, "/docs/a.txt", text); });
+        followAll(wire, s);
+        expectSettled(s);   // the digest is the core's: versions are never part of it
+        receiveAll(s);
+    }
+    EXPECT_EQ(versions("overwrite"), 2) << "the prior generations, bounded by keep_last";
+
+    coreChange(s, [](const EnginePtr& e) { ops::fs::remove(superUser, e->vault->id, "/docs/b.txt"); });
+    followAll(wire, s);
+    expectSettled(s);
+    EXPECT_EQ(versions("delete"), 1) << "what the core trashed or deleted is kept here";
+    EXPECT_TRUE(mq::Pending::list(s.mirrorId).empty()) << "nothing of them is submitted";
+    EXPECT_EQ(one<int>("SELECT count(*) FROM vault_replication_log WHERE vault_id = " + std::to_string(s.mirrorId)), 0);
+
+    // Off again: nothing more is kept.
+    (void)ops::mirrors::setVersions(superUser, {.vault_id = s.mirrorId, .enabled = false});
+    coreChange(s, [](const EnginePtr& e) { write(e, "/docs/a.txt", "sixth"); });
+    followAll(wire, s);
+    expectSettled(s);
+    EXPECT_EQ(versions(""), 3);
+}
+
+// Cost (run by hand: --gtest_also_run_disabled_tests): the applier's time per replacing group with versions off and on.
+TEST_F(MirrorSubmitDbTest, DISABLED_VersionsOnTheMirrorCostPerGroup) {
+    auto s = begin([](const EnginePtr& e) {
+        e->mkdir("/docs", superUser);
+        for (int i = 0; i < 20; ++i) write(e, "/docs/f" + std::to_string(i) + ".txt", "zero");
+    });
+    Wire wire(s);
+    followAll(wire, s);
+    receiveAll(s);
+    const auto measure = [&](const char* label) {
+        std::chrono::nanoseconds spent{};
+        for (int round = 0; round < 5; ++round) {
+            coreChange(s, [round](const EnginePtr& e) {
+                for (int i = 0; i < 20; ++i) write(e, "/docs/f" + std::to_string(i) + ".txt", "round " + std::to_string(round));
+            });
+            const auto t0 = std::chrono::steady_clock::now();
+            followAll(wire, s);
+            spent += std::chrono::steady_clock::now() - t0;
+            receiveAll(s);
+        }
+        std::printf("[versions cost] %s: %.3f ms per group (100 groups of one replacement)\n", label,
+                    std::chrono::duration<double, std::milli>(spent).count() / 100.0);
+    };
+    measure("off");
+    (void)ops::mirrors::setVersions(superUser, {.vault_id = s.mirrorId, .enabled = true, .keep_last = 3});
+    measure("on");
 }
 
 }

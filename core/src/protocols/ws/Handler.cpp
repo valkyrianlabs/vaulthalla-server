@@ -8,6 +8,7 @@
 #include "protocols/ws/handler/Approvals.hpp"
 #include "protocols/ws/handler/Devices.hpp"
 #include "protocols/ws/handler/MirrorFollow.hpp"
+#include "protocols/ws/handler/MirrorLeave.hpp"
 #include "protocols/ws/handler/Mirrors.hpp"
 #include "protocols/ws/handler/PeerPolicy.hpp"
 #include "protocols/ws/handler/Peers.hpp"
@@ -169,6 +170,12 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("peer.mirror.notify", &handler::MirrorFollow::notify);
     // A change made on the mirror (wave 4 piece B; design/peers/mirror.md "As built: a change made on the mirror").
     r->registerPayload("peer.mirror.submit", &handler::MirrorFollow::submit);
+    // Leaving a mirror (wave 5 piece A; design/peers/mirror.md "As built: leaving a mirror").
+    r->registerPayload("mirror.detach.preview", &handler::MirrorLeave::detachPreview);
+    r->registerPayload("mirror.detach", &handler::MirrorLeave::detach);
+    r->registerPayload("mirror.versions.set", &handler::MirrorLeave::versionsSet);
+    r->registerPayload("mirror.held.get", &handler::MirrorLeave::heldGet);
+    r->registerPayload("peer.mirror.detached", &handler::MirrorLeave::detached);
 }
 
 void Handler::registerDeviceHandlers(const std::shared_ptr<Router>& r) {

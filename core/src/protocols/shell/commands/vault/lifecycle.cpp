@@ -191,7 +191,8 @@ CommandResult handle_vault_delete(const CommandCall& call) {
         .now = hasFlag(call, "now"),
         .delete_upstream = deleteUp ? std::optional<bool>(true) : keepUp ? std::optional<bool>(false) : std::nullopt,
         .confirm_now = yes,
-        .accept_key_loss = hasFlag(call, "accept-key-loss")
+        .accept_key_loss = hasFlag(call, "accept-key-loss"),
+        .mirror_copy = optVal(call, "mirror-copy")
     };
 
     const auto vLkp = resolveVault(call, call.positionals[0], usage, kDeleteErr);

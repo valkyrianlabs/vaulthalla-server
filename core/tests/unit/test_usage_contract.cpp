@@ -455,11 +455,11 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         // Assigning a vault role names a linked server too (migration 162): the same two refusals there.
         if (code == "peers_experimental" || code == "peer_forbidden")
             return command.starts_with("peer.") || command.starts_with("mirror.") || command == "role.vault.assign" ||
-                   command == "role.vault.unassign";
+                   command == "role.vault.unassign" || command == "storage.vault.remove";
         // Starting a mirror (ops::mirrors, mirror::start): each refusal on the commands that send it.
         static const std::map<std::string, std::set<std::string>> kMirrorCodes{
             {"peer_revoked", {"peer.mirror.offer", "peer.mirror.answer", "peer.mirror.keys", "peer.mirror.begin",
-                              "peer.mirror.grant", "peer.mirror.cancel", "peer.mirror.submit"}},
+                              "peer.mirror.grant", "peer.mirror.cancel", "peer.mirror.submit", "peer.mirror.detached"}},
             {"mirror_already", {"mirror.add"}}, {"mirror_start_running", {"mirror.add"}},
             {"vault_replicated", {"mirror.add"}}, {"vault_attach_running", {"mirror.add"}},
             {"vault_detach_running", {"mirror.add"}}, {"layout_migration_running", {"mirror.add"}},
@@ -478,9 +478,14 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"mirror_keys_refused", {"peer.mirror.keys"}}, {"mirror_offer_not_accepted", {"peer.mirror.keys"}},
             {"mirror_offer_not_installed", {"peer.mirror.begin"}},
             {"vault_mirrored", {"storage.vault.remove"}}, {"vault_orphaned_copy", {"storage.vault.remove"}},
+            {"mirror_copy_choice_required", {"storage.vault.remove"}},
             // A change made on the mirror (wave 4 piece B, mirror::submit).
             {"mirror_not_live", {"peer.mirror.submit"}}, {"mirror_read_only", {"mirror.held.retry"}},
             {"contents_missing", {"peer.mirror.submit"}},
+            // Leaving a mirror (wave 5 piece A, mirror::leave).
+            {"mirror_not_held", {"mirror.detach", "mirror.detach.preview", "mirror.versions.set"}},
+            {"too_large", {"mirror.held.get"}},
+            {"mirror_detached_copy", {"mirror.add", "mirror.accept", "peer.mirror.keys"}},
         };
         if (const auto m = kMirrorCodes.find(code); m != kMirrorCodes.end() && m->second.contains(command)) return true;
         if ((code == "no_pairing_window" || code == "rate_limited" || code == "device_unknown") &&
