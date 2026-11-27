@@ -867,9 +867,21 @@ waiting for review; each is listed for confirmation in the hand-off):
 - **The mount's own shortcut is gone:** a held vault's root is shown and listed through `rbac::mirrored` like every
   other surface (no super-admin, owner or admin-view shortcut in `canExposeVaultRoot`; a super admin's listing of the
   mount root leaves out a copy whose grant shows nothing).
-- **Cost** (`tools/dev/bench/replication_log_cost.sh`; numbers below). On a server that holds no copy the triggers
-  read one empty partial index (`mirror_vault_held_idx`) per row; with a copy held elsewhere one more indexed lookup of
-  the row's vault.
+- **Cost** (`tools/dev/bench/replication_log_cost.sh`, which now also measures "held elsewhere" and "without 165").
+  On a server that holds no copy the triggers read one empty partial index (`mirror_vault_held_idx`) per row; with a
+  copy held elsewhere one more indexed lookup of the row's vault. Measured on the dev VM, 2026-11-26, PostgreSQL 16,
+  3,000 seals per run, while the other wave 4 piece built on the same VM (load about 2.7), two runs back to back:
+
+  | Per seal | run 1 (3 runs, median) | run 2 (5 runs, median) |
+  |---|---|---|
+  | No vault mirrored, 165 dropped | 0.536 ms | 0.832 ms |
+  | No vault mirrored, with 165 (every server today) | 0.826 ms | 0.736 ms |
+  | No vault mirrored, a copy held elsewhere | 0.821 ms | 0.817 ms |
+  | This vault mirrored (core, 2 log rows per seal) | 1.400 ms | 1.375 ms |
+
+  The backstop's difference is +0.29 ms in one run and -0.10 ms in the other: inside this VM's noise (in run 1 "no
+  triggers" even measured slower than "journal only"). Nothing measurable on a loaded VM; a quiet host would give a
+  sharper figure (not run).
 
 Carried fixes (each with a test that failed before it):
 
