@@ -69,8 +69,9 @@ struct Crypto {
 
 struct Catalog {
     // Moves the file's row from `expected` to the file's (IV, version), only if the row (same vault and path) still
-    // says `expected`. False when it changed meanwhile (rewritten, moved, deleted): the caller backs out.
-    std::function<bool(const fs::model::File& file, const EncryptionState& expected)> commit;
+    // says `expected`. False when it changed meanwhile (rewritten, moved, deleted): the caller backs out. `published`:
+    // the remote now holds the new generation (uploaded by this rotation).
+    std::function<bool(const fs::model::File& file, const EncryptionState& expected, bool published)> commit;
     // After a commit took effect on disk: refresh in-memory copies of the row (fs cache). Optional.
     std::function<void(const FileSP& file)> committed;
     // A writer holds the file open (FUSE working copy); its seal would race the rename. Optional.

@@ -37,7 +37,8 @@
 // For a drill: the vault's mirror_vault row holds the applied position (term, last_seq), copy_finished, copy_cursor,
 // digest and the stop reason; the log says "first copy finished" and "applied through" with the digest.
 //
-// Gate: while peers.experimental is off nothing is requested or sent.
+// A server that has linked nothing (db::query::peer::Peers::anyRecorded) requests and sends nothing: only the hourly
+// housekeeping runs.
 namespace vh::mirror::follow {
 
 // How the follower reaches the core (the link service by default; tests replay what the core answered).

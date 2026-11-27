@@ -4,6 +4,8 @@
 
 #include "model_suites.hpp"
 
+#include "mirror/versions/Versions.hpp"
+#include "ops/Mirrors.hpp"
 #include "ops/Vaults.hpp"
 #include "protocols/ws/handler/vault/Vaults.hpp"
 #include "sync/model/RemotePolicy.hpp"
@@ -11,6 +13,8 @@
 #include "vault/model/Deletion.hpp"
 #include "vault/model/S3Vault.hpp"
 #include "vault/model/Vault.hpp"
+
+#include <gtest/gtest.h>
 
 #include <chrono>
 #include <memory>
@@ -232,6 +236,32 @@ void checkVaultModels(Checker& c) {
     plain.name = "r2";
     plain.provider = vault::model::S3Provider::CloudflareR2;
     c.check(json(plain), "APIKey", "plain key");
+
+    // A mirrored vault beside its row (ops::mirrors::toJson(Status)): a mirror partway through its first copy that
+    // keeps versions, a core whose mirror acknowledged it, a row with no mirror row and no linked server.
+    namespace mirrors = ops::mirrors;
+    mirrors::Status copying{.pending_changes = 2,
+                            .first_copy = mirrors::Status::FirstCopy{.finished = false, .entries_copied = 40,
+                                                                     .entries_total = 120},
+                            .link_up = true,
+                            .confirmed_at = kT0,
+                            .settings = mirrors::Status::Settings{
+                                .versions = vh::mirror::versions::Setting{
+                                    .policy = {.enabled = true, .keep_last = 10, .max_age_days = 30,
+                                               .quota_bytes = 1 << 20},
+                                    .set_by = 1, .set_at = kT0},
+                                .accept_all = true, .keep_removed = false, .mirror_all = false}};
+    const auto mirrorJson = mirrors::toJson(copying);
+    c.check(mirrorJson.at("first_copy"), "MirrorFirstCopy", "a mirror's first copy partway");
+    c.check(mirrorJson.at("settings"), "MirrorSettings", "a mirror that keeps versions");
+    mirrors::Status core{.pending_changes = 0, .first_copy = mirrors::Status::FirstCopy{.finished = true},
+                         .link_up = false,
+                         .settings = mirrors::Status::Settings{.mirror_all = true}};
+    const auto coreJson = mirrors::toJson(core);
+    c.check(coreJson.at("first_copy"), "MirrorFirstCopy", "a core whose mirror acknowledged its first copy");
+    c.check(coreJson.at("settings"), "MirrorSettings", "a core's linked server");
+    const auto none = mirrors::toJson(mirrors::Status{});
+    EXPECT_TRUE(none.at("first_copy").is_null() && none.at("settings").is_null() && none.at("confirmed_at").is_null());
 }
 
 }

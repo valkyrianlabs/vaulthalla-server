@@ -15,7 +15,7 @@ import { isWsError } from '@/lib/ws/errors'
 import type { VaultDeletion, VaultRemovalPlan } from '@/models/vaultDeletion'
 import { cn } from '@/util/cn'
 import { CommandCopy } from '@/features/vaults/CommandCopy'
-import { usePeersAvailability } from '@/features/peers/signal'
+import { useCan } from '@/lib/permissions'
 import { MIRROR_COPY } from '@/features/mirrors/copy'
 import { ChoiceCards } from '@/features/mirrors/parts'
 
@@ -119,10 +119,9 @@ export const DeleteVaultDialog = ({
   const [error, setError] = useState<unknown>(null)
   const [mirrorCopy, setMirrorCopy] = useState<MirrorCopy | null>(null)
   const [choiceRequired, setChoiceRequired] = useState(false)
-  // Whether the vault is mirrored (super admins on a server with linked servers on; anyone else learns it from the
-  // refusal, which names the choice).
-  const peers = usePeersAvailability()
-  const mirror = useWs('mirror.get', { vault_id: vault.id }, { enabled: open && peers.enabled, retry: false, staleTime: 0, select: d => d.vault })
+  // Whether the vault is mirrored (super admins; anyone else learns it from the refusal, which names the choice).
+  const superAdmin = useCan({ superAdmin: true })
+  const mirror = useWs('mirror.get', { vault_id: vault.id }, { enabled: open && superAdmin, retry: false, staleTime: 0, select: d => d.vault })
 
   useEffect(() => {
     if (!open) return

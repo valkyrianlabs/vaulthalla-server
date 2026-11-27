@@ -1,6 +1,5 @@
 #include "mirror/follow/Follower.hpp"
 
-#include "config/Registry.hpp"
 #include "db/query/mirror/Contents.hpp"
 #include "log/Registry.hpp"
 #include "mirror/Contents.hpp"
@@ -46,8 +45,6 @@ const char* toString(const Step s) {
 }
 
 namespace {
-
-bool followExperimental() { return config::Registry::get().peers.experimental; }
 
 class FollowLinkTransport final : public Transport {
 public:
@@ -378,9 +375,9 @@ void Follower::runLoop() {
     while (!shouldStop()) {
         auto wait = std::chrono::milliseconds(250);
         try {
-            (void)housekeep(SteadyClock::now());   // first pass and hourly, the switch on or off
+            (void)housekeep(SteadyClock::now());   // first pass and hourly
             if (vh::mirror::resync::scrubNowForTesting()) (void)vh::mirror::resync::scrubDue(std::chrono::hours(0));
-            if (!followExperimental()) {
+            if (!vh::db::query::peer::Peers::anyRecorded()) {   // a server that links nothing follows nothing
                 lazySleep(std::chrono::seconds(1));
                 continue;
             }

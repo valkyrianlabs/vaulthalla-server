@@ -2,7 +2,6 @@
 
 #include "audit/Trail.hpp"
 #include "auth/stepup/StepUp.hpp"
-#include "config/Registry.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "device/Crypto.hpp"
@@ -59,7 +58,7 @@ std::optional<std::string> normalizedSpki(const std::optional<std::string>& text
 
 // Who may: a super admin who can sign in, on the host socket, the web console or a full-access, directly connected
 // device; never an agent, a scoped device, a relayed device or a linked server (design/peers/link.md).
-void requireLinkerRights(const Actor& actor, const std::string& what) {
+void requireLinker(const Actor& actor, const std::string& what) {
     requireActor(actor);
     if (actor->systemOnly() || !actor->authorizing()) throw Denied("this account cannot " + what);
     if (!actor->isSuperAdmin()) throw Denied("only super admins may " + what);
@@ -81,18 +80,12 @@ void requireLinkerRights(const Actor& actor, const std::string& what) {
     }
 }
 
-// Who compared the code: Vaulthalla Desktop when the call came over a device session (requireLinkerRights already
+// Who compared the code: Vaulthalla Desktop when the call came over a device session (requireLinker already
 // refused scoped and relayed ones, so it is a full-access, directly connected device: the brokered path), else a person
 // (the web console, the host socket). Never inferred from whether a key was pinned: a person may pin one too.
 std::string comparedByCaller() {
     const auto* scope = auth::stepup::Scope::current();
     return scope && scope->channel() == auth::stepup::Channel::Device ? "desktop" : "person";
-}
-
-// Every management operation but status(): the switch first, then who.
-void requireLinker(const Actor& actor, const std::string& what) {
-    requireExperimental();
-    requireLinkerRights(actor, what);
 }
 
 std::string serverSpkiOrThrow() {
@@ -150,17 +143,6 @@ std::shared_ptr<vh::peer::LinkService> links() {
     return service;
 }
 
-}
-
-void requireExperimental() {
-    if (!vh::config::Registry::get().peers.experimental)
-        throw Refused("peers_experimental", "linked servers are experimental and off on this server: set "
-                                            "peers.experimental: true in config.yaml and restart the daemon");
-}
-
-bool enabled(const Actor& actor) {
-    requireLinkerRights(actor, "see whether servers can be linked");
-    return vh::config::Registry::get().peers.experimental;
 }
 
 // ---- pairing, the side that opens a window
@@ -326,7 +308,6 @@ Record unlink(const Actor& actor, const std::string& ref) {
 // ---- the wire
 
 vh::peer::LinkRequestReceipt pairRequest(const vh::device::Peer& connection, const json& payload) {
-    requireExperimental();
     if (connection.relayed) throw Refused("peer_forbidden", "a server can't be linked through the Vaulthalla Cloud relay");
     if (!payload.is_object() || !payload.contains("card")) throw Invalid("card is required");
     auto card = vh::peer::cardFromJson(payload.at("card"));
@@ -352,7 +333,6 @@ vh::peer::LinkRequestReceipt pairRequest(const vh::device::Peer& connection, con
 }
 
 std::time_t pairConfirm(const vh::device::Peer& connection, const std::string& requestId, const std::string& nonceA) {
-    requireExperimental();
     const auto nonce = dc::hashFromHex(nonceA);
     if (!nonce) throw Invalid("nonce_a must be 64 hex digits");
     const auto identity = vh::device::currentServerIdentity();
@@ -362,7 +342,6 @@ std::time_t pairConfirm(const vh::device::Peer& connection, const std::string& r
 }
 
 vh::peer::LinkRequestStatus pairStatus(const vh::device::Peer& connection, const std::string& requestId) {
-    requireExperimental();
     return vh::peer::Pairing::instance().status(connection, requestId, vh::device::PairingClock::now());
 }
 
@@ -378,7 +357,6 @@ const vh::peer::Principal& linkedOf(const std::shared_ptr<protocols::ws::Session
 }
 
 void identityRotateReceived(const std::shared_ptr<protocols::ws::Session>& session, const json& payload) {
-    requireExperimental();
     const auto& principal = linkedOf(session);
     const auto row = Peers::byId(principal.peer_id);
     if (!row || row->revoked()) throw Denied("this server is not linked here");
@@ -413,7 +391,6 @@ void identityRotateReceived(const std::shared_ptr<protocols::ws::Session>& sessi
 }
 
 void unlinkedReceived(const std::shared_ptr<protocols::ws::Session>& session) {
-    requireExperimental();
     const auto& principal = linkedOf(session);
     const auto row = Peers::byId(principal.peer_id);
     if (!row || row->revoked()) return;

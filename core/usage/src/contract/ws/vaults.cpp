@@ -137,14 +137,13 @@ std::vector<WsCommandUsage> vaultCommands() {
         .response = {object("deletion", "VaultDeletion").nullable()},
         // A copy held here is never deleted as a vault (vault_mirrored: detach it; vault_orphaned_copy: mirror.cancel);
         // a mirrored vault on its core needs mirror_copy (mirror_copy_choice_required), and ending its mirror is a
-        // person's (peer_forbidden, peers_experimental).
+        // person's (peer_forbidden).
         .refusal_codes = [] {
             auto r = opsRefusals();
             r.emplace_back("vault_mirrored");
             r.emplace_back("vault_orphaned_copy");
             r.emplace_back("mirror_copy_choice_required");
             r.emplace_back("peer_forbidden");
-            r.emplace_back("peers_experimental");
             return r;
         }(),
         .confirmations = {{.code = "vault_upstream_key_loss",

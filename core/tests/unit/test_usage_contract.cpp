@@ -435,7 +435,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
         // Scoped devices: a scoped device unpairing another, or anyone's scope changed from a device.
         {"device_scope", {"device.revoke", "device.scope.set"}},
         // design/peers/link.md: linked servers (every peer.* command, below).
-        {"peers_experimental", {}}, {"peer_forbidden", {}}};
+        {"peer_forbidden", {}}};
     const auto stepUp = contract::stepUpTable();
     const auto refusedCodeAllowed = [&](const std::string& code, const std::string& command) {
         if (code == "step_up_required")
@@ -452,10 +452,10 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
                                                        r.family == "identity.admin" || r.family == "secrets" ||
                                                        r.family == "settings" || r.family == "connector.trust");
                    });
-        // Linked servers: the switch and who may link (ops::peers), on every peer.* command; the window's own
+        // Linked servers: who may link (ops::peers), on every peer.* command; the window's own
         // refusals on the dialling server's side of pairing.
-        // Assigning a vault role names a linked server too (migration 162): the same two refusals there.
-        if (code == "peers_experimental" || code == "peer_forbidden")
+        // Assigning a vault role names a linked server too (migration 162): the same refusal there.
+        if (code == "peer_forbidden")
             return command.starts_with("peer.") || command.starts_with("mirror.") || command == "role.vault.assign" ||
                    command == "role.vault.unassign" || command == "storage.vault.remove";
         // Starting a mirror (ops::mirrors, mirror::start): each refusal on the commands that send it.
@@ -463,7 +463,8 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"peer_revoked", {"peer.mirror.offer", "peer.mirror.answer", "peer.mirror.keys", "peer.mirror.begin",
                               "peer.mirror.grant", "peer.mirror.cancel", "peer.mirror.submit", "peer.mirror.detached",
                               "peer.mirror.deleting", "peer.mirror.resync", "peer.mirror.switch.request",
-                              "peer.mirror.switch.prepare", "peer.mirror.switch.commit", "peer.mirror.promoted"}},
+                              "peer.mirror.switch.prepare", "peer.mirror.switch.commit", "peer.mirror.promoted",
+                              "peer.mirror.key"}},
             {"mirror_already", {"mirror.add"}}, {"mirror_start_running", {"mirror.add"}},
             {"vault_replicated", {"mirror.add"}}, {"vault_attach_running", {"mirror.add"}},
             {"vault_detach_running", {"mirror.add"}}, {"layout_migration_running", {"mirror.add"}},
@@ -471,7 +472,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"vault_pending_deletion", {"mirror.add"}}, {"vault_unavailable", {"mirror.add"}},
             {"legacy_content", {"mirror.add"}}, {"key_version_missing", {"mirror.add"}},
             {"key_version_unattested", {"mirror.add"}}, {"trashed_without_uid", {"mirror.add"}},
-            {"contents_not_held", {"mirror.add"}}, {"peer_not_linked", {"mirror.add"}},
+            {"contents_not_held", {"mirror.add"}}, {"peer_not_linked", {"mirror.add", "mirror.mirror_all.set"}},
             {"peer_link_down", {"mirror.add", "mirror.switch"}},
             {"mirror_offer_not_pending", {"mirror.accept", "mirror.decline"}},
             {"mirror_vault_exists", {"mirror.accept", "peer.mirror.keys"}},
@@ -479,7 +480,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"mirror_no_space", {"mirror.accept", "peer.mirror.keys"}},
             {"history_not_supported", {"mirror.accept", "peer.mirror.keys"}},
             {"mirror_detach_required", {"mirror.cancel"}}, {"mirror_offer_finished", {"mirror.cancel"}},
-            {"mirror_keys_refused", {"peer.mirror.keys"}}, {"mirror_offer_not_accepted", {"peer.mirror.keys"}},
+            {"mirror_keys_refused", {"peer.mirror.keys"}}, {"mirror_key_refused", {"peer.mirror.key"}}, {"mirror_offer_not_accepted", {"peer.mirror.keys"}},
             {"mirror_offer_not_installed", {"peer.mirror.begin"}},
             {"vault_mirrored", {"storage.vault.remove"}}, {"vault_orphaned_copy", {"storage.vault.remove"}},
             {"mirror_copy_choice_required", {"storage.vault.remove"}},

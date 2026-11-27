@@ -7,7 +7,7 @@
     vault whose mirror_vault role is mirror or orphaned resolves from its grant alone, for this server's super admins
     only; no local assignment, group, admin vault permission, global vault policy or ownership applies; no grant means
     no access. One atomic load on the permission path while no vault is held.
-  - Commands, experimental and off by default (peers.experimental): vh peer policy show|set, ws peer.policy.get|set
+  - Commands: vh peer policy show|set, ws peer.policy.get|set
     (identity.admin step-up), vh vault role assign|remove --peer and role.vault.assign|unassign subject_type peer;
     refused to agents, scoped and relayed devices (peer_forbidden). Audited peer.policy.set and
     rbac.vault_role.assign|unassign with the server's node id. roles.vault.list.assigned annotates peer subjects and,

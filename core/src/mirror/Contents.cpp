@@ -1,7 +1,6 @@
 #include "mirror/Contents.hpp"
 
 #include "concurrency/ThreadPoolManager.hpp"
-#include "config/Registry.hpp"
 #include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/File.hpp"
@@ -139,7 +138,6 @@ public:
 
     SourceResult read(const uint64_t offset, const uint64_t sealedSize, const std::function<bool()>& cancelled,
                       const peer::object::Sink& sink) override {
-        if (!vh::config::Registry::get().peers.experimental) return {FetchStatus::Unreachable, "peers.experimental is off"};
         const auto links = peer::linkService();
         if (!links) return {FetchStatus::Unreachable, "the link service is not running"};
         const auto row = db::query::peer::Peers::byId(peerId_);
@@ -198,7 +196,6 @@ std::optional<std::string> linkDownReason(const MirrorVault& mirror, peer::LinkS
         std::scoped_lock lock(factoryMutex());
         if (testFactory()) return std::nullopt;
     }
-    if (!vh::config::Registry::get().peers.experimental) return "peers.experimental is off";
     const auto row = db::query::peer::Peers::byId(mirror.peer_id);
     if (!row || row->revoked()) return "the vault's linked server is no longer linked";
     if (!links.health(mirror.peer_id).connected) return "the link to " + row->name + " is down";

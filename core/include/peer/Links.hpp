@@ -41,7 +41,7 @@ namespace boost::asio::ssl { class context; }
 // Bulk data (design/peers/mirror.md "Contents") goes over separate connections to the same listener with the same pins
 // (peer::object, the sealed lane), within this service's per-peer transfer slots (Transfers).
 //
-// Gate: while peers.experimental is off nothing dials, no attempt starts, and every connection closes. "PeerLinks"
+// A server that has linked nothing (db::query::peer::Peers::anyRecorded) loads, dials and pings nothing. "PeerLinks"
 // in runtime::Manager, started after the device listener.
 namespace vh::peer {
 

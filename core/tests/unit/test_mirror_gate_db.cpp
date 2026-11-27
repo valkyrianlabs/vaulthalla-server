@@ -12,7 +12,6 @@
 #include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
 
-#include "config/Registry.hpp"
 #include "crypto/ScratchFile.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/Entry.hpp"
@@ -97,12 +96,9 @@ std::string mgTag() {
 class MirrorGateDbTest : public vh::test::db::Suite {
 protected:
     inline static uint32_t peerId{};
-    inline static config::Config savedConfig;
 
     static void SetUpTestSuite() {
         if (!setUpDbSuite("mirror_gate")) return;
-        savedConfig = config::Registry::get();
-        setPeers(true);
         const auto t = mgTag();
         const auto spki = dc::sha256(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(t.data()), t.size()));
         peerId = db::query::peer::Peers::insert(
@@ -113,21 +109,8 @@ protected:
     static void TearDownTestSuite() {
         if (skipTests) return;
         for (const auto& m : mq::MirrorVaults::list()) (void)mq::MirrorVaults::remove(m.vault_id);
-        config::Registry::set(savedConfig);
         access::resetForTesting();
         tearDownDbSuite();
-    }
-
-    void SetUp() override {
-        Suite::SetUp();
-        if (IsSkipped()) return;
-        setPeers(true);
-    }
-
-    static void setPeers(const bool on) {
-        auto cfg = config::Registry::get();
-        cfg.peers.experimental = on;
-        config::Registry::set(cfg);
     }
 
     static void sql(const std::string& statement) {
@@ -241,10 +224,6 @@ TEST_F(MirrorGateDbTest, EachFactGivesItsStateAndReason) {
     EXPECT_EQ(access::state(v), access::State::ReadOnly);
     EXPECT_EQ(access::reason(v), access::kLinkDown);
     access::linkChanged(peerId, true);
-
-    setPeers(false);
-    EXPECT_EQ(access::reason(v), access::kPeersOff);
-    setPeers(true);
 
     // Each writer of the facts republishes before it returns.
     ASSERT_TRUE(mq::MirrorVaults::setState(v, "paused"));

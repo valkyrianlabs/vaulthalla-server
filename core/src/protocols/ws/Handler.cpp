@@ -120,7 +120,6 @@ void Handler::registerAuthHandlers(const std::shared_ptr<Router>& r) {
 // Paired devices (ops::devices). Which sessions reach which is the router's decision (classifyCommand).
 // design/peers/link.md: linked servers (handler/Peers.hpp).
 void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
-    r->registerSessionOnlyHandler("peer.status", &handler::Peers::status);
     r->registerSessionOnlyHandler("peer.pairing.open", &handler::Peers::pairingOpen);
     r->registerSessionOnlyHandler("peer.pairing.close", &handler::Peers::pairingClose);
     r->registerSessionOnlyHandler("peer.pairing.pending", &handler::Peers::pairingPending);
@@ -153,6 +152,7 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("mirror.get", &handler::Mirrors::get);
     r->registerPayload("mirror.accept_all.set", &handler::Mirrors::acceptAllSet);
     r->registerPayload("mirror.keep_removed.set", &handler::Mirrors::keepRemovedSet);
+    r->registerPayload("mirror.mirror_all.set", &handler::Mirrors::mirrorAllSet);
     r->registerPayload("mirror.held.list", &handler::Mirrors::heldList);
     r->registerPayload("mirror.held.discard", &handler::Mirrors::heldDiscard);
     r->registerPayload("mirror.held.retry", &handler::Mirrors::heldRetry);
@@ -165,6 +165,8 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("peer.mirror.begin", &handler::Mirrors::begin);
     r->registerPayload("peer.mirror.grant", &handler::Mirrors::grant);
     r->registerPayload("peer.mirror.cancel", &handler::Mirrors::cancelWire);
+    // Key rotation on a mirrored vault (mirror/rotate/Rotate.hpp).
+    r->registerPayload("peer.mirror.key", &handler::Mirrors::key);
 
     // The server mirror's data plane (wave 3 piece B; design/peers/mirror.md "As built: following the core").
     r->registerPayload("peer.mirror.tree", &handler::MirrorFollow::tree);

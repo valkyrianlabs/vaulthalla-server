@@ -17,7 +17,6 @@
 #include "../helpers/db_suite.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "audit/Trail.hpp"
-#include "config/Registry.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/Entry.hpp"
@@ -75,17 +74,13 @@ std::string mcTag() {
 
 class MirrorCopyDbTest : public vh::test::db::Suite {
 protected:
-    inline static config::Config savedConfig;
 
     static void SetUpTestSuite() {
         if (!setUpDbSuite("mirror_copy")) return;
-        savedConfig = config::Registry::get();
-        setExperimental(true);
     }
 
     static void TearDownTestSuite() {
         if (skipTests) return;
-        config::Registry::set(savedConfig);
         rbac::mirrored::resetForTesting();
         access::resetForTesting();
         tearDownDbSuite();
@@ -94,14 +89,7 @@ protected:
     void SetUp() override {
         Suite::SetUp();
         if (IsSkipped()) return;
-        setExperimental(true);
         copy::resetForTesting();
-    }
-
-    static void setExperimental(const bool on) {
-        auto cfg = config::Registry::get();
-        cfg.peers.experimental = on;
-        config::Registry::set(cfg);
     }
 
     static void sql(const std::string& statement) {
@@ -342,10 +330,6 @@ TEST_F(MirrorCopyDbTest, TheSamePermissionAndRefusalsAsDetachAndNoRoomOrATakenNa
         EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::detachCopy(superUser, {.vault_id = h.vaultId}); }),
                   "peer_forbidden");
     }
-    setExperimental(false);
-    EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::detachCopy(superUser, {.vault_id = h.vaultId}); }),
-              "peers_experimental");
-    setExperimental(true);
 
     // A vault of this server's own is not a held copy.
     const auto own = ops::vaults::create(superUser, {.name = "mc_own_" + mcTag(), .type = vault::model::VaultType::Local,

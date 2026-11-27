@@ -21,7 +21,7 @@
 //   NotMirrored  not held here (no row, or this server is the vault's core): writes are the vault's own business,
 //                except a core whose planned switch runs (migration 168: state `switching`): ReadOnly, kSwitching; an
 //                old core that learned another server took over (`rejoining`: kRejoining) or both did (`forked`)
-//   Live         role mirror, first copy finished, state live, peers.experimental on, the link to the core up
+//   Live         role mirror, first copy finished, state live, the link to the core up
 //   ReadOnly     anything else, with a reason code (below)
 //
 // Held in memory behind a shared lock, so a check never waits on the database (FUSE, HTTP and ws threads): one atomic
@@ -48,7 +48,6 @@ inline constexpr std::string_view kExpired = "mirror_expired";            // sto
 inline constexpr std::string_view kStopped = "mirror_stopped";            // stopped: a key missing, an unknown op
 inline constexpr std::string_view kPaused = "mirror_paused";              // following is paused
 inline constexpr std::string_view kCoreDeleting = "mirror_core_deleting"; // paused: the core is deleting the vault
-inline constexpr std::string_view kPeersOff = "mirror_peers_off";         // peers.experimental is off here
 inline constexpr std::string_view kLinkDown = "mirror_link_down";         // the link to the core is down
 inline constexpr std::string_view kWritesNotBuilt = "mirror_writes_not_built";  // Live, but piece B is not built
 inline constexpr std::string_view kCoreOwned = "mirror_core_owned";      // settings, remote: the core's, always

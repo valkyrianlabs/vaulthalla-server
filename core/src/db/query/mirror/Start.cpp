@@ -334,6 +334,65 @@ void MirrorStart::setKeepVaults(const uint32_t peerId, const bool enabled, const
     });
 }
 
+AcceptVaults MirrorStart::mirrorVaults(const uint32_t peerId) {
+    return Transactions::exec("mirror::MirrorStart::mirrorVaults", [&](pqxx::work& txn) {
+        AcceptVaults out;
+        const auto res = txn.exec("SELECT mirror_vaults, mirror_vaults_set_by, "
+                                  "  EXTRACT(EPOCH FROM mirror_vaults_set_at)::BIGINT FROM peer WHERE id = $1",
+                                  pqxx::params{peerId});
+        if (res.empty()) return out;
+        out.enabled = res[0][0].as<bool>();
+        if (!res[0][1].is_null()) out.set_by = res[0][1].as<uint32_t>();
+        if (!res[0][2].is_null()) out.set_at = static_cast<std::time_t>(res[0][2].as<int64_t>());
+        return out;
+    });
+}
+
+void MirrorStart::setMirrorVaults(const uint32_t peerId, const bool enabled, const std::optional<uint32_t> setBy) {
+    Transactions::exec("mirror::MirrorStart::setMirrorVaults", [&](pqxx::work& txn) {
+        if (txn.exec("UPDATE peer SET mirror_vaults = $2, mirror_vaults_set_by = $3, "
+                     "  mirror_vaults_set_at = CURRENT_TIMESTAMP WHERE id = $1 AND revoked_at IS NULL",
+                     pqxx::params{peerId, enabled, setBy})
+                .affected_rows() == 0)
+            throw ops::NotFound("no such linked server");
+    });
+}
+
+std::vector<std::pair<uint32_t, AcceptVaults>> MirrorStart::mirroringEveryVault() {
+    return Transactions::exec("mirror::MirrorStart::mirroringEveryVault", [&](pqxx::work& txn) {
+        std::vector<std::pair<uint32_t, AcceptVaults>> out;
+        for (const auto row : txn.exec("SELECT id, mirror_vaults_set_by, "
+                                       "  EXTRACT(EPOCH FROM COALESCE(mirror_vaults_set_at, CURRENT_TIMESTAMP))::BIGINT "
+                                       "FROM peer WHERE mirror_vaults AND revoked_at IS NULL ORDER BY id")) {
+            AcceptVaults a{.enabled = true};
+            if (!row[1].is_null()) a.set_by = row[1].as<uint32_t>();
+            a.set_at = static_cast<std::time_t>(row[2].as<int64_t>());
+            out.emplace_back(row[0].as<uint32_t>(), a);
+        }
+        return out;
+    });
+}
+
+std::vector<uint32_t> MirrorStart::mirrorEveryVaultCandidates(const uint32_t peerId) {
+    return Transactions::exec("mirror::MirrorStart::mirrorEveryVaultCandidates", [&](pqxx::work& txn) {
+        std::vector<uint32_t> out;
+        for (const auto row : txn.exec(
+                 "SELECT v.id FROM vault v WHERE v.uid IS NOT NULL AND v.deleted_at IS NULL "
+                 "  AND NOT EXISTS (SELECT 1 FROM mirror_vault m WHERE m.vault_id = v.id) "
+                 // Detached between these two servers and not re-keyed: the same uid and keys on both (never offered).
+                 "  AND NOT EXISTS (SELECT 1 FROM mirror_detached d WHERE d.vault_uid = v.uid AND d.peer_id = $1 "
+                 "                  AND d.rekeyed_at IS NULL) "
+                 "  AND NOT EXISTS (SELECT 1 FROM mirror_offer o WHERE o.vault_uid = v.uid AND o.side = 'core' "
+                 "                  AND (o.finished_at IS NULL OR (o.peer_id = $1 AND o.updated_at >= "
+                 "                       (SELECT COALESCE(p.mirror_vaults_set_at, '-infinity') FROM peer p "
+                 "                        WHERE p.id = $1)))) "
+                 "ORDER BY v.id",
+                 pqxx::params{peerId}))
+            out.push_back(row[0].as<uint32_t>());
+        return out;
+    });
+}
+
 // ---- the core's vault -----------------------------------------------------------------------------------------------
 
 std::optional<VaultFacts> MirrorStart::facts(const uint32_t vaultId) {

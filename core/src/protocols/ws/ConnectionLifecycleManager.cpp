@@ -59,7 +59,7 @@ ConnectionLifecycleManager::SweepVerdict ConnectionLifecycleManager::verdict(
     if (session.isDeviceSession())
         return session.user && session.user->authorizing() ? SweepVerdict::Keep : SweepVerdict::DeviceEnded;
     // A link between two servers (design/peers/link.md): no token either; the link service ends it (unlink,
-    // three missed pings, peers.experimental off).
+    // three missed pings).
     if (session.isPeerSession()) return SweepVerdict::Keep;
     if (!session.user && !session.isShareSession() && expired) return SweepVerdict::UnauthenticatedTimeout;
 

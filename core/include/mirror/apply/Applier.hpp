@@ -26,7 +26,9 @@
 //   * After the changes, the hash of each entry is computed from this server's own tables and must be the core's: a
 //     mismatch, a compare-and-set that fails, an entry the group cannot place, or a first copy whose digest is not the
 //     baseline's stops the vault as `diverged` with the entry and both hashes, and nothing of the group is applied. A
-//     key version this server does not hold stops it as `stopped` (mirror_key_missing). The digest moves by each
+//     key version this server does not hold stops it as `stopped` (mirror_key_missing); a key row naming a version the
+//     core delivered ahead of its rotation (mirror/rotate) makes it current here, with the same key check
+//     (mirror_key_mismatch otherwise), and the engine reloads its keys after the commit. The digest moves by each
 //     entry's new hash less the one it replaced, as the core's does, so a scrub (Digests::recompute) agrees with it.
 //   * Every file whose content this server does not hold at the row's generation gets its mirror_content_pending row in
 //     the same transaction (a newer generation replaces an older one; a file removed or trashed drops it). Contents are

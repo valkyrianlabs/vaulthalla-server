@@ -5998,6 +5998,125 @@
       "name": "MfaFactor"
     },
     {
+      "description": "A mirrored vault's first copy (ops::mirrors::toJson(Status)): on the mirror, how far it got; on the core, whether its mirror acknowledged it (the core can't tell how many entries arrived).",
+      "fields": [
+        {
+          "name": "finished",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "mirror: the baseline entries applied so far; core: null.",
+          "name": "entries_copied",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "description": "The baseline's entries while it is kept; null once dropped.",
+          "name": "entries_total",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "name": "MirrorFirstCopy"
+    },
+    {
+      "description": "The settings that apply to a mirrored vault's row (ops::mirrors::toJson(Status)): on a mirror, the versions it keeps of what its core replaces or deletes; for the row's linked server, this server's link settings.",
+      "fields": [
+        {
+          "description": "A mirror row only (mirror.versions.set); null on the core.",
+          "fields": [
+            {
+              "name": "enabled",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "keep_last",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "max_age_days",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "quota_bytes",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "set_by",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "set_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "versions",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "This server accepts every vault the linked server offers (mirror.accept_all.set).",
+          "name": "accept_all",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "This server keeps the vaults the linked server removes (mirror.keep_removed.set).",
+          "name": "keep_removed",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "This server, as core, offers the linked server every vault (mirror.mirror_all.set).",
+          "name": "mirror_all",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "name": "MirrorSettings"
+    },
+    {
       "description": "Filesystem operation queue and share upload figures, one vault or the system (core/src/stats/model/OperationStats.cpp to_json).",
       "fields": [
         {
@@ -24435,7 +24554,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "340de841a7a45bc8da2d720dd791cb0e378bf45cdf8f66ae7b484ce08837aa0c",
+  "models_hash": "22ee63a7649f4d3e730bfe38c9e071777204f292e084265c7a867a3729b941e6",
   "protocol": {
     "min": 1,
     "version": 1
@@ -37925,7 +38044,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_offer_not_pending",
         "mirror_vault_exists",
@@ -37940,7 +38058,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_offer_not_pending",
         "mirror_vault_exists",
@@ -38332,7 +38449,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -38341,7 +38457,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -38454,7 +38569,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_already",
         "mirror_start_running",
@@ -38483,7 +38597,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_already",
         "mirror_start_running",
@@ -38927,7 +39040,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_detach_required",
         "mirror_offer_finished",
@@ -38939,7 +39051,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_detach_required",
         "mirror_offer_finished",
@@ -39375,7 +39486,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_offer_not_pending"
       ],
@@ -39385,7 +39495,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_offer_not_pending"
       ],
@@ -39798,7 +39907,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_not_held"
       ],
@@ -39808,7 +39916,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_not_held"
       ],
@@ -40361,7 +40468,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_not_held",
         "mirror_copy_no_space"
@@ -40372,7 +40478,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_not_held",
         "mirror_copy_no_space"
@@ -40612,7 +40717,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_copy_not_running"
       ],
@@ -40622,7 +40726,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_copy_not_running"
       ],
@@ -40861,7 +40964,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -40870,7 +40972,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -41109,7 +41210,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_not_held"
       ],
@@ -41119,7 +41219,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_not_held"
       ],
@@ -41452,7 +41551,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -41461,7 +41559,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -42353,6 +42450,52 @@
                 "string",
                 "null"
               ]
+            },
+            {
+              "description": "mirror: changes made here the core has not confirmed yet; core: changes numbered here the mirror has not acknowledged (in this term). 0 without a mirror row.",
+              "minimum": 0,
+              "name": "pending_changes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "null without a mirror row.",
+              "model": "MirrorFirstCopy",
+              "name": "first_copy",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "The link to the row's linked server is up now.",
+              "name": "link_up",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "When the last position was acknowledged (core: by its mirror; mirror: to its core).",
+              "name": "confirmed_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "null without a linked server.",
+              "model": "MirrorSettings",
+              "name": "settings",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
             }
           ],
           "name": "vault",
@@ -42399,7 +42542,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -42408,7 +42550,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -42602,7 +42743,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "too_large"
       ],
@@ -42612,7 +42752,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "too_large"
       ],
@@ -42819,7 +42958,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -42828,7 +42966,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -43023,7 +43160,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_read_only"
       ],
@@ -43033,7 +43169,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_read_only"
       ],
@@ -43237,7 +43372,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -43246,7 +43380,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -43325,7 +43458,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -43334,7 +43466,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -44226,6 +44357,52 @@
                 "string",
                 "null"
               ]
+            },
+            {
+              "description": "mirror: changes made here the core has not confirmed yet; core: changes numbered here the mirror has not acknowledged (in this term). 0 without a mirror row.",
+              "minimum": 0,
+              "name": "pending_changes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "null without a mirror row.",
+              "model": "MirrorFirstCopy",
+              "name": "first_copy",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "The link to the row's linked server is up now.",
+              "name": "link_up",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "When the last position was acknowledged (core: by its mirror; mirror: to its core).",
+              "name": "confirmed_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "description": "null without a linked server.",
+              "model": "MirrorSettings",
+              "name": "settings",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
             }
           ],
           "items": "object",
@@ -44237,6 +44414,125 @@
         }
       ],
       "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.mirror_all.set",
+      "confirmations": [],
+      "description": "On the core: whether this server mirrors every vault it owns to a linked server, new ones included (default off). When on, the start service offers each vault that is not mirrored yet and each new one as it is created (an offer the other server declined, or that ended, is not made again until the setting is turned on again); with the other server's accept_all on it is fully automatic. A vault whose preconditions refuse it waits until they pass. Super admins, a person only; turning it on asks the keys step-up in the console (every vault's keys go there). Audited mirror.mirror_all.set.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "peer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "peer",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_forbidden",
+        "peer_not_linked",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_forbidden",
+        "peer_not_linked",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "node_id",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "peer",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "name": "enabled",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "set_by",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "name": "set_at",
+          "required": true,
+          "types": [
+            "integer",
+            "null"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "keys",
       "untyped_refusals": [],
       "variants": []
     },
@@ -44256,7 +44552,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -44265,7 +44560,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -44644,7 +44938,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_not_stopped",
         "mirror_core_unreachable",
@@ -44659,7 +44952,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_not_stopped",
         "mirror_core_unreachable",
@@ -44763,7 +45055,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_switch_no_role",
         "mirror_not_live",
@@ -44786,7 +45077,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_switch_no_role",
         "mirror_not_live",
@@ -45120,7 +45410,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_not_mirror",
         "mirror_orphaned",
@@ -45136,7 +45425,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_not_mirror",
         "mirror_orphaned",
@@ -45410,7 +45698,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_not_held"
       ],
@@ -45420,7 +45707,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "mirror_not_held"
       ],
@@ -45552,16 +45838,14 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "response": [
         {
@@ -45644,7 +45928,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -45653,7 +45936,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -46025,16 +46307,14 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "response": [
         {
@@ -46135,16 +46415,14 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "response": [
         {
@@ -46191,7 +46469,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -46200,7 +46477,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -46408,7 +46684,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "step_up_required",
         "recovery_cooldown"
@@ -46419,7 +46694,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "step_up_required",
         "recovery_cooldown"
@@ -46593,7 +46867,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -46602,7 +46875,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -46768,7 +47040,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -46777,7 +47048,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -47166,15 +47436,13 @@
         "denied",
         "invalid",
         "not_found",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "response": [
         {
@@ -47293,7 +47561,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked"
       ],
       "refusal_kinds": [
@@ -47302,7 +47569,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked"
       ],
       "response": [
@@ -47440,7 +47706,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked",
         "mirror_offer_not_installed"
       ],
@@ -47450,7 +47715,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked",
         "mirror_offer_not_installed"
       ],
@@ -47545,7 +47809,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked"
       ],
       "refusal_kinds": [
@@ -47554,7 +47817,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked"
       ],
       "response": [
@@ -47651,7 +47913,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked"
       ],
       "refusal_kinds": [
@@ -47660,7 +47921,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked"
       ],
       "response": [
@@ -47779,7 +48039,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked"
       ],
       "refusal_kinds": [
@@ -47788,7 +48047,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked"
       ],
       "response": [
@@ -47903,7 +48161,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked"
       ],
       "refusal_kinds": [
@@ -47912,12 +48169,186 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked"
       ],
       "response": [
         {
           "name": "recorded",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 30000,
+      "command": "peer.mirror.key",
+      "confirmations": [],
+      "description": "A key rotation on the core of a mirrored vault, before anything is sealed under the new version: that version as a KEV1 envelope (suite X25519) to the receiver's peer wrap key, the core's key check over its vault id and its attestation. The receiver (the vault's mirror for this very server) proves it against the attestation keys it pinned at pairing and holds it sealed under its own vault master with its origin; it becomes the current version there when the core's log names it. The same key again: the same answer. Refused (mirror_key_refused) when unprovable or when this server holds that version with another key; nothing is written.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "peer.mirror.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "core_vault_id"
+            ],
+            "entity": "peer.mirror.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "core_vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "version"
+            ],
+            "entity": "peer.mirror.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 1,
+          "name": "version",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "KEV1, standard base64.",
+          "generator": {
+            "attrs": [
+              "envelope"
+            ],
+            "entity": "peer.mirror.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "envelope",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "32 hex digits, over the core's vault id.",
+          "generator": {
+            "attrs": [
+              "key_check"
+            ],
+            "entity": "peer.mirror.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "key_check",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "key_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "signature",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "public_key",
+              "required": false,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "attestation"
+            ],
+            "entity": "peer.mirror.key",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "attestation",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_revoked",
+        "mirror_key_refused"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_revoked",
+        "mirror_key_refused"
+      ],
+      "response": [
+        {
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "version",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "installed",
           "required": true,
           "types": [
             "boolean"
@@ -48071,7 +48502,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked",
         "mirror_keys_refused",
         "mirror_offer_not_accepted",
@@ -48087,7 +48517,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked",
         "mirror_keys_refused",
         "mirror_offer_not_accepted",
@@ -48221,15 +48650,13 @@
         "denied",
         "invalid",
         "not_found",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "response": [
         {
@@ -48686,15 +49113,13 @@
         "denied",
         "invalid",
         "not_found",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "response": [],
       "response_model": null,
@@ -49001,7 +49426,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked"
       ],
       "refusal_kinds": [
@@ -49010,7 +49434,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked"
       ],
       "response": [
@@ -49172,7 +49595,6 @@
         "invalid",
         "not_found",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked",
         "mirror_term_stale"
       ],
@@ -49181,7 +49603,6 @@
         "invalid",
         "not_found",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked",
         "mirror_term_stale"
       ],
@@ -49245,7 +49666,6 @@
         "invalid",
         "not_found",
         "unauthorized",
-        "peers_experimental",
         "mirror_paused",
         "mirror_resync_failed",
         "peer_revoked"
@@ -49255,7 +49675,6 @@
         "invalid",
         "not_found",
         "unauthorized",
-        "peers_experimental",
         "mirror_paused",
         "mirror_resync_failed",
         "peer_revoked"
@@ -49588,7 +50007,6 @@
         "invalid",
         "not_found",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked",
         "mirror_not_live",
         "contents_missing"
@@ -49598,7 +50016,6 @@
         "invalid",
         "not_found",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked",
         "mirror_not_live",
         "contents_missing"
@@ -49739,7 +50156,6 @@
         "invalid",
         "not_found",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked",
         "mirror_not_prepared"
       ],
@@ -49748,7 +50164,6 @@
         "invalid",
         "not_found",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked",
         "mirror_not_prepared"
       ],
@@ -49994,7 +50409,6 @@
         "invalid",
         "not_found",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked",
         "mirror_not_live",
         "mirror_first_copy",
@@ -50010,7 +50424,6 @@
         "invalid",
         "not_found",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked",
         "mirror_not_live",
         "mirror_first_copy",
@@ -50215,7 +50628,6 @@
         "invalid",
         "not_found",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked",
         "conflict",
         "mirror_not_live",
@@ -50229,7 +50641,6 @@
         "invalid",
         "not_found",
         "unauthorized",
-        "peers_experimental",
         "peer_revoked",
         "conflict",
         "mirror_not_live",
@@ -50314,15 +50725,13 @@
         "denied",
         "invalid",
         "not_found",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "response": [
         {
@@ -50500,7 +50909,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "device_unknown"
       ],
       "refusal_kinds": [
@@ -50509,7 +50917,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "device_unknown"
       ],
       "response": [
@@ -50637,7 +51044,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "no_pairing_window",
         "rate_limited",
         "device_unknown",
@@ -50649,7 +51055,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "no_pairing_window",
         "rate_limited",
         "device_unknown",
@@ -50777,7 +51182,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "device_unknown"
       ],
       "refusal_kinds": [
@@ -50786,7 +51190,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "device_unknown"
       ],
       "response": [
@@ -50866,7 +51269,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "step_up_required",
         "recovery_cooldown"
@@ -50877,7 +51279,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "step_up_required",
         "recovery_cooldown"
@@ -51087,7 +51488,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -51096,7 +51496,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -51145,7 +51544,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -51154,7 +51552,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -51186,7 +51583,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -51195,7 +51591,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -51366,7 +51761,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -51375,7 +51769,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -51527,16 +51920,14 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "response": [
         {
@@ -51585,7 +51976,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -51594,7 +51984,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -51755,7 +52144,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "step_up_required",
         "recovery_cooldown"
@@ -51766,7 +52154,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "step_up_required",
         "recovery_cooldown"
@@ -51905,7 +52292,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -51914,7 +52300,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -52108,46 +52493,6 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
-      "command": "peer.status",
-      "confirmations": [],
-      "description": "Whether linked servers are switched on here (peers.experimental in config.yaml). The one peer.* command that answers while the switch is off, so a console or Desktop can leave linked servers out without provoking peers_experimental. The same callers as the other management commands.",
-      "effect": "read",
-      "input": "none",
-      "operation": null,
-      "payload": [],
-      "refusal_codes": [
-        "denied",
-        "invalid",
-        "not_found",
-        "conflict",
-        "unauthorized",
-        "peer_forbidden"
-      ],
-      "refusal_kinds": [
-        "denied",
-        "invalid",
-        "not_found",
-        "conflict",
-        "unauthorized",
-        "peer_forbidden"
-      ],
-      "response": [
-        {
-          "description": "peers.experimental: every other peer.* command refuses while false.",
-          "name": "enabled",
-          "required": true,
-          "types": [
-            "boolean"
-          ]
-        }
-      ],
-      "response_model": null,
-      "untyped_refusals": [],
-      "variants": []
-    },
-    {
-      "auth": "human",
-      "client_timeout_ms": 15000,
       "command": "peer.unlink",
       "confirmations": [],
       "description": "Unlink a server: the row is revoked (kept for the audit trail), its connections close at once, and it is told (peer.unlinked) if it is connected. Linking it again needs a new pairing.",
@@ -52178,7 +52523,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "refusal_kinds": [
@@ -52187,7 +52531,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden"
       ],
       "response": [
@@ -52393,16 +52736,14 @@
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "refusal_kinds": [
         "denied",
         "invalid",
         "not_found",
         "conflict",
-        "unauthorized",
-        "peers_experimental"
+        "unauthorized"
       ],
       "response": [
         {
@@ -54781,7 +55122,7 @@
       "client_timeout_ms": 15000,
       "command": "role.vault.assign",
       "confirmations": [],
-      "description": "Assign a vault role to a user, a group or a linked server on a vault (one assignment per subject and vault). A linked server: peers.experimental must be on, and a person decides (never an agent, a scoped or a relayed device: peer_forbidden). Refused (conflict) on a vault held here as another server's copy.",
+      "description": "Assign a vault role to a user, a group or a linked server on a vault (one assignment per subject and vault). A linked server: a person decides (never an agent, a scoped or a relayed device: peer_forbidden). Refused (conflict) on a vault held here as another server's copy.",
       "effect": "write",
       "input": "payload",
       "operation": "roles.vault.assign",
@@ -54804,7 +55145,7 @@
           ]
         },
         {
-          "description": "peer: a linked server (peer.list's id), while peers.experimental is on; it takes the role on this vault in place of its link's default (peer.policy.set), and implicit_deny means no access.",
+          "description": "peer: a linked server (peer.list's id); it takes the role on this vault in place of its link's default (peer.policy.set), and implicit_deny means no access.",
           "enum": [
             "user",
             "group",
@@ -54857,7 +55198,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "step_up_required",
         "recovery_cooldown"
@@ -54868,7 +55208,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "step_up_required",
         "recovery_cooldown"
@@ -55548,7 +55887,7 @@
           ]
         },
         {
-          "description": "peer: a linked server (peer.list's id), while peers.experimental is on; it takes the role on this vault in place of its link's default (peer.policy.set), and implicit_deny means no access.",
+          "description": "peer: a linked server (peer.list's id); it takes the role on this vault in place of its link's default (peer.policy.set), and implicit_deny means no access.",
           "enum": [
             "user",
             "group",
@@ -55584,7 +55923,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "step_up_required",
         "recovery_cooldown"
@@ -55595,7 +55933,6 @@
         "not_found",
         "conflict",
         "unauthorized",
-        "peers_experimental",
         "peer_forbidden",
         "step_up_required",
         "recovery_cooldown"
@@ -66426,7 +66763,6 @@
         "vault_orphaned_copy",
         "mirror_copy_choice_required",
         "peer_forbidden",
-        "peers_experimental",
         "step_up_required",
         "vault_upstream_key_loss",
         "vault_delete_now"
@@ -66441,7 +66777,6 @@
         "vault_orphaned_copy",
         "mirror_copy_choice_required",
         "peer_forbidden",
-        "peers_experimental",
         "step_up_required"
       ],
       "response": [
@@ -72617,5 +72952,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "bbf4aad5ca1cd380384c549ab8a1ceb28a7df3e6ae5f04d4d32359715df3762d"
+  "ws_hash": "2d929ea0319172a28adf80a6156ada78111213be91e7140752130dfb8cd5a876"
 }

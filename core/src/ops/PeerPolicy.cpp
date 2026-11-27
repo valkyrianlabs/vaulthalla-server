@@ -61,7 +61,6 @@ LinkPolicy policyOf(const vh::peer::Record& peer) {
 
 void requirePerson(const Actor& actor, const std::string& what) {
     requireActor(actor);
-    peers::requireExperimental();
     if (actor->systemOnly() || !actor->authorizing()) throw Denied("this account cannot " + what);
     const auto* scope = auth::stepup::Scope::current();
     if (!scope) return;  // the daemon's own callers and tests (ops/Actor.hpp)

@@ -20,12 +20,12 @@
 #include "auth/stepup/StepUp.hpp"
 #include "auth/model/RefreshToken.hpp"
 #include "auth/model/TokenPair.hpp"
-#include "config/Registry.hpp"
 #include "crypto/SecretKey.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/mirror/Contents.hpp"
 #include "db/query/mirror/MirrorVault.hpp"
+#include "db/query/vault/Key.hpp"
 #include "db/query/mirror/Start.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "db/query/vault/Vault.hpp"
@@ -147,7 +147,6 @@ json refusal(const std::string& code, const std::string& text) {
 
 class MirrorStartDbTest : public vh::test::db::Suite {
 protected:
-    inline static config::Config savedConfig;
     inline static std::shared_ptr<Wire> wire;
     // The fake mirror's wrap key (the core wraps to it).
     inline static std::array<uint8_t, 32> mirrorWrapSecret{};
@@ -157,8 +156,6 @@ protected:
 
     static void SetUpTestSuite() {
         if (!setUpDbSuite("mirror_start")) return;
-        savedConfig = config::Registry::get();
-        setExperimental(true);
         randombytes_buf(mirrorWrapSecret.data(), mirrorWrapSecret.size());
         crypto_scalarmult_base(mirrorWrapPublic.data(), mirrorWrapSecret.data());
         randombytes_buf(coreSeed.data(), coreSeed.size());
@@ -170,7 +167,6 @@ protected:
         if (skipTests) return;
         start::setTransportForTesting({});
         mirror::contents::setSourceFactoryForTesting({});
-        config::Registry::set(savedConfig);
         rbac::mirrored::resetForTesting();
         vh::mirror::access::resetForTesting();
         tearDownDbSuite();
@@ -179,7 +175,6 @@ protected:
     void SetUp() override {
         Suite::SetUp();
         if (IsSkipped()) return;
-        setExperimental(true);
         wire = std::make_shared<Wire>();
         const auto w = wire;
         start::setTransportForTesting(
@@ -206,12 +201,6 @@ protected:
     void TearDown() override {
         start::setTransportForTesting({});
         mirror::contents::setSourceFactoryForTesting({});
-    }
-
-    static void setExperimental(const bool on) {
-        auto cfg = config::Registry::get();
-        cfg.peers.experimental = on;
-        config::Registry::set(cfg);
     }
 
     static vh::peer::Key32 coreAttestPublic() {
@@ -487,11 +476,6 @@ TEST_F(MirrorStartDbTest, OnlyAPersonWhoMayManageTheVaultStartsAMirrorAndOnlyWit
     EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::add(plain, {.vault_id = v, .peer = std::to_string(peer.id)}); }),
               "denied");
     EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::pending(plain); }), "denied") << "the mirror's side: super admins";
-    setExperimental(false);
-    EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::add(superUser, {.vault_id = v, .peer = std::to_string(peer.id)}); }),
-              "peers_experimental");
-    EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::list(superUser); }), "peers_experimental");
-    setExperimental(true);
     const auto offer = ops::mirrors::add(superUser, {.vault_id = v, .peer = std::to_string(peer.id)});
     EXPECT_EQ(offer.state, "offered");
     EXPECT_TRUE(offer.notify);
@@ -997,17 +981,51 @@ TEST_F(MirrorStartDbTest, OffersExpireAndFinishedOnesAreSweptButAStartedOneStays
     EXPECT_TRUE(MirrorStart::offer(s.offer.id));
 }
 
-TEST_F(MirrorStartDbTest, KeyRotationIsRefusedOnAMirroredVaultAndWhileAStartRuns) {
+TEST_F(MirrorStartDbTest, KeyRotationWaitsForAStartAndOnTheCoreGoesOverTheLinkFirst) {
     const auto peer = newPeer(false);
     const auto v = coreVault();
     const auto em = runtime::Deps::get().storageManager->getEngine(v)->encryptionManager;
     (void)ops::mirrors::add(superUser, {.vault_id = v, .peer = std::to_string(peer.id)});
-    EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "vault_mirrored") << "while the start runs";
+    EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "mirror_start_running") << "while the start runs";
     (void)MirrorVaults::startCore(v, peer.id);
-    EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "vault_mirrored");
-    EXPECT_EQ(refusalCode([&] { (void)vh::vault::EncryptionManager::mintSalvageKey(v, 99, true); }), "vault_mirrored");
+    const auto version = em->get_key_version();
+    {   // the link down: refused, nothing rotated
+        std::scoped_lock lock(wire->mutex);
+        wire->up.reset();
+    }
+    EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "mirror_link_down");
+    EXPECT_EQ(em->get_key_version(), version);
+    {   // up, the mirror refuses the key: refused, nothing rotated
+        std::scoped_lock lock(wire->mutex);
+        wire->up = 1;
+        wire->answer = [](const std::string&, const json&) -> std::optional<json> {
+            return refusal("mirror_key_refused", "a test");
+        };
+    }
+    EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "mirror_key_refused");
+    EXPECT_EQ(em->get_key_version(), version);
+    EXPECT_FALSE(db::query::vault::Key::keyRotationInProgress(v));
+    {
+        std::scoped_lock lock(wire->mutex);
+        wire->answer = nullptr;
+        wire->sent.clear();
+    }
+    // The mirror holds it: the rotation goes on, and what went over the link was an envelope, never the key.
+    EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "");
+    EXPECT_EQ(em->get_key_version(), version + 1);
+    {
+        std::scoped_lock lock(wire->mutex);
+        ASSERT_FALSE(wire->sent.empty());
+        const auto& [command, payload] = wire->sent.back();
+        EXPECT_EQ(command, "peer.mirror.key");
+        EXPECT_EQ(payload.value("version", 0u), version + 1);
+        EXPECT_FALSE(payload.value("envelope", std::string{}).empty());
+        for (const auto* secret : {"key", "encrypted_key", "iv"}) EXPECT_FALSE(payload.contains(secret)) << secret;
+    }
+    EXPECT_EQ(refusalCode([&] { (void)vh::vault::EncryptionManager::mintSalvageKey(v, 99, true); }), "vault_mirrored")
+        << "a key salvage stays refused";
+    em->finish_key_rotation();
     (void)ops::mirrors::cancel(superUser, {.vault_id = v});
-    EXPECT_EQ(refusalCode([&] { em->prepare_key_rotation(); }), "") << "free again once the mirror ended";
 }
 
 // =============================================================================== ending a mirror (owner, 2026-11-26)
@@ -1079,10 +1097,6 @@ TEST_F(MirrorStartDbTest, TheKeepSettingIsASuperAdminsAndAudited) {
                                        .password = std::string("Mirror-Start-Pass-123")})
             .user->id);
     EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::setKeepRemoved(plain, std::to_string(core.id), true); }), "denied");
-    setExperimental(false);
-    EXPECT_EQ(refusalCode([&] { (void)ops::mirrors::setKeepRemoved(superUser, std::to_string(core.id), true); }),
-              "peers_experimental");
-    setExperimental(true);
     EXPECT_FALSE(MirrorStart::keepVaults(core.id).enabled) << "off by default";
     EXPECT_TRUE(ops::mirrors::setKeepRemoved(superUser, std::to_string(core.id), true).enabled);
     EXPECT_TRUE(audit::Trail::instance()->flushNow());
@@ -1406,6 +1420,66 @@ TEST_F(MirrorStartDbTest, BackgroundContentsFetchWhileTheLinkIsUpAndBackOffFromF
     EXPECT_FALSE(mq::PendingContents::get(v, *file->object_uid)) << "received";
     EXPECT_EQ(vh::fs::ops::readFileToString(file->backing_path), sealed);
     (void)MirrorVaults::remove(v);
+}
+
+// ============================================================================ mirror every vault (the core's link)
+
+TEST_F(MirrorStartDbTest, MirrorEveryVaultOffersEachVaultOnceNewOnesTooAndNeverOneTheOtherServerDeclined) {
+    namespace stepup = auth::stepup;
+    const auto peer = newPeer(false);
+    const auto ref = std::to_string(peer.id);
+    const auto offers = [&](const uint32_t v, const bool active = false) {
+        return std::stoi(scalar("SELECT count(*) FROM mirror_offer WHERE side = 'core' AND vault_id = " +
+                                std::to_string(v) + " AND peer_id = " + ref +
+                                (active ? " AND finished_at IS NULL" : "")));
+    };
+    const auto a = coreVault("every"), b = coreVault("every");
+    start::Service::instance()->tick();
+    EXPECT_EQ(offers(a), 0) << "off by default";
+    EXPECT_FALSE(MirrorStart::mirrorVaults(peer.id).enabled);
+
+    // Turning it on sends vaults' keys: the console asks the keys step-up, bound to the server.
+    const auto web = mirrorConsole(superUser);
+    {
+        const stepup::Scope scope(web);
+        const auto asked = stepUpAsked([&] { (void)ops::mirrors::setMirrorAll(superUser, ref, true); });
+        ASSERT_TRUE(asked);
+        EXPECT_EQ(asked->first, "keys");
+        EXPECT_EQ(asked->second, "mirror.mirror_all:" + ref);
+        EXPECT_FALSE(MirrorStart::mirrorVaults(peer.id).enabled) << "nothing set without the step-up";
+        grantStepUp(web, stepup::Family::Keys, "mirror.mirror_all:" + ref);
+        EXPECT_TRUE(ops::mirrors::setMirrorAll(superUser, ref, true).enabled);
+    }
+    start::Service::instance()->tick();
+    EXPECT_EQ(offers(a, true), 1) << "every vault that is not mirrored is offered";
+    EXPECT_EQ(offers(b, true), 1);
+    start::Service::instance()->tick();
+    EXPECT_EQ(offers(a), 1) << "once";
+
+    // The other server declines a's offer: never made again. A vault made now is offered.
+    const auto offerA = *MirrorStart::activeOffer(MirrorStart::facts(a)->vault_uid, "core");
+    (void)start::answerReceived(peer, json{{"offer_uid", offerA.offer_uid}, {"decision", "declined"},
+                                           {"reason", "declined"}});
+    const auto c = coreVault("every");
+    start::Service::instance()->wake();
+    start::Service::instance()->tick();
+    EXPECT_EQ(offers(c, true), 1) << "a new vault is offered as it is created";
+    EXPECT_EQ(offers(a), 1) << "a declined offer is not made again";
+    EXPECT_EQ(MirrorStart::latestOffer(offerA.vault_uid, "core")->state, "declined");
+
+    // Off: a new vault waits for mirror.add.
+    EXPECT_FALSE(ops::mirrors::setMirrorAll(superUser, ref, false).enabled);
+    const auto d = coreVault("every");
+    start::Service::instance()->wake();
+    start::Service::instance()->tick();
+    EXPECT_EQ(offers(d), 0);
+    audit::Trail::instance()->flushNow();
+    EXPECT_GE(std::stoi(scalar("SELECT count(*) FROM audit_event WHERE action = 'mirror.mirror_all.set'")), 2);
+
+    // Every offer made here ends (the database, and its other tests' vaults, are shared).
+    for (const auto& o : MirrorStart::offers("core", true))
+        if (o.peer_id == peer.id && o.vault_id)
+            (void)start::cancelOnCore(*o.vault_id, "cancelled_by_core", false, false, std::nullopt, "test");
 }
 
 }

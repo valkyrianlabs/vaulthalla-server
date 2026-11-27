@@ -68,7 +68,7 @@ calls the resolver below). Experimental and off by default, like the rest of lin
   mirrored over the link and to nothing else. Nothing calls `may()` yet, and a peer session runs only the peer wire
   set, so nothing a linked server does reaches anything here.
 - **Who may** (design decision, from how the server governs vault role assignment and the global vault policy:
-  "someone on the core who may manage vault policies"): the `peers.experimental` switch; a person, on the host socket,
+  "someone on the core who may manage vault policies"): a person, on the host socket,
   in the console or on a full-access, directly connected device's session, never an agent, a scoped or a relayed
   device (`peer_forbidden`), a system-only or non-authorizing account; per vault, the right to assign or remove vault
   roles on that vault, exactly as for a user or a group (`vault.roles.assign|revoke` from the actor's global vault

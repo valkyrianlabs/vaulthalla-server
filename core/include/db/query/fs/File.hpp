@@ -82,10 +82,17 @@ public:
     static void setEncryptionIVAndVersion(const FilePtr& f);
 
     // Compare-and-set: records f's IV and key version only while the row (same vault and path) still holds
-    // expectedIv / expectedVersion. False when it no longer does (rewritten, moved or deleted meanwhile).
+    // expectedIv / expectedVersion. False when it no longer does (rewritten, moved or deleted meanwhile). With
+    // `contentHash`, the sealed bytes' new BLAKE2b goes in the same update (a key rotation's new generation: a mirror
+    // checks the bytes it fetches against it); without, the recorded one stays. A new hash moves a cloud vault's sync
+    // baseline with it (the same plaintext, re-sealed: no local change), and with `published` (the rotation uploaded
+    // the new generation) the baseline's remote hash and the remote index entry of the old generation (by its IV)
+    // too, so neither side reads as changed and the index is brought to the new key version (reconcileRemoteIndex).
     [[nodiscard]] static bool compareAndSetEncryptionIVAndVersion(const F& f,
                                                                   const std::string& expectedIv,
-                                                                  unsigned int expectedVersion);
+                                                                  unsigned int expectedVersion,
+                                                                  const std::optional<std::string>& contentHash = std::nullopt,
+                                                                  bool published = false);
 
     // Encrypted files (non-empty IV) sealed with a key version older than keyVersion: what a key rotation still has
     // to re-encrypt. Empty files and legacy plaintext carry no IV and are not included.

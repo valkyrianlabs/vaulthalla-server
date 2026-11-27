@@ -493,11 +493,11 @@ Anything finer stays RBAC's.
 ### Linked servers (`peer/`, migration 157; `design/peers/link.md`)
 
 Two Vaulthalla servers paired with each other keep one mutually authenticated websocket (phase 1a of the server
-mirror: the link only; nothing travels over it yet but control). **Experimental and off:** `peers.experimental` in
-config.yaml (read-only like `cloud`, never in settings JSON); off = the link service closes every link and dials
-nothing, `device::authorize` never looks in `peer`, and every `peer.*` command and `vh peer` refuses
-`peers_experimental`, except ws `peer.status` (`ops::peers::enabled`: the same callers, answers `{enabled}`), which
-the console reads to leave the Linked servers page out (`web-client.md`, "Linked servers").
+mirror: the link; the server mirror below travels over it). **Shipped on** (the `peers.experimental` switch, its
+`peers_experimental` refusal and ws `peer.status` were removed 2026-11-27; an old config.yaml with the key loads, ignored).
+**Idle until used:** `db::query::peer::Peers::anyRecorded()` (any `peer` row, live or unlinked; latched by `insert`,
+else probed at most every 10 s) gates the link service's tick, the follower's loop (only the hourly housekeeping runs),
+the starter, background contents and detach copies, so a server that links nothing does nothing for them.
 - **Principal:** the `peer` table (migration 157; `db::query::peer::Peers`): node_id and spki_sha256 unique among live
   rows only (an unlinked server links again with a new row; the revoked one stays for the audit trail),
   `next_spki_sha256` + `rotate_counter` (rotation), `attest_public_keys`, `wrap_public_key`, `endpoints` (last good
@@ -551,7 +551,7 @@ the console reads to leave the Linked servers page out (`web-client.md`, "Linked
   (up/down, at most one a minute per peer).
 - Tests: `PeerCrypto*`, `PeerCards.*`, `PeerEndpoints.*`, `PeerPairingState.*`, `PeerRouting.*`, `PeerSwitch.*`
   (DB-free, `test_peer_crypto.cpp`); `PeerLinkDbTest.*` (the real listener as one end, `test_peer_link_db.cpp`; also
-  `peer.status` either way and to whom, and `compared_by` by channel with `pinned` in the audit);
+  `anyRecorded` with no rows and after the first link, and `compared_by` by channel with `pinned` in the audit);
   `DeviceIdentityRotationTest.LinkedServersThatHeardOfTheNewKey*`; Tier B `vhh drill peers`
   (`tools/harness/vhh/drill_peers.py`: two daemons pair TOFU and pinned, reconnect after each restarts, rotate,
   unlink).
@@ -645,7 +645,7 @@ that a `mirror` row exists (`MirrorVaults::startMirror`) and that `MirrorVaults:
   stops the vault as `diverged` (`mirror_digest_mismatch`). New states `expired`, `stopped`; `stop_reason`,
   `stop_detail`, `stopped_at`.
 - **Wire (`mirror::follow::Protocol`, ws `handler/MirrorFollow`):** `peer.mirror.tree|log|ack` (core answers),
-  `peer.mirror.notify` (mirror wakes); peer wire set only (`Router::isPeerWireCommand`), `peers_experimental` when off,
+  `peer.mirror.notify` (mirror wakes); peer wire set only (`Router::isPeerWireCommand`),
   a vault the caller is not the linked server of answers `not_found` ("Not found"), as the sealed lane. Answers under
   768 KiB (the link's ws frame limit is 1 MiB, `kWebSocketReadBufferMaxBytes`); a group larger than that comes in
   `part`s. `peer::LinkService::request|notify|connected` carry them.
@@ -776,7 +776,7 @@ server's vault role".
   `role(peer, vault)` = per-vault assignment (`implicit_deny`, by name: no access) else the link's default else none,
   nothing for a revoked peer or a deleted vault, never anything from an account's rows; `may(peer, vault, action, path,
   exists, isDirectory)` only on a vault this server is core of, mirrored with that peer. Nothing calls `may` yet.
-- **Who may** (`ops::peer_policy`, `ops::roles` for subject peer): `peers.experimental`; a person (Host, Web,
+- **Who may** (`ops::peer_policy`, `ops::roles` for subject peer): a person (Host, Web,
   full-access direct device; Agent, scoped and relayed devices `peer_forbidden`); per vault `vault.roles.assign|revoke`
   as for users and groups; the link's default needs it in every scope of the actor's global vault policy (view to
   read). identity.admin step-up. Audited `peer.policy.set`, `rbac.vault_role.assign|unassign` with `node_id`.
@@ -802,7 +802,7 @@ server's vault role".
 ### Starting a mirror (`mirror/start/`, `ops::mirrors`, migration 163; `design/peers/mirror.md`)
 
 Phase 2 wave 3, piece A: the control plane (offer, answer, keys, the mirror's vault, begin, grant, cancel). The tree and
-the log are piece B. Full text: mirror.md "As built: starting a mirror". Experimental (peers.experimental).
+the log are piece B. Full text: mirror.md "As built: starting a mirror".
 - **Tables:** `mirror_offer` (163; one row per start per side, shared `offer_uid`; core offered → accepted → keys_acked →
   started, mirror pending → accepted → installed → started; declined | cancelled | expired | failed; `notify` = the
   other server not told yet; 7-day expiry of unanswered offers, 30-day sweep, a started row whose vault is mirrored
@@ -848,7 +848,7 @@ the log are piece B. Full text: mirror.md "As built: starting a mirror". Experim
 
 ### Leaving a mirror (`mirror/leave/`, `mirror/versions/`, `ops::mirrors` in `ops/MirrorLeave.*`, migration 167)
 
-Phase 2 wave 5, piece A. Full text: mirror.md "As built: leaving a mirror". Experimental (peers.experimental).
+Phase 2 wave 5, piece A. Full text: mirror.md "As built: leaving a mirror".
 - **Permission:** admin module `mirror` (`rbac/permission/admin/Mirror.hpp`, `admin_role.mirror_permissions`), bit 0
   `admin.mirror.detach`; super_admin only among built-ins. `ops::mirrors::requireDetacher` (a person, then super admin
   or the bit).

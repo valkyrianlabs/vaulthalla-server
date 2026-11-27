@@ -262,6 +262,14 @@ void vh::db::Connection::initPreparedFiles() const {
                               FOR NO KEY UPDATE)
          AND f.encryption_iv IS NOT DISTINCT FROM $5
          AND f.encrypted_with_key_version IS NOT DISTINCT FROM $6)");
+    // The same, with the new generation's sealed-bytes hash (a key rotation: a mirror checks fetched bytes against it).
+    conn_->prepare("compare_and_set_file_encryption_iv_version_and_hash",
+                   R"(UPDATE files f
+       SET encryption_iv = $3, encrypted_with_key_version = $4, content_hash = $7
+       WHERE f.fs_entry_id = (SELECT fs.id FROM fs_entry fs WHERE fs.vault_id = $1 AND fs.path = $2
+                              FOR NO KEY UPDATE)
+         AND f.encryption_iv IS NOT DISTINCT FROM $5
+         AND f.encrypted_with_key_version IS NOT DISTINCT FROM $6)");
 
     // Empty files and legacy plaintext have no IV: nothing sealed, nothing for a key rotation to re-encrypt.
     // A key rotation's pending files. Versions a key salvage names are left out (key-backup.md "Salvage"): their files

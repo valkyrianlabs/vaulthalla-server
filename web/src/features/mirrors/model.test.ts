@@ -12,7 +12,6 @@ import {
   firstCopyProgress,
   heldCounts,
   heldWhat,
-  isPeersOff,
   offerable,
   parseLimit,
   positionText,
@@ -42,6 +41,11 @@ const row = (over: Partial<MirroredVault> = {}): MirroredVault => ({
   switch: null,
   takeover: null,
   advice: null,
+  pending_changes: 0,
+  first_copy: null,
+  link_up: true,
+  confirmed_at: null,
+  settings: null,
   ...over,
 })
 
@@ -177,12 +181,6 @@ test('held changes in words, counted per vault', () => {
 test('the switch says what the old core keeps', () => {
   assert.equal(accessText({ peer_access: 'read-only', peer_role: { role_name: 'Viewer', files: 0, directories: 0, sync: 0, roles: 0 } }, 'studio'), 'studio keeps read-only access through the role “Viewer”.')
   assert.match(accessText({ peer_access: 'none', peer_role: null }, 'studio'), /keeps no access/)
-})
-
-test('linked servers being off is recognised from the refusal code', () => {
-  assert.equal(isPeersOff({ code: 'peers_experimental' }), true)
-  assert.equal(isPeersOff({ code: 'mirror_link_down' }), false)
-  assert.equal(isPeersOff(null), false)
 })
 
 test('limits and offerable vaults', () => {

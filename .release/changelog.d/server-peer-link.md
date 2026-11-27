@@ -1,4 +1,5 @@
-- Linked servers (design/peers/link.md), experimental and off by default (`peers.experimental` in config.yaml): two
+- Linked servers (design/peers/link.md), on by default with no setting (a `peers:` section left in config.yaml is
+  ignored); a server that has linked nothing loads, dials and runs nothing for them (`Peers::anyRecorded`). Two
   servers pair by number matching (`vh peer pair` / `vh peer link`, ws `peer.pairing.*` and `peer.link.*`, domain
   `vh/peer/sas/v1` over both keys, nonces and peer cards; `expect_spki` for a brokered pairing), keep one pinned,
   mutually authenticated websocket (the device listener's identity both ways; peer.hello, peer.ping, peer.endpoints;

@@ -1,9 +1,9 @@
 #include "mirror/start/BackgroundContents.hpp"
 
 #include "concurrency/Backoff.hpp"
-#include "config/Registry.hpp"
 #include "db/query/mirror/Contents.hpp"
 #include "db/query/mirror/MirrorVault.hpp"
+#include "db/query/peer/Peer.hpp"
 #include "log/Registry.hpp"
 #include "mirror/Contents.hpp"
 #include "mirror/start/Start.hpp"
@@ -43,7 +43,7 @@ bool BackgroundContents::waitIdleForTesting(const std::chrono::milliseconds time
 std::size_t BackgroundContents::tick() {
     using vh::db::query::mirror::MirrorVaults;
     using vh::db::query::mirror::PendingContents;
-    if (!config::Registry::get().peers.experimental) return 0;
+    if (!vh::db::query::peer::Peers::anyRecorded()) return 0;  // nothing linked: nothing to receive
     const auto links = vh::peer::linkService();
     if (!links || links->transfers().stopping()) return 0;
     const auto t = transport();

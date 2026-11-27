@@ -14,12 +14,12 @@ std::vector<WsField> vaultSubjectPayload() {
             uinteger("subject_id").gen(gen::ref("subject", {"id"})).desc("A user id or a group id, per subject_type.")};
 }
 
-// Assigning or removing a role names a linked server too (migration 162; experimental, off by default): its role on
+// Assigning or removing a role names a linked server too (migration 162): its role on
 // the vault, the ceiling on what it may submit. Path overrides stay a user's or a group's.
 std::vector<WsField> vaultAssignSubjectPayload() {
     return {vaultId(),
             str("subject_type").oneOf({"user", "group", "peer"}).desc(
-                "peer: a linked server (peer.list's id), while peers.experimental is on; it takes the role on this "
+                "peer: a linked server (peer.list's id); it takes the role on this "
                 "vault in place of its link's default (peer.policy.set), and implicit_deny means no access."),
             uinteger("subject_id").gen(gen::ref("subject", {"id"})).desc(
                 "A user id, a group id or a linked server's id, per subject_type.")};
@@ -62,14 +62,12 @@ std::vector<WsCommandUsage> roleCommands() {
     out.push_back({
         .command = "role.vault.assign",
         .description = "Assign a vault role to a user, a group or a linked server on a vault (one assignment per "
-                       "subject and vault). A linked server: peers.experimental must be on, and a person decides "
-                       "(never an agent, a scoped or a relayed device: peer_forbidden). Refused (conflict) on a vault "
+                       "subject and vault). A linked server: a person decides (never an agent, a scoped or a relayed device: peer_forbidden). Refused (conflict) on a vault "
                        "held here as another server's copy.",
         .payload = assignPayload,
         .response = {object("assignment", "VaultRole")},
         .refusal_codes = [] {
             auto r = opsRefusals();
-            r.emplace_back("peers_experimental");
             r.emplace_back("peer_forbidden");
             return r;
         }(),
@@ -85,7 +83,6 @@ std::vector<WsCommandUsage> roleCommands() {
         .response = {boolean("unassigned")},
         .refusal_codes = [] {
             auto r = opsRefusals();
-            r.emplace_back("peers_experimental");
             r.emplace_back("peer_forbidden");
             return r;
         }(),

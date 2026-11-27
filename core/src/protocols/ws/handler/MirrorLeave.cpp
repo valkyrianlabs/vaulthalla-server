@@ -8,7 +8,6 @@
 #include "ops/Mirrors.hpp"
 #include "protocols/shell/Transfer.hpp"
 #include "storage/PlaintextReader.hpp"
-#include "ops/Peers.hpp"
 #include "peer/Peer.hpp"
 #include "protocols/ws/Session.hpp"
 
@@ -47,7 +46,6 @@ std::optional<std::string> leaveOptionalText(const json& payload, const char* ke
 }
 
 vh::peer::Record leavePeerOf(const std::shared_ptr<Session>& session) {
-    ::vh::ops::peers::requireExperimental();
     const auto& principal = session ? session->peerPrincipal() : nullptr;
     if (!principal || principal->peer_id == 0) throw ops::Denied("not a linked server's session");
     const auto row = db::query::peer::Peers::byId(principal->peer_id);

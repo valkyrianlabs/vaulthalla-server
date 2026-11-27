@@ -1,6 +1,5 @@
 #include "device/Peer.hpp"
 
-#include "config/Registry.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/peer/Peer.hpp"
 #include "peer/Peer.hpp"
@@ -32,7 +31,7 @@ Authorization authorize(const crypto::PublicKey& key, const std::string& address
     const auto row = db::query::device::Devices::byAnySpki(peer->spkiHex);
     if (!row) {
         // design/peers/link.md: a key no device has ever had may be a linked server's; never through the relay.
-        if (relayed || !config::Registry::get().peers.experimental) return out;
+        if (relayed) return out;
         auto linked = db::query::peer::Peers::liveBySpki(peer->spkiHex);
         if (!linked) return out;
         // The key the peer announced is in use: it is the pin from now on, and the old key is no longer accepted.

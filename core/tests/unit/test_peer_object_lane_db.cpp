@@ -11,7 +11,6 @@
 
 #include "../helpers/db_suite.hpp"
 #include "../helpers/device_client.hpp"
-#include "config/Registry.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "crypto/util/hash.hpp"
 #include "db/Transactions.hpp"
@@ -90,15 +89,12 @@ protected:
     inline static std::shared_ptr<const vh::device::ServerIdentity> server;
     inline static uint16_t port = 0;
     inline static std::shared_ptr<storage::Engine> engine;
-    inline static config::Config savedConfig;
     inline static std::unique_ptr<ClientIdentity> linkedKey;   // the vault's linked server
     inline static vh::peer::Record linked;
     inline static std::vector<uint8_t> plaintext;
 
     static void SetUpTestSuite() {
         if (!setUpDbSuite("peer_object_lane")) return;
-        savedConfig = config::Registry::get();
-        setExperimental(true);
         server = vh::device::ServerIdentity::generate();
         vh::device::setCurrentServerIdentity(server);
         ioc = std::make_shared<boost::asio::io_context>();
@@ -138,21 +134,8 @@ protected:
         (void)runtime::Deps::releaseSessions();
         ioc.reset();
         engine.reset();
-        config::Registry::set(savedConfig);
         vh::device::setCurrentServerIdentity(nullptr);
         tearDownDbSuite();
-    }
-
-    void SetUp() override {
-        Suite::SetUp();
-        if (IsSkipped()) return;
-        setExperimental(true);
-    }
-
-    static void setExperimental(const bool on) {
-        auto cfg = config::Registry::get();
-        cfg.peers.experimental = on;
-        config::Registry::set(cfg);
     }
 
     static vh::peer::Record addPeer(const ClientIdentity& key, const std::string& name) {
@@ -338,20 +321,6 @@ TEST_F(PeerObjectLaneDbTest, ARevokedPeerIsRefusedAndUnlinkingClosesItsLaneConne
     ASSERT_EQ(open.request(bhttp::verb::get, targetOf(*f))->result_int(), 200);
     EXPECT_GE(vh::peer::linkService()->disconnect(linked.id, false), 0u);
     EXPECT_FALSE(open.request(bhttp::verb::get, targetOf(*f))) << "the connection was closed";
-}
-
-TEST_F(PeerObjectLaneDbTest, WithTheSwitchOffTheLaneDoesNotExist) {
-    const auto f = db::query::fs::File::getFileByPath(engine->vault->id, "/blob.bin");
-    HttpClient http(port, *linkedKey);
-    ASSERT_TRUE(http.connect());  // linked at the handshake
-    setExperimental(false);
-    const auto open = http.request(bhttp::verb::get, targetOf(*f));
-    ASSERT_TRUE(open);
-    EXPECT_EQ(open->result_int(), 404) << "per request: an open connection too";
-    const auto fresh = get(*linkedKey, targetOf(*f));
-    ASSERT_TRUE(fresh);
-    EXPECT_EQ(fresh->result_int(), 404);
-    setExperimental(true);
 }
 
 TEST_F(PeerObjectLaneDbTest, AGenerationThatIsNotCurrentIsGone) {

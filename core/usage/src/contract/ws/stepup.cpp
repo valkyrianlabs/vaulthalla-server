@@ -26,6 +26,8 @@ std::vector<WsStepUp> stepUpTable() {
         {"vault.remote.detach", "keys", kTarget, ""},
         {"vault.remote.abort", "keys", kTarget, ""},
         {"mirror.add", "keys", kTarget, "in the web console (bound to the vault): its keys go to another server"},
+        {"mirror.mirror_all.set", "keys", kTarget,
+         "in the web console when it turns the setting on (bound to the linked server): every vault's keys go there"},
         // device.trust: target-bound (request id + new key + chosen code), single use
         {"device.pairing.approve", "device.trust", kTarget, ""},
         {"device.remote.enable", "device.trust", kTarget, "when remote device connections are off"},

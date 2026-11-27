@@ -1,6 +1,5 @@
 #include "protocols/device/PeerObject.hpp"
 
-#include "config/Registry.hpp"
 #include "crypto/id/ObjectUid.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/mirror/Contents.hpp"
@@ -133,8 +132,6 @@ bool isTarget(const std::string_view target) noexcept {
 }
 
 http::model::preview::Response serve(const http::request& req, const vh::peer::Principal& caller) {
-    // Off: the lane does not exist.
-    if (!vh::config::Registry::get().peers.experimental) return notFound(req);
     if (req.method() != verb::get && req.method() != verb::head) {
         auto res = jsonError(req, status::method_not_allowed, "method_not_allowed", "GET, HEAD or PUT only");
         std::get<http::string_response>(res).set(field::allow, "GET, HEAD, PUT");
@@ -215,10 +212,6 @@ http::model::preview::Response serve(const http::request& req, const vh::peer::P
 
 PutStart beginPut(const http::request& req, const vh::peer::Principal& caller, const std::optional<uint64_t> contentLength) {
     PutStart out;
-    if (!vh::config::Registry::get().peers.experimental) {
-        out.refusal = notFound(req);
-        return out;
-    }
     const auto row = db::query::peer::Peers::byId(caller.peer_id);
     if (!row || row->revoked() || row->spki_sha256 != caller.spki_hex) {
         out.refusal = jsonError(req, status::forbidden, "peer_revoked", "This server is no longer linked");

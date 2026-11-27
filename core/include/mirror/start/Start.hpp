@@ -42,8 +42,7 @@
 // A `core` row exists only after the mirror holds its keys and its own `mirror` row, and the mirror is told the begin
 // until it answers; a crash at any point leaves a state the Service resumes or mirror.cancel removes (on both sides).
 //
-// Gate: with peers.experimental off nothing here runs (the handlers and ops refuse with peers_experimental, the Service
-// does nothing). Key material is never logged, audited, put in an error or stored outside vault_keys.
+// On a server that has linked nothing the Service does nothing (db::query::peer::Peers::anyRecorded). Key material is never logged, audited, put in an error or stored outside vault_keys.
 namespace vh::mirror::start {
 
 using json = nlohmann::json;
@@ -180,12 +179,25 @@ public:
 protected:
     void runLoop() override;
 
+    // How often the core looks for vaults to offer a linked server set to receive every vault (and sooner on wake).
+    static constexpr std::chrono::seconds kEveryVaultInterval{10};
+    // A vault whose preconditions refused it is looked at again after this (its refusal logged once a time).
+    static constexpr std::chrono::seconds kEveryVaultRetry{60};
+
 private:
     void step(const Offer& offer);
     void syncGrants();
+    // The core's per-link setting "mirror every vault to this server" (peer.mirror_vaults): an offer for each vault
+    // this server owns that is not mirrored yet, new ones included, with the link up (offerVault, as mirror.add does
+    // once authorized; attributed to whoever turned the setting on). An offer that ended since is not made again.
+    void offerEveryVault(bool now);
+
+    std::chrono::steady_clock::time_point everyVaultAt_{};
+    std::map<std::pair<uint32_t, uint32_t>, std::chrono::steady_clock::time_point> everyVaultRetry_;  // (peer, vault)
 
     std::mutex mutex_;
     bool woken_{false};
+    bool everyVaultWoken_{false};
     std::map<uint32_t, std::pair<std::string, std::time_t>> sentGrants_;  // vault → (grant sent, link up since)
     std::map<uint32_t, std::chrono::steady_clock::time_point> retryAt_;   // offer → not before
 };

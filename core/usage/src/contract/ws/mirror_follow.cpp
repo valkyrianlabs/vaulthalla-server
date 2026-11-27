@@ -2,8 +2,7 @@
 // peer.mirror.resync, peer.mirror.switch.request|prepare|commit (mirror::switching)
 // (core/src/protocols/ws/handler/MirrorFollow.cpp; mirror::follow::Protocol; design/peers/mirror.md "As built: following the core"). The server
 // mirror's data plane, between the two linked servers of a mirrored vault only ("peer": a linked server's own Peer
-// session). Experimental: refused with peers_experimental while peers.experimental is off. A vault the caller is not
-// the linked server of (or no such vault) answers not_found, exactly as the sealed lane does. Every answer stays under
+// session). A vault the caller is not the linked server of (or no such vault) answers not_found, exactly as the sealed lane does. Every answer stays under
 // 768 KiB (the link's websocket takes at most 1 MiB a message).
 
 #include "fields.hpp"
@@ -12,7 +11,7 @@ namespace vh::contract::ws::detail {
 
 namespace {
 
-std::vector<std::string> mfRefusals() { return {"denied", "invalid", "not_found", "unauthorized", "peers_experimental"}; }
+std::vector<std::string> mfRefusals() { return {"denied", "invalid", "not_found", "unauthorized"}; }
 
 WsField mfVaultUid() {
     return str("vault_uid").gen(gen::ref("mirror.vault", {"uid"}))
@@ -298,7 +297,7 @@ std::vector<WsCommandUsage> mirrorFollowCommands() {
                      uinteger("groups").opt().desc("executed: the groups the core logged for it."),
                      str("code").opt().desc("refused (or executed in part): the refusal's code."),
                      str("error").opt(), mfCoreState()},
-        .refusal_codes = {"denied", "invalid", "not_found", "unauthorized", "peers_experimental", "peer_revoked",
+        .refusal_codes = {"denied", "invalid", "not_found", "unauthorized", "peer_revoked",
                           "mirror_not_live", "contents_missing"},
         .client_timeout = kDefaultTimeout,
     });

@@ -3,8 +3,9 @@
     sudo tools/harness/vhh.sh drill peers --build build [--keep] [--out report.json]
 
 Two independent private instances (own database, swtpm, state, device listener on a private loopback port), driven
-through the real `vh` as their super admin. First with peers.experimental off: every `vh peer` command refuses.
-Then on (config.yaml appended, both restarted):
+through the real `vh` as their super admin. First, two servers that have linked nothing: neither lists a linked server
+or a mirror, and a config.yaml that still carries the removed `peers: {experimental: ...}` key starts (it is ignored).
+Then:
 
   1. trust on first use: B opens a window (`vh peer pair`), A dials it (`vh peer link`) and shows a code; B is offered
      three codes, a wrong pick denies the request; then the right one links both sides, and the link comes up;
@@ -83,7 +84,8 @@ from pathlib import Path
 from vhh.drill import DrillError, Node, Report
 from vhh.instance import Instance
 
-PEERS_ON = "peers: {experimental: true}\n"
+# The switch linked servers had before they shipped on: an old config.yaml may still say so, and is read without it.
+STALE_PEERS_KEY = "peers: {experimental: false}\n"
 
 
 def _json(node: Node, *args: str) -> tuple[int, dict, str]:
@@ -1036,7 +1038,9 @@ def _ending_rule(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, rep
 
     v1, bv1, uid1 = mirrored("ending")
     cp = a.vh("vault", "keys", "rotate", str(v1), check=False)
-    report.check("8: key rotation on the mirrored vault is refused on A", "vault_mirrored" in (cp.stdout + cp.stderr),
+    report.check("8: key rotation on the mirrored vault runs on A once B holds the new version (10a follows it through)",
+                 cp.returncode == 0 and "Key rotation started" in cp.stdout
+                 and _sql(b, f"SELECT count(*) FROM vault_keys_trashed WHERE vault_id = {bv1}") != "0",
                  (cp.stdout + cp.stderr)[-300:])
     cp = b.vh("mirror", "cancel", str(bv1), check=False)
     report.check("8: B can't remove a live mirror (mirror_detach_required)",
@@ -1298,6 +1302,64 @@ def _leaving(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, report:
                  and _plain(b, "leftover/f.txt") == hashlib.sha256(b"content of leftover\n").hexdigest(), text[-300:])
 
 
+def _rotation(a: Node, b: Node, node_a: str, node_b: str, report: Report) -> None:
+    """10a: a key rotation on a mirrored vault, run by A (its core): the new version reaches B first; A re-seals; B makes
+    it current when A's log names it and fetches the re-sealed files, never stopping. Refused while B is down."""
+    v, bv, uid = _new_mirror(a, b, node_b, "rotated")
+    a.sh("printf 'a second file\\n' > MNT/rotated/g.txt")
+    _wait_synced(a, v, b, bv, "B holding rotated's second file", timeout=120)
+    _contents_here(b, bv, "rotated's contents on B")
+    before = int(_sql(a, f"SELECT version FROM vault_keys WHERE vault_id = {v}"))
+    sealed = ("SELECT count(*) FROM files f JOIN fs_entry e ON e.id = f.fs_entry_id "
+              "WHERE e.vault_id = {vid} AND COALESCE(f.size_bytes, 0) > 0 AND f.encrypted_with_key_version <> {ver}")
+    cp = a.vh("vault", "keys", "rotate", str(v), "--sync-now", check=False)
+    _wait("A re-sealed every file", lambda: _sql(a, sealed.format(vid=v, ver=before + 1)) == "0" or None, timeout=180)
+    ok = _wait_synced(a, v, b, bv, "B following the rotation", timeout=180)
+    _contents_here(b, bv, "the re-sealed files on B")
+    stops = _sql(b, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {bv} AND state <> 'live'")
+    report.check("10a: A rotates a mirrored vault's key: B holds the new version, every file re-sealed under it on B "
+                 "and readable there, equal digests, B never stopped",
+                 cp.returncode == 0 and bool(ok) and stops == "0"
+                 and _sql(b, f"SELECT version FROM vault_keys WHERE vault_id = {bv}") == str(before + 1)
+                 and _sql(b, sealed.format(vid=bv, ver=before + 1)) == "0"
+                 and _sql(b, f"SELECT count(*) FROM vault_keys_trashed WHERE vault_id = {bv} AND version = {before}") == "1"
+                 and _plain(b, "rotated/f.txt") == hashlib.sha256(b"content of rotated\n").hexdigest()
+                 and _plain(b, "rotated/g.txt") == hashlib.sha256(b"a second file\n").hexdigest(),
+                 (cp.stdout + cp.stderr)[-300:] + " " + json.dumps(ok)[:300])
+    # B down: A refuses the rotation, says why, and changes nothing.
+    _stop(b, a, node_b)
+    cp = a.vh("vault", "keys", "rotate", str(v), check=False)
+    report.check("10a: with B down A refuses the rotation (mirror_link_down) and rotates nothing",
+                 cp.returncode != 0 and "mirror_link_down" in (cp.stdout + cp.stderr)
+                 and _sql(a, f"SELECT version FROM vault_keys WHERE vault_id = {v}") == str(before + 1),
+                 (cp.stdout + cp.stderr)[-300:])
+    _start(b, a, node_b, node_a)
+
+
+def _mirror_every_vault(a: Node, b: Node, node_a: str, node_b: str, report: Report) -> None:
+    """10b: A mirrors every vault to B (its link's setting) and B accepts every vault A offers: a vault made on A is
+    mirrored to B with nobody asked on either side."""
+    on_b = b.vh("mirror", "accept-all", node_a, "on", check=False)
+    on_a = a.vh("mirror", "mirror-all", node_b, "on", check=False)
+    name = "everything"
+    a.vh("vault", "create", name, "--local")
+    v = int(_sql(a, f"SELECT id FROM vault WHERE name = '{name}' AND deleted_at IS NULL"))
+    _wait(f"A's mount showing {name}", lambda: (a.inst.mount / name).is_dir(), timeout=60)
+    a.sh(f"printf 'mirrored without asking\\n' > MNT/{name}/f.txt")
+    uid = _sql(a, f"SELECT uid FROM vault WHERE id = {v}")
+    bv = int(_wait(f"B's {name}, offered and accepted by the settings", lambda: _sql(
+        b, f"SELECT id FROM vault WHERE uid = '{uid}'"), timeout=180))
+    ok = _wait_synced(a, v, b, bv, f"B's first copy of {name}", timeout=180)
+    _contents_here(b, bv, f"{name}'s contents on B")
+    offer = _mirror_info(a, v).get("start") or {}
+    report.check("10b: with A's mirror-all and B's accept-all on, a new vault on A is mirrored to B with nobody asked",
+                 on_a.returncode == 0 and on_b.returncode == 0 and bool(ok) and offer.get("state") == "started"
+                 and _plain(b, f"{name}/f.txt") == hashlib.sha256(b"mirrored without asking\n").hexdigest(),
+                 (on_a.stdout + on_a.stderr)[-200:] + " " + json.dumps(offer)[:300])
+    a.vh("mirror", "mirror-all", node_b, "off")
+    b.vh("mirror", "accept-all", node_a, "off")
+
+
 def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bool, dict]:
     report = Report()
     run_id = time.strftime("%Y%m%dT%H%M%S") + "_" + secrets.token_hex(3)
@@ -1322,23 +1384,21 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
             nodes.append(n)
             return n
 
-        def enable(n: Node) -> None:
-            with open(n.inst.run_dir / "config.yaml", "a") as f:
-                f.write(PEERS_ON)
-            n.close()
-            n.inst.restart(kill=False)
-
-        # ------------------------------------------------------------------ 0. the switch
-        print("vhh drill peers: two daemons; the switch is off", flush=True)
+        # ------------------------------------------------------------------ 0. nothing linked
+        print("vhh drill peers: two daemons that have linked nothing", flush=True)
         a, b = node("a"), node("b")
-        for who, n, args in (("B", b, ("peer", "pair")), ("A", a, ("peer", "list")),
-                             ("A", a, ("peer", "link", "127.0.0.1:1"))):
-            cp = n.vh(*args, check=False)
-            report.check(f"0: {who}: `vh {' '.join(args)}` refuses while peers.experimental is off",
-                         cp.returncode != 0 and "experimental" in (cp.stdout + cp.stderr),
-                         (cp.stdout + cp.stderr)[-300:])
-        enable(a)
-        enable(b)
+        with open(a.inst.run_dir / "config.yaml", "a") as f:
+            f.write(STALE_PEERS_KEY)
+        a.close()
+        a.inst.restart(kill=False)
+        for who, n in (("A", a), ("B", b)):
+            peers_now = _peers(n, everything=True)
+            code, mirrors, text = _json(n, "mirror", "list")
+            report.check(f"0: {who} has linked nothing: no linked server and no mirror",
+                         not peers_now and code == 0 and not mirrors.get("vaults"),
+                         json.dumps({"peers": peers_now, "mirrors": mirrors})[:300] or text[-300:])
+        report.check("0: A starts with the removed peers.experimental key still in its config.yaml (ignored)",
+                     _peers(a) == [], "")
         spki_a, port_a = _identity(a)
         spki_b, port_b = _identity(b)
         addr_b = f"127.0.0.1:{port_b}"
@@ -1407,6 +1467,12 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
         print("vhh drill peers: 9. leaving a mirror: versions on B, detach with A down, A told, delete in one step",
               flush=True)
         _leaving(a, b, faults["b"], node_a, node_b, report)
+
+        # ------------------------------------------------------------------ 10. keys and the link's settings
+        print("vhh drill peers: 10. a key rotation on a mirrored vault; refused while the mirror is down", flush=True)
+        _rotation(a, b, node_a, node_b, report)
+        print("vhh drill peers: 10. mirror every vault: A's link setting and B's accept-all", flush=True)
+        _mirror_every_vault(a, b, node_a, node_b, report)
 
         # ------------------------------------------------------------------ 2. restarts
         print("vhh drill peers: 2. B restarts, then A restarts: the link comes back", flush=True)

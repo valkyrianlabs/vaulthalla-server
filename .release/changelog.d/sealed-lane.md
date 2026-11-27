@@ -1,7 +1,7 @@
 - Sealed file contents between linked servers (migration 161_mirror_contents.sql; design/peers/mirror.md "As built:
   sealed contents"): the device listener's sealed lane, GET|HEAD /peer/object/<vault uid>/<object uid>/<generation>,
   serves a file generation's backing bytes as they are (ETag = generation, one byte range) to a vault's linked server
-  only, only while peers.experimental is on, VHF1 only, refusing with not_found, peer_revoked,
+  only, VHF1 only, refusing with not_found, peer_revoked,
   generation_not_current, format_not_portable and not_held; unlinking closes its connections.
   - peer::object::fetch, the pinned client (the link's TLS context and pin check, resume by range, deadlines); peer::Transfers,
     4 transfers per peer with one kept for interactive opens. mirror_content_pending records what a mirror still expects

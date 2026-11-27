@@ -1004,10 +1004,8 @@ export interface WebSocketCommandMap {
   'device.identity.rotate': WsContract['device.identity.rotate']
   'device.server.identity': WsContract['device.server.identity']
   'device.endpoints': WsContract['device.endpoints']
-  // Linked servers (design/peers/link.md; experimental, off by default): the Linked servers page (features/peers).
-  // peer.status answers whether the switch is on (the only one that answers while it is off). peer.pair.* and the wire
-  // set (peer.hello ... peer.unlinked) only pass between two servers; the console never sends them.
-  'peer.status': WsContract['peer.status']
+  // Linked servers (design/peers/link.md): the Linked servers page (features/peers). peer.pair.* and the wire set
+  // (peer.hello ... peer.unlinked) only pass between two servers; the console never sends them.
   'peer.pairing.open': WsContract['peer.pairing.open']
   'peer.pairing.close': WsContract['peer.pairing.close']
   'peer.pairing.pending': WsContract['peer.pairing.pending']
@@ -1040,6 +1038,8 @@ export interface WebSocketCommandMap {
   'mirror.get': WsContract['mirror.get']
   'mirror.accept_all.set': WsContract['mirror.accept_all.set']
   'mirror.keep_removed.set': WsContract['mirror.keep_removed.set']
+  // On the core: offer every vault (new ones included) to a linked server (super admins; keys step-up to turn on).
+  'mirror.mirror_all.set': WsContract['mirror.mirror_all.set']
   // Changes made here that the core refused: held changes and conflict copies (super admins).
   'mirror.held.list': WsContract['mirror.held.list']
   'mirror.held.discard': WsContract['mirror.held.discard']
@@ -1053,6 +1053,8 @@ export interface WebSocketCommandMap {
   'peer.mirror.offer': WsContract['peer.mirror.offer']
   'peer.mirror.answer': WsContract['peer.mirror.answer']
   'peer.mirror.keys': WsContract['peer.mirror.keys']
+  // A key rotation on the core delivers its new version first (between two servers only).
+  'peer.mirror.key': WsContract['peer.mirror.key']
   'peer.mirror.begin': WsContract['peer.mirror.begin']
   'peer.mirror.grant': WsContract['peer.mirror.grant']
   'peer.mirror.cancel': WsContract['peer.mirror.cancel']

@@ -20,7 +20,6 @@
 //
 // Who may (decided 2026-11-25 from how this server governs the global vault policy and role assignment: "someone on
 // the core who may manage vault policies"):
-//   - the switch: peers.experimental, like every other linked-server operation (ops::Refused "peers_experimental");
 //   - a person: an authorizing, non-system account on the host socket, in the web console, or on a full-access,
 //     directly connected device's session; never an agent (MCP, `vh mcp`), a scoped device or a relayed one
 //     (ops::Refused "peer_forbidden"), and a linked server's own session runs no management command at all;

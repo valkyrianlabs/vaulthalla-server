@@ -5,12 +5,9 @@
 
 export const PEERS_COPY = {
   title: 'Linked servers',
-  experimental: 'Experimental',
   description:
     'Other Vaulthalla servers this one keeps a pinned, mutually authenticated connection with. Linking two servers takes a super admin on each.',
   purpose: 'A link is the trusted connection mirrored vaults travel over; it carries nothing else.',
-  unavailableTitle: 'Linked servers aren’t available on this server',
-  unavailableBody: 'This server doesn’t offer linking with other servers.',
   denied: 'Only super admins can see and link servers.',
 
   acceptAction: 'Accept a link',

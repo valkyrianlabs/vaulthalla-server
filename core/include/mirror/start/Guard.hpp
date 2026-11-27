@@ -4,11 +4,10 @@
 #include <optional>
 #include <string>
 
-// Key rotation on a mirrored vault (design/peers/mirror.md "Key rotation"): refused on both servers, with its own
-// reason, until rotation over the link is built. A new key version on the core would seal files the mirror has no key
-// for; on the mirror, keys are the core's. Every path that mints a key version asks here: `vh vault keys rotate`
-// (EncryptionManager::prepare_key_rotation, also the attach-remote's rotation and an import's salvage) and
-// EncryptionManager::mintSalvageKey.
+// A new key version on a mirrored vault (design/peers/mirror.md "Key rotation"). A rotation runs on the core and goes
+// over the link first (mirror/rotate/Rotate.hpp, from EncryptionManager::prepare_key_rotation); on a copy held here it
+// is refused (its keys are its core's). A key salvage on a mirrored vault stays refused on both servers: every path
+// that mints a salvage version asks here (ops::vault_keys' salvage, EncryptionManager::mintSalvageKey).
 namespace vh::mirror::start {
 
 // The vault is mirrored here (any role: core, mirror, orphaned) or a start of it is running on this server.
@@ -39,8 +38,9 @@ enum class MirrorCopy { Remove, Leave };
 // recorded at the schedule (mirror::leave::endForPurge), so a restore within the window keeps the mirror.
 void refuseDeletingAHeldCopy(uint32_t vaultId);
 
-// Tests only: lets a rotation through on a mirrored vault (the replication log's own test drives the `key` rows a
-// rotation over the link will write). Never set by the daemon.
+// Tests only: lets a rotation or salvage through on a mirrored core without the link (the replication log's own test
+// drives the `key` rows a rotation writes). Never set by the daemon.
 void allowRotationOnMirroredForTesting(bool allow);
+[[nodiscard]] bool rotationAllowedForTesting();
 
 }

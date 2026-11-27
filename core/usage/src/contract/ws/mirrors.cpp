@@ -1,6 +1,5 @@
 // ws book: mirror.* and peer.mirror.* (core/src/protocols/ws/handler/Mirrors.cpp; design/peers/mirror.md "Starting a
-// mirror", "As built: starting a mirror"). Experimental and off by default (peers.experimental): every command answers
-// peers_experimental while it is off.
+// mirror", "As built: starting a mirror").
 //
 // Auth levels: the management commands are "human" (a signed-in person, or a full-access paired device's session:
 // never a scoped device, a relayed one, an agent or a share session; ops answers peer_forbidden, the router and the
@@ -14,15 +13,13 @@ namespace {
 
 std::vector<std::string> mcMirrorRefusals(const std::vector<std::string>& extra = {}) {
     auto out = opsRefusals();
-    out.emplace_back("peers_experimental");
     out.emplace_back("peer_forbidden");
     for (const auto& e : extra) out.push_back(e);
     return out;
 }
 
 std::vector<std::string> mcWireRefusals(const std::vector<std::string>& extra = {}) {
-    std::vector<std::string> out{"denied", "invalid", "not_found", "conflict", "unauthorized", "peers_experimental",
-                                 "peer_revoked"};
+    std::vector<std::string> out{"denied", "invalid", "not_found", "conflict", "unauthorized", "peer_revoked"};
     for (const auto& e : extra) out.push_back(e);
     return out;
 }
@@ -109,7 +106,15 @@ std::vector<WsField> mcMirroredFields() {
                 .desc("The vault's core is deleting it (its retention window): when the purge is due and what it does "
                       "to the copy (mirror: `here`, what this server will do by its keep setting). null: not deleting."),
             str("stop_reason").nullable().desc("Why the copy is not live (mirror_core_deleting while its core deletes "
-                                               "the vault).")};
+                                               "the vault)."),
+            uinteger("pending_changes").desc("mirror: changes made here the core has not confirmed yet; core: changes "
+                                             "numbered here the mirror has not acknowledged (in this term). 0 without "
+                                             "a mirror row."),
+            object("first_copy", "MirrorFirstCopy").nullable().desc("null without a mirror row."),
+            boolean("link_up").desc("The link to the row's linked server is up now."),
+            integer("confirmed_at").nullable().desc("When the last position was acknowledged (core: by its mirror; "
+                                                    "mirror: to its core)."),
+            object("settings", "MirrorSettings").nullable().desc("null without a linked server.")};
 }
 
 WsField mcVaultIdField() { return vaultId(); }
@@ -248,6 +253,22 @@ std::vector<WsCommandUsage> mirrorCommands() {
         .client_timeout = kDefaultTimeout,
     });
 
+    out.push_back({
+        .command = "mirror.mirror_all.set",
+        .description = "On the core: whether this server mirrors every vault it owns to a linked server, new ones "
+                       "included (default off). When on, the start service offers each vault that is not mirrored yet "
+                       "and each new one as it is created (an offer the other server declined, or that ended, is not "
+                       "made again until the setting is turned on again); with the other server's accept_all on it is "
+                       "fully automatic. A vault whose preconditions refuse it waits until they pass. Super admins, a "
+                       "person only; turning it on asks the keys step-up in the console (every vault's keys go "
+                       "there). Audited mirror.mirror_all.set.",
+        .payload = {str("peer").gen(gen::ref("peer", {"id"})), boolean("enabled").gen(gen::boolean())},
+        .response = {object("peer", "", {uinteger("id"), str("node_id"), str("name")}), boolean("enabled"),
+                     integer("set_by").nullable(), integer("set_at").nullable()},
+        .refusal_codes = mcMirrorRefusals({"peer_not_linked"}),
+        .client_timeout = kDefaultTimeout,
+    });
+
     // ---- a change made on the mirror that the core refused (mirror::submit; ops::mirrors::held*)
 
     const auto heldFields = [] {
@@ -357,6 +378,25 @@ std::vector<WsCommandUsage> mirrorCommands() {
                                            "mirror_switch_refused", "mirror_orphaned", "peer_link_down",
                                            "mirror_vault_deleting"}),
         .client_timeout = std::chrono::milliseconds(60'000),
+    });
+
+    out.push_back({
+        .command = "peer.mirror.key",
+        .description = "A key rotation on the core of a mirrored vault, before anything is sealed under the new "
+                       "version: that version as a KEV1 envelope (suite X25519) to the receiver's peer wrap key, the "
+                       "core's key check over its vault id and its attestation. The receiver (the vault's mirror for "
+                       "this very server) proves it against the attestation keys it pinned at pairing and holds it "
+                       "sealed under its own vault master with its origin; it becomes the current version there when "
+                       "the core's log names it. The same key again: the same answer. Refused (mirror_key_refused) "
+                       "when unprovable or when this server holds that version with another key; nothing is written.",
+        .auth = "peer",
+        .payload = mcGenerated("peer.mirror.key", {str("vault_uid"), uinteger("core_vault_id"),
+                    uinteger("version").min(1), str("envelope").desc("KEV1, standard base64."),
+                    str("key_check").desc("32 hex digits, over the core's vault id."),
+                    object("attestation", "", {uinteger("key_id"), str("signature"), str("public_key").opt()})}),
+        .response = {str("vault_uid"), uinteger("version"), boolean("installed")},
+        .refusal_codes = mcWireRefusals({"mirror_key_refused"}),
+        .client_timeout = std::chrono::milliseconds(30'000),
     });
 
     out.push_back({

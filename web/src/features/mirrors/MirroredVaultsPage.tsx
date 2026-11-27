@@ -3,7 +3,6 @@
 import React, { useState } from 'react'
 import dynamic from 'next/dynamic'
 import { useWsMutation } from '@/lib/query'
-import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { confirm } from '@/components/ui/Confirm'
 import { PageHeader, Panel } from '@/components/ui/Panel'
@@ -11,12 +10,12 @@ import { EmptyState, QueryState } from '@/components/ui/State'
 import { notify } from '@/components/ui/Toast'
 import { GearIcon, PlusIcon, VaultIcon } from '@/components/ui/icons'
 import { PEERS_COPY } from '@/features/peers/copy'
-import { PeersGate, PeersTabs, PeersUnavailable } from '@/features/peers/Gate'
+import { PeersGate, PeersTabs } from '@/features/peers/Gate'
 import { healthText, peerLabel, type LinkedPeer } from '@/features/peers/model'
 import { PeerError } from '@/features/peers/parts'
 import { formatRelative } from '@/lib/format'
 import { MIRROR_COPY as C } from '@/features/mirrors/copy'
-import { MIRROR_READS, cancelTarget, isPeersOff, peerName, type MirroredVault } from '@/features/mirrors/model'
+import { MIRROR_READS, cancelTarget, peerName, type MirroredVault } from '@/features/mirrors/model'
 import { MirrorTable } from '@/features/mirrors/MirrorTable'
 import { OffersPanel } from '@/features/mirrors/OffersPanel'
 import { useHeldCounts, useMirrorList, useOffers, usePeers } from '@/features/mirrors/queries'
@@ -26,8 +25,7 @@ const AddMirrorDialog = dynamic(() => import('@/features/mirrors/AddMirrorDialog
 const LinkSettingsDialog = dynamic(() => import('@/features/mirrors/LinkSettingsDialog'), { ssr: false })
 
 // /linked-servers/mirrors (design/peers/mirror.md): every vault mirrored with a linked server, the offers waiting
-// here, starting a mirror and each link's settings. Super admins on a server with linked servers on (PeersGate); the
-// same operations as `vh mirror`, and the daemon decides everything.
+// here, starting a mirror and each link's settings. Super admins (PeersGate); the same operations as `vh mirror`, and the daemon decides everything.
 export const MirroredVaultsPage = () => (
   <PeersGate denied={C.denied}>
     <MirroredVaults />
@@ -37,14 +35,7 @@ export const MirroredVaultsPage = () => (
 export const MirrorHeader = ({ actions }: { actions?: React.ReactNode }) => (
   <>
     <PageHeader
-      title={
-        <span className="inline-flex items-center gap-2.5">
-          {PEERS_COPY.title}
-          <Badge tone="warn" className="align-middle" title="This feature is still being built and may change.">
-            {PEERS_COPY.experimental}
-          </Badge>
-        </span>
-      }
+      title={PEERS_COPY.title}
       description={C.description}
       actions={actions}
       className="mb-4"
@@ -80,9 +71,6 @@ const MirroredVaults = () => {
     setError(null)
     cancelStart.mutate(row, { onError: setError })
   }
-
-  // Linked servers switched off between the gate's check and now: the same plain sentence.
-  if (isPeersOff(list.error) || isPeersOff(offers.error)) return <PeersUnavailable />
 
   return (
     <div className="w-full">

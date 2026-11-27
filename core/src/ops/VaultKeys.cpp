@@ -1,6 +1,7 @@
 #include "ops/VaultKeys.hpp"
 #include "ops/BackupGrants.hpp"
 #include "auth/stepup/StepUp.hpp"
+#include "mirror/start/Guard.hpp"
 
 #include "crypto/id/ObjectUid.hpp"
 #include <vl/keykit/kev1.hpp>
@@ -1295,6 +1296,8 @@ SalvageReport runSalvage(const Actor& actor, const ImportTarget& target, std::ma
                          Unsealer& unsealer, const Channel channel) {
     const SalvageGuard guard(target.vault_id);
     sync::replicas::refuseIfReplicated(target.vault_id, "a key salvage (it mints a key version)", sync::replicas::kRotateHow);
+    // Never on a mirrored vault (either server): only a rotation goes over the link (mirror/rotate).
+    vh::mirror::start::refuseIfMirrored(target.vault_id, "a key salvage (it mints a key version)");
     // A salvage mints a new key version: it waits for a remote attach of the vault, as a rotation does.
     if (vault::remote::attachInProgress(target.vault_id))
         throw Conflict("a remote is being attached to vault '" + target.name + "'; run the salvage once the attach has "

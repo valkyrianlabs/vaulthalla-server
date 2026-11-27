@@ -12,7 +12,6 @@
 
 #include "audit/Trail.hpp"
 #include "crypto/id/ObjectUid.hpp"
-#include "config/Registry.hpp"
 #include "db/Transactions.hpp"
 #include "db/query/device/Device.hpp"
 #include "db/query/fs/Entry.hpp"
@@ -40,6 +39,7 @@
 #include "ops/Mirrors.hpp"
 #include "ops/Roles.hpp"
 #include "ops/Vaults.hpp"
+#include "peer/Keys.hpp"
 #include "rbac/role/Vault.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
@@ -64,7 +64,6 @@
 #include <vector>
 
 namespace vh::test_mirror_pair {
-
 
 using json = nlohmann::json;
 using EnginePtr = std::shared_ptr<storage::Engine>;
@@ -91,6 +90,9 @@ protected:
     // The derived fixture's SetUpTestSuite calls this with its suite's database name.
     static void setUpPair(const char* suite) {
         if (!setUpDbSuite(suite)) return;
+        // This server's peer wrap key, made before any linked server pins it (as the first pairing does): a suite
+        // that delivers keys over the link wraps them to it.
+        (void)vh::peer::keys::wrapPublicKey();
         ownNode = vh::db::query::device::Devices::nodeId();
         coreNode = "core-node-" + msTag();
         for (auto* id : {&mirrorPeer, &corePeer}) {
@@ -111,7 +113,6 @@ protected:
         ms::setInlineForTesting(false);
         ms::setPollPauseForTesting(100ms);
         vh::mirror::access::linkChanged(corePeer, false);
-        setExperimental(false);
         tearDownDbSuite();
     }
 
@@ -119,13 +120,6 @@ protected:
         Suite::SetUp();
         if (IsSkipped()) return;
         ownNode = vh::db::query::device::Devices::nodeId();
-        setExperimental(true);
-    }
-
-    static void setExperimental(const bool on) {
-        auto cfg = config::Registry::get();
-        cfg.peers.experimental = on;
-        config::Registry::set(cfg);
     }
 
     // ---- helpers

@@ -40,7 +40,7 @@ inline constexpr std::chrono::seconds kInteractiveSlotWait{60};
 
 // Why an open of a file whose contents have not arrived fails, as each surface reports it.
 enum class Reason {
-    LinkDown,  // the vault's linked server cannot be reached now (or peers.experimental is off): ENOLINK
+    LinkDown,  // the vault's linked server cannot be reached now: ENOLINK
     TimedOut,  // not received within kOpenWait (it keeps coming): ETIMEDOUT
     Failed,    // fetching failed (three attempts, or the file is marked failed): ENODATA
     Missing,   // the vault was detached before these contents arrived (migration 167): ENODATA, for good

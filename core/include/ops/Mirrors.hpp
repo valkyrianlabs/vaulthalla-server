@@ -4,12 +4,14 @@
 #include "db/query/mirror/MirrorVault.hpp"
 #include "db/query/mirror/Pending.hpp"
 #include "db/query/mirror/Start.hpp"
+#include "mirror/versions/Versions.hpp"
 #include "ops/Actor.hpp"
 #include "peer/Peer.hpp"
 
 #include <nlohmann/json_fwd.hpp>
 
 #include <cstdint>
+#include <ctime>
 #include <optional>
 #include <string>
 #include <vector>
@@ -26,8 +28,7 @@
 //     setting: super admins of this server only.
 //   - mirror.list, mirror.get: super admins (every mirrored vault and start); on the core, the vault's admin View.
 // Never an agent (MCP, `vh mcp`), a scoped device, a relayed device or a linked server's session: Refused
-// "peer_forbidden" (and the router and the MCP catalog refuse first). Gate: peers.experimental, else Refused
-// "peers_experimental".
+// "peer_forbidden" (and the router and the MCP catalog refuse first).
 namespace vh::ops::mirrors {
 
 using db::query::mirror::Offer;
@@ -80,6 +81,30 @@ struct Mirrored {
     std::optional<db::query::mirror::DetachRecord> detached{};
 };
 [[nodiscard]] std::vector<Mirrored> list(const Actor& actor);
+
+// What the console shows of a mirrored vault beside its row (mirror.list and mirror.get rows carry it).
+struct Status {
+    // mirror: changes made here the core has not confirmed yet; core: changes numbered here its mirror has not
+    // acknowledged (in this term; all of them before any acknowledgement or after a term change). 0 without a row.
+    uint64_t pending_changes{};
+    struct FirstCopy {
+        bool finished{false};
+        std::optional<uint64_t> entries_copied{};   // mirror: the entries applied so far; core: null (it can't tell)
+        std::optional<uint64_t> entries_total{};    // the baseline's entries while it is kept; null once dropped
+    };
+    std::optional<FirstCopy> first_copy{};          // null without a mirror row
+    bool link_up{false};                            // the link to the row's linked server is up now
+    std::optional<std::time_t> confirmed_at{};      // when the last position was acknowledged (either side's record)
+    struct Settings {
+        std::optional<vh::mirror::versions::Setting> versions{};   // a mirror: what it keeps of what its core replaces
+        bool accept_all{false}, keep_removed{false}, mirror_all{false};   // the row's linked server's settings here
+    };
+    std::optional<Settings> settings{};             // null without a linked server
+};
+// Read for a row of list() or get() (the database and the link's health).
+[[nodiscard]] Status statusOf(const Mirrored& m);
+// {pending_changes, first_copy, link_up, confirmed_at, settings}: DB-free.
+[[nodiscard]] nlohmann::json toJson(const Status& s);
 [[nodiscard]] Mirrored get(const Actor& actor, uint32_t vaultId);
 // Every offer on this server (both sides, newest first), finished ones included.
 [[nodiscard]] std::vector<Offer> offers(const Actor& actor);
@@ -91,6 +116,13 @@ struct Mirrored {
 // here, orphaned, instead. Super admins; audited mirror.keep_removed.set.
 [[nodiscard]] db::query::mirror::AcceptVaults keepRemoved(const Actor& actor, const std::string& peer);
 [[nodiscard]] db::query::mirror::AcceptVaults setKeepRemoved(const Actor& actor, const std::string& peer, bool enabled);
+// On the core, the link's "mirror every vault to this server" (default off): every vault this server owns that is not
+// mirrored yet, and each new one, is offered to the linked server (mirror::start::Service; with the receiver's
+// accept-all on it is fully automatic). Super admins, a person only (never an agent, a scoped or relayed device);
+// turning it on sends vaults' keys, so the console asks the keys step-up (target mirror.mirror_all:<peer id>), as
+// mirror.add does. Audited mirror.mirror_all.set.
+[[nodiscard]] db::query::mirror::AcceptVaults mirrorAll(const Actor& actor, const std::string& peer);
+[[nodiscard]] db::query::mirror::AcceptVaults setMirrorAll(const Actor& actor, const std::string& peer, bool enabled);
 
 // Held changes and conflict copies (design/peers/mirror.md "As built: a change made on the mirror"): a person's change
 // to a vault this server mirrors that the core refused (kind held: the entry came back to the core's state, the

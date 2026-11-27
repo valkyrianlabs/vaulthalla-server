@@ -1,4 +1,4 @@
-- Server mirror (experimental, behind peers.experimental): the planned switch of the core role (migration 168:
+- Server mirror: the planned switch of the core role (migration 168:
   mirror_switch, mirror_vault state 'switching', vh_mirror_core_term and vh_mirror_track_vault refusing a switching
   core's changes). mirror.switch / vh mirror switch on either server (super admins; audited mirror.switch on both);
   wire peer.mirror.switch.request (mirror to core), peer.mirror.switch.prepare and peer.mirror.switch.commit (core to
