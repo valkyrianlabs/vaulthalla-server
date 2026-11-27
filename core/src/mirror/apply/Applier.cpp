@@ -9,16 +9,19 @@
 #include "db/query/mirror/Apply.hpp"
 #include "db/query/mirror/Contents.hpp"
 #include "db/query/mirror/Pending.hpp"
+#include "db/query/mirror/Resync.hpp"
 #include "db/query/vault/Vault.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/Entry.hpp"
+#include "fs/model/File.hpp"
 #include "fs/tree_apply/TreeApply.hpp"
 #include "fuse/WorkingCopies.hpp"
 #include "log/Registry.hpp"
 #include "mirror/access/Access.hpp"
 #include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Local.hpp"
+#include "mirror/submit/Submit.hpp"
 #include "ops/Error.hpp"
 #include "paths.h"
 #include "runtime/Deps.hpp"
@@ -315,6 +318,8 @@ struct Pass {
     std::map<std::string, mq::DirtyEntry> dirty;
     std::set<std::string> listed;   // uids in `changes`
     std::vector<std::size_t> placed;
+    // A resync's copy (migration 168): the person who started it, named on what it keeps as held changes.
+    std::optional<mq::Account> resyncActor;
 
     Pass(pqxx::work& t, Run& r, Accounts& a, const uint32_t rootId, Effects& effects)
         : txn(t), run(r), accounts(a), root(rootId), fx(effects) {}
@@ -344,7 +349,10 @@ std::size_t setUp(Pass& p, const std::size_t i) {
     const bool held = p.recorded.contains(c.uid);
     // A change made here and still pending may have created, removed or trashed the entry: its tables are this
     // server's own until the core's state replaces them.
-    if (held != w.cur.has_value() && !p.dirty.contains(c.uid) && !c.aside)
+    // A copy (a resync's: migration 168) takes an entry this server holds under the uid as it is: the copy brings it to
+    // the core's state in place (a fresh mirror's vault holds none).
+    const bool adopted = p.run.batch->copy && !held && w.cur.has_value();
+    if (held != w.cur.has_value() && !p.dirty.contains(c.uid) && !c.aside && !adopted)
         diverge(held ? "mirror_entry_missing" : "mirror_entry_unrecorded",
                 {{"uid", c.uid},
                  {"why", held ? "the entry this server recorded is not in its tables"
@@ -404,7 +412,10 @@ bool addRevert(Pass& p, const std::string& uid, std::size_t& pending, const bool
 // name, and mirror::submit then resubmits it under this name).
 bool setAside(Pass& p, const uint32_t occupantId, std::size_t& pending) {
     const auto uid = mq::Pending::uidOfEntry(p.txn, occupantId);
-    if (!uid || p.listed.contains(*uid) || !p.dirty.contains(*uid)) return false;
+    // In a resync's copy, an entry of this server's that the core's tree has not named (yet) steps aside too: a later
+    // page takes it into place, or the copy's end keeps it as a held change.
+    const bool unrecorded = p.run.batch->copy && uid && mq::ApplyRows::recordedHashes(p.txn, p.run.vaultId, {*uid}).empty();
+    if (!uid || p.listed.contains(*uid) || !(p.dirty.contains(*uid) || unrecorded)) return false;
     const auto now = ta::locate(p.txn, p.run.vaultId, *uid);
     if (!now || now->trashed || !now->parent_uid) return false;
     const auto aside = vh::mirror::submit::conflictName(now->name, *uid, now->kind == ta::Located::Kind::Directory);
@@ -420,6 +431,103 @@ bool setAside(Pass& p, const uint32_t occupantId, std::size_t& pending) {
     p.listed.insert(*uid);
     pending += setUp(p, p.changes.size() - 1);
     return true;
+}
+
+// ---- a resync's copy (migration 168; design/peers/mirror.md "As built: moving the core and resync") ----------------------
+
+// This server's own version of an entry, kept as a held change (with its bytes when it has some here).
+uint64_t resyncKeep(Pass& p, const std::string& uid, const std::string& op, json args, const std::string& path,
+                    const std::string& code, const std::string& why, const std::filesystem::path& bytes) {
+    mq::HeldChange h;
+    h.vault_id = p.run.vaultId;
+    h.kind = "held";
+    h.request_id = vh::mirror::submit::newRequestId();
+    h.op = op;
+    h.entry_uid = uid;
+    h.args = std::move(args);
+    h.path = path;
+    h.actor = *p.resyncActor;
+    h.reason_code = code;
+    h.reason = why;
+    const auto id = mq::Pending::hold(p.txn, h);
+    // The bytes get their second name now, inside the transaction and before anything removes or replaces them: a stop
+    // between the commit and its effects must not leave a held change without its bytes. A transaction that rolls back
+    // leaves a name no row uses, which housekeeping sweeps; one that cannot keep the bytes does not commit.
+    std::error_code ec;
+    if (!bytes.empty() && std::filesystem::is_regular_file(bytes, ec))
+        vh::mirror::submit::contents::keep(bytes, vh::mirror::submit::contents::heldBlob(p.run.vaultId, id));
+    return id;
+}
+
+// A file of this server's whose bytes the core's state replaces: this server's version is kept first (unless a
+// change of its, held when the resync started, keeps it already).
+void resyncKeepReplaced(Pass& p, const Change& c, const ta::Located& was) {
+    if (!p.resyncActor || was.trashed || was.generation.empty()) return;
+    if (mq::Resync::heldOpenFor(p.txn, p.run.vaultId, c.uid)) return;
+    const auto b = p.run.before.find(c.uid);
+    if (b == p.run.before.end() || !b->second.entry) return;
+    const auto file = std::dynamic_pointer_cast<vh::fs::model::File>(b->second.entry);
+    if (!file) return;
+    json args{{"uid", c.uid},
+              {"parent_uid", was.parent_id == p.root ? p.run.vaultUid : was.parent_uid.value_or("")},
+              {"name", was.name},
+              {"generation", was.generation},
+              {"key_version", file->encrypted_with_key_version},
+              {"size", file->size_bytes},
+              {"content_hash", file->content_hash.value_or("")}};
+    if (file->mime_type) args["mime"] = *file->mime_type;
+    (void)resyncKeep(p, c.uid, "write", std::move(args), was.path, "mirror_resync_replaced",
+                     "this server's version of the file when its copy started over; the core's replaced it",
+                     file->backing_path);
+}
+
+// The copy is complete: every entry here the core's tree does not hold leaves the tree, kept as a held change.
+void resyncKeepLeftovers(Pass& p) {
+    auto& txn = p.txn;
+    const auto vaultId = p.run.vaultId;
+    for (const auto& l : mq::Resync::leftovers(txn, vaultId)) {
+        if (!p.resyncActor)
+            diverge("mirror_entry_unrecorded", {{"uid", l.uid}, {"path", l.path},
+                                                {"why", "this server's tables hold an entry the core's tree does not"}});
+        const auto parentUid = l.parent_uid.value_or("");
+        // A change of its that was pending when the resync started is held already, with its bytes: it leaves the
+        // tree all the same, kept once.
+        const bool keptAlready = mq::Resync::heldOpenFor(txn, vaultId, l.uid);
+        if (l.trashed) {
+            if (!keptAlready)
+                (void)resyncKeep(p, l.uid, "write",
+                                 {{"uid", l.uid}, {"name", l.name}, {"size", l.size}, {"trashed", true}}, l.path,
+                                 "mirror_resync_extra",
+                                 "in this server's trash when its copy started over; the core's tree does not hold it",
+                                 l.backing);
+            mq::ApplyRows::endTrash(txn, l.id);
+            vh::db::query::mirror::PendingContents::forget(txn, vaultId, vh::crypto::id::fromUuid(l.uid));
+            continue;
+        }
+        const auto model = db::query::fs::Entry::getFSEntryById(l.id);
+        const std::filesystem::path backing = model ? model->backing_path : std::filesystem::path{};
+        json args{{"uid", l.uid}, {"parent_uid", parentUid}, {"name", l.name}};
+        std::string op = "mkdir";
+        auto kind = ta::Located::Kind::Directory;
+        if (l.kind == "file") {
+            op = "write";
+            kind = ta::Located::Kind::File;
+            args.update({{"generation", l.generation}, {"key_version", l.key_version}, {"size", l.size},
+                         {"content_hash", l.content_hash}});
+            vh::db::query::mirror::PendingContents::forget(txn, vaultId, vh::crypto::id::fromUuid(l.uid));
+        } else if (l.kind == "symlink") {
+            op = "symlink";
+            kind = ta::Located::Kind::Symlink;
+            args["target"] = l.target;
+        }
+        if (!keptAlready)
+            (void)resyncKeep(p, l.uid, op, std::move(args), l.path, "mirror_resync_extra",
+                             "this server held it when its copy started over; the core's tree does not",
+                             kind == ta::Located::Kind::File ? backing : std::filesystem::path{});
+        const auto parent = db::query::fs::Directory::parentIdOf(txn, l.id);
+        mq::ApplyRows::removeEntry(txn, l.id);
+        p.fx.removed.push_back({.id = l.id, .kind = kind, .backing = backing, .path = l.path, .parent = parent});
+    }
 }
 
 // Removes and places every change from `from` on, repeating until done; a swap or a cycle of names goes through a
@@ -594,6 +702,7 @@ void finishAll(Pass& p, const std::size_t from, vh::mirror::Digest& digest) {
         const auto& was = b != p.run.before.end() && b->second.located ? b->second.located : w.cur;
         const bool wasLive = was && !was->trashed;
         if (wasLive && was->generation == generation) continue;   // the same bytes
+        if (p.run.batch->copy && wasLive) resyncKeepReplaced(p, c, *was);
         mq::Expected e;
         e.vault_id = vaultId;
         e.object_uid = objectUid;
@@ -730,6 +839,7 @@ Committed applyInTransaction(pqxx::work& txn, Run& run) {
     const auto root = mq::ApplyRows::rootOf(txn, vaultId);
     if (!root) throw Halt{Status::Gone, "", "mirror_vault_root_missing", json::object()};
     Pass p(txn, run, accounts, *root, fx);
+    if (batch.copy && mv->resync_by) p.resyncActor = mq::Account{.node = run.ownNode, .id = *mv->resync_by};
     p.changes = batch.changes;
     p.work.resize(p.changes.size());
     for (const auto& c : p.changes) p.listed.insert(c.uid);
@@ -816,6 +926,7 @@ Committed applyInTransaction(pqxx::work& txn, Run& run) {
     if (batch.copy) {
         const auto& page = *run.page;
         const bool finished = !page.more;
+        if (finished) resyncKeepLeftovers(p);
         if (finished && digest != page.digest)
             diverge("mirror_copy_mismatch",
                     {{"baseline_digest", page.digest.hex()}, {"baseline_entries", page.digest.entries},

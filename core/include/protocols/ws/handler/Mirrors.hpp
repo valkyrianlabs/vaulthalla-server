@@ -27,6 +27,8 @@ struct Mirrors {
     static json heldList(const json& payload, const std::shared_ptr<Session>& session);
     static json heldDiscard(const json& payload, const std::shared_ptr<Session>& session);
     static json heldRetry(const json& payload, const std::shared_ptr<Session>& session);
+    // mirror.resync: a stopped copy starts over from its core's tree (wave 5 piece B).
+    static json resync(const json& payload, const std::shared_ptr<Session>& session);
 
     // A linked server's session.
     static json offer(const json& payload, const std::shared_ptr<Session>& session);

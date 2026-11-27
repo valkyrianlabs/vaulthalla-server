@@ -2,6 +2,7 @@
 
 #include "db/query/peer/Peer.hpp"
 #include "mirror/follow/Protocol.hpp"
+#include "mirror/resync/Resync.hpp"
 #include "mirror/submit/Submit.hpp"
 #include "ops/Error.hpp"
 #include "ops/Peers.hpp"
@@ -48,6 +49,10 @@ json MirrorFollow::ack(const json& payload, const std::shared_ptr<Session>& sess
 
 json MirrorFollow::notify(const json& payload, const std::shared_ptr<Session>& session) {
     return vh::mirror::follow::receiveNotify(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::resync(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::resync::serveResync(mirrorFollowCaller(session), mirrorFollowPayload(payload));
 }
 
 json MirrorFollow::submit(const json& payload, const std::shared_ptr<Session>& session) {

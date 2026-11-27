@@ -62,6 +62,10 @@ SubmitStep submitPending(uint32_t vaultId, vh::mirror::follow::Transport& transp
 // content, and every change still pending (never to be confirmed now) becomes a held change (reason mirror_orphaned)
 // with its sealed bytes, listed until someone discards it; nothing stays dirty. Returns how many it kept.
 std::size_t orphaned(uint32_t vaultId);
+// The same for any reason the vault's pending changes can never be confirmed as they are (orphaned, a resync starting
+// over from the core's tree): each becomes a held change with `code` and `why`, its sealed bytes with it; nothing stays
+// dirty. Returns how many it kept.
+std::size_t holdAllPending(uint32_t vaultId, const std::string& code, const std::string& why);
 
 // Tests: how long submitPending waits between asking again about a change the core has queued (0: no pause).
 void setPollPauseForTesting(std::chrono::milliseconds pause);

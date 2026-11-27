@@ -8,6 +8,7 @@
 #include "identities/User.hpp"
 #include "mirror/access/Access.hpp"
 #include "mirror/follow/Follower.hpp"
+#include "mirror/resync/Resync.hpp"
 #include "mirror/start/Start.hpp"
 #include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Local.hpp"
@@ -358,6 +359,14 @@ nlohmann::json toJson(const db::query::mirror::AcceptVaults& a, const vh::peer::
             {"enabled", a.enabled},
             {"set_by", opt(a.set_by)},
             {"set_at", optTime(a.set_at)}};
+}
+
+// ---- resync (wave 5 piece B) -----------------------------------------------------------------------------------------
+
+nlohmann::json resync(const Actor& actor, const uint32_t vaultId) {
+    ops_mirrors_detail::requireSuperAdmin(actor, "start a mirrored vault's copy over");
+    (void)ops_mirrors_detail::liveVault(vaultId);
+    return vh::mirror::resync::start(vaultId, actor->id, actor->name(), *vh::mirror::follow::linkTransport());
 }
 
 // ---- held changes ------------------------------------------------------------------------------------------------------

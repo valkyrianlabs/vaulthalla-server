@@ -2568,4 +2568,48 @@ TEST_F(SqlDeployerHistoryDb, MirrorPendingMigration166IsAdditiveAndIdempotent) {
     });
 }
 
+TEST_F(SqlDeployerHistoryDb, MirrorSwitchMigration168IsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        const std::string file = "168_mirror_switch.sql";
+        // ---- back to the schema before 168
+        for (const auto* c : {"resync_at", "resync_by", "resync_count", "scrubbed_at"})
+            txn.exec(std::string("ALTER TABLE mirror_vault DROP COLUMN IF EXISTS ") + c);
+        txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
+
+        // ---- an upgraded install: a vault mirrored with a linked server
+        const auto owner = txn.exec("INSERT INTO users (name, password_hash) VALUES ('claude_test_168_owner', 'x') "
+                                    "RETURNING id").one_field_ref().as<int>();
+        const auto vault = txn.exec("INSERT INTO vault (name, owner_id, type, mount_point, uid) VALUES "
+                                    "('claude_test_168', $1, 'local', 'claude_test_168', gen_random_uuid()) RETURNING id",
+                                    pqxx::params{owner}).one_field_ref().as<int>();
+        const auto peer = txn.exec("INSERT INTO peer (node_id, name, spki_sha256, wrap_public_key) "
+                                   "VALUES ('claude-168-node', 'vps', repeat('ce', 32), decode(repeat('00', 32), 'hex')) "
+                                   "RETURNING id").one_field_ref().as<int>();
+        txn.exec("INSERT INTO mirror_vault (vault_id, peer_id, role, term, last_seq) VALUES ($1, $2, 'mirror', 3, 7)",
+                 pqxx::params{vault, peer});
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, file));
+        EXPECT_EQ(report.applied.size(), 1u) << "only 168 was missing";
+        EXPECT_EQ(recordedHash(txn, file), currentHash(file));
+        for (const auto* c : {"resync_at", "resync_by", "resync_count", "scrubbed_at"})
+            EXPECT_TRUE(columnExists(txn, "mirror_vault", c)) << c;
+        const auto row = txn.exec("SELECT term, last_seq, resync_count, resync_at IS NULL AS never, "
+                                  "  scrubbed_at IS NULL AS unscrubbed FROM mirror_vault WHERE vault_id = $1",
+                                  pqxx::params{vault}).one_row();
+        EXPECT_EQ(row["term"].as<int>(), 3) << "the row is untouched";
+        EXPECT_EQ(row["last_seq"].as<int>(), 7);
+        EXPECT_EQ(row["resync_count"].as<int>(), 0);
+        EXPECT_TRUE(row["never"].as<bool>());
+        EXPECT_TRUE(row["unscrubbed"].as<bool>());
+
+        // A second run of the file, and of the deployer, changes nothing.
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / file)));
+    });
+}
+
 } // namespace vh_sql_deployer_history_test

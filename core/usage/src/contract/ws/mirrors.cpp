@@ -268,6 +268,23 @@ std::vector<WsCommandUsage> mirrorCommands() {
         .client_timeout = kDefaultTimeout,
     });
 
+    out.push_back({
+        .command = "mirror.resync",
+        .description = "Starts a copy that stopped (diverged, expired or stopped) over from its core's tree without "
+                       "making it again: the core takes its baseline again in the next term and this server runs the "
+                       "first copy over the entries it has (files whose bytes are here already are not fetched). "
+                       "Changes still pending, this server's version of a file the core's replaces and anything the "
+                       "core's tree does not hold are kept as held changes. The link must be up. Super admins; "
+                       "audited mirror.resync.",
+        .payload = {mcVaultIdField()},
+        .response = {uinteger("vault_id"), str("state"), boolean("copy_finished"), uinteger("term"),
+                     uinteger("held").desc("Changes that were pending, now held."),
+                     integer("entries").desc("Entries in the core's new baseline.")},
+        .refusal_codes = mcMirrorRefusals({"mirror_not_stopped", "mirror_core_unreachable", "mirror_core_gone",
+                                           "mirror_paused", "mirror_resync_failed", "mirror_resync_refused"}),
+        .client_timeout = kDefaultTimeout,
+    });
+
     // ---- a linked server's own session (mirror/start/Start.hpp)
 
     out.push_back({
