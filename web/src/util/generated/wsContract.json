@@ -4823,6 +4823,14 @@
           "types": [
             "string"
           ]
+        },
+        {
+          "description": "Files of a vault detached from its mirror whose contents never arrived (server mirror, wave 5): listed with their size, but opening one fails (mirror_contents_missing). Sent only when true.",
+          "name": "contents_missing",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
         }
       ],
       "name": "FsEntry"
@@ -24427,7 +24435,7 @@
       "name": "WebsocketServerConfig"
     }
   ],
-  "models_hash": "a973eba373811a2c4c9a0413826290da2c61e0254ec3a5626154023274b4cfb9",
+  "models_hash": "340de841a7a45bc8da2d720dd791cb0e378bf45cdf8f66ae7b484ce08837aa0c",
   "protocol": {
     "min": 1,
     "version": 1
@@ -37923,7 +37931,8 @@
         "mirror_vault_exists",
         "mirror_name_taken",
         "mirror_no_space",
-        "history_not_supported"
+        "history_not_supported",
+        "mirror_detached_copy"
       ],
       "refusal_kinds": [
         "denied",
@@ -37937,7 +37946,8 @@
         "mirror_vault_exists",
         "mirror_name_taken",
         "mirror_no_space",
-        "history_not_supported"
+        "history_not_supported",
+        "mirror_detached_copy"
       ],
       "response": [
         {
@@ -38154,7 +38164,8 @@
                 "cancelled",
                 "expired",
                 "failed",
-                "orphaned"
+                "orphaned",
+                "detached"
               ],
               "name": "state",
               "required": true,
@@ -38191,7 +38202,8 @@
               "enum": [
                 "removed",
                 "kept",
-                "none"
+                "none",
+                "detached"
               ],
               "name": "copy",
               "required": true,
@@ -38461,6 +38473,7 @@
         "contents_not_held",
         "peer_not_linked",
         "peer_link_down",
+        "mirror_detached_copy",
         "step_up_required",
         "recovery_cooldown"
       ],
@@ -38489,6 +38502,7 @@
         "contents_not_held",
         "peer_not_linked",
         "peer_link_down",
+        "mirror_detached_copy",
         "step_up_required",
         "recovery_cooldown"
       ],
@@ -38707,7 +38721,8 @@
                 "cancelled",
                 "expired",
                 "failed",
-                "orphaned"
+                "orphaned",
+                "detached"
               ],
               "name": "state",
               "required": true,
@@ -38744,7 +38759,8 @@
               "enum": [
                 "removed",
                 "kept",
-                "none"
+                "none",
+                "detached"
               ],
               "name": "copy",
               "required": true,
@@ -39179,7 +39195,8 @@
                 "cancelled",
                 "expired",
                 "failed",
-                "orphaned"
+                "orphaned",
+                "detached"
               ],
               "name": "state",
               "required": true,
@@ -39216,7 +39233,8 @@
               "enum": [
                 "removed",
                 "kept",
-                "none"
+                "none",
+                "detached"
               ],
               "name": "copy",
               "required": true,
@@ -39586,7 +39604,8 @@
                 "cancelled",
                 "expired",
                 "failed",
-                "orphaned"
+                "orphaned",
+                "detached"
               ],
               "name": "state",
               "required": true,
@@ -39623,7 +39642,8 @@
               "enum": [
                 "removed",
                 "kept",
-                "none"
+                "none",
+                "detached"
               ],
               "name": "copy",
               "required": true,
@@ -39713,6 +39733,920 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
+      "command": "mirror.detach",
+      "confirmations": [],
+      "description": "Leave a mirror with its files: the held copy (live, stopped, diverged, expired or orphaned; the link up, down or gone) becomes a standalone vault here, owned by `owner` (default: the caller), without asking the core, which is told when it is reachable. One transaction: the mirror record goes (no gate, no backstop), pending changes become ordinary local changes, held changes stay listed, files whose contents never arrived stay marked missing, the linked server's role goes. Nothing is deleted on either server; no bucket is touched. The vault keeps the original's uid and keys until the re-key pass. No step-up; the console asks for the vault's name (confirm_name). Super admins, or holders of admin.mirror.detach; audited mirror.detach.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The new owner: a sign-in account here, by number or name.",
+          "generator": {
+            "attrs": [
+              "name"
+            ],
+            "entity": "user",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "owner",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "When given, it must be the vault's name exactly.",
+          "generator": {
+            "attrs": [
+              "name"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "confirm_name",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_not_held"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_not_held"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "owner_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "missing",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "pending_kept",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Pending writes the file no longer held, kept as held changes with their bytes.",
+              "minimum": 0,
+              "name": "pending_held",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "enum": [
+                "when_reachable",
+                "no"
+              ],
+              "name": "core_told",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "mirror",
+                    "core"
+                  ],
+                  "name": "side",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "vault_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "peer_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Where the copy left the core's log.",
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "fork",
+                  "required": true,
+                  "types": [
+                    "object"
+                  ]
+                },
+                {
+                  "name": "digest_matched",
+                  "required": true,
+                  "types": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "was_state",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "missing",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "owner_id",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "detached_by",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "detached_at",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "rekeyed_at",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "description": "The vault shares its uid and keys with the original until the re-key pass runs.",
+                  "name": "rekey_recommended",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                }
+              ],
+              "name": "record",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "vault_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "vault_name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "enum": [
+                    "mirror",
+                    "orphaned"
+                  ],
+                  "name": "role",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "live | paused | diverged | expired | stopped",
+                  "name": "state",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "stop_reason",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "description": "The vault's core.",
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "id",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "name": "node_id",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "name": "name",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "name": "revoked",
+                      "required": true,
+                      "types": [
+                        "boolean"
+                      ]
+                    }
+                  ],
+                  "name": "peer",
+                  "required": true,
+                  "types": [
+                    "object",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "link_up",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "An unfinished first copy holds only the entries copied so far.",
+                  "fields": [
+                    {
+                      "name": "finished",
+                      "required": true,
+                      "types": [
+                        "boolean"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "entries_copied",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "entries_total",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "first_copy",
+                  "required": true,
+                  "types": [
+                    "object"
+                  ]
+                },
+                {
+                  "description": "The last (term, seq) applied here: the fork point.",
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "applied",
+                  "required": true,
+                  "types": [
+                    "object"
+                  ]
+                },
+                {
+                  "description": "The last (term, seq) the core acknowledged with an equal digest.",
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "confirmed",
+                  "required": true,
+                  "types": [
+                    "object",
+                    "null"
+                  ]
+                },
+                {
+                  "description": "At `confirmed`; false once the copy diverged; null: nothing compared yet.",
+                  "name": "digest_matched",
+                  "required": true,
+                  "types": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                {
+                  "description": "Changes made here not yet confirmed by the core: they become ordinary local changes.",
+                  "minimum": 0,
+                  "name": "pending_changes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Held changes: they stay listed until discarded.",
+                  "minimum": 0,
+                  "name": "held_changes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "missing_count",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Every file whose contents are not on this server (vault-relative paths, shown only to someone who may detach): after the detach each stays listed, marked missing, and an open fails with mirror_contents_missing.",
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "file_id",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "name": "uid",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "name": "path",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "size_bytes",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "enum": [
+                        "waiting",
+                        "failed",
+                        "missing"
+                      ],
+                      "name": "state",
+                      "required": true,
+                      "types": [
+                        "string"
+                      ]
+                    },
+                    {
+                      "name": "last_error",
+                      "required": true,
+                      "types": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  ],
+                  "items": "object",
+                  "name": "missing",
+                  "required": true,
+                  "types": [
+                    "array"
+                  ]
+                },
+                {
+                  "description": "The vault's owner here now (the core's owner, as a remote account).",
+                  "minimum": 0,
+                  "name": "owner_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "before",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "name": "detached",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.detach.preview",
+      "confirmations": [],
+      "description": "What detaching a vault this server holds as another server's copy would give, before anything happens: the fork point, whether the digest matched there, the pending and held changes, and every file whose contents are not here (the list to export). Changes nothing. Super admins, or holders of admin.mirror.detach.",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_not_held"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "mirror_not_held"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "mirror",
+                "orphaned"
+              ],
+              "name": "role",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "live | paused | diverged | expired | stopped",
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "stop_reason",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The vault's core.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "node_id",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "revoked",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                }
+              ],
+              "name": "peer",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "name": "link_up",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "An unfinished first copy holds only the entries copied so far.",
+              "fields": [
+                {
+                  "name": "finished",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "entries_copied",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "entries_total",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "first_copy",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "The last (term, seq) applied here: the fork point.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "seq",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "applied",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "description": "The last (term, seq) the core acknowledged with an equal digest.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "seq",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "confirmed",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "At `confirmed`; false once the copy diverged; null: nothing compared yet.",
+              "name": "digest_matched",
+              "required": true,
+              "types": [
+                "boolean",
+                "null"
+              ]
+            },
+            {
+              "description": "Changes made here not yet confirmed by the core: they become ordinary local changes.",
+              "minimum": 0,
+              "name": "pending_changes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Held changes: they stay listed until discarded.",
+              "minimum": 0,
+              "name": "held_changes",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "missing_count",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "Every file whose contents are not on this server (vault-relative paths, shown only to someone who may detach): after the detach each stays listed, marked missing, and an open fails with mirror_contents_missing.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "file_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "uid",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "path",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "size_bytes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "waiting",
+                    "failed",
+                    "missing"
+                  ],
+                  "name": "state",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "last_error",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                }
+              ],
+              "items": "object",
+              "name": "missing",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "description": "The vault's owner here now (the core's owner, as a remote account).",
+              "minimum": 0,
+              "name": "owner_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "preview",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
       "command": "mirror.get",
       "confirmations": [],
       "description": "One vault's mirror: role, linked server, state, grant, and what step a start is at. Super admins; on the core also the vault's admin View.",
@@ -39775,11 +40709,13 @@
               ]
             },
             {
+              "description": "orphaned: a copy whose core ended the mirror, kept here read-only (detach it, or remove it with mirror.cancel); detached: a former copy, standalone here now.",
               "enum": [
                 "core",
                 "mirror",
                 "orphaned",
                 "starting",
+                "detached",
                 "none"
               ],
               "name": "role",
@@ -39851,9 +40787,7 @@
                 "diverged",
                 "expired",
                 "stopped",
-                "switching",
-                "rejoining",
-                "forked"
+                "switching"
               ],
               "name": "state",
               "required": true,
@@ -40176,7 +41110,8 @@
                     "cancelled",
                     "expired",
                     "failed",
-                    "orphaned"
+                    "orphaned",
+                    "detached"
                   ],
                   "name": "state",
                   "required": true,
@@ -40213,7 +41148,8 @@
                   "enum": [
                     "removed",
                     "kept",
-                    "none"
+                    "none",
+                    "detached"
                   ],
                   "name": "copy",
                   "required": true,
@@ -40297,19 +41233,20 @@
               ]
             },
             {
-              "description": "The vault's latest planned switch here.",
+              "description": "Wave 5: the vault's detach not followed by a re-key (side mirror: detached here; side core: its mirror left with a copy).",
               "fields": [
                 {
-                  "name": "switch_id",
+                  "minimum": 0,
+                  "name": "id",
                   "required": true,
                   "types": [
-                    "string"
+                    "integer"
                   ]
                 },
                 {
                   "enum": [
-                    "core",
-                    "mirror"
+                    "mirror",
+                    "core"
                   ],
                   "name": "side",
                   "required": true,
@@ -40318,66 +41255,16 @@
                   ]
                 },
                 {
-                  "enum": [
-                    "requested",
-                    "draining",
-                    "preparing",
-                    "prepared",
-                    "switched",
-                    "abandoned"
-                  ],
-                  "name": "phase",
-                  "required": true,
-                  "types": [
-                    "string"
-                  ]
-                },
-                {
                   "minimum": 0,
-                  "name": "term",
+                  "name": "vault_id",
                   "required": true,
                   "types": [
                     "integer"
                   ]
                 },
                 {
-                  "name": "reason",
-                  "required": true,
-                  "types": [
-                    "string",
-                    "null"
-                  ]
-                },
-                {
                   "minimum": 0,
-                  "name": "created_at",
-                  "required": true,
-                  "types": [
-                    "integer"
-                  ]
-                },
-                {
-                  "name": "ended_at",
-                  "required": true,
-                  "types": [
-                    "integer",
-                    "null"
-                  ]
-                }
-              ],
-              "name": "switch",
-              "required": true,
-              "types": [
-                "object",
-                "null"
-              ]
-            },
-            {
-              "description": "A take over here still waiting for its old core to return.",
-              "fields": [
-                {
-                  "minimum": 0,
-                  "name": "term",
+                  "name": "peer_id",
                   "required": true,
                   "types": [
                     "integer"
@@ -40409,31 +41296,69 @@
                   ]
                 },
                 {
+                  "name": "digest_matched",
+                  "required": true,
+                  "types": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "was_state",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
                   "minimum": 0,
-                  "name": "peer_id",
+                  "name": "missing",
                   "required": true,
                   "types": [
                     "integer"
                   ]
                 },
                 {
-                  "minimum": 0,
-                  "name": "contents_missing",
+                  "name": "owner_id",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "detached_by",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "detached_at",
                   "required": true,
                   "types": [
                     "integer"
                   ]
                 },
                 {
-                  "minimum": 0,
-                  "name": "created_at",
+                  "name": "rekeyed_at",
                   "required": true,
                   "types": [
-                    "integer"
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "rekey_recommended",
+                  "required": true,
+                  "types": [
+                    "boolean"
                   ]
                 }
               ],
-              "name": "takeover",
+              "name": "detached",
               "required": true,
               "types": [
                 "object",
@@ -40441,8 +41366,59 @@
               ]
             },
             {
-              "description": "What a person does next when the vault waits on the other server.",
-              "name": "advice",
+              "description": "The vault was detached here and shares its uid and keys with the original: the re-key pass is recommended.",
+              "name": "rekey_recommended",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "The vault's core is deleting it (its retention window): when the purge is due and what it does to the copy (mirror: `here`, what this server will do by its keep setting). null: not deleting.",
+              "fields": [
+                {
+                  "name": "deleting",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "name": "purge_after",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "remove",
+                    "leave"
+                  ],
+                  "name": "copy",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "here",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "deleting",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "Why the copy is not live (mirror_core_deleting while its core deletes the vault).",
+              "name": "stop_reason",
               "required": true,
               "types": [
                 "string",
@@ -40657,6 +41633,211 @@
           "required": true,
           "types": [
             "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.held.get",
+      "confirmations": [],
+      "description": "A held write's bytes: the person's version, decrypted, inline (base64) up to 8 MiB; a larger one is refused too_large (vh mirror save streams it). Nothing in the vault changes. Super admins (whoever may list held changes).",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "mirror.held",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "too_large"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_forbidden",
+        "too_large"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "kind",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "op",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entry_uid",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "path",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "copy_name",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "person",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "reason_code",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "reason",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "state",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "resolved_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "held",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "name": "name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "size",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "content_b64",
+          "required": true,
+          "types": [
+            "string"
           ]
         }
       ],
@@ -41246,11 +42427,13 @@
               ]
             },
             {
+              "description": "orphaned: a copy whose core ended the mirror, kept here read-only (detach it, or remove it with mirror.cancel); detached: a former copy, standalone here now.",
               "enum": [
                 "core",
                 "mirror",
                 "orphaned",
                 "starting",
+                "detached",
                 "none"
               ],
               "name": "role",
@@ -41322,9 +42505,7 @@
                 "diverged",
                 "expired",
                 "stopped",
-                "switching",
-                "rejoining",
-                "forked"
+                "switching"
               ],
               "name": "state",
               "required": true,
@@ -41647,7 +42828,8 @@
                     "cancelled",
                     "expired",
                     "failed",
-                    "orphaned"
+                    "orphaned",
+                    "detached"
                   ],
                   "name": "state",
                   "required": true,
@@ -41684,7 +42866,8 @@
                   "enum": [
                     "removed",
                     "kept",
-                    "none"
+                    "none",
+                    "detached"
                   ],
                   "name": "copy",
                   "required": true,
@@ -41768,19 +42951,20 @@
               ]
             },
             {
-              "description": "The vault's latest planned switch here.",
+              "description": "Wave 5: the vault's detach not followed by a re-key (side mirror: detached here; side core: its mirror left with a copy).",
               "fields": [
                 {
-                  "name": "switch_id",
+                  "minimum": 0,
+                  "name": "id",
                   "required": true,
                   "types": [
-                    "string"
+                    "integer"
                   ]
                 },
                 {
                   "enum": [
-                    "core",
-                    "mirror"
+                    "mirror",
+                    "core"
                   ],
                   "name": "side",
                   "required": true,
@@ -41789,66 +42973,16 @@
                   ]
                 },
                 {
-                  "enum": [
-                    "requested",
-                    "draining",
-                    "preparing",
-                    "prepared",
-                    "switched",
-                    "abandoned"
-                  ],
-                  "name": "phase",
-                  "required": true,
-                  "types": [
-                    "string"
-                  ]
-                },
-                {
                   "minimum": 0,
-                  "name": "term",
+                  "name": "vault_id",
                   "required": true,
                   "types": [
                     "integer"
                   ]
                 },
                 {
-                  "name": "reason",
-                  "required": true,
-                  "types": [
-                    "string",
-                    "null"
-                  ]
-                },
-                {
                   "minimum": 0,
-                  "name": "created_at",
-                  "required": true,
-                  "types": [
-                    "integer"
-                  ]
-                },
-                {
-                  "name": "ended_at",
-                  "required": true,
-                  "types": [
-                    "integer",
-                    "null"
-                  ]
-                }
-              ],
-              "name": "switch",
-              "required": true,
-              "types": [
-                "object",
-                "null"
-              ]
-            },
-            {
-              "description": "A take over here still waiting for its old core to return.",
-              "fields": [
-                {
-                  "minimum": 0,
-                  "name": "term",
+                  "name": "peer_id",
                   "required": true,
                   "types": [
                     "integer"
@@ -41880,31 +43014,69 @@
                   ]
                 },
                 {
+                  "name": "digest_matched",
+                  "required": true,
+                  "types": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "was_state",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
                   "minimum": 0,
-                  "name": "peer_id",
+                  "name": "missing",
                   "required": true,
                   "types": [
                     "integer"
                   ]
                 },
                 {
-                  "minimum": 0,
-                  "name": "contents_missing",
+                  "name": "owner_id",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "detached_by",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "detached_at",
                   "required": true,
                   "types": [
                     "integer"
                   ]
                 },
                 {
-                  "minimum": 0,
-                  "name": "created_at",
+                  "name": "rekeyed_at",
                   "required": true,
                   "types": [
-                    "integer"
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "rekey_recommended",
+                  "required": true,
+                  "types": [
+                    "boolean"
                   ]
                 }
               ],
-              "name": "takeover",
+              "name": "detached",
               "required": true,
               "types": [
                 "object",
@@ -41912,8 +43084,59 @@
               ]
             },
             {
-              "description": "What a person does next when the vault waits on the other server.",
-              "name": "advice",
+              "description": "The vault was detached here and shares its uid and keys with the original: the re-key pass is recommended.",
+              "name": "rekey_recommended",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "The vault's core is deleting it (its retention window): when the purge is due and what it does to the copy (mirror: `here`, what this server will do by its keep setting). null: not deleting.",
+              "fields": [
+                {
+                  "name": "deleting",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "name": "purge_after",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "enum": [
+                    "remove",
+                    "leave"
+                  ],
+                  "name": "copy",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "here",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "deleting",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "Why the copy is not live (mirror_core_deleting while its core deletes the vault).",
+              "name": "stop_reason",
               "required": true,
               "types": [
                 "string",
@@ -42176,7 +43399,8 @@
                 "cancelled",
                 "expired",
                 "failed",
-                "orphaned"
+                "orphaned",
+                "detached"
               ],
               "name": "state",
               "required": true,
@@ -42213,7 +43437,8 @@
               "enum": [
                 "removed",
                 "kept",
-                "none"
+                "none",
+                "detached"
               ],
               "name": "copy",
               "required": true,
@@ -42468,7 +43693,8 @@
         "mirror_core_gone",
         "mirror_switch_refused",
         "mirror_orphaned",
-        "peer_link_down"
+        "peer_link_down",
+        "mirror_vault_deleting"
       ],
       "refusal_kinds": [
         "denied",
@@ -42490,7 +43716,8 @@
         "mirror_core_gone",
         "mirror_switch_refused",
         "mirror_orphaned",
-        "peer_link_down"
+        "peer_link_down",
+        "mirror_vault_deleting"
       ],
       "response": [
         {
@@ -42762,9 +43989,9 @@
     {
       "auth": "human",
       "client_timeout_ms": 15000,
-      "command": "mirror.takeover",
+      "command": "mirror.versions.set",
       "confirmations": [],
-      "description": "On a mirror whose core is gone or cannot be reached: take over as the vault's core. This server records the next term with itself as the core, the last change it applied from the old core as the fork point and its tree as the old core last confirmed it as the fork base (kept for the old core's return); changes made here and still pending become ordinary changes, held ones stay listed. Refused while the core answers (mirror_core_reachable: use mirror.switch). Also the way out of a planned switch whose core never came back. `confirm` is the vault's name, typed. Super admins (Take over as core); the data.destroy step-up in the console; audited mirror.takeover.",
+      "description": "Keep versions of what the core replaces or deletes, for a vault this server holds as another server's mirror (default off): before the core's replacement, trash or delete of a file is applied here, its prior generation is kept as a local version, bounded by keep_last, max_age_days and quota_bytes (unset ones default to 10 versions and 30 days when turning it on; 0 is no limit of that kind; at least one stays). This server's own state: never logged, hashed or submitted. Read them with recovery.list|inspect (whoever may read the file here); restoring one is a change made here (Live only). Super admins; audited mirror.versions.set.",
       "effect": "write",
       "input": "payload",
       "operation": null,
@@ -42787,19 +44014,40 @@
           ]
         },
         {
-          "description": "The vault's name, typed exactly.",
           "generator": {
-            "attrs": [
-              "name"
-            ],
-            "entity": "vault",
-            "kind": "ref",
-            "scope": "any"
+            "kind": "bool"
           },
-          "name": "confirm",
+          "name": "enabled",
           "required": true,
           "types": [
-            "string"
+            "boolean"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "keep_last",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "max_age_days",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "quota_bytes",
+          "required": false,
+          "types": [
+            "integer",
+            "null"
           ]
         }
       ],
@@ -42811,13 +44059,7 @@
         "unauthorized",
         "peers_experimental",
         "peer_forbidden",
-        "mirror_not_mirror",
-        "mirror_orphaned",
-        "mirror_first_copy",
-        "mirror_diverged",
-        "mirror_core_reachable",
-        "mirror_name_mismatch",
-        "step_up_required"
+        "mirror_not_held"
       ],
       "refusal_kinds": [
         "denied",
@@ -42827,135 +44069,20 @@
         "unauthorized",
         "peers_experimental",
         "peer_forbidden",
-        "mirror_not_mirror",
-        "mirror_orphaned",
-        "mirror_first_copy",
-        "mirror_diverged",
-        "mirror_core_reachable",
-        "mirror_name_mismatch",
-        "step_up_required"
+        "mirror_not_held"
       ],
       "response": [
         {
-          "minimum": 0,
-          "name": "id",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "vault_id",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "description": "The old core.",
-          "minimum": 0,
-          "name": "peer_id",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "from_term",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "description": "This server's term as the core.",
-          "minimum": 0,
-          "name": "term",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "description": "The fork point: the last change applied from the old core, and the digest there.",
           "fields": [
             {
-              "minimum": 0,
-              "name": "term",
+              "name": "enabled",
               "required": true,
               "types": [
-                "integer"
+                "boolean"
               ]
             },
             {
-              "minimum": 0,
-              "name": "seq",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "name": "digest",
-              "required": true,
-              "types": [
-                "string"
-              ]
-            },
-            {
-              "name": "entries",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "name": "fork",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "description": "Entries in the fork base.",
-          "minimum": 0,
-          "name": "fork_rows",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "pending_made_local",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "held",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "description": "Files whose contents never arrived here.",
-          "minimum": 0,
-          "name": "contents_missing",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "fields": [
-            {
-              "name": "id",
+              "name": "keep_last",
               "required": true,
               "types": [
                 "integer",
@@ -42963,68 +44090,46 @@
               ]
             },
             {
-              "name": "name",
+              "name": "max_age_days",
               "required": true,
               "types": [
-                "string"
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "quota_bytes",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "set_by",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "set_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
               ]
             }
           ],
-          "name": "by",
+          "name": "versions",
           "required": true,
           "types": [
             "object"
-          ]
-        },
-        {
-          "minimum": 0,
-          "name": "created_at",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "name": "settled_at",
-          "required": true,
-          "types": [
-            "integer",
-            "null"
-          ]
-        },
-        {
-          "name": "settled_how",
-          "required": true,
-          "types": [
-            "string",
-            "null"
-          ]
-        },
-        {
-          "description": "The fork base's own digest and whether it is the fork point's.",
-          "name": "detail",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "name": "warning",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "name": "fork_base_matches",
-          "required": true,
-          "types": [
-            "boolean"
           ]
         }
       ],
       "response_model": null,
-      "step_up": "data.destroy",
       "untyped_refusals": [],
       "variants": []
     },
@@ -45128,6 +46233,235 @@
     {
       "auth": "peer",
       "client_timeout_ms": 15000,
+      "command": "peer.mirror.deleting",
+      "confirmations": [],
+      "description": "The core says whether it is deleting a mirrored vault (its retention window): deleting with the date the purge is due and what it does to the copy (remove | leave, the mirror's keep setting deciding on its side), or not (restored). The mirror pauses its copy (read-only, reason mirror_core_deleting) or follows again where it was. Sent again on every link-up and whenever it changes. Only from the vault's core (not_found otherwise).",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "peer.mirror.deleting",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "kind": "bool"
+          },
+          "name": "deleting",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "purge_after"
+            ],
+            "entity": "peer.mirror.deleting",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "purge_after",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "enum": [
+            "remove",
+            "leave"
+          ],
+          "name": "copy",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked"
+      ],
+      "response": [
+        {
+          "name": "recorded",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "state",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.detached",
+      "confirmations": [],
+      "description": "The mirror detached its copy of a vault (told, not asked): the core ends the mirror on its side as a cancel does (its core row, log, submissions and staged bytes go), records it (its offer's copy becomes detached), audits mirror.detached, and leaves its own vault as it is. Answers whether it recorded anything (a vault it holds no record of: false).",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "offer_uid"
+            ],
+            "entity": "peer.mirror.detached",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "offer_uid",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "peer.mirror.detached",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "seq",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "at"
+            ],
+            "entity": "peer.mirror.detached",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "at",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "missing"
+            ],
+            "entity": "peer.mirror.detached",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "missing",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peers_experimental",
+        "peer_revoked"
+      ],
+      "response": [
+        {
+          "name": "recorded",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "record",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
       "command": "peer.mirror.grant",
       "confirmations": [],
       "description": "What the core grants the mirror server for a vault now (its role's name and actual permissions; null: nothing). Sent at begin, on every link-up and whenever it changes. Kept only for a vault the sender is the core of (else not_found).",
@@ -45391,7 +46725,8 @@
         "mirror_vault_exists",
         "mirror_name_taken",
         "mirror_no_space",
-        "history_not_supported"
+        "history_not_supported",
+        "mirror_detached_copy"
       ],
       "refusal_kinds": [
         "denied",
@@ -45406,7 +46741,8 @@
         "mirror_vault_exists",
         "mirror_name_taken",
         "mirror_no_space",
-        "history_not_supported"
+        "history_not_supported",
+        "mirror_detached_copy"
       ],
       "response": [
         {
@@ -45919,9 +47255,7 @@
             "diverged",
             "expired",
             "stopped",
-            "switching",
-            "rejoining",
-            "forked"
+            "switching"
           ],
           "name": "core_state",
           "required": false,
@@ -46347,176 +47681,6 @@
           "required": true,
           "types": [
             "string"
-          ]
-        }
-      ],
-      "response_model": null,
-      "untyped_refusals": [],
-      "variants": []
-    },
-    {
-      "auth": "peer",
-      "client_timeout_ms": 15000,
-      "command": "peer.mirror.promoted",
-      "confirmations": [],
-      "description": "The new core tells its old core it took over (mirror.takeover), on every pass while the link is up until answered: the new term, the fork point and its digest, and the new core's digest at (term, 0). The old core stops taking changes for the vault at once (read-only) and answers pending until it decided: following (it committed nothing after the fork point: the vault's mirror in the new term), rejoining (it did: read-only with them until the merge; changes is their count) or forced (it had taken over too: both read-only until an operator picks one).",
-      "effect": "write",
-      "input": "payload",
-      "operation": null,
-      "payload": [
-        {
-          "description": "The mirrored vault's uid (UUID text): the same on both servers.",
-          "generator": {
-            "attrs": [
-              "uid"
-            ],
-            "entity": "mirror.vault",
-            "kind": "ref",
-            "scope": "any"
-          },
-          "name": "vault_uid",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "The new term.",
-          "generator": {
-            "attrs": [
-              "term"
-            ],
-            "entity": "mirror.position",
-            "kind": "ref",
-            "scope": "any"
-          },
-          "minimum": 0,
-          "name": "term",
-          "required": true,
-          "types": [
-            "integer"
-          ]
-        },
-        {
-          "description": "The last position the new core applied from the old one, and its digest there.",
-          "fields": [
-            {
-              "minimum": 0,
-              "name": "term",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "minimum": 0,
-              "name": "seq",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            },
-            {
-              "name": "digest",
-              "required": true,
-              "types": [
-                "string"
-              ]
-            },
-            {
-              "name": "entries",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "generator": {
-            "attrs": [
-              "fork"
-            ],
-            "entity": "mirror.takeover",
-            "kind": "ref",
-            "scope": "any"
-          },
-          "name": "fork",
-          "required": true,
-          "types": [
-            "object"
-          ]
-        },
-        {
-          "description": "The new core's digest at (term, 0).",
-          "fields": [
-            {
-              "name": "digest",
-              "required": true,
-              "types": [
-                "string"
-              ]
-            },
-            {
-              "name": "entries",
-              "required": true,
-              "types": [
-                "integer"
-              ]
-            }
-          ],
-          "generator": {
-            "attrs": [
-              "baseline"
-            ],
-            "entity": "mirror.takeover",
-            "kind": "ref",
-            "scope": "any"
-          },
-          "name": "baseline",
-          "required": false,
-          "types": [
-            "object"
-          ]
-        }
-      ],
-      "refusal_codes": [
-        "denied",
-        "invalid",
-        "not_found",
-        "unauthorized",
-        "peers_experimental",
-        "peer_revoked",
-        "mirror_term_stale"
-      ],
-      "refusal_kinds": [
-        "denied",
-        "invalid",
-        "not_found",
-        "unauthorized",
-        "peers_experimental",
-        "peer_revoked",
-        "mirror_term_stale"
-      ],
-      "response": [
-        {
-          "enum": [
-            "pending",
-            "following",
-            "rejoining",
-            "forced"
-          ],
-          "name": "outcome",
-          "required": true,
-          "types": [
-            "string"
-          ]
-        },
-        {
-          "description": "rejoining: the old core's changes past the fork point.",
-          "minimum": 0,
-          "name": "changes",
-          "required": false,
-          "types": [
-            "integer"
           ]
         }
       ],
@@ -46960,9 +48124,7 @@
             "diverged",
             "expired",
             "stopped",
-            "switching",
-            "rejoining",
-            "forked"
+            "switching"
           ],
           "name": "core_state",
           "required": false,
@@ -47532,7 +48694,8 @@
         "mirror_not_live",
         "mirror_switch_running",
         "mirror_submissions_queued",
-        "mirror_has_remote"
+        "mirror_has_remote",
+        "mirror_vault_deleting"
       ],
       "refusal_kinds": [
         "denied",
@@ -47545,7 +48708,8 @@
         "mirror_not_live",
         "mirror_switch_running",
         "mirror_submissions_queued",
-        "mirror_has_remote"
+        "mirror_has_remote",
+        "mirror_vault_deleting"
       ],
       "response": [
         {
@@ -47745,9 +48909,7 @@
             "diverged",
             "expired",
             "stopped",
-            "switching",
-            "rejoining",
-            "forked"
+            "switching"
           ],
           "name": "core_state",
           "required": false,
@@ -63660,7 +64822,7 @@
           "description": "Deleting now skips the restore window: resend with confirm_now."
         }
       ],
-      "description": "Delete a vault: restorable until the retention window ends, or purged on the next pass with `now`. Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or 'vault_delete_now' (resend with confirm_now). A mirrored vault is refused (vault_mirrored: end the mirror first; vault_orphaned_copy: remove it with mirror.cancel).",
+      "description": "Delete a vault: restorable until the retention window ends, or purged on the next pass with `now`. Refusals with data.code 'vault_upstream_key_loss' (resend with accept_key_loss) or 'vault_delete_now' (resend with confirm_now). A vault this server mirrors to a linked server takes mirror_copy (remove | leave: what happens to the mirror's copy, as mirror.cancel [remove_copy]; mirror_copy_choice_required without it), recorded with the deletion: the mirror is read-only for the retention window and ends with that choice at the purge (a restore keeps it; on a deleted vault, mirror_copy alone changes the choice); a copy held here is refused (vault_mirrored: detach it; vault_orphaned_copy: remove it with mirror.cancel).",
       "effect": "destructive",
       "input": "payload",
       "operation": "vaults.delete",
@@ -63710,6 +64872,19 @@
           "types": [
             "boolean"
           ]
+        },
+        {
+          "description": "A mirrored vault on its core: remove (the mirror removes its copy unless it keeps the vaults this server removes) or leave (it keeps it, orphaned). The data-destroy step-up binds remove.",
+          "enum": [
+            "remove",
+            "leave"
+          ],
+          "name": "mirror_copy",
+          "required": false,
+          "types": [
+            "string",
+            "null"
+          ]
         }
       ],
       "refusal_codes": [
@@ -63720,6 +64895,9 @@
         "unauthorized",
         "vault_mirrored",
         "vault_orphaned_copy",
+        "mirror_copy_choice_required",
+        "peer_forbidden",
+        "peers_experimental",
         "step_up_required",
         "vault_upstream_key_loss",
         "vault_delete_now"
@@ -63732,6 +64910,9 @@
         "unauthorized",
         "vault_mirrored",
         "vault_orphaned_copy",
+        "mirror_copy_choice_required",
+        "peer_forbidden",
+        "peers_experimental",
         "step_up_required"
       ],
       "response": [
@@ -69907,5 +71088,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "7ea1833209e9bb89a8dda10591932509e218bbbadfb18fc2c99e0d470d92ca62"
+  "ws_hash": "fd188f2489ad6cb105150128a52f288aab24e4f04d04699966c1c4b0136607b8"
 }

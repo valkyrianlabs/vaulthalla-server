@@ -1063,6 +1063,14 @@ export interface WebSocketCommandMap {
   'peer.mirror.notify': WsContract['peer.mirror.notify']
   // A change made on the mirror, submitted to the core (design/peers/mirror.md "As built: a change made on the mirror").
   'peer.mirror.submit': WsContract['peer.mirror.submit']
+  // Leaving a mirror (design/peers/mirror.md "As built: leaving a mirror"): detach a held copy here; the core is told.
+  'mirror.detach.preview': WsContract['mirror.detach.preview']
+  'mirror.detach': WsContract['mirror.detach']
+  // Versions the mirror keeps of what its core replaces or deletes; a held change's bytes (the person's version).
+  'mirror.versions.set': WsContract['mirror.versions.set']
+  'mirror.held.get': WsContract['mirror.held.get']
+  'peer.mirror.detached': WsContract['peer.mirror.detached']
+  'peer.mirror.deleting': WsContract['peer.mirror.deleting']
   'peer.mirror.resync': WsContract['peer.mirror.resync']
   // The planned switch between the two linked servers (design/peers/mirror.md "As built: the planned switch").
   'peer.mirror.switch.request': WsContract['peer.mirror.switch.request']

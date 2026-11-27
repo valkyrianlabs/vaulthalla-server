@@ -43,10 +43,11 @@ enum class Reason {
     LinkDown,  // the vault's linked server cannot be reached now (or peers.experimental is off): ENOLINK
     TimedOut,  // not received within kOpenWait (it keeps coming): ETIMEDOUT
     Failed,    // fetching failed (three attempts, or the file is marked failed): ENODATA
+    Missing,   // the vault was detached before these contents arrived (migration 167): ENODATA, for good
 };
 
-// mirror_link_down | mirror_fetch_timeout | mirror_fetch_failed: the leading code of the message, and the HTTP lanes'
-// error code (503 with Retry-After).
+// mirror_link_down | mirror_fetch_timeout | mirror_fetch_failed | mirror_contents_missing: the leading code of the
+// message, and the HTTP lanes' error code (503 with Retry-After; 410 for mirror_contents_missing, which never arrives).
 [[nodiscard]] std::string_view codeOf(Reason r);
 // The mount's errno for each reason (FUSE open answers it; fuse::errnoFrom reads it off the system_error).
 [[nodiscard]] int errnoOf(Reason r);

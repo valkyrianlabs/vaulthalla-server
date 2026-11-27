@@ -31,9 +31,12 @@
 #include "vault/model/Vault.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <mutex>
 #include <set>
+#include <string>
+#include <thread>
 
 namespace vh::test_vault_retention {
 
@@ -195,6 +198,28 @@ TEST_F(VaultRetentionTest, ScheduleHidesTheVaultAndRestoreBringsItBackAsItWas) {
 // A vault waiting for its purge doesn't keep a vault role in use (before #162 deleting the vault cascaded its
 // assignments away at once; the integration harness deletes a vault, then its role). Deleting the role removes the
 // assignment there too, so a restore brings the vault back without it.
+// Deleting and restoring is bookkeeping (the root off the mount, the inodes forgotten), never a change to an entry: every
+// modification time comes back as it was (it used to be stamped with the deletion's time by the fs_entry trigger, and a
+// mirrored vault's log recorded a change for every entry).
+TEST_F(VaultRetentionTest, ScheduleAndRestoreKeepEveryEntrysModificationTime) {
+    const auto v = localVault("vr_mtime_");
+    const auto engine = runtime::Deps::get().storageManager->getEngine(v->id);
+    ASSERT_EQ(fs::Filesystem::mkdir({.path = engine->vaultPathToFusePath("/docs"), .engine = engine, .user = superUser}), 0);
+    const auto times = [&] {
+        return db::Transactions::exec("VaultRetentionTest::times", [&](pqxx::work& txn) {
+            return txn.exec("SELECT string_agg(path || '=' || updated_at::text, ',' ORDER BY path) FROM fs_entry "
+                            "WHERE vault_id = $1 AND path <> '/'", pqxx::params{v->id})
+                .one_field_ref().as<std::string>();
+        });
+    };
+    const auto before = times();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    ASSERT_TRUE(ops::vaults::remove(superUser, {.id = v->id}));
+    EXPECT_EQ(times(), before) << "deleting changed no entry's time";
+    ASSERT_TRUE(ops::vaults::restore(superUser, v->id));
+    EXPECT_EQ(times(), before) << "nor did restoring";
+}
+
 TEST_F(VaultRetentionTest, ARoleAssignedOnlyOnADeletedVaultCanBeDeleted) {
     const auto v = localVault("vr_role_");
     const auto role = ops::roles::createVaultRole(superUser, {.name = "vr_role_" + tag()});

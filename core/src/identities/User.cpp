@@ -205,6 +205,7 @@ namespace vh::identities {
     VH_ADMIN_PERMS(statsPerms, rbac::permission::admin::Stats, stats)
     VH_ADMIN_PERMS(upstreamPerms, rbac::permission::admin::Upstream, upstream)
     VH_ADMIN_PERMS(cloudPerms, rbac::permission::admin::Cloud, cloud)
+    VH_ADMIN_PERMS(mirrorPerms, rbac::permission::admin::Mirror, mirror)
     VH_ADMIN_PERMS(encryptionKeysPerms, rbac::permission::admin::keys::EncryptionKey, keys.encryptionKeys)
 
 #undef VH_ADMIN_PERMS

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 // Key rotation on a mirrored vault (design/peers/mirror.md "Key rotation"): refused on both servers, with its own
@@ -21,6 +22,22 @@ void refuseIfMirrored(uint32_t vaultId, const std::string& what);
 // [--remove-copy]) and on a mirror (another server's vault); "vault_orphaned_copy" for an orphaned copy, which is
 // removed only through vh mirror cancel <id> (one way, so the step-up and the audit line are always the same).
 void refuseDeletionIfMirrored(uint32_t vaultId);
+
+// Deleting a mirrored vault in one step, on its core (wave 5; design/peers/mirror.md "Ending a mirror from the core, and
+// deleting"): the caller says what happens to the mirror's copy, exactly as mirror.cancel [--remove-copy] (the mirror's
+// keep setting still decides on its side); the deletion goes the usual way, its retention window included, and the
+// mirror ends with that choice when the vault is purged.
+enum class MirrorCopy { Remove, Leave };
+// "remove" | "leave"; nullopt for none; ops::Invalid for anything else.
+[[nodiscard]] std::optional<MirrorCopy> mirrorCopyFrom(const std::optional<std::string>& text);
+// Whether deleting the vault must end a mirror first (a `core` row, or a start of it running). On a copy held here
+// (mirror, orphaned) it refuses as refuseDeletionIfMirrored does (detach it, or vh mirror cancel an orphaned one); on the
+// core with no choice: ops::Refused "mirror_copy_choice_required". A choice for a vault that is not mirrored is ignored.
+[[nodiscard]] bool deletionEndsMirror(uint32_t vaultId, const std::optional<MirrorCopy>& choice);
+// A copy held here (mirror, orphaned) is never deleted as a vault: ops::Refused vault_mirrored / vault_orphaned_copy
+// naming detach and vh mirror cancel. The deletion itself never ends the mirror: its purge does, with the choice
+// recorded at the schedule (mirror::leave::endForPurge), so a restore within the window keeps the mirror.
+void refuseDeletingAHeldCopy(uint32_t vaultId);
 
 // Tests only: lets a rotation through on a mirrored vault (the replication log's own test drives the `key` rows a
 // rotation over the link will write). Never set by the daemon.

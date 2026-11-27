@@ -11,6 +11,7 @@
 #include "db/query/vault/Vault.hpp"
 #include "log/Registry.hpp"
 #include "mirror/follow/Follower.hpp"
+#include "mirror/leave/Leave.hpp"
 #include "ops/Error.hpp"
 #include "peer/Keys.hpp"
 #include "runtime/Deps.hpp"
@@ -166,6 +167,8 @@ std::optional<uint32_t> heldFrom(const vh::crypto::id::ObjectUid& vaultUid, cons
 
 std::optional<std::pair<std::string, std::string>> mirrorRefusal(const Offer& o, const std::optional<uint32_t> ownVault) {
     using namespace start_mirror_detail;
+    // A vault detached between these two servers shares its uid and keys with the original until it is re-keyed.
+    if (auto detached = vh::mirror::leave::offerRefusal(vh::crypto::id::toUuid(o.vault_uid), o.peer_id)) return detached;
     if (o.history)
         return std::make_pair(std::string("history_not_supported"),
                               std::string("the offer includes the vault's history, which this server can't mirror yet"));
@@ -241,8 +244,8 @@ Offer cancelOnMirror(const Offer& offer, const std::optional<uint32_t> actorId, 
     if (offer.state == "started")
         throw ops::Refused("mirror_detach_required",
                            "this server holds the vault as a completed mirror: removing it here would destroy a copy of "
-                           "its data, so it is refused; ending a mirror from this side is the detach (a later version), "
-                           "or the core cancels it (vh mirror cancel on the core)");
+                           "its data, so it is refused; leave with it as this server's vault (vh mirror detach), or the "
+                           "core cancels it (vh mirror cancel on the core)");
     if (offer.finished()) throw ops::Refused("mirror_offer_finished", "that offer is " + offer.state + " already");
     std::optional<Offer> moved;
     {

@@ -1,4 +1,5 @@
 #include "protocols/ws/handler/fs/Storage.hpp"
+#include "db/query/mirror/Contents.hpp"
 #include "protocols/ws/handler/RequestErrors.hpp"
 #include "db/encoding/timestamp.hpp"
 #include "protocols/ws/Session.hpp"
@@ -411,6 +412,11 @@ json Storage::listDir(const json& payload, const std::shared_ptr<Session>& sessi
                                                                    runtime::Deps::get().fsCache->listDir(entry->id));
     json entryJson = *entry;
     json files = entries;
+    // A detached vault's files whose contents never arrived: listed, and said to be missing.
+    if (const auto missing = vh::db::query::mirror::PendingContents::missingFileIds(vaultId); !missing.empty())
+        for (std::size_t i = 0; i < entries.size(); ++i)
+            if (!entries[i]->isDirectory() && !entries[i]->isSymlink() && missing.contains(entries[i]->id))
+                files[i]["contents_missing"] = true;
     if (!vh::rbac::fs::visibility::seesWholeSubtree(user, entry)) {
         std::uintmax_t listedSize = 0;
         for (std::size_t i = 0; i < entries.size(); ++i) {

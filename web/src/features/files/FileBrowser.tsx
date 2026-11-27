@@ -923,7 +923,7 @@ const Row = React.memo(function Row({
             {entry.name}
           </button>
           <div className="text-fg-subtle truncate text-xs md:hidden">
-            {entry.kind === 'dir' ? 'Folder' : formatBytes(entry.size)}
+            {entry.kind === 'dir' ? 'Folder' : entry.missing ? 'Contents missing' : formatBytes(entry.size)}
             {entry.modified ? ` · ${formatRelative(entry.modified)}` : ''}
           </div>
         </div>
@@ -933,6 +933,7 @@ const Row = React.memo(function Row({
           entry.fileCount !== undefined ?
             countLabel(entry.fileCount + (entry.dirCount ?? 0), 'item')
           : '—'
+        : entry.missing ? 'Contents missing'
         : formatBytes(entry.size)}
       </span>
       <span
@@ -984,7 +985,7 @@ const GridTile = React.memo(function GridTile({
             {entry.name}
           </button>
           <div className="text-fg-subtle tabular truncate text-xs">
-            {entry.kind === 'dir' ? 'Folder' : formatBytes(entry.size)}
+            {entry.kind === 'dir' ? 'Folder' : entry.missing ? 'Contents missing' : formatBytes(entry.size)}
           </div>
         </div>
         <div onClick={event => event.stopPropagation()}>{menu}</div>

@@ -846,6 +846,41 @@ the log are piece B. Full text: mirror.md "As built: starting a mirror". Experim
 - Tests: `MirrorStartDbTest.*` (`test_mirror_start_db.cpp`); Tier B `vhh drill peers` steps 7 (a whole mirror) and 8
   (ending it).
 
+### Leaving a mirror (`mirror/leave/`, `mirror/versions/`, `ops::mirrors` in `ops/MirrorLeave.*`, migration 167)
+
+Phase 2 wave 5, piece A. Full text: mirror.md "As built: leaving a mirror". Experimental (peers.experimental).
+- **Permission:** admin module `mirror` (`rbac/permission/admin/Mirror.hpp`, `admin_role.mirror_permissions`), bit 0
+  `admin.mirror.detach`; super_admin only among built-ins. `ops::mirrors::requireDetacher` (a person, then super admin
+  or the bit).
+- **Detach** (`mirror::leave::preview|detach`, `db::query::mirror::MirrorDetach`): one transaction under `stepMutex()`
+  and the vault's `submit::vaultMutex`: content rows of missing files → `missing` (others go), pending changes dropped or
+  (a write the file no longer holds) held `mirror_detached`, dirty rows and `peer` assignments gone, owner set, the
+  mirror's offer `detached` (notify), `mirror_detached` row (side mirror), `MirrorVaults::remove(txn, ...)`. Then the
+  `rbac::mirrored`/`mirror::access` republish, blob moves, `Manager::reloadEngine`, audit `mirror.detach`. ws
+  `mirror.detach.preview|detach`, `vh mirror detach [--owner] [--dry-run]`. A missing file's open:
+  `contents::Reason::Missing` (`mirror_contents_missing`, ENODATA, HTTP 410).
+- **The core told:** the start service sends `peer.mirror.detached` for a `detached` mirror offer with `notify`
+  (`leave::detachedPayload`); `leave::detachedReceived` on the core: `cancelOnCore`, `copy_outcome` detached,
+  `MirrorDetach::recordCore`, audit `mirror.detached`. `leave::offerRefusal` (`mirror_detached_copy`) in `mirror.add`
+  and `mirrorRefusal` until `rekeyed_at`.
+- **Delete in one step** (`ops::vaults::remove`, `Remove::mirror_copy`; `mirror/start/Guard.hpp` `mirrorCopyFrom`,
+  `deletionEndsMirror`, `endMirrorForDeletion`): a core's mirrored vault needs remove|leave
+  (`mirror_copy_choice_required`), a person, the data.destroy target `...:mirror-copy` for remove; the choice is recorded
+  (`mirror_vault.deleting_copy`) and `vault::retention::schedule` runs; the mirror is told (`peer.mirror.deleting`,
+  `leave::syncDeletionNotices` from the start service) and pauses its copy (`mirror_core_deleting`); a restore
+  (`retention::restore` → `leave::restored`) lets it follow again; the purge (`retention::purgeOne` →
+  `leave::endForPurge`) ends it with the choice via `cancelOnCore`. A held copy: `vault_mirrored` / `vault_orphaned_copy`.
+  Listings flag a detached vault's missing files (`contents_missing`, `vh fs ls` type `missing`).
+- **Versions on the mirror** (`mirror::versions`, `mirror_vault.keep_versions`; `ops::mirrors::setVersions`, ws
+  `mirror.versions.set`, `vh mirror versions`): `policyFor` (one atomic load while none is on) read by the applier per
+  group; `apply::keepVersions` stages `recovery::local::versions::retain(..., {.held_copy_policy})` before the
+  group's transaction, attaches in it, finishes after the commit; `versions::maintain` applies the mirror's policy to
+  held vaults.
+- **Held bytes:** `ops::mirrors::heldContent` (a reader over `heldBlob` with the vault's key), ws `mirror.held.get`
+  (inline ≤ 8 MiB), `vh mirror save <id> <dest>` (transfer frames; `transfer::planLocal` knows it).
+- Tests: `MirrorLeaveDbTest.*` (`test_mirror_leave_db.cpp`), `MirrorSubmitDbTest.VersionsOnTheMirror*`,
+  `RoleParityTest.MirrorDetach*`, `SqlDeployerHistoryDb.MirrorLeaveMigration167*`; Tier B `vhh drill peers` step 9.
+
 ### Super-admin initial credential
 
 No universal default password. `seed::initAdmin` (fresh DB only: `initDB` seeds when no `admin` row exists) calls

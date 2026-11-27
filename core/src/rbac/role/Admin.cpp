@@ -34,6 +34,8 @@ namespace vh::rbac::role {
               try_get<uint64_t>(row, "upstream_permissions").value_or(0))),
           cloud(static_cast<typename decltype(cloud)::Mask>(
               try_get<uint64_t>(row, "cloud_permissions").value_or(0))),
+          mirror(static_cast<typename decltype(mirror)::Mask>(
+              try_get<uint64_t>(row, "mirror_permissions").value_or(0))),
           vGlobals(globalVaultRoles) {
         if (const auto id = try_get<uint32_t>(row, "user_id")) user_id = *id;
     }
@@ -57,7 +59,9 @@ namespace vh::rbac::role {
           upstream(static_cast<typename decltype(upstream)::Mask>(
               try_get<uint64_t>(row, "upstream_permissions").value_or(0))),
           cloud(static_cast<typename decltype(cloud)::Mask>(
-              try_get<uint64_t>(row, "cloud_permissions").value_or(0))) {
+              try_get<uint64_t>(row, "cloud_permissions").value_or(0))),
+          mirror(static_cast<typename decltype(mirror)::Mask>(
+              try_get<uint64_t>(row, "mirror_permissions").value_or(0))) {
         if (const auto id = try_get<uint32_t>(row, "user_id")) user_id = *id;
     }
 
@@ -121,6 +125,7 @@ namespace vh::rbac::role {
         auto statsFlags = stats.getFlags();
         auto upstreamFlags = upstream.getFlags();
         auto cloudFlags = cloud.getFlags();
+        auto mirrorFlags = mirror.getFlags();
 
         std::vector<std::string> flags;
         flags.reserve(
@@ -133,7 +138,8 @@ namespace vh::rbac::role {
             s3GatewayFlags.size() +
             statsFlags.size() +
             upstreamFlags.size() +
-            cloudFlags.size()
+            cloudFlags.size() +
+            mirrorFlags.size()
         );
 
         auto append = [&](auto &src) { std::move(src.begin(), src.end(), std::back_inserter(flags)); };
@@ -148,6 +154,7 @@ namespace vh::rbac::role {
         append(statsFlags);
         append(upstreamFlags);
         append(cloudFlags);
+        append(mirrorFlags);
 
         return flags;
     }
@@ -163,6 +170,7 @@ namespace vh::rbac::role {
         auto statsPerms = stats.exportPermissions();
         auto upstreamPerms = upstream.exportPermissions();
         auto cloudPerms = cloud.exportPermissions();
+        auto mirrorPerms = mirror.exportPermissions();
 
         std::vector<permission::Permission> perms;
         perms.reserve(
@@ -175,7 +183,8 @@ namespace vh::rbac::role {
             s3GatewayPerms.size() +
             statsPerms.size() +
             upstreamPerms.size() +
-            cloudPerms.size()
+            cloudPerms.size() +
+            mirrorPerms.size()
         );
 
         auto appendMoved = [&](auto &exportResult) {
@@ -193,6 +202,7 @@ namespace vh::rbac::role {
         appendMoved(statsPerms);
         appendMoved(upstreamPerms);
         appendMoved(cloudPerms);
+        appendMoved(mirrorPerms);
 
         return perms;
     }
@@ -201,7 +211,8 @@ namespace vh::rbac::role {
         return identities.toFlagsString() + " " + vaults.toFlagsString() + " " + audits.toFlagsString() + " " + settings
                .toFlagsString() + " " +
                roles.toFlagsString() + " " + keys.toFlagsString() + " " + s3Gateway.toFlagsString() + " " +
-               stats.toFlagsString() + " " + upstream.toFlagsString() + " " + cloud.toFlagsString();
+               stats.toFlagsString() + " " + upstream.toFlagsString() + " " + cloud.toFlagsString() + " " +
+               mirror.toFlagsString();
     }
 
     std::optional<Admin> Admin::builtin(const std::string_view name, const uint32_t userId) {
@@ -249,7 +260,8 @@ namespace vh::rbac::role {
                 << s3Gateway.toString(i)
                 << stats.toString(i)
                 << upstream.toString(i)
-                << cloud.toString(i);
+                << cloud.toString(i)
+                << mirror.toString(i);
         return oss.str();
     }
 
@@ -276,6 +288,7 @@ Admin Admin::None(const std::optional<uint32_t> userId) {
         permission::admin::Stats::None(),
         permission::admin::Upstream::None(),
         permission::admin::Cloud::None(),
+        permission::admin::Mirror::None(),
         permission::admin::VaultGlobals::NoneIfBound(userId)
     );
 }
@@ -295,6 +308,7 @@ Admin Admin::Auditor(const std::optional<uint32_t> userId) {
         permission::admin::Stats::ViewOnly(),
         permission::admin::Upstream::ViewOnly(),
         permission::admin::Cloud::ViewOnly(),
+        permission::admin::Mirror::None(),
         permission::admin::VaultGlobals::ReaderIfBound(userId)
     );
 }
@@ -314,6 +328,7 @@ Admin Admin::Support(const std::optional<uint32_t> userId) {
         permission::admin::Stats::None(),
         permission::admin::Upstream::None(),
         permission::admin::Cloud::None(),
+        permission::admin::Mirror::None(),
         permission::admin::VaultGlobals::ReaderIfBound(userId)
     );
 }
@@ -333,6 +348,7 @@ Admin Admin::IdentityAdmin(const std::optional<uint32_t> userId) {
         permission::admin::Stats::None(),
         permission::admin::Upstream::None(),
         permission::admin::Cloud::None(),
+        permission::admin::Mirror::None(),
         permission::admin::VaultGlobals::ManagerIfBound(userId)
     );
 }
@@ -352,6 +368,7 @@ Admin Admin::SecurityAdmin(const std::optional<uint32_t> userId) {
         permission::admin::Stats::None(),
         permission::admin::Upstream::Guardian(),
         permission::admin::Cloud::None(),
+        permission::admin::Mirror::None(),
         permission::admin::VaultGlobals::ManagerIfBound(userId)
     );
 }
@@ -371,6 +388,7 @@ Admin Admin::PlatformOperator(const std::optional<uint32_t> userId) {
         permission::admin::Stats::ViewOnly(),
         permission::admin::Upstream::Operator(),
         permission::admin::Cloud::ViewOnly(),
+        permission::admin::Mirror::None(),
         permission::admin::VaultGlobals::PowerUserIfBound(userId)
     );
 }
@@ -390,6 +408,7 @@ Admin Admin::VaultAdmin(const std::optional<uint32_t> userId) {
         permission::admin::Stats::None(),
         permission::admin::Upstream::ViewOnly(),
         permission::admin::Cloud::None(),
+        permission::admin::Mirror::None(),
         permission::admin::VaultGlobals::PowerUserIfBound(userId)
     );
 }
@@ -409,6 +428,7 @@ Admin Admin::OrgAdmin(const std::optional<uint32_t> userId) {
         permission::admin::Stats::ViewOnly(),
         permission::admin::Upstream::Operator(),
         permission::admin::Cloud::ViewOnly(),
+        permission::admin::Mirror::None(),
         permission::admin::VaultGlobals::FullIfBound(userId)
     );
 }
@@ -428,6 +448,7 @@ Admin Admin::SuperAdmin(const std::optional<uint32_t> userId) {
         permission::admin::Stats::Full(),
         permission::admin::Upstream::Full(),
         permission::admin::Cloud::Full(),
+        permission::admin::Mirror::Full(),
         permission::admin::VaultGlobals::FullIfBound(userId)
     );
 }
@@ -447,6 +468,7 @@ Admin Admin::KeyCustodian(const std::optional<uint32_t> userId) {
         permission::admin::Stats::None(),
         permission::admin::Upstream::None(),
         permission::admin::Cloud::None(),
+        permission::admin::Mirror::None(),
         permission::admin::VaultGlobals::ReaderIfBound(userId)
     );
 }

@@ -307,6 +307,7 @@ std::string_view codeOf(const Reason r) {
         case Reason::LinkDown: return "mirror_link_down";
         case Reason::TimedOut: return "mirror_fetch_timeout";
         case Reason::Failed: return "mirror_fetch_failed";
+        case Reason::Missing: return "mirror_contents_missing";
     }
     return "mirror_fetch_failed";
 }
@@ -315,7 +316,8 @@ int errnoOf(const Reason r) {
     switch (r) {
         case Reason::LinkDown: return ENOLINK;
         case Reason::TimedOut: return ETIMEDOUT;
-        case Reason::Failed: return ENODATA;
+        case Reason::Failed:
+        case Reason::Missing: return ENODATA;
     }
     return ENODATA;
 }
@@ -325,7 +327,7 @@ NotReceived::NotReceived(const Reason reason, const std::string& detail)
       reason_(reason) {}
 
 std::optional<std::string_view> reasonCodeIn(const std::string_view message) {
-    for (const auto r : {Reason::LinkDown, Reason::TimedOut, Reason::Failed}) {
+    for (const auto r : {Reason::LinkDown, Reason::TimedOut, Reason::Failed, Reason::Missing}) {
         const auto code = codeOf(r);
         if (message.starts_with(code) && message.size() > code.size() && message[code.size()] == ':') return code;
     }
@@ -460,6 +462,10 @@ bool awaitIfPending(const vh::fs::model::File& file, const std::chrono::millisec
     // Nothing pending, or pending for another generation than the row the caller holds (its bytes are whatever is on
     // disk for that row; the newer row arrives with the log).
     if (!expected || expected->generation != file.encryption_iv) return false;
+    // A detached vault's file whose contents never arrived (wave 5): it never will; the entry says so, nothing is read.
+    if (expected->missing())
+        throw NotReceived(Reason::Missing, "this file's contents never arrived from the core before the vault was "
+                                           "detached; only the core's copy holds them");
     if (expected->failed())
         throw NotReceived(Reason::Failed, expected->last_error.value_or("fetching this file failed"));
 

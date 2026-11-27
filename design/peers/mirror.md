@@ -7,7 +7,8 @@ replication log" below) and the sealed contents lane with the mirror's receive p
 the core" below), the write gate (phase 2 wave 4 piece A, migration 165; "As built: the gate" below) and changes made
 on the mirror without contents (wave 4 piece B, migration 166; "As built: a change made on the mirror" below), resync,
 the scrub and the planned switch (wave 5 piece B, migration 168; "As built: resync and the scrub", "As built: the
-planned switch" below). The rest is not implemented. It covers how a vault
+planned switch" below), and leaving a mirror: detach, deleting a mirrored vault in one step, versions on the mirror
+(wave 5 piece A, migration 167; "As built: leaving a mirror" below). The rest is not implemented. It covers how a vault
 is kept identical on two linked servers: the core role, the replication log, applying it, changes made on the
 mirror, behaviour while the link is down, moving the core, leaving a mirror, and vaults that also have a remote. The
 link is in [`link.md`](link.md); accounts, ownership and audits are in [`identity.md`](identity.md). Section "What
@@ -1433,14 +1434,142 @@ try to remove the mirror's copy, the mirror may keep what its core removes, and 
 - **Orphaned copies do not pile up:** a super admin on the server holding one removes it (`vh mirror cancel <vault>`,
   with the data-destroy step-up; audited `mirror.remove`). A live mirror is not removed from the mirror's side (detach,
   wave 5).
-- **Deleting a mirrored vault is refused until its mirror is ended,** on both servers and at every entry point that
-  deletes a vault: on the core "end the mirror first: vh mirror cancel <id> [--remove-copy]", on the mirror "this is
-  another server's vault"; an orphaned copy is removed only through `vh mirror cancel`. Deleting and choosing what
-  happens to the mirror's copy in one step is wave 5.
+- **Deleting a mirrored vault** (wave 5): on the core it is one step that takes the choice for the mirror's copy
+  (`vh vault delete <id> --mirror-copy remove|leave`, `mirror_copy` on `storage.vault.remove`; no default) and follows the
+  vault's retention window (decisions log 601-602; Cooper: the mirror matches the core until the core actually deletes the
+  vault): the choice is recorded with the deletion and the mirror is read-only for the window; a restore keeps it; the
+  purge ends it with that choice exactly as `mirror.cancel [--remove-copy]` does. On the mirror a held copy is never deleted as a vault: detach it, or remove an orphaned one through
+  `vh mirror cancel`. (Until wave 5 the core's delete was refused until the mirror was ended.)
 - **The mirror unreachable:** the core ends its side at once and the request waits (`notify`) until the link is back.
 - **Unlinking the servers** invalidates the trust: a request still queued is dropped, never delivered; the mirror's
   copies of that core become orphaned (kept), and the core's mirrors with that server end on the core.
 - **After any of these** the server that left still holds the keys. The core is offered a key rotation.
+
+### As built: leaving a mirror (phase 2 wave 5, piece A, migration 167)
+
+"Detach", "Who may do it", the core's side of "Ending a mirror from the core, and deleting", invariants 10 and 11, and
+opt-in versions on the mirror. Detach a copy and the re-key pass are piece C. Decided while building (owner's
+instruction to build without waiting for review); each is listed for confirmation in the hand-off:
+
+- **The permission** "Detach mirrored vaults" is the admin module `mirror` (`admin.mirror.detach`, bit 0 of
+  `admin_role.mirror_permissions`, migration 167; `rbac/permission/admin/Mirror.hpp`; the next bit is piece B's "Take
+  over as core"). Super admins hold it, no other built-in role; an admin role grants it like any admin permission
+  (`--allow-mirror-detach`, the console's snapshot) under the escalation ceiling. `ops::mirrors::requireDetacher`: the
+  switch, a person (`peer_policy::requirePerson`: never an agent, a scoped or relayed device, a linked server:
+  `peer_forbidden`), then a super admin or a holder. A super admin on the host's socket always holds it.
+- **Detach** (`mirror.detach`, `vh mirror detach <vault> [--owner <user>]`; `mirror/leave/Leave.hpp`): every held copy,
+  role `mirror` in any state (live with the link up or down, first copy unfinished, stopped, diverged, expired) or
+  `orphaned`, with the peer unreachable or unlinked; it asks the core nothing. **The preview** is `mirror.detach.preview` /
+  `vh mirror detach --dry-run [--json]` (decision: a separate read command, so a console can show it before the typed
+  confirmation): the last `(term, seq)` applied (the fork point) and the last the core confirmed, whether the digest
+  matched there (false once diverged; null when nothing was compared), the first copy's progress, the pending and held
+  changes, and every file whose current contents are not here, by path (shown to someone who may detach, never logged or
+  audited; `--json` is the export). **One transaction** (`db::query::mirror::MirrorDetach::detach`, the mirror row locked
+  first, under the start's step lock and the vault's local-change lock, so no page, group or person's change interleaves):
+  the files whose contents never arrived become `mirror_content_pending` rows in state `missing` (every other content row
+  goes); each pending change becomes an ordinary local change (its row and its pending bytes go), except a write whose
+  bytes the file no longer holds (the core's state came back over it while it waited), which is kept as a held change
+  (`mirror_detached`) with its bytes, so nothing a person wrote is lost; dirty rows, the linked server's role and any
+  `peer` assignment go; the owner is set (a local, active account: the caller by default); the mirror's offer ends
+  `detached` (to be told); the detach is recorded (`mirror_detached`, side `mirror`: fork point, digest, state it was in,
+  missing count, owner, who); then `MirrorVaults::remove` (log, entry hashes, baseline, submissions). Remote accounts on the
+  access list stay listed and do nothing; there is no local-denial table yet. After the commit `rbac::mirrored` and
+  `mirror::access` republish (no gate, no backstop), the pending bytes move or go, the engine is rebuilt
+  (`Manager::reloadEngine`), and it is audited `mirror.detach` (who, role, state, fork, confirmed, digest, missing, pending
+  kept and held, owners). **No step-up** (decision: nothing is destroyed and no key leaves; the console asks for the vault's
+  name, `confirm_name`, which the server checks when given).
+- **Files whose contents never arrived** stay in the tree as they are (decision: nothing is deleted, the entries and
+  their sizes are the person's record of what the core holds), each with its `missing` row at the file's generation. An
+  open fails with `mirror_contents_missing` (`mirror::contents::Reason::Missing`, `ENODATA` on the mount, HTTP 410), never
+  empty and never another generation's bytes (an older generation's bytes left on disk are not read); nothing ever fetches
+  them (`outstanding` takes waiting rows, failed ones only when asked). A new version written here supersedes the row (it
+  names the old generation). `MirrorDetach::missing` lists them exactly, before and after. **This is the rule** (owner
+  decision 1 of the wave 5 hand-off, confirmed by the lead's review): and listings say so without opening anything,
+  `fs.dir.list` entries carry `contents_missing: true` (`PendingContents::missingFileIds`, no query for a vault that
+  never had a content row), `vh fs ls` shows their type as `missing`, and the console shows "Contents missing" in place
+  of the size.
+- **The core is told, not asked** (`peer.mirror.detached {offer_uid, vault_uid, at, missing}`, sent by the start service
+  for the mirror's `detached` offer while `notify`, dropped by `dropNotices` on unlink like every notice; an orphaned copy's
+  core ended the mirror already and is not told). The core (`leave::detachedReceived`) takes it only from the server it
+  mirrored the vault with: it ends the mirror as `cancelOnCore` does (core row, log, submissions, staged bytes), records the
+  outcome on its offer (`copy_outcome` `detached`), records the detach (side `core`, once) and audits `mirror.detached`. Its
+  own vault is unaffected. `vh mirror info|list` show both records.
+- **The same uid afterwards**: until the re-key pass sets `rekeyed_at`, `mirror_detached` makes both servers refuse to
+  mirror that uid with each other: the core's `mirror.add` and the receiving end's offer check (`mirrorRefusal`, so at the
+  offer, the accept and the keys) answer `mirror_detached_copy`. `vh mirror info|list` show the detached vault as
+  `detached` with `rekey_recommended`. Known limit: a record stays when the other server deleted its vault (nothing tells
+  this one); the re-key pass clears it.
+- **Orphaned copies**: a super admin (or a holder of the permission) detaches one like any copy; `vh mirror cancel` still
+  removes it. `vh mirror list|info` say what it is and the two things that can be done with it.
+- **Deleting a mirrored vault in one step**, on the core (`ops::vaults::remove`, `Remove::mirror_copy`, `vh vault delete
+  --mirror-copy remove|leave`, `storage.vault.remove {mirror_copy}`): a vault with a `core` row or a start running needs the
+  choice (`mirror_copy_choice_required`, no default); then every check of the delete runs (the key-loss and "now"
+  confirmations, the data-destroy step-up at the request, its target bound to `:mirror-copy` for remove), a person is
+  required (deciding a mirror's end is never an agent's), and the vault is scheduled through the existing retention path.
+  **The mirror follows the retention window** (lead's review of c42e1d09): the schedule only records the choice
+  (`mirror_vault.deleting_copy`, migration 167) and the core's row, log and offer stay. The start service tells the mirror
+  (`peer.mirror.deleting {vault_uid, deleting, purge_after, copy}`, `leave::syncDeletionNotices`: once per connection and
+  whenever it changes, so a mirror down at the schedule learns it on reconnect; the core keeps the grant it sent). The
+  mirror pauses a live copy with reason `mirror_core_deleting` (`MirrorDetach::pauseForCore`; `mirror::access` judges it
+  before `mirror_paused`): read-only on every surface with a sentence saying what happens and when, and naming detach;
+  `vh mirror info` shows the date, the core's choice and what this server's keep setting makes of it. The follower asks
+  nothing of a paused copy, so nothing is submitted and changes pending stay pending (submitted if the vault is restored,
+  held when the mirror ends). Detach works throughout. **A restore** (`vault::retention::restore` → `leave::restored`)
+  clears the choice and the mirror is told: it is live again where it was, nothing copied again. **The purge** (the
+  window's end, or `--now`/expedite; `vault::retention::purgeOne` → `leave::endForPurge`, before anything is removed) ends
+  the mirror with the recorded choice (`leave` when none was recorded: erring towards keeping) through `cancelOnCore`, so
+  the keep setting, the queue while the mirror is down and the drop on unlink are the cancel's. Changing the choice during
+  the window: `vh vault delete <id> --mirror-copy remove|leave` (or `storage.vault.remove {mirror_copy}`) on the deleted
+  vault, by whoever may delete it, with the same step-up rule; it is told again. This rides on the existing retention
+  scheduler and restore (no second scheduler): the retention service's pass is the only thing that ends the mirror.
+  Fixed on the way (found by the drill): the deletion's and the restore's bookkeeping (`inode = NULL`, the root off and
+  back on the mount) ran without `vh.keep_mtime`, so every entry's modification time was stamped with the deletion's
+  time (any vault: users saw every file modified) and a mirrored vault's entries changed under its log; both keep the
+  times now. The round trip logs only the vault's own document (its soft deletion, 160's rule), which the applier
+  records and does not act on. On the mirror a held copy is refused with a sentence naming detach (`vault_mirrored`), an orphaned one
+  naming `vh mirror cancel` and detach (`vault_orphaned_copy`); the S3 gateway's DeleteBucket keeps refusing a mirrored
+  vault (409: no field for the choice there).
+- **Versions on the mirror** (`mirror.versions.set`, `vh mirror versions <vault> on|off [--keep-last N] [--max-age-days
+  D] [--quota-bytes B]`; `mirror/versions/Versions.hpp`): `mirror_vault.keep_versions`, the local versioning policy's
+  shape, default off, super admins of the mirror, audited `mirror.versions.set`. Turning it on with no limits gives 10
+  versions per file for 30 days (decision: never unbounded; a 0 is "no limit of that kind", at least one stays). The
+  applier, before a group's transaction, stages the prior generation of each live file the core replaces (a new
+  generation), trashes or deletes, through `versions::retain` with the mirror's policy (`RetainOptions::held_copy_policy`,
+  past the held-copy skip; not for this server's own entries brought back into line, not for a first copy, not for a
+  generation whose contents never arrived), attaches it in the group's transaction (recovery tables only: past the
+  backstop, never logged, hashed, submitted or in the digest) and finishes it after the commit. `versions::maintain` applies
+  the mirror's policy to held vaults that keep versions. Read them with `recovery.list|inspect` (rbac::mirrored decides who
+  may read the file); a restore is a change made on the mirror (the restore writes through `Filesystem::createFile`, a
+  pending write while Live; `read_only` with the gate's reason otherwise). After a detach they are the local vault's like
+  any others (its own policy from then on); a removed copy takes them with its recovery store. **Cost**: with it off, one
+  atomic load per group: nothing beyond the applier's own work. Measured
+  (`MirrorSubmitDbTest.DISABLED_VersionsOnTheMirrorCostPerGroup`, dev VM, ASan build, PostgreSQL 16, 2026-11-27, load
+  about 2: 100 groups each replacing one file): 12.1 ms a group off, 16.7 ms on (+4.6 ms: the hard link of the prior
+  bytes, the version and blob rows under a savepoint, the per-file prune).
+- **A held change's bytes** (`mirror.held.get`, `vh mirror save <id> <dest|->`, a leaf beside `discard` and `retry`, so
+  `vh mirror held` stays the listing leaf): the person's version of a held write,
+  decrypted with the vault's key at that generation, for super admins (who may list held changes); inline base64 up to
+  8 MiB on ws (`too_large` beyond), streamed with `vh fs get`'s transfer frames on the CLI (the client writes `<dest>`).
+  Nothing in the vault changes; a detached vault's held changes stay listed.
+
+- **With the planned switch** (piece B, merged into this branch):
+  - A detach while a switch is running or prepared completes (invariant 10) and ends every switch of the vault on this
+    side (`mirror_switch` abandoned with `mirror_detached`, nothing left to tell); the old core is told by
+    `peer.mirror.detached` as usual and ends its own switch (`peer_detached`).
+  - If the core had already decided `switched` (it is the other server's mirror now) and that server detaches instead
+    of taking the role, the notice leaves the old core an **orphaned copy** (decision: the ending rule's outcome when the
+    other side ends a mirror without asking a removal; read-only, pending changes held; its super admin makes it a local
+    vault again with `vh mirror detach`, or removes it). Turning it into a local vault by itself was not taken: that is
+    a person's act here (the owner, the same-uid record), never the other server's.
+  - Every setting follows the role a server holds now: the one-step delete and the retention-window state are the
+    core's, detach and `mirror.versions.set` the mirror's. The versions setting stays on the server's row through a
+    switch: dormant while it is the core (the applier does not run there; `policyFor` reads mirror rows only, again
+    every 10 s), in force again when it is the mirror again.
+  - While the core deletes the vault (its retention window) a switch is refused on either side with
+    `mirror_vault_deleting` (`switching::begin` on the core, `switching::request` on the mirror).
+
+Proven: `MirrorLeaveDbTest` (`test_mirror_leave_db.cpp`), `MirrorSubmitDbTest.VersionsOnTheMirror...`,
+`RoleParityTest.MirrorDetach...`, `SqlDeployerHistoryDb.MirrorLeaveMigration167...`, and `vhh drill peers` step 9.
 
 ## A mirrored vault with a remote
 
@@ -1494,8 +1623,10 @@ CLI: `vh mirror add <vault> --to <peer>`, `vh mirror status [<vault>]`, `vh mirr
 8. No file is linked into place before its size, hash and authentication checks pass.
 9. A key version is installed on the mirror only after `prove` accepts it against a pinned attestation key.
 10. Detach completes with the peer unreachable, deletes nothing, and touches no bucket.
+    (`MirrorLeaveDbTest.Invariant10_DetachCompletesWithThePeerUnreachableDeletesNothingAndTouchesNoBucket`)
 11. When a mirror ends, the mirror's copy is removed only by the rule above: unfinished, or removal asked by the core
     with the mirror's keep setting off; otherwise it is kept, orphaned. Nothing else on either side removes it.
+    (`MirrorLeaveDbTest.Invariant11_TheCopyIsRemovedOnlyByTheRuleWhenItsCoreDeletesTheVaultAndNeverByADeleteHere`)
 12. Two servers never both accept changes as core of one vault in the same term.
 
 **The drill** (exit criterion for phase 2): two private daemons; mirror a vault; write on both sides; kill the core

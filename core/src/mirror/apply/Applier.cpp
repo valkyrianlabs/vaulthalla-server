@@ -6,6 +6,7 @@
 #include "db/query/device/Device.hpp"
 #include "db/query/fs/Directory.hpp"
 #include "db/query/fs/Entry.hpp"
+#include "db/query/fs/File.hpp"
 #include "db/query/mirror/Apply.hpp"
 #include "db/query/mirror/Contents.hpp"
 #include "db/query/mirror/Pending.hpp"
@@ -21,6 +22,8 @@
 #include "mirror/access/Access.hpp"
 #include "mirror/submit/Contents.hpp"
 #include "mirror/submit/Local.hpp"
+#include "mirror/versions/Versions.hpp"
+#include "recovery/local/Versions.hpp"
 #include "mirror/submit/Submit.hpp"
 #include "ops/Error.hpp"
 #include "paths.h"
@@ -1039,6 +1042,40 @@ void afterCommit(const Run& run, const Effects& fx) {
             }
 }
 
+// Versions on the mirror (wave 5, mirror/versions/Versions.hpp): before a group's transaction, the prior generation of
+// each live file the core replaces (a new generation), trashes or removes, staged by the local versioning mechanism under
+// this vault's mirror setting; attached in the transaction, finished after the commit, dropped with it otherwise.
+// Only the core's own changes (never this server's entries brought back into line), only groups (a first copy replaces
+// nothing anyone had here).
+std::vector<vh::recovery::local::versions::Pending> keepVersions(const Run& r,
+                                                                  const vh::recovery::LocalVersioningPolicy& policy) {
+    namespace lv = vh::recovery::local;
+    std::vector<lv::versions::Pending> kept;
+    if (!r.target.engine) return kept;
+    for (const auto& c : r.batch->changes) {
+        if (c.type != "file" || c.revert || c.aside) continue;
+        const auto it = r.before.find(c.uid);
+        if (it == r.before.end() || !it->second.located) continue;
+        const auto& at = *it->second.located;
+        if (at.trashed || at.kind != ta::Located::Kind::File || at.generation.empty()) continue;
+        const bool replaced = c.outcome == Outcome::Live && at.generation != text(c.state, "generation").value_or("");
+        const bool removed = c.outcome != Outcome::Live;
+        if (!replaced && !removed) continue;
+        const auto prior = db::query::fs::File::getFileById(at.id);
+        if (!prior) continue;
+        // Contents of that generation that never arrived here: there is nothing of it to keep (the bytes on disk, if
+        // any, are an older generation's).
+        if (prior->object_uid)
+            if (const auto waiting = mq::PendingContents::get(r.vaultId, *prior->object_uid);
+                waiting && waiting->generation == at.generation)
+                continue;
+        auto p = lv::versions::retain(*r.target.engine, *prior, removed ? lv::Reason::Delete : lv::Reason::Overwrite,
+                                      {.actor = std::nullopt, .upstream = false, .held_copy_policy = policy});
+        if (p.active()) kept.push_back(std::move(p));
+    }
+    return kept;
+}
+
 bool openNow(const Options& options, const ta::Target& target, const Before& b) {
     if (!b.located || b.located->trashed || b.located->kind != ta::Located::Kind::File) return false;
     std::optional<uint64_t> inode = b.located->inode;
@@ -1104,9 +1141,17 @@ Result run(const uint32_t vaultId, const TreePage* page, const LogGroup* group, 
         r.before.emplace(uid, std::move(b));
     }
 
+    // What this vault's mirror setting keeps of the core's replacements and removals (nothing while it keeps none).
+    std::vector<vh::recovery::local::versions::Pending> kept;
+    if (group)
+        if (const auto policy = vh::mirror::versions::policyFor(vaultId)) kept = keepVersions(r, *policy);
+
     Committed done;
     try {
-        done = db::Transactions::exec("mirror::apply", [&](pqxx::work& txn) { return applyInTransaction(txn, r); });
+        done = db::Transactions::exec("mirror::apply", [&](pqxx::work& txn) {
+            for (auto& k : kept) k.attach(txn);
+            return applyInTransaction(txn, r);
+        });
     } catch (const Halt& h) {
         if (!h.state.empty()) {
             (void)mq::MirrorVaults::stop(vaultId, h.state, h.reason, h.detail);
@@ -1122,6 +1167,7 @@ Result run(const uint32_t vaultId, const TreePage* page, const LogGroup* group, 
         }
         return out;
     }
+    for (auto& k : kept) k.committed();
     afterCommit(r, done.effects);
     // The first copy is complete: the write gate's reason changes (mirror_first_copy no more) before this returns.
     if (page && done.result.copy_finished) vh::mirror::access::reload();

@@ -10,6 +10,7 @@
 #include "protocols/http/Access.hpp"
 #include "CommandUsage.hpp"
 #include "config/Registry.hpp"
+#include "db/query/mirror/Contents.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/Entry.hpp"
@@ -214,8 +215,13 @@ CommandResult handleLs(const CommandCall& call) {
         {.header = "MODIFIED"},
         {.header = "NAME", .ellipsize_middle = true},
     });
+    // A detached vault's files whose contents never arrived say so (opening one fails).
+    const auto missing = ::vh::db::query::mirror::PendingContents::missingFileIds(ref->vault->id);
+    const auto isMissing = [&](const std::shared_ptr<fs::model::Entry>& e) {
+        return !e->isDirectory() && !e->isSymlink() && missing.contains(e->id);
+    };
     for (const auto& e : entries)
-        table.add_row({e->isDirectory() ? "dir" : e->isSymlink() ? "link" : "file",
+        table.add_row({e->isDirectory() ? "dir" : e->isSymlink() ? "link" : isMissing(e) ? "missing" : "file",
                        e->isDirectory() ? "-" : humanSize(e->size_bytes), utc(e->updated_at),
                        e->name + (e->isDirectory() ? "/" : "")});
     return {0, entries.empty() ? std::string{} : table.render(), ""};

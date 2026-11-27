@@ -82,7 +82,7 @@ std::shared_ptr<CommandUsage> cancel(const std::weak_ptr<CommandUsage>& parent) 
                        "server is told when it is reachable; it keeps its copy as an orphaned copy, or removes it with "
                        "--remove-copy (unless it keeps the vaults this server removes; an unfinished copy is removed "
                        "anyway). On the mirror: a start that has not completed is removed here and the core is told; "
-                       "a completed mirror is refused (leaving with the copy is a later version's detach); an orphaned "
+                       "a completed mirror is refused (leave with the copy instead: vh mirror detach); an orphaned "
                        "copy is removed with its keys. --offer names a start whose vault does not exist here yet.";
     cmd->positionals = {Positional::WithAliases("vault", "The vault's number here (or 0 with --offer)", {"vault"},
                                                 contract::gen::pattern("{9}"))};
@@ -101,8 +101,10 @@ std::shared_ptr<CommandUsage> list(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->effect = CommandEffect::Read;
     cmd->aliases = {"list", "ls"};
-    cmd->description = "List the mirrored vaults here (this server's role, the linked server, the grant) and the starts "
-                       "in progress. Super admins only.";
+    cmd->description = "List the mirrored vaults here (this server's role, the linked server, the grant), the starts "
+                       "in progress, and the vaults detached here (standalone now; the re-key pass is recommended). An "
+                       "orphaned copy is one whose core ended the mirror while this server kept it, read-only: detach "
+                       "it to keep it as this server's vault, or remove it with vh mirror cancel. Super admins only.";
     cmd->optional_flags = {jsonFlag};
     cmd->examples = {{"vh mirror list", "Mirrored vaults and starts."}, {"vh mirrors", "The same (plural alias)."}};
     return cmd;
@@ -136,6 +138,18 @@ std::shared_ptr<CommandUsage> keep(const std::weak_ptr<CommandUsage>& parent) {
 const auto heldPos = Positional::WithAliases("held", "The held change's number (vh mirror held)", {"held", "id"},
                                              contract::gen::pattern("{9}"));
 
+std::shared_ptr<CommandUsage> save(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Read;
+    cmd->aliases = {"save"};
+    cmd->description = "Save the person's version of a held write (decrypted) to a local file; nothing in the vault "
+                       "changes. Super admins only.";
+    cmd->positionals = {heldPos, Positional::Alias("dest", "The local file to write, or - for stdout", "dest",
+                                                   contract::gen::constant("-"))};
+    cmd->examples = {{"vh mirror save 7 ./mine.txt", "Save held change 7's version as ./mine.txt."}};
+    return cmd;
+}
+
 std::shared_ptr<CommandUsage> held(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->effect = CommandEffect::Read;
@@ -145,7 +159,8 @@ std::shared_ptr<CommandUsage> held(const std::weak_ptr<CommandUsage>& parent) {
                        "conflict copy. Super admins only.";
     cmd->optional = {Optional::ManyToOne("vault", "One vault only (its number here)", {"vault"}, "vault")};
     cmd->optional_flags = {Flag::WithAliases("all", "Include the ones discarded or retried", {"all"}), jsonFlag};
-    cmd->examples = {{"vh mirror held", "Held changes and conflict copies."}};
+    cmd->examples = {{"vh mirror held", "Held changes and conflict copies."},
+                     {"vh mirror save 7 ./mine.txt", "Save the person's version of held write 7."}};
     return cmd;
 }
 
@@ -170,6 +185,47 @@ std::shared_ptr<CommandUsage> retry(const std::weak_ptr<CommandUsage>& parent) {
     cmd->positionals = {heldPos};
     cmd->optional_flags = {jsonFlag};
     cmd->examples = {{"vh mirror retry 7", "Submit held change 7 again."}};
+    return cmd;
+}
+
+std::shared_ptr<CommandUsage> detach(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
+    cmd->aliases = {"detach"};
+    cmd->description = "Leave a mirror with its files: a copy of another server's vault held here (live, stopped, "
+                       "diverged, expired or orphaned; link up, down or gone) becomes a standalone vault on this server, "
+                       "without asking the core, which is told when it is reachable. Nothing is deleted on either "
+                       "server and no bucket is touched; changes made here and not yet confirmed become ordinary "
+                       "changes; files whose contents never arrived stay listed, marked missing. --dry-run shows all of "
+                       "that first (with --json, the list to export). The vault keeps the original's uid and keys "
+                       "until the re-key pass runs. Super admins, or holders of admin.mirror.detach; audited.";
+    cmd->positionals = {vaultPos};
+    cmd->optional = {Optional::ManyToOne("owner", "The new owner: a sign-in account here (default: you)", {"owner"},
+                                         "user")};
+    cmd->optional_flags = {Flag::WithAliases("dry_run", "Show what detaching would give, and change nothing",
+                                             {"dry-run", "preview"}),
+                           jsonFlag};
+    cmd->examples = {{"vh mirror detach 5 --dry-run", "What detaching vault 5 would give, missing files included."},
+                     {"vh mirror detach 5 --owner alice", "Detach vault 5; alice owns it here."}};
+    return cmd;
+}
+
+std::shared_ptr<CommandUsage> versions(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
+    cmd->aliases = {"versions"};
+    cmd->description = "Whether this server keeps versions of what a vault's core replaces or deletes (a vault held "
+                       "here as another server's mirror; off by default): before the core's change is applied here, "
+                       "the file's prior version is kept, bounded by the limits (when turning it on, unset ones default "
+                       "to the last 10 versions per file for 30 days; 0 is no limit of that kind). Read them with vh "
+                       "recovery list|inspect. Super admins only; audited.";
+    cmd->positionals = {vaultPos, Positional::Alias("state", "on or off", "state", contract::gen::constant("off"))};
+    cmd->optional = {Optional::ManyToOne("keep_last", "Versions kept per file", {"keep-last"}, "n"),
+                     Optional::ManyToOne("max_age_days", "Days a version is kept", {"max-age-days"}, "days"),
+                     Optional::ManyToOne("quota_bytes", "Bytes the vault's versions may take", {"quota-bytes"}, "bytes")};
+    cmd->optional_flags = {jsonFlag};
+    cmd->examples = {{"vh mirror versions 5 on", "Keep the last 10 versions of each file for 30 days."},
+                     {"vh mirror versions 5 on --keep-last 3 --max-age-days 0", "Keep the last 3, however old."}};
     return cmd;
 }
 
@@ -253,7 +309,8 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
                          decline(root->weak_from_this()), cancel(root->weak_from_this()), list(root->weak_from_this()),
                          info(root->weak_from_this()),    acceptAll(root->weak_from_this()),
                          keep(root->weak_from_this()),    held(root->weak_from_this()),    discard(root->weak_from_this()),
-                         retry(root->weak_from_this()),   resync(root->weak_from_this()),
+                         retry(root->weak_from_this()), save(root->weak_from_this()), detach(root->weak_from_this()),
+                         versions(root->weak_from_this()), resync(root->weak_from_this()),
                          switchCore(root->weak_from_this()), takeover(root->weak_from_this())};
     root->examples = {
         {"vh mirror add <vault> --to <server>", "On the core: offer a vault."},

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <ctime>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -51,13 +52,14 @@ struct Expected {
     int64_t mtime_us{};            // the backing file's modification time once linked
     int16_t priority{0};           // higher first
     // Read back only:
-    std::string state{"waiting"};  // waiting | failed
+    std::string state{"waiting"};  // waiting | failed | missing (a detached vault's: never fetched, migration 167)
     uint32_t attempts{0};
     std::optional<std::string> last_error{};
     std::time_t expected_at{};
     std::optional<std::time_t> last_attempt_at{};
 
     [[nodiscard]] bool failed() const noexcept { return state == "failed"; }
+    [[nodiscard]] bool missing() const noexcept { return state == "missing"; }
 };
 
 class PendingContents {
@@ -108,6 +110,10 @@ public:
     // a vault the moment it gets one. A database that cannot answer gives false (asked again next time), so the open
     // path never fails on this check.
     [[nodiscard]] static bool mayHavePending(uint32_t vaultId);
+    // The entry ids (fs_entry.id) of a vault's files whose contents are missing for good (a detached vault's, state
+    // missing, at the file's current generation): listings mark them. Empty, without a query, for a vault that never
+    // had a content row (mayHavePending).
+    [[nodiscard]] static std::set<uint32_t> missingFileIds(uint32_t vaultId);
 };
 
 }

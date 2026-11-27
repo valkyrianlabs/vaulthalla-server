@@ -1,0 +1,472 @@
+#include "mirror/leave/Leave.hpp"
+
+#include "audit/Trail.hpp"
+#include "crypto/id/ObjectUid.hpp"
+#include "db/query/mirror/Contents.hpp"
+#include "db/query/mirror/Pending.hpp"
+#include "db/query/mirror/Start.hpp"
+#include "db/query/peer/Peer.hpp"
+#include "db/query/vault/Deletion.hpp"
+#include "db/query/vault/Vault.hpp"
+#include "mirror/follow/Follower.hpp"
+#include "vault/model/Deletion.hpp"
+#include "fs/tree_apply/TreeApply.hpp"
+#include "log/Registry.hpp"
+#include "mirror/access/Access.hpp"
+#include "mirror/start/Start.hpp"
+#include "mirror/submit/Contents.hpp"
+#include "mirror/submit/Local.hpp"
+#include "mirror/submit/Submit.hpp"
+#include "mirror/versions/Versions.hpp"
+#include "ops/Error.hpp"
+#include "rbac/Mirrored.hpp"
+#include "recovery/local/Versions.hpp"
+#include "runtime/Deps.hpp"
+#include "storage/Manager.hpp"
+#include "vault/model/Vault.hpp"
+
+#include <vl/keykit/uid.hpp>
+
+#include <fmt/format.h>
+
+#include <algorithm>
+#include <chrono>
+#include <ctime>
+#include <filesystem>
+#include <map>
+#include <mutex>
+#include <set>
+#include <utility>
+
+namespace vh::mirror::leave {
+
+namespace mirror_leave_detail {
+
+namespace mq = vh::db::query::mirror;
+
+const json& field(const json& payload, const char* key) {
+    if (!payload.is_object() || !payload.contains(key)) throw ops::Invalid(std::string(key) + " is required");
+    return payload.at(key);
+}
+
+uint64_t number(const json& v, const char* key) {
+    if (!v.is_number_unsigned() && !(v.is_number_integer() && v.get<int64_t>() >= 0))
+        throw ops::Invalid(std::string(key) + " must be a non-negative integer");
+    const auto n = v.get<uint64_t>();
+    if (n > (uint64_t{1} << 62)) throw ops::Invalid(std::string(key) + " is out of range");
+    return n;
+}
+
+std::string vaultUuidOf(const json& payload) {
+    const auto& v = field(payload, "vault_uid");
+    if (!v.is_string() || v.get<std::string>().size() != 26) throw ops::Invalid("vault_uid is not a uid (26 base32 symbols)");
+    const auto uid = vl::keykit::fromBase32(v.get<std::string>());
+    if (!uid) throw ops::Invalid("vault_uid is not a uid (26 base32 symbols)");
+    return vh::crypto::id::toUuid(*uid);
+}
+
+// A write applied here whose bytes the file still holds is an ordinary change now; one the file no longer holds (the
+// core's state came back over it while it waited) stays the person's: a held change with its pending bytes.
+mq::DetachChanges changesOf(const uint32_t vaultId) {
+    mq::DetachChanges out;
+    for (const auto& p : mq::Pending::list(vaultId)) {
+        const bool write = p.op == "write" && p.args.value("size", uint64_t{0}) > 0;
+        if (!write) {
+            out.dropped.push_back(p.id);
+            continue;
+        }
+        std::error_code ec;
+        const bool bytes = std::filesystem::exists(vh::mirror::submit::contents::pendingBlob(vaultId, p.id), ec);
+        std::optional<std::string> now;
+        if (const auto fileId = mq::SealedObjects::fileIdOf(vaultId, vh::crypto::id::fromUuid(p.entry_uid)))
+            now = mq::SealedObjects::generationOf(*fileId);
+        if (!bytes || (now && *now == p.args.value("generation", std::string{}))) {
+            out.dropped.push_back(p.id);
+            continue;
+        }
+        mq::HeldChange h;
+        h.vault_id = vaultId;
+        h.kind = "held";
+        h.request_id = p.request_id;
+        h.op = p.op;
+        h.entry_uid = p.entry_uid;
+        h.args = p.args;
+        h.actor = p.actor;
+        h.reason_code = "mirror_detached";
+        h.reason = "the vault was detached before its core confirmed this version; the file holds another one";
+        if (const auto where = vh::fs::tree_apply::locate(vaultId, p.entry_uid)) h.path = where->path;
+        out.held.emplace_back(p.id, std::move(h));
+    }
+    return out;
+}
+
+std::string positionText(const mq::Position& p) { return fmt::format("({}, {})", p.term, p.seq); }
+
+}
+
+Preview preview(const uint32_t vaultId) {
+    namespace mq = vh::db::query::mirror;
+    const auto row = mq::MirrorVaults::get(vaultId);
+    if (!row || (row->role != "mirror" && row->role != "orphaned"))
+        throw ops::Refused("mirror_not_held", "vault " + std::to_string(vaultId) +
+                                                  " is not held here as another server's copy: there is nothing to detach");
+    const auto vault = vh::db::query::vault::Vault::getVault(vaultId);
+    if (!vault) throw ops::NotFound("no vault with ID " + std::to_string(vaultId));
+    Preview p;
+    p.vault_id = vaultId;
+    p.vault_name = vault->name;
+    p.role = row->role;
+    p.state = row->state;
+    p.stop_reason = row->stop_reason;
+    p.peer = vh::db::query::peer::Peers::byId(row->peer_id);
+    if (const auto f = vh::mirror::access::facts(vaultId)) p.link_up = f->link_up;
+    p.copy_finished = row->copy_finished;
+    p.copy_cursor = row->copy_cursor;
+    p.baseline_rows = row->baseline_rows;
+    p.applied = row->position();
+    p.confirmed = row->acked;
+    if (row->state == "diverged") p.digest_matched = false;
+    else if (row->acked) p.digest_matched = true;
+    p.pending_changes = mq::Pending::list(vaultId).size();
+    p.held_changes = mq::Pending::heldChanges(vaultId).size();
+    p.missing = mq::MirrorDetach::missing(vaultId);
+    p.owner_id = vault->owner_id;
+    return p;
+}
+
+Detached detach(const uint32_t vaultId, const uint32_t ownerId, const std::optional<uint32_t> actorId,
+                const std::string& actorName) {
+    using namespace mirror_leave_detail;
+    Detached out;
+    mq::DetachOutcome done;
+    {
+        // The start's steps and every change of the vault here (the applier's pages and groups, a person's change)
+        // wait for this, and this for them: nothing of the vault moves while it becomes local.
+        std::scoped_lock step(vh::mirror::start::stepMutex());
+        std::scoped_lock local(vh::mirror::submit::vaultMutex(vaultId));
+        out.before = preview(vaultId);
+        const auto changes = changesOf(vaultId);
+        const bool tell = out.before.role == "mirror" && out.before.peer && !out.before.peer->revoked();
+        done = mq::MirrorDetach::detach({.vault_id = vaultId, .owner_id = ownerId, .actor_id = actorId,
+                                         .changes = changes, .tell_core = tell});
+        out.core_told_later = tell;
+    }
+    // Before anything else serves the vault: no gate, no backstop, the owner's ordinary resolution.
+    vh::rbac::mirrored::reload();
+    vh::mirror::access::reload();
+    for (const auto& [pendingId, heldId] : done.held)
+        vh::mirror::submit::contents::moveBlob(vh::mirror::submit::contents::pendingBlob(vaultId, pendingId),
+                                               vh::mirror::submit::contents::heldBlob(vaultId, heldId));
+    for (const auto pendingId : done.dropped)
+        vh::mirror::submit::contents::dropBlob(vh::mirror::submit::contents::pendingBlob(vaultId, pendingId));
+    vh::recovery::local::invalidatePolicy(vaultId);
+    vh::mirror::versions::invalidate();   // its versions belong to the local vault now (its own policy)
+    try {
+        if (const auto& manager = runtime::Deps::get().storageManager) manager->reloadEngine(vaultId);
+    } catch (const std::exception& e) {
+        log::Registry::storage()->error("[mirror] vault {} was detached but its engine did not reload: {}", vaultId,
+                                        e.what());
+    }
+    out.record = done.record;
+    out.owner_id = ownerId;
+    out.missing = done.missing;
+    out.pending_held = done.held.size();
+    out.pending_kept = done.dropped.size();
+
+    const auto& b = out.before;
+    audit::record({.action = "mirror.detach", .actor_id = actorId, .actor = actorName, .vault_id = vaultId,
+                   .details = {{"peer", done.was.peer_id},
+                               {"role", b.role},
+                               {"state", b.state},
+                               {"fork", {{"term", b.applied.term}, {"seq", b.applied.seq}}},
+                               {"confirmed", b.confirmed ? json{{"term", b.confirmed->term}, {"seq", b.confirmed->seq}}
+                                                         : json(nullptr)},
+                               {"digest_matched", b.digest_matched ? json(*b.digest_matched) : json(nullptr)},
+                               {"missing", out.missing},
+                               {"pending_kept", out.pending_kept},
+                               {"pending_held", out.pending_held},
+                               {"owner", ownerId},
+                               {"previous_owner", done.previous_owner ? json(*done.previous_owner) : json(nullptr)},
+                               {"core_told", out.core_told_later ? "when_reachable" : "no"}}},
+                  fmt::format("[mirror] {} detached vault {} from linked server {}: it is a standalone vault here now "
+                              "(fork point {}, {} file(s) whose contents never arrived, owner {}); it shares its uid and "
+                              "keys with the original until the re-key pass runs",
+                              actorName.empty() ? std::string("this server") : actorName, vaultId, done.was.peer_id,
+                              positionText(b.applied), out.missing, ownerId),
+                  spdlog::level::warn);
+    vh::mirror::start::Service::instance()->wake();
+    return out;
+}
+
+json detachedPayload(const vh::db::query::mirror::Offer& offer) {
+    namespace mq = vh::db::query::mirror;
+    json at{{"term", 0}, {"seq", 0}};
+    uint64_t missing = 0;
+    if (offer.vault_id)
+        if (const auto rec = mq::MirrorDetach::forVault(*offer.vault_id)) {
+            at = {{"term", rec->fork.term}, {"seq", rec->fork.seq}};
+            missing = rec->missing;
+        }
+    return {{"offer_uid", offer.offer_uid}, {"vault_uid", vl::keykit::toBase32(offer.vault_uid)}, {"at", at},
+            {"missing", missing}};
+}
+
+json detachedReceived(const vh::peer::Record& from, const json& payload) {
+    using namespace mirror_leave_detail;
+    const auto vaultUuid = vaultUuidOf(payload);
+    mq::Position at{};
+    if (payload.contains("at") && payload.at("at").is_object())
+        at = {number(field(payload.at("at"), "term"), "term"), number(field(payload.at("at"), "seq"), "seq")};
+    const auto missing = payload.contains("missing") ? number(payload.at("missing"), "missing") : 0;
+
+    const auto vaultId = mq::MirrorStart::vaultWithUid(vh::crypto::id::fromUuid(vaultUuid));
+    if (!vaultId) return {{"recorded", false}};
+    const auto row = mq::MirrorVaults::get(*vaultId);
+    const auto latest = mq::MirrorStart::latestOffer(vh::crypto::id::fromUuid(vaultUuid), "core");
+    // A planned switch with that server ends here whatever its phase (the server it would hand the role to left).
+    (void)mq::MirrorDetach::endSwitches(*vaultId, "peer_detached");
+    // This server decided a switch and became that server's mirror, which then left with the vault before taking the
+    // core role: this copy has no core any more. It is kept as an orphaned copy, by the ending rule (the other side
+    // ended the mirror and asked nothing removed): read-only, its pending changes held; a super admin here detaches it
+    // (it becomes this server's vault again) or removes it.
+    if (row && row->role == "mirror" && row->peer_id == from.id) {
+        (void)mq::MirrorVaults::orphan(*vaultId);
+        (void)vh::mirror::submit::orphaned(*vaultId);
+        const auto rec = mq::MirrorDetach::recordCore(*vaultId, from.id, row->position(), 0);
+        audit::record({.action = "mirror.detached", .outcome = audit::Outcome::Info, .vault_id = *vaultId,
+                       .details = {{"peer", from.id}, {"node_id", from.node_id}, {"side", "mirror"},
+                                   {"orphaned", true}}},
+                      fmt::format("[mirror] linked server {} detached the vault while it was taking the core role from "
+                                  "this server: vault {} is kept here as an orphaned copy (vh mirror detach {} makes it "
+                                  "this server's vault again)", from.node_id, *vaultId, *vaultId),
+                      spdlog::level::warn);
+        return {{"recorded", true}, {"record", rec.id}, {"copy", "kept"}};
+    }
+    const bool mirroredWithIt = row && row->role == "core" && row->peer_id == from.id;
+    // Only the server this one mirrored the vault with (now or last) can say it left with a copy of it.
+    if (!mirroredWithIt && !(latest && latest->peer_id == from.id)) return {{"recorded", false}};
+    if (mirroredWithIt)
+        (void)vh::mirror::start::cancelOnCore(*vaultId, "peer_detached", false, false, std::nullopt, "");
+    if (const auto now = mq::MirrorStart::latestOffer(vh::crypto::id::fromUuid(vaultUuid), "core"); now && now->peer_id == from.id)
+        (void)mq::MirrorStart::recordCopyOutcome(now->id, "detached");
+    const auto rec = mq::MirrorDetach::recordCore(*vaultId, from.id, at, missing);
+    audit::record({.action = "mirror.detached", .outcome = audit::Outcome::Info, .vault_id = *vaultId,
+                   .details = {{"peer", from.id}, {"node_id", from.node_id}, {"side", "core"},
+                               {"fork", {{"term", at.term}, {"seq", at.seq}}}, {"missing", missing},
+                               {"ended_here", mirroredWithIt}}},
+                  fmt::format("[mirror] linked server {} detached its copy of vault {} (its fork point {}): the "
+                              "mirror is ended here; this server's vault is unaffected. Both servers hold the vault's "
+                              "keys: a key rotation here is recommended",
+                              from.node_id, *vaultId, positionText(at)),
+                  spdlog::level::warn);
+    return {{"recorded", true}, {"record", rec.id}};
+}
+
+std::optional<std::pair<std::string, std::string>> offerRefusal(const std::string& vaultUuid, const uint32_t peerId) {
+    const auto rec = vh::db::query::mirror::MirrorDetach::between(vaultUuid, peerId);
+    if (!rec) return std::nullopt;
+    return std::make_pair(
+        std::string("mirror_detached_copy"),
+        std::string(rec->side == "mirror"
+                        ? "this vault was detached from that server, which holds the original: the two share the "
+                          "vault's uid and keys, so they can't mirror it with each other until the re-key pass runs"
+                        : "that server detached its copy of this vault: the two share the vault's uid and keys, so they "
+                          "can't mirror it with each other until it runs the re-key pass"));
+}
+
+// ---- deleting a mirrored vault ------------------------------------------------------------------------------------------
+
+namespace mirror_deleting_detail {
+
+std::mutex& noticeMutex() {
+    static std::mutex m;
+    return m;
+}
+std::map<uint32_t, std::pair<std::string, std::time_t>>& noticesSent() {   // vault -> (notice, link up since)
+    static std::map<uint32_t, std::pair<std::string, std::time_t>> m;
+    return m;
+}
+
+}
+
+bool coreMirrored(const uint32_t vaultId) {
+    namespace mq = vh::db::query::mirror;
+    if (const auto row = mq::MirrorVaults::get(vaultId)) return row->role == "core";
+    const auto facts = mq::MirrorStart::facts(vaultId);
+    return facts && mq::MirrorStart::activeOffer(facts->vault_uid, "core").has_value();
+}
+
+json deletionOf(const uint32_t vaultId) {
+    namespace mq = vh::db::query::mirror;
+    const auto row = mq::MirrorVaults::get(vaultId);
+    if (!row) return nullptr;
+    if (row->role == "core") {
+        const auto d = vh::db::query::vault::Deletion::get(vaultId);
+        if (!d || d->state == vh::vault::model::DeletionState::Purged) return nullptr;
+        return {{"deleting", true}, {"purge_after", static_cast<int64_t>(d->purge_after)},
+                {"copy", mq::MirrorDetach::deletingCopy(vaultId).value_or("leave")}};
+    }
+    if (row->state == "paused" && row->stop_reason && *row->stop_reason == kCoreDeletingReason) {
+        json out = row->stop_detail.is_object() ? row->stop_detail : json::object();
+        out["deleting"] = true;
+        return out;
+    }
+    return nullptr;
+}
+
+void syncDeletionNotices() {
+    namespace mq = vh::db::query::mirror;
+    using namespace mirror_deleting_detail;
+    const auto t = vh::mirror::start::transport();
+    if (!t.request || !t.upSince) return;
+    std::set<uint32_t> cores;
+    for (const auto& row : mq::MirrorVaults::list()) {
+        if (row.role != "core") continue;
+        cores.insert(row.vault_id);
+        const auto up = t.upSince(row.peer_id);
+        if (!up) continue;
+        const auto facts = mq::MirrorStart::facts(row.vault_id);
+        if (!facts) continue;
+        auto notice = deletionOf(row.vault_id);
+        json payload{{"vault_uid", vl::keykit::toBase32(facts->vault_uid)}, {"deleting", !notice.is_null()}};
+        if (!notice.is_null()) {
+            payload["purge_after"] = notice.at("purge_after");
+            payload["copy"] = notice.at("copy");
+        }
+        const auto fingerprint = payload.dump();
+        {
+            std::scoped_lock lock(noticeMutex());
+            const auto it = noticesSent().find(row.vault_id);
+            if (it != noticesSent().end() && it->second.first == fingerprint && it->second.second == *up) continue;
+        }
+        // A refusal (the mirror holds no such vault) is not repeated until the notice or the link changes; no answer is.
+        if (t.request(row.peer_id, "peer.mirror.deleting", payload, std::chrono::seconds(15))) {
+            std::scoped_lock lock(noticeMutex());
+            noticesSent()[row.vault_id] = {fingerprint, *up};
+        }
+    }
+    std::scoped_lock lock(noticeMutex());
+    std::erase_if(noticesSent(), [&](const auto& kv) { return !cores.contains(kv.first); });
+}
+
+json deletingReceived(const vh::peer::Record& from, const json& payload) {
+    using namespace mirror_leave_detail;
+    const auto vaultUuid = vaultUuidOf(payload);
+    const auto& flag = field(payload, "deleting");
+    if (!flag.is_boolean()) throw ops::Invalid("deleting must be a boolean");
+    const auto vaultId = mq::MirrorStart::vaultWithUid(vh::crypto::id::fromUuid(vaultUuid));
+    const auto row = vaultId ? mq::MirrorVaults::get(*vaultId) : std::nullopt;
+    // Only the vault's own core says it is deleting it.
+    if (!row || row->role != "mirror" || row->peer_id != from.id) throw ops::NotFound("this server holds no such vault for that server");
+    bool changed = false;
+    if (flag.get<bool>()) {
+        const auto purgeAfter = number(field(payload, "purge_after"), "purge_after");
+        const auto& copy = field(payload, "copy");
+        if (!copy.is_string() || (copy.get<std::string>() != "remove" && copy.get<std::string>() != "leave"))
+            throw ops::Invalid("copy is remove or leave");
+        const bool keep = mq::MirrorStart::keepVaults(from.id).enabled;
+        const auto outcome = copy.get<std::string>() == "remove" && !keep ? "removed" : "kept as an orphaned copy";
+        changed = mq::MirrorDetach::pauseForCore(*vaultId, std::string(kCoreDeletingReason),
+                                                 {{"purge_after", purgeAfter}, {"copy", copy.get<std::string>()},
+                                                  {"here", outcome}});
+        if (changed)
+            audit::record({.action = "mirror.core_deleting", .outcome = audit::Outcome::Info, .vault_id = *vaultId,
+                           .details = {{"peer", from.id}, {"purge_after", purgeAfter}, {"copy", copy.get<std::string>()}}},
+                          fmt::format("[mirror] linked server {} is deleting its vault that vault {} mirrors: read-only "
+                                      "here until its restore window ends, then {} (unless it restores the vault)",
+                                      from.node_id, *vaultId, outcome),
+                          spdlog::level::warn);
+    } else {
+        changed = mq::MirrorDetach::resumeFromCore(*vaultId, std::string(kCoreDeletingReason));
+        if (changed) {
+            audit::record({.action = "mirror.core_restored", .outcome = audit::Outcome::Info, .vault_id = *vaultId,
+                           .details = {{"peer", from.id}}},
+                          fmt::format("[mirror] linked server {} restored its vault: vault {} follows it again",
+                                      from.node_id, *vaultId));
+            vh::mirror::follow::Follower::instance()->wake(*vaultId);
+        }
+    }
+    if (changed) vh::mirror::access::reload();
+    return {{"recorded", true}, {"state", mq::MirrorVaults::get(*vaultId)->state}};
+}
+
+void endForPurge(const uint32_t vaultId) {
+    namespace mq = vh::db::query::mirror;
+    if (!coreMirrored(vaultId)) return;
+    const auto copy = mq::MirrorDetach::deletingCopy(vaultId).value_or("leave");
+    (void)vh::mirror::start::cancelOnCore(vaultId, "vault_deleted", true, copy == "remove", std::nullopt,
+                                          "the vault's purge");
+}
+
+void recordDeletionChoice(const uint32_t vaultId, const std::string& copy) {
+    (void)vh::db::query::mirror::MirrorDetach::setDeletingCopy(vaultId, copy);
+    vh::mirror::start::Service::instance()->wake();
+}
+
+void restored(const uint32_t vaultId) {
+    (void)vh::db::query::mirror::MirrorDetach::setDeletingCopy(vaultId, std::nullopt);
+    vh::mirror::start::Service::instance()->wake();
+}
+
+void resetDeletionNoticesForTesting() {
+    std::scoped_lock lock(mirror_deleting_detail::noticeMutex());
+    mirror_deleting_detail::noticesSent().clear();
+}
+
+json toJson(const Preview& p) {
+    json missing = json::array();
+    for (const auto& m : p.missing)
+        missing.push_back({{"file_id", m.file_id}, {"uid", m.uid}, {"path", m.path}, {"size_bytes", m.size_bytes},
+                           {"state", m.state},
+                           {"last_error", m.last_error ? json(*m.last_error) : json(nullptr)}});
+    const auto pos = [](const vh::db::query::mirror::Position& x) { return json{{"term", x.term}, {"seq", x.seq}}; };
+    return {{"vault_id", p.vault_id},
+            {"vault_name", p.vault_name},
+            {"role", p.role},
+            {"state", p.state},
+            {"stop_reason", p.stop_reason ? json(*p.stop_reason) : json(nullptr)},
+            {"peer", p.peer ? json{{"id", p.peer->id}, {"node_id", p.peer->node_id}, {"name", p.peer->name},
+                                   {"revoked", p.peer->revoked()}}
+                            : json(nullptr)},
+            {"link_up", p.link_up},
+            {"first_copy", {{"finished", p.copy_finished}, {"entries_copied", p.copy_cursor},
+                            {"entries_total", p.baseline_rows}}},
+            {"applied", pos(p.applied)},
+            {"confirmed", p.confirmed ? pos(*p.confirmed) : json(nullptr)},
+            {"digest_matched", p.digest_matched ? json(*p.digest_matched) : json(nullptr)},
+            {"pending_changes", p.pending_changes},
+            {"held_changes", p.held_changes},
+            {"missing_count", p.missing.size()},
+            {"missing", std::move(missing)},
+            {"owner_id", p.owner_id}};
+}
+
+json toJson(const vh::db::query::mirror::DetachRecord& r) {
+    return {{"id", r.id},
+            {"side", r.side},
+            {"vault_id", r.vault_id},
+            {"peer_id", r.peer_id},
+            {"fork", {{"term", r.fork.term}, {"seq", r.fork.seq}}},
+            {"digest_matched", r.digest_matched ? json(*r.digest_matched) : json(nullptr)},
+            {"was_state", r.was_state ? json(*r.was_state) : json(nullptr)},
+            {"missing", r.missing},
+            {"owner_id", r.owner_id ? json(*r.owner_id) : json(nullptr)},
+            {"detached_by", r.detached_by ? json(*r.detached_by) : json(nullptr)},
+            {"detached_at", static_cast<int64_t>(r.detached_at)},
+            {"rekeyed_at", r.rekeyed_at ? json(static_cast<int64_t>(*r.rekeyed_at)) : json(nullptr)},
+            {"rekey_recommended", !r.rekeyed_at}};
+}
+
+json toJson(const Detached& d) {
+    auto before = toJson(d.before);
+    return {{"vault_id", d.before.vault_id},
+            {"owner_id", d.owner_id},
+            {"missing", d.missing},
+            {"pending_kept", d.pending_kept},
+            {"pending_held", d.pending_held},
+            {"core_told", d.core_told_later ? "when_reachable" : "no"},
+            {"record", toJson(d.record)},
+            {"before", std::move(before)}};
+}
+
+}
