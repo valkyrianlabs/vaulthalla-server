@@ -221,8 +221,11 @@ TEST_F(MirrorRotateDbTest, ARotationOnTheCoreEndsWithEqualDigestsAndEveryFileRea
     const auto link = std::make_shared<Link>();
     linkTo(s, link);
     const auto mirrorBefore = mirrorEm(s)->get_key_version();
+    const auto journal = "SELECT count(*) FROM fs_change_log WHERE vault_id = " + std::to_string(s.coreId);
+    const auto journaled = coreCount(s, journal);
 
     rotateOnCore(s);
+    EXPECT_EQ(coreCount(s, journal), journaled) << "a re-seal is no change in the core's journal (the same plaintext)";
     ASSERT_EQ(link->delivered.size(), 1u) << "the new version went to the mirror once, before anything was re-sealed";
     ASSERT_EQ(link->answers.front().value("status", ""), "OK") << link->answers.front().dump();
     for (const auto* secret : {"key", "encrypted_key", "iv"})

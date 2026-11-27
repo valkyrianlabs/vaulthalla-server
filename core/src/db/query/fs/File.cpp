@@ -375,7 +375,12 @@ bool File::compareAndSetEncryptionIVAndVersion(const F& f, const std::string& ex
         if (!contentHash)
             return txn.exec(pqxx::prepped{"compare_and_set_file_encryption_iv_and_version"}, p).affected_rows() == 1;
         p.append(*contentHash);
-        return txn.exec(pqxx::prepped{"compare_and_set_file_encryption_iv_version_and_hash"}, p).affected_rows() == 1;
+        // A key rotation's re-seal: the plaintext is the same, so the change journal records nothing (migration 170).
+        txn.exec("SELECT set_config('vh.key_rotation', 'on', true)");
+        const bool moved =
+            txn.exec(pqxx::prepped{"compare_and_set_file_encryption_iv_version_and_hash"}, p).affected_rows() == 1;
+        txn.exec("SELECT set_config('vh.key_rotation', 'off', true)");
+        return moved;
     });
 }
 

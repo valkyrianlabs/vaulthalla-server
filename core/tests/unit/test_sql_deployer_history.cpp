@@ -2652,6 +2652,13 @@ TEST_F(SqlDeployerHistoryDb, MirrorAllMigration170IsAdditiveAndIdempotent) {
         const std::string file = "170_mirror_all.sql";
         for (const auto* c : {"mirror_vaults", "mirror_vaults_set_by", "mirror_vaults_set_at"})
             txn.exec(std::string("ALTER TABLE peer DROP COLUMN IF EXISTS ") + c);
+        // 115's journal trigger on files.
+        txn.exec("DROP TRIGGER IF EXISTS vh_fs_change_track_update ON files");
+        txn.exec("CREATE TRIGGER vh_fs_change_track_update AFTER UPDATE ON files FOR EACH ROW WHEN "
+                 "(OLD.size_bytes IS DISTINCT FROM NEW.size_bytes OR OLD.content_hash IS DISTINCT FROM NEW.content_hash "
+                 "OR OLD.mime_type IS DISTINCT FROM NEW.mime_type OR (OLD.encryption_iv IS DISTINCT FROM "
+                 "NEW.encryption_iv AND OLD.encrypted_with_key_version IS NOT DISTINCT FROM "
+                 "NEW.encrypted_with_key_version)) EXECUTE FUNCTION vh_fs_change_track_typed('file')");
         txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
         const auto peer = txn.exec("INSERT INTO peer (node_id, name, spki_sha256, wrap_public_key, accept_vaults) "
                                    "VALUES ('claude-170-node', 'vps', repeat('cf', 32), decode(repeat('00', 32), 'hex'), "
@@ -2670,6 +2677,10 @@ TEST_F(SqlDeployerHistoryDb, MirrorAllMigration170IsAdditiveAndIdempotent) {
         EXPECT_TRUE(row[1].as<bool>());
         EXPECT_TRUE(row[2].as<bool>());
         EXPECT_TRUE(row[3].as<bool>()) << "the row is untouched";
+        // The change journal's files trigger skips a key rotation's new sealed-bytes hash (vh.key_rotation).
+        EXPECT_NE(txn.exec("SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgname = 'vh_fs_change_track_update' "
+                           "AND tgrelid = 'files'::regclass").one_field_ref().as<std::string>().find("vh.key_rotation"),
+                  std::string::npos);
 
         migseed::SqlDeployReport again;
         ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
