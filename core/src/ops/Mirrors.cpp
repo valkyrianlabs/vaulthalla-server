@@ -58,7 +58,8 @@ void requireMirrorPerson(const Actor& actor, const std::string& what) { peer_pol
 
 void requireSuperAdmin(const Actor& actor, const std::string& what) {
     requireMirrorPerson(actor, what);
-    if (!actor->isSuperAdmin()) throw Denied("only super admins of this server may " + what);
+    if (!actor->isSuperAdmin())
+        throw Denied(peer_policy::refusalFor(actor, "this is for super admins of this server", what));
 }
 
 std::shared_ptr<vault::model::Vault> liveVault(const uint32_t vaultId) {
@@ -74,8 +75,9 @@ void requireManager(const Actor& actor, const std::shared_ptr<vault::model::Vaul
     if (actor->isSuperAdmin()) return;
     if (!rbac::resolver::Admin::has<VaultPerm>({.user = actor, .permission = VaultPerm::Edit, .vault = vault}) ||
         !rbac::resolver::Vault::has<RolePerm>({.user = actor, .permission = RolePerm::Assign, .vault_id = vault->id}))
-        throw Denied("mirroring vault '" + vault->name + "' takes a super admin, or the vault's edit permission and the "
-                     "right to assign its vault roles");
+        throw Denied(peer_policy::refusalFor(actor, "mirroring vault '" + vault->name + "' takes a super admin, or the "
+                                                    "vault's edit permission and the right to assign its vault roles",
+                                             what));
 }
 
 bool digitsOnly(const std::string& s) {
@@ -633,8 +635,9 @@ nlohmann::json switchRole(const Actor& actor, const uint32_t vaultId, const bool
 void requireTakeover(const Actor& actor, const std::string& what) {
     ops_mirrors_detail::requireMirrorPerson(actor, what);
     if (actor->isSuperAdmin() || actor->mirrorPerms().canTakeover()) return;
-    throw Denied("only super admins of this server, or people its admin roles let take over as core "
-                 "(admin.mirror.takeover), may " + what);
+    throw Denied(peer_policy::refusalFor(actor, "this is for super admins of this server, and people its admin roles "
+                                                "let take over as core (admin.mirror.takeover)",
+                                         what));
 }
 
 nlohmann::json takeover(const Actor& actor, const uint32_t vaultId, const std::string& confirmName) {

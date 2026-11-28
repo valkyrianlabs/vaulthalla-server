@@ -497,6 +497,69 @@ TEST_F(MirrorFollowDbTest, FirstCopyOfAMixedTreeIsTheCoresBaseline) {
     EXPECT_EQ(mq::PendingContents::countOutstanding(s.mirrorId), 13u) << "every live file (not the trashed one)";
 }
 
+// A folder's modification time is outside its entry hash (a totals stamp, moved by every write below it), so a change
+// of it alone is never logged. It still travels in the folder's state (migration 173, folder_modified_at): the first
+// copy gives every folder the core's time and keeps it while it adds what is below (in later pages too), and a folder
+// the log creates arrives with its time. Listings on the mirror show the core's times, not when the mirror made them.
+TEST_F(MirrorFollowDbTest, FolderTimesAreTheCoresAndAFolderTimeAloneIsNeverLogged) {
+    const auto folderTimes = [](const uint32_t vaultId) {
+        return db::Transactions::exec("mf folder times", [&](pqxx::work& txn) {
+            std::map<std::string, int64_t> out;
+            for (const auto row : txn.exec("SELECT e.path, vh_mirror_micros(e.updated_at) FROM fs_entry e "
+                                           "JOIN directories d ON d.fs_entry_id = e.id "
+                                           "WHERE e.vault_id = $1 AND e.path <> '/'",
+                                           pqxx::params{vaultId}))
+                out[row[0].as<std::string>()] = row[1].as<int64_t>();
+            return out;
+        });
+    };
+    // As a dated write sets it (vh.keep_mtime): a time the mirror could not have made itself.
+    const auto setFolderTime = [](const uint32_t vaultId, const std::string& path, const std::string& at) {
+        db::Transactions::exec("mf folder time", [&](pqxx::work& txn) {
+            txn.exec("SELECT set_config('vh.keep_mtime', 'on', true)");
+            txn.exec("UPDATE fs_entry SET updated_at = $3::timestamptz WHERE vault_id = $1 AND path = $2",
+                     pqxx::params{vaultId, path, at});
+        });
+    };
+
+    mf::setAnswerBytesForTesting(2048);   // several pages: folders and what is below them in different ones
+    std::map<std::string, int64_t> core;
+    auto s = begin([&](const EnginePtr& e) {
+        e->mkdir("/docs", superUser);
+        e->mkdir("/docs/sub", superUser);
+        e->mkdir("/empty", superUser);
+        for (int i = 0; i < 8; ++i) write(e, "/docs/sub/f" + std::to_string(i) + ".txt", "file " + std::to_string(i));
+        write(e, "/docs/top.txt", "top");
+        setFolderTime(vid(e), "/docs", "2021-03-04 05:06:07.123456+00");
+        setFolderTime(vid(e), "/docs/sub", "2022-04-05 06:07:08.234567+00");
+        setFolderTime(vid(e), "/empty", "2023-05-06 07:08:09.345678+00");
+        core = folderTimes(vid(e));
+    });
+    EXPECT_GT(s.rec.answers.size(), 2u) << "the baseline came in several pages";
+    // Only a folder's time: no row, so nothing to apply and no digest change.
+    step(s, [&](const EnginePtr& e) { setFolderTime(vid(e), "/docs", "2024-06-07 08:09:10+00"); });
+    EXPECT_TRUE(s.rec.steps.back().empty()) << "a folder-time-only change writes no log row";
+    // A folder the log creates carries its time.
+    step(s, [&](const EnginePtr& e) {
+        e->mkdir("/later", superUser);
+        core["/later"] = folderTimes(vid(e)).at("/later");
+    });
+    EXPECT_FALSE(s.rec.steps.back().empty());
+
+    retireAndMirror(s);
+    Replay replay(s.rec);
+    copyOnly(replay, s);
+    auto mirror = folderTimes(s.mirrorId);
+    for (const auto* path : {"/docs", "/docs/sub", "/empty"})
+        EXPECT_EQ(mirror.at(path), core.at(path)) << path << " has the core's time after the copy";
+    followAll(replay, s);
+    EXPECT_TRUE(replay.misses.empty()) << ::testing::PrintToString(replay.misses);
+    expectAt(s, s.rec.at);
+    mirror = folderTimes(s.mirrorId);
+    EXPECT_EQ(mirror.at("/later"), core.at("/later")) << "a folder the log created has the core's time";
+    EXPECT_EQ(mirror.at("/docs"), core.at("/docs")) << "the core's later folder-time-only change never traveled";
+}
+
 TEST_F(MirrorFollowDbTest, FirstCopyInterruptedAfterEachPageResumesExactly) {
     mf::setAnswerBytesForTesting(2048);
     auto s = begin([&](const EnginePtr& e) {

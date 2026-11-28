@@ -185,7 +185,9 @@ mq::EntryFields fieldsOf(const json& s, Accounts& accounts) {
     f.owner_uid = integer(s, "owner_uid");
     f.owner_gid = integer(s, "owner_gid");
     f.created_at_us = integer(s, "created_at");
+    // A folder's time is outside its hash and comes as folder_modified_at (migration 173); others have modified_at.
     f.modified_at_us = integer(s, "modified_at");
+    if (!f.modified_at_us) f.modified_at_us = integer(s, "folder_modified_at");
     if (s.contains("created_by")) f.created_by = accounts.of(s["created_by"]);
     if (s.contains("modified_by")) f.modified_by = accounts.of(s["modified_by"]);
     f.size = integer(s, "size");
@@ -799,6 +801,8 @@ Committed applyInTransaction(pqxx::work& txn, Run& run) {
     const auto& batch = *run.batch;
     const auto vaultId = run.vaultId;
     mq::ApplyRows::begin(txn);
+    // A copy's states are the folders as they are now, times included: what it adds below a folder leaves that time.
+    if (batch.copy) mq::ApplyRows::keepFolderTimes(txn);
 
     const auto mv = mq::ApplyRows::lock(txn, vaultId);
     if (!mv || mv->role != "mirror") throw Halt{Status::Gone, "", "mirror_gone", json::object()};

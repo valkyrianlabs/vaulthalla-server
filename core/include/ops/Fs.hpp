@@ -29,7 +29,8 @@
 // from the core). The person sees the change at once; the core executes it as that person, and the change is
 // confirmed through the log, or reverted and kept (a conflict copy or a held change) when the core refuses.
 //
-// Callers today: the ws fs.* handlers (protocols/ws/handler/fs/Storage.cpp, Upload.cpp) and FUSE setattr. The HTTP
+// Callers today: the ws fs.* handlers (protocols/ws/handler/fs/Storage.cpp, Upload.cpp), `vh fs mkdir|mv|rm`
+// (protocols/shell/commands/fs.cpp) and FUSE setattr. The HTTP
 // lanes, text save, `vh fs put`, shares, the S3 gateway and the rest of FUSE still have their own paths to
 // vh::fs::Filesystem (which refuses for such a vault too).
 namespace vh::ops::fs {

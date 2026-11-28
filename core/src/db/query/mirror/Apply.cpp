@@ -83,6 +83,8 @@ void ApplyRows::begin(pqxx::work& txn) {
     txn.exec("SELECT set_config('vh.keep_mtime', 'on', true)");
 }
 
+void ApplyRows::keepFolderTimes(pqxx::work& txn) { txn.exec("SELECT set_config('vh.keep_folder_times', 'on', true)"); }
+
 std::optional<MirrorVault> ApplyRows::lock(pqxx::work& txn, const uint32_t vaultId) {
     return MirrorVaults::get(txn, vaultId, true);
 }
@@ -239,8 +241,8 @@ void ApplyRows::updateEntry(pqxx::work& txn, const uint32_t id, const std::strin
              "  created_at = COALESCE(" + mirrorTs(6) + ", created_at), "
              "  updated_at = COALESCE(" + mirrorTs(7) + ", updated_at), created_by = $8, last_modified_by = $9 "
              "WHERE id = $1",
-             pqxx::params{id, f.mode, f.hidden, f.owner_uid, f.owner_gid, f.created_at_us,
-                          type == "directory" ? std::nullopt : f.modified_at_us, f.created_by, f.modified_by});
+             pqxx::params{id, f.mode, f.hidden, f.owner_uid, f.owner_gid, f.created_at_us, f.modified_at_us,
+                          f.created_by, f.modified_by});
     if (type == "file") {
         const auto before = txn.exec("SELECT COALESCE(f.size_bytes, 0), e.parent_id FROM files f "
                                      "JOIN fs_entry e ON e.id = f.fs_entry_id WHERE f.fs_entry_id = $1",

@@ -80,16 +80,73 @@ static std::shared_ptr<CommandUsage> putCmd(const std::weak_ptr<CommandUsage>& p
     return cmd;
 }
 
+static const auto recursiveFlag = Flag::WithAliases(
+    "recursive", "Remove a folder that isn't empty, with everything in it", {"recursive", "r"});
+static const auto fromPos = Positional::Alias("from", "Path of the entry to move (starting at /)", "from");
+static const auto toPos = Positional::Alias("to", "Its new path, name included (starting at /)", "to");
+
+// rm, mkdir and mv run the console's own operations (ops::fs): the same permission check, read-only refusal on a copy
+// of another server's vault, audit event and sync pass.
+static std::shared_ptr<CommandUsage> rmCmd(const std::weak_ptr<CommandUsage>& parent) {
+    const auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"rm", "remove", "delete"};
+    cmd->effect = CommandEffect::Destructive;
+    cmd->description = "Delete a file, link or folder in a vault, as the web console does: files go to the vault's "
+                       "trash (restorable from there), folders and links are removed. A folder that isn't empty needs "
+                       "--recursive. Put options after the positionals. Needs the Delete permission on the path. Exit "
+                       "status: 66 not found, 77 permission denied, 69 the vault is read-only here, 1 a folder that "
+                       "isn't empty.";
+    cmd->positionals = {vaultPos, pathPos};
+    cmd->optional = {owner};
+    cmd->optional_flags = {recursiveFlag};
+    cmd->examples = {
+        {"vh fs rm 42 /reports/old.pdf", "Move /reports/old.pdf in vault 42 to its trash."},
+        {"vh fs rm 42 /drafts --recursive", "Remove the folder /drafts and everything in it."}
+    };
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> mkdirCmd(const std::weak_ptr<CommandUsage>& parent) {
+    const auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"mkdir"};
+    cmd->effect = CommandEffect::Write;
+    cmd->description = "Create a folder in a vault. Its parent folder must exist. Needs the Touch permission on the "
+                       "path. Exit status: 73 the path exists, 66 the parent folder is missing, 77 permission denied.";
+    cmd->positionals = {vaultPos, pathPos};
+    cmd->optional = {owner};
+    cmd->examples = {{"vh fs mkdir 42 /reports/2026", "Create the folder /reports/2026 in vault 42."}};
+    return cmd;
+}
+
+static std::shared_ptr<CommandUsage> mvCmd(const std::weak_ptr<CommandUsage>& parent) {
+    const auto cmd = buildBaseUsage(parent);
+    cmd->aliases = {"mv", "move", "rename"};
+    cmd->effect = CommandEffect::Write;
+    cmd->description = "Move or rename a file, link or folder in a vault. <to> is the entry's new path; an existing "
+                       "entry there is never replaced. Within one folder it needs the Rename permission, into another "
+                       "the Move permission and what creating the entry there needs. Exit status: 73 <to> exists, 66 "
+                       "<from> or the folder of <to> is missing, 77 permission denied.";
+    cmd->positionals = {vaultPos, fromPos, toPos};
+    cmd->optional = {owner};
+    cmd->examples = {
+        {"vh fs mv 42 /draft.txt /final.txt", "Rename /draft.txt to /final.txt in vault 42."},
+        {"vh fs mv 42 /final.txt /reports/final.txt", "Move it into /reports."}
+    };
+    return cmd;
+}
+
 static std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& parent) {
     const auto cmd = buildBaseUsage(parent);
     cmd->aliases = {"fs", "files"};
     cmd->description = "Read and write vault files without a mount (bytes travel over the vh socket): the CLI file "
                        "path on macOS, where the server never mounts vaults.";
-    cmd->subcommands = {lsCmd(cmd->weak_from_this()), getCmd(cmd->weak_from_this()), putCmd(cmd->weak_from_this())};
+    cmd->subcommands = {lsCmd(cmd->weak_from_this()), getCmd(cmd->weak_from_this()), putCmd(cmd->weak_from_this()),
+                        mkdirCmd(cmd->weak_from_this()), mvCmd(cmd->weak_from_this()), rmCmd(cmd->weak_from_this())};
     cmd->examples = {
         {"vh fs ls 42 /", "List the top of vault 42."},
         {"vh fs get 42 /a.txt -o a.txt", "Download a file."},
-        {"vh fs put 42 ./a.txt /a.txt", "Upload a file."}
+        {"vh fs put 42 ./a.txt /a.txt", "Upload a file."},
+        {"vh fs rm 42 /a.txt", "Move a file to the vault's trash."}
     };
     return cmd;
 }

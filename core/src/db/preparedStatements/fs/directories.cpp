@@ -8,10 +8,13 @@ void vh::db::Connection::initPreparedDirectories() const {
                    "  WHERE fs_entry_id = $1 RETURNING fs_entry_id, file_count"
                    "), updated_entry AS ("
                    "  UPDATE fs_entry SET updated_at = NOW() "
-                   "  WHERE id = (SELECT fs_entry_id FROM updated_stats)"
+                   "  WHERE id = (SELECT fs_entry_id FROM updated_stats) "
+                   "    AND coalesce(current_setting('vh.keep_folder_times', true), '') <> 'on'"
                    ") "
                    "SELECT file_count FROM updated_stats");
 
+    // Both stamp the folders they count into with the current time, unless the transaction keeps folder times (the
+    // mirror applier's copy pages: db::query::mirror::ApplyRows::keepFolderTimes).
     // Adds ($2 bytes, $3 files, $4 subdirectories) to directory $1 and every directory above it in one statement.
     // Rows are locked nearest-first (the order the per-level walk it replaces used), so concurrent writers under a
     // shared ancestor queue the same way; `seen` stops on a corrupt (cyclic) tree.
@@ -29,7 +32,8 @@ void vh::db::Connection::initPreparedDirectories() const {
                    "  SET size_bytes = size_bytes + $2, file_count = file_count + $3, subdirectory_count = subdirectory_count + $4 "
                    "  FROM locked l WHERE d.fs_entry_id = l.fs_entry_id RETURNING d.fs_entry_id"
                    ") "
-                   "UPDATE fs_entry SET updated_at = NOW() WHERE id IN (SELECT fs_entry_id FROM updated)");
+                   "UPDATE fs_entry SET updated_at = NOW() WHERE id IN (SELECT fs_entry_id FROM updated) "
+                   "  AND coalesce(current_setting('vh.keep_folder_times', true), '') <> 'on'");
 
     // Entry $1's ancestors, nearest first.
     conn_->prepare("collect_ancestor_ids",

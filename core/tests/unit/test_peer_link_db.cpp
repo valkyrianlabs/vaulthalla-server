@@ -27,6 +27,7 @@
 #include "device/ServerIdentity.hpp"
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
+#include "ops/Mirrors.hpp"
 #include "ops/Peers.hpp"
 #include "peer/Crypto.hpp"
 #include "peer/Keys.hpp"
@@ -52,8 +53,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <future>
 #include <optional>
+#include <string>
 #include <thread>
 
 namespace vh::test_peer_link_db {
@@ -561,6 +564,41 @@ TEST_F(PeerLinkDbTest, ARotationAnnouncementIsVerifiedAndTheAnnouncedKeyTakesOve
 
 // Who may make a link: the console steps up (device.trust, bound to the target), a full-access Desktop connected
 // directly does not (RBAC alone, decision 2), nor does the host; a device reached through the relay never gets there.
+// `sudo vh peer list` said only "this account cannot see linked servers". A refusal says who may and who is asking. Root
+// (the host's system account, which sudo runs vh as) is not a super admin for linking or mirroring, as it is not for
+// pairing devices: its refusal says to run vh without sudo, as one's own account.
+TEST_F(PeerLinkDbTest, ARefusalSaysWhoMayAndWhoIsAsking) {
+    const auto refusal = [](const std::function<void()>& call) {
+        try {
+            call();
+        } catch (const ops::Denied& e) {
+            return std::string(e.what());
+        }
+        return std::string("(not refused)");
+    };
+    // The host's root principal as the CLI server maps uid 0 to it (seeded by initdb, which the test database skips).
+    identities::UserState rootState;
+    rootState.name = "root";
+    rootState.systemOnly = true;
+    rootState.meta.linux_uid = 0;
+    const auto root = identities::User::detached(0, std::move(rootState));
+    auto text = refusal([&] { (void)ops::peers::list(root); });
+    EXPECT_NE(text.find("linked servers are managed by super admins; you are signed in as root"), std::string::npos) << text;
+    EXPECT_NE(text.find("without sudo"), std::string::npos) << text;
+    text = refusal([&] { (void)ops::mirrors::list(root); });
+    EXPECT_NE(text.find("you are signed in as root"), std::string::npos) << text;
+    EXPECT_NE(text.find("without sudo"), std::string::npos) << text;
+
+    const auto plain = test::identities::createUser("pl_plain_" + tag(), db::query::rbac::role::Admin::get("unprivileged"),
+                                                    "pl_plain_" + tag() + "@vaulthalla.test");
+    text = refusal([&] { (void)ops::peers::list(plain); });
+    EXPECT_EQ(text, "linked servers are managed by super admins; you are signed in as " + plain->name() +
+                        ", who cannot see linked servers");
+    text = refusal([&] { (void)ops::mirrors::pending(plain); });
+    EXPECT_NE(text.find("super admins of this server; you are signed in as " + plain->name()), std::string::npos) << text;
+    EXPECT_NO_THROW((void)ops::peers::list(super));
+}
+
 TEST_F(PeerLinkDbTest, MakingALinkStepsUpInTheConsoleButNotOnADirectFullAccessDesktopOrTheHost) {
     namespace stepup = auth::stepup;
     auto web = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());

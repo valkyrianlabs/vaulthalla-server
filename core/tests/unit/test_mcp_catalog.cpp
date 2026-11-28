@@ -132,6 +132,9 @@ TEST(McpCatalog, EffectsOfKnownCommands) {
     EXPECT_EQ(byCommand.at("s3-gateway creds revoke"), CommandEffect::Destructive);
     EXPECT_EQ(byCommand.at("upstream cleanup"), CommandEffect::Destructive);
     EXPECT_EQ(byCommand.at("recovery restore"), CommandEffect::Destructive);
+    EXPECT_EQ(byCommand.at("fs rm"), CommandEffect::Destructive);
+    EXPECT_EQ(byCommand.at("fs mkdir"), CommandEffect::Write);
+    EXPECT_EQ(byCommand.at("fs mv"), CommandEffect::Write);
 }
 
 // ---- exclusions -------------------------------------------------------------------------------------------------

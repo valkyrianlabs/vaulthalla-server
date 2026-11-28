@@ -2,9 +2,11 @@
 // definitions, so the definitions must cover what the commands read and what the help documents.
 
 #include "CommandUsage.hpp"
+#include "identities/User.hpp"
 #include "protocols/shell/ClientInput.hpp"
 #include "UsageManager.hpp"
 #include "protocols/shell/Router.hpp"
+#include "protocols/shell/types.hpp"
 #include "protocols/shell/commands/all.hpp"
 #include "runtime/Deps.hpp"
 
@@ -59,6 +61,80 @@ TEST(CliOptions, UndeclaredOptionsAreRejectedNotIgnored) {
     EXPECT_FALSE(router->optionError("group create --help").has_value());
     EXPECT_FALSE(router->optionError("role admin create r --allow-users-view").has_value());
     EXPECT_TRUE(router->optionError("role admin info r --allow-users-view").has_value()) << "info declares no permission flags";
+}
+
+// `--help` anywhere on a line prints that command's usage and runs nothing (`vh peer pair --help` opened a real pairing
+// window; `vh peer link --help` ran far enough to complain about its positionals). Every command of the usage tree is
+// served here by a handler that records it ran: none may, for any way of asking for help on any command.
+TEST(CliOptions, HelpAnywhereOnALineShowsThatCommandsUsageAndRunsNothing) {
+    (void)fullRouter();
+    const auto usageManager = runtime::Deps::get().shellUsageManager;
+    const auto root = usageManager->root();
+    ASSERT_TRUE(root);
+
+    const auto router = std::make_shared<protocols::shell::Router>();
+    std::vector<std::string> ran;
+    for (const auto& book : root->subcommands)
+        router->registerCommand(book, [&ran](const protocols::shell::CommandCall& call) {
+            ran.push_back(call.name);
+            return protocols::shell::CommandResult{0, "ran", ""};
+        });
+
+    identities::UserState state;
+    state.name = "help_walker";
+    const auto user = identities::User::detached(0, std::move(state));
+
+    std::size_t checked = 0;
+    std::function<void(const std::shared_ptr<protocols::shell::CommandUsage>&, std::vector<std::string>)> walk =
+        [&](const std::shared_ptr<protocols::shell::CommandUsage>& node, std::vector<std::string> path) {
+            if (node != root) {
+                if (node->primary().starts_with("-")) return;
+                path.push_back(node->primary());
+                std::string shown;
+                for (const auto& w : path) shown += (shown.empty() ? "" : " ") + w;
+                // A usage registered under two books (`snapshot`, `recovery snapshot`) resolves to the other copy.
+                const auto resolved = usageManager->resolve(path);
+                ASSERT_TRUE(resolved) << shown;
+                ASSERT_EQ(resolved->primary(), node->primary()) << shown;
+                const auto expected = usageManager->renderHelp(path);
+                std::string words;
+                for (const auto& w : path) words += w + " ";
+                std::string args;  // the command's own positionals, so help also comes after arguments
+                for (std::size_t i = 0; i < node->positionals.size(); ++i) args += "arg" + std::to_string(i) + " ";
+                std::vector<std::string> lines{words + "--help", words + "-h", words + args + "--help",
+                                               words + args + "-h --yes", words + "--help " + args};
+                // Help in the middle: the parser takes the next word as its value, which still names the subcommand.
+                if (path.size() > 1) {
+                    std::string rest;
+                    for (std::size_t i = 1; i < path.size(); ++i) rest += " " + path[i];
+                    lines.push_back(path[0] + " --help" + rest);
+                }
+                for (const auto& line : lines) {
+                    ran.clear();
+                    const auto result = router->executeLine(line, user, nullptr);
+                    EXPECT_TRUE(ran.empty()) << "vh " << line << " ran its handler";
+                    EXPECT_EQ(result.exit_code, 0) << "vh " << line << ": " << result.stderr_text;
+                    EXPECT_EQ(result.stdout_text, expected) << "vh " << line << " shows the help of 'vh "
+                                                            << words << "'";
+                    ++checked;
+                }
+            }
+            for (const auto& child : node->subcommands) walk(child, path);
+        };
+    walk(root, {});
+    EXPECT_GT(checked, 1000u) << "expected the whole usage tree";
+
+    // The commands that were reported, by name.
+    const std::vector<std::pair<std::string, std::vector<std::string>>> reported{
+        {"peer pair --help", {"peer", "pair"}}, {"peer link --help", {"peer", "link"}},
+        {"peer approve --help", {"peer", "approve"}}, {"peer approve 7 -h", {"peer", "approve"}}};
+    for (const auto& [line, path] : reported) {
+        ran.clear();
+        const auto result = router->executeLine(line, user, nullptr);
+        EXPECT_TRUE(ran.empty()) << line;
+        EXPECT_EQ(result.exit_code, 0) << line;
+        EXPECT_EQ(result.stdout_text, usageManager->renderHelp(path)) << line;
+    }
 }
 
 }

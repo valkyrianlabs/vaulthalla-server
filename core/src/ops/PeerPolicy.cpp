@@ -19,6 +19,9 @@
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
+#include <optional>
+#include <string>
 #include <variant>
 
 namespace vh::ops::peer_policy {
@@ -59,9 +62,24 @@ LinkPolicy policyOf(const vh::peer::Record& peer) {
 
 }
 
+std::string refusalFor(const Actor& actor, const std::string& managedBy, const std::string& what) {
+    const auto name = actor->name();
+    const auto prefix = managedBy + "; you are signed in as " + name;
+    if (actor->systemOnly() && (name == "root" || actor->linuxUid() == std::optional<uint32_t>(0)))
+        return prefix + ", the host's system account, which cannot " + what +
+               " (sudo runs vh as root: run vh without sudo, as your own account)";
+    if (actor->systemOnly()) return prefix + ", a system account, which cannot " + what;
+    if (actor->remote()) return prefix + ", an account of another server, which cannot " + what + " here";
+    if (!actor->authorizing()) return prefix + ", which is not active and cannot " + what;
+    return prefix + ", who cannot " + what;
+}
+
 void requirePerson(const Actor& actor, const std::string& what) {
     requireActor(actor);
-    if (actor->systemOnly() || !actor->authorizing()) throw Denied("this account cannot " + what);
+    if (actor->systemOnly() || !actor->authorizing())
+        throw Denied(refusalFor(actor, "linked servers and mirrored vaults are managed by super admins and the people "
+                                       "their roles allow",
+                                what));
     const auto* scope = auth::stepup::Scope::current();
     if (!scope) return;  // the daemon's own callers and tests (ops/Actor.hpp)
     switch (scope->channel()) {

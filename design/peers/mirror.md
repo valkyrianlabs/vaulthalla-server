@@ -605,7 +605,11 @@ without waiting for review); each is listed for confirmation in the hand-off:
   the mirror's `mirror_vault` row (`last_seq`, `copy_finished`, `copy_cursor`, `digest`, `state`, `stop_reason`) and the
   log lines "first copy finished at (t, s), digest D, N entries" and "applied through (t, s), digest D".
 - **The applier** (`mirror::apply`): one transaction per page or group, under the apply switch and `vh.keep_mtime`
-  (`ApplyRows::begin`). The mirror's entry hashes are kept in `mirror_entry_hash` on the mirror too (the Janitor's sweep
+  (`ApplyRows::begin`). A folder's modification time is outside its hash and a change of it alone is never logged, but
+  its state carries it as `folder_modified_at` (migration 173): the applier gives a folder that time when it creates or
+  updates it from a state, and a first copy's pages set `vh.keep_folder_times` so that what they add below a folder
+  leaves its time as the core's (the totals statements stamp folders otherwise). While following, the mirror's own
+  writes below a folder move its time as the core's writes did. The mirror's entry hashes are kept in `mirror_entry_hash` on the mirror too (the Janitor's sweep
   of vaults that are not a core now spares `mirror` and `orphaned` rows): per uid the group's first `prev_hash` must be
   the hash recorded here, the last row's state is the result. Work: removals (a folder once it is empty), then
   placements (a creation or a move whose parent exists here and whose name is free), repeated until done; when nothing

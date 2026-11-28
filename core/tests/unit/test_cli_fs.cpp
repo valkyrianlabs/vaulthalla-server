@@ -4,11 +4,13 @@
 #include "../helpers/db_suite.hpp"
 
 #include "crypto/ScratchFile.hpp"
+#include "db/Transactions.hpp"
 #include "fs/Filesystem.hpp"
 #include "fs/cache/Registry.hpp"
 #include "fs/model/File.hpp"
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
+#include "ops/Fs.hpp"
 #include "ops/Roles.hpp"
 #include "ops/Users.hpp"
 #include "ops/Vaults.hpp"
@@ -17,6 +19,7 @@
 #include "protocols/shell/Transfer.hpp"
 #include "protocols/shell/commands/all.hpp"
 #include "protocols/shell/commands/fs.hpp"
+#include "rbac/permission/vault/Filesystem.hpp"
 #include "runtime/Deps.hpp"
 #include "storage/Engine.hpp"
 #include "storage/Manager.hpp"
@@ -27,6 +30,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 #include <paths.h>
+#include <pqxx/pqxx>
 
 #include <chrono>
 #include <filesystem>
@@ -527,6 +531,90 @@ TEST_F(CliFsDbTest, StartupSweepsLeftoverStagingFiles) {
     EXPECT_FALSE(std::filesystem::exists(dir / "put-leftover.part"));
     EXPECT_TRUE(std::filesystem::exists(dir / "unrelated.txt"));
     std::filesystem::remove(dir / "unrelated.txt");
+}
+
+// `vh fs rm|mkdir|mv` run the console's operations (ops::fs): a removed file goes to the vault's trash as a web delete
+// sends it, a folder that isn't empty needs --recursive, and refusals are the transfer commands' exit codes, with no
+// existence oracle for a path the caller can't see.
+TEST_F(CliFsDbTest, RmMovesFilesToTheTrashAndFoldersNeedRecursive) {
+    const auto trashed = [](const std::shared_ptr<storage::Engine>& engine, const std::string& path) {
+        return db::Transactions::exec("cli fs trashed", [&](pqxx::work& txn) {
+            return txn.exec("SELECT count(*) FROM files_trashed WHERE vault_id = $1 AND path = $2 AND deleted_at IS NULL",
+                            pqxx::params{engine->vault->id, path}).one_field().as<int64_t>();
+        });
+    };
+    const auto exists = [](const std::shared_ptr<storage::Engine>& engine, const std::string& path) {
+        return runtime::Deps::get().fsCache->getEntry(engine->vaultPathToFusePath(path)) != nullptr;
+    };
+    write(vaultA, "/rm/one.txt", {'1'});
+    write(vaultA, "/rm/tree/a.txt", {'a'});
+    write(vaultA, "/rm/tree/deeper/b.txt", {'b'});
+
+    // Refusals first: nothing changes.
+    EXPECT_EQ(get(reader, "fs rm " + a("/rm/one.txt"), false).exit, tx::exitcode::kNoPerm) << "a reader can't delete";
+    EXPECT_EQ(get(plain, "fs rm " + b("/other.bin"), false).exit, tx::exitcode::kNoPerm);
+    EXPECT_EQ(get(plain, "fs rm " + b("/no-such.bin"), false).exit, tx::exitcode::kNoPerm)
+        << "no existence oracle where the caller can't list";
+    EXPECT_EQ(get(admin, "fs rm " + a("/rm/missing.txt"), false).exit, tx::exitcode::kNoInput);
+    EXPECT_EQ(get(admin, "fs rm " + a("/"), false).exit, tx::exitcode::kUsage);
+    EXPECT_EQ(get(admin, "fs rm " + a("/../x"), false).exit, tx::exitcode::kUsage);
+    auto out = get(admin, "fs rm " + a("/rm/tree"), false);
+    EXPECT_EQ(out.exit, 1) << out.err;
+    EXPECT_NE(out.err.find("--recursive"), std::string::npos) << out.err;
+    EXPECT_TRUE(exists(vaultA, "/rm/one.txt"));
+    EXPECT_TRUE(exists(vaultA, "/rm/tree/deeper/b.txt"));
+    // The console's answer for the same person and path is the CLI's.
+    const auto consoleDeletes = ops::fs::check(writer, vaultA->vault->id, "/rm/one.txt",
+                                               rbac::permission::vault::FilesystemAction::Delete) ==
+                                ops::fs::Access::Allowed;
+    if (!consoleDeletes) {
+        EXPECT_EQ(get(writer, "fs rm " + a("/rm/one.txt"), false).exit, tx::exitcode::kNoPerm);
+    }
+
+    // A file: to the trash.
+    out = get(admin, "fs rm " + a("/rm/one.txt"), false);
+    EXPECT_EQ(out.exit, 0) << out.err;
+    EXPECT_FALSE(exists(vaultA, "/rm/one.txt"));
+    EXPECT_EQ(trashed(vaultA, "/rm/one.txt"), 1);
+    EXPECT_EQ(get(admin, "fs rm " + a("/rm/one.txt"), false).exit, tx::exitcode::kNoInput) << "gone now";
+
+    // A folder with everything in it, and an empty one without the flag.
+    out = get(admin, "fs rm " + a("/rm/tree --recursive"), false);
+    EXPECT_EQ(out.exit, 0) << out.err;
+    EXPECT_FALSE(exists(vaultA, "/rm/tree"));
+    EXPECT_EQ(trashed(vaultA, "/rm/tree/a.txt") + trashed(vaultA, "/rm/tree/deeper/b.txt"), 2);
+    ASSERT_EQ(get(admin, "fs mkdir " + a("/rm/empty"), false).exit, 0);
+    EXPECT_EQ(get(admin, "fs rm " + a("/rm/empty"), false).exit, 0);
+    EXPECT_FALSE(exists(vaultA, "/rm/empty"));
+}
+
+TEST_F(CliFsDbTest, MkdirAndMvGoThroughTheSameOperations) {
+    const auto exists = [](const std::string& path) {
+        return runtime::Deps::get().fsCache->getEntry(vaultA->vaultPathToFusePath(path)) != nullptr;
+    };
+    auto out = get(admin, "fs mkdir " + a("/mv"), false);
+    ASSERT_EQ(out.exit, 0) << out.err;
+    EXPECT_TRUE(exists("/mv"));
+    EXPECT_EQ(get(admin, "fs mkdir " + a("/mv"), false).exit, tx::exitcode::kCantCreat) << "it exists";
+    EXPECT_EQ(get(admin, "fs mkdir " + a("/mv/no/such"), false).exit, tx::exitcode::kNoInput) << "no parent";
+    EXPECT_EQ(get(reader, "fs mkdir " + a("/mv/by-reader"), false).exit, tx::exitcode::kNoPerm);
+    ASSERT_EQ(get(admin, "fs mkdir " + a("/mv/into"), false).exit, 0);
+
+    write(vaultA, "/mv/a.txt", {'a'});
+    write(vaultA, "/mv/taken.txt", {'t'});
+    // Rename within the folder, then move into another; an existing entry is never replaced.
+    out = get(admin, "fs mv " + a("/mv/a.txt /mv/b.txt"), false);
+    EXPECT_EQ(out.exit, 0) << out.err;
+    EXPECT_TRUE(exists("/mv/b.txt"));
+    EXPECT_FALSE(exists("/mv/a.txt"));
+    out = get(admin, "fs mv " + a("/mv/b.txt /mv/into/b.txt"), false);
+    EXPECT_EQ(out.exit, 0) << out.err;
+    EXPECT_TRUE(exists("/mv/into/b.txt"));
+    EXPECT_EQ(get(admin, "fs mv " + a("/mv/into/b.txt /mv/taken.txt"), false).exit, tx::exitcode::kCantCreat);
+    EXPECT_EQ(stored(vaultA, "/mv/taken.txt"), std::vector<uint8_t>{'t'});
+    EXPECT_EQ(get(admin, "fs mv " + a("/mv/missing.txt /mv/x.txt"), false).exit, tx::exitcode::kNoInput);
+    EXPECT_EQ(get(reader, "fs mv " + a("/mv/into/b.txt /mv/c.txt"), false).exit, tx::exitcode::kNoPerm);
+    EXPECT_TRUE(exists("/mv/into/b.txt"));
 }
 
 }

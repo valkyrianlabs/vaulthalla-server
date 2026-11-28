@@ -43,6 +43,12 @@ struct LinkPolicy {
 // The gate for any write that names a linked server as a vault role subject: the switch, then a person (above).
 void requirePerson(const Actor& actor, const std::string& what);
 
+// The text of a refusal of `vh peer|mirror ...` and their ws commands: who may (`managedBy`, "linked servers are managed
+// by super admins"), then who the actor is and that it cannot `what`. An account that is not a person here says what it
+// is; root, the host's system account (`sudo vh ...` runs as root), adds that vh is run without sudo, as one's own
+// account: root is never a super admin for linking and mirroring, as it is not for pairing devices.
+[[nodiscard]] std::string refusalFor(const Actor& actor, const std::string& managedBy, const std::string& what);
+
 [[nodiscard]] LinkPolicy get(const Actor& actor, const std::string& peerRef);
 // role: a vault role by id or name, or nullopt for none. implicit_deny is refused here: "no access" is a per-vault
 // override, and the link's absence of a default already grants nothing. Audited peer.policy.set.
