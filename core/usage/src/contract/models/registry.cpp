@@ -13,7 +13,7 @@ std::vector<WsModel> models() {
     for (auto&& part : {detail::identityModels(), detail::vaultModels(), detail::fsModels(), detail::shareModels(),
                         detail::syncModels(), detail::statsModels(), detail::s3GatewayModels(), detail::adminModels(),
                         detail::recoveryModels(), detail::upstreamModels(), detail::deviceModels(),
-                        detail::vaultKeyModels()})
+                        detail::vaultKeyModels(), detail::healthModels()})
         all.insert(all.end(), std::make_move_iterator(part.begin()), std::make_move_iterator(part.end()));
 
     std::ranges::sort(all, {}, &WsModel::name);

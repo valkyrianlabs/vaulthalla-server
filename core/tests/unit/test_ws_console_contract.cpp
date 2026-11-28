@@ -210,8 +210,15 @@ TEST_F(DashboardSeverityTest, SeverityMatchesTheOverviewSummaryWithoutTheCards) 
     EXPECT_EQ(slim.warningCount, full.warningCount);
     EXPECT_TRUE(slim.sections.empty());
 
+    // The two unattended counts (health findings: design/health/findings.md) are what still asks for a person; until
+    // an operator marks a finding they equal the counts.
+    EXPECT_EQ(slim.unattendedErrorCount, slim.errorCount);
+    EXPECT_EQ(slim.unattendedWarningCount, slim.warningCount);
+
     const auto payload = stats::model::dashboardSeverityJson(slim);
-    EXPECT_EQ(payload.size(), 4u);
+    EXPECT_EQ(payload.size(), 6u);
+    EXPECT_TRUE(payload.at("unattended_error_count").is_number_unsigned());
+    EXPECT_TRUE(payload.at("unattended_warning_count").is_number_unsigned());
     EXPECT_TRUE(payload.at("overall_status").is_string());
     EXPECT_TRUE(payload.at("error_count").is_number_unsigned());
     EXPECT_TRUE(payload.at("warning_count").is_number_unsigned());

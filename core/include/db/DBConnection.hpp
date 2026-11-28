@@ -109,6 +109,7 @@ class Connection {
 
     // Dashboard
     void initPreparedDashboardPreferences() const;
+    void initPreparedHealthFindingState() const;
 
     // Admin
     void initPreparedSecrets() const;

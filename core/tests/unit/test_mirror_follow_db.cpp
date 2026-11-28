@@ -19,6 +19,7 @@
 #include "../helpers/db_suite.hpp"
 
 #include "db/Transactions.hpp"
+#include "db/query/device/Device.hpp"
 #include "db/query/fs/Directory.hpp"
 #include "db/query/fs/File.hpp"
 #include "db/query/fs/Symlink.hpp"

@@ -25,6 +25,7 @@
 #include "db/query/rbac/role/Admin.hpp"
 #include "device/Crypto.hpp"
 #include "device/Pairing.hpp"
+#include "device/Peer.hpp"
 #include "device/ServerIdentity.hpp"
 #include "identities/User.hpp"
 #include "ops/CloudRelay.hpp"

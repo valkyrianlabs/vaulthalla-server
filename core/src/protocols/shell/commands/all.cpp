@@ -24,6 +24,7 @@ void vh::protocols::shell::commands::registerAllCommands(const std::shared_ptr<R
     registerRecoveryCommands(r);
     registerSnapshotCommands(r);
     registerAuditCommands(r);
+    registerHealthCommands(r);
     registerDeviceCommands(r);
     registerPeerCommands(r);
     registerMirrorCommands(r);

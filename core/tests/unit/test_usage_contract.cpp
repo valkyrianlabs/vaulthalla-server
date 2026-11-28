@@ -251,6 +251,7 @@ void walkContract(const FieldVisitor& visit) {
 // model, inline fields, a map or a union. Paths as walkContract prints them.
 const std::map<std::string, std::string>& opaqueObjects() {
     static const std::map<std::string, std::string> kOpaque{
+        {"HealthRemedy.payload", "the payload of the existing ws command a remedy names, passed through for the client to send as it is; its shape is that command's own"},
         {"PriceBudgetNotification.metadata", "operator notification details stored as JSONB; each producer (budget preflight, gateway budgets, recovery cost alerts) records its own keys"},
         {"peer.mirror.log response.groups[].rows[].state", "a replication log row's state document (design/peers/mirror.md \"State documents\"), carried verbatim and hashed by its canonical encoding (mirror/Hash.hpp), never read by the contract"},
         {"peer.mirror.log response.part.rows[].state", "a replication log row's state document, as in groups[].rows[].state"},

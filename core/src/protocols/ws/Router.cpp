@@ -331,7 +331,9 @@ bool Router::isRelayedReadCommand(const std::string_view command) {
 }
 
 bool Router::isScopedDeviceForbidden(const std::string_view command) {
-    for (const std::string_view prefix : {"device.pair", "device.approval.", "device.backup.grant.", "connector.", "peer.", "mirror."})
+    // health.finding.: whether a warning has been dealt with is decided by a human (design/health/findings.md §7).
+    for (const std::string_view prefix : {"device.pair", "device.approval.", "device.backup.grant.", "connector.", "peer.",
+                                          "mirror.", "health.finding."})
         if (command.starts_with(prefix)) return true;
     constexpr std::array exact{std::string_view{"vault.keys.export"}, std::string_view{"vault.keys.export.confirm"},
                                std::string_view{"vault.keys.import"}, std::string_view{"device.scope.set"}};

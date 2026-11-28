@@ -18,6 +18,7 @@
 
 #include "../helpers/identities.hpp"
 #include "auth/model/RefreshToken.hpp"
+#include "auth/model/TokenPair.hpp"
 #include "auth/stepup/StepUp.hpp"
 #include "db/query/mirror/Switch.hpp"
 #include "db/query/mirror/Takeover.hpp"
