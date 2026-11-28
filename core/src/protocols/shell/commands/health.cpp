@@ -119,6 +119,8 @@ CommandResult unsilence(const CommandCall& call) {
 }
 
 CommandResult handle(const CommandCall& call) {
+    // Help for the group or the subcommand named, before anything runs (`vh health --help` used to list).
+    if (hasKey(call, "help") || hasKey(call, "h")) return usage(call.constructFullArgs());
     // `vh health` alone lists.
     if (call.positionals.empty()) return list(call);
     const auto [sub, subcall] = descend(call);

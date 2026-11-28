@@ -88,7 +88,10 @@ std::shared_ptr<CommandUsage> base(const std::weak_ptr<CommandUsage>& parent) {
     cmd->aliases = {"health"};
     cmd->description = "Health findings: what the server reports as wrong, and what was said about it "
                        "(acknowledged, silenced). `vh health` alone lists them.";
+    // `vh health` alone is `vh health list`, so it takes list's flag too.
+    cmd->optional_flags = {jsonOut};
     cmd->examples = {{"vh health", "What needs attention now."},
+                     {"vh health --json", "The same as JSON."},
                      {"vh health silence system.operations.active_work", "Stop hearing about queued work."}};
     cmd->subcommands = {list(cmd->weak_from_this()), ack(cmd->weak_from_this()), silence(cmd->weak_from_this()),
                         unsilence(cmd->weak_from_this())};

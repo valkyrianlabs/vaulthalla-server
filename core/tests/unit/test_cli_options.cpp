@@ -57,6 +57,9 @@ TEST(CliOptions, UndeclaredOptionsAreRejectedNotIgnored) {
     EXPECT_TRUE(router->optionError("user create bob --role admin --typo").has_value());
     // Help is accepted everywhere; declared permission-flag families stay open for the command to validate.
     EXPECT_FALSE(router->optionError("group create --help").has_value());
+    // `vh health` alone lists, so it takes list's --json (it was refused there).
+    EXPECT_FALSE(router->optionError("health --json").has_value());
+    EXPECT_FALSE(router->optionError("health list --json").has_value());
     EXPECT_FALSE(router->optionError("role admin create r --allow-users-view").has_value());
     EXPECT_TRUE(router->optionError("role admin info r --allow-users-view").has_value()) << "info declares no permission flags";
 }
