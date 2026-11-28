@@ -21,6 +21,7 @@
 #include <ctime>
 #include <functional>
 #include <optional>
+#include <utility>
 
 // `vh mirror ...` (design/peers/mirror.md): parsing and rendering only. Who may, and what changes, is ops::mirrors.
 // Minimal by design (wave 3): the polished CLI, the console and Desktop come later.
@@ -126,19 +127,58 @@ CommandResult handleAdd(const CommandCall& call) {
                        });
 }
 
+std::string utcTime(const std::time_t at) {
+    char when[32] = {};
+    std::tm tm{};
+    if (gmtime_r(&at, &tm)) (void)std::strftime(when, sizeof when, "%Y-%m-%d %H:%M UTC", &tm);
+    return when;
+}
+
+// A linked server's relink of a vault here, as `vh mirror pending` and `vh mirror relink <vault>` show it.
+std::string relinkRequestText(const nlohmann::json& q) {
+    const auto& h = q.value("handshake", nlohmann::json::object());
+    const auto peer = q.contains("peer") && q["peer"].is_object() ? q["peer"].value("name", std::string("?")) : std::string("?");
+    const auto vault = q.value("vault_id", uint64_t{0});
+    const auto phase = q.value("phase", std::string{});
+    const auto asked = q.value("asked_by", std::string{});
+    std::string out = fmt::format("relink  vault {} \"{}\"  asked by linked server '{}'{}  {}\n", vault,
+                                  q.value("vault_name", std::string{}), peer, asked.empty() ? "" : " (" + asked + ")", phase);
+    if (phase == "requested") {
+        out += "  " + h.value("discloses", std::string{}) + "\n";
+        out += fmt::format("  vh mirror relink {} --accept | --decline\n", vault);
+    } else if (phase == "accepted") {
+        out += fmt::format("  accepted{}: it may compare the two trees; the outcome it proposes waits for approval here\n",
+                           h.contains("accepted_by") && h["accepted_by"].is_string()
+                               ? " by " + h["accepted_by"].get<std::string>() : std::string{});
+    } else if (phase == "proposed") {
+        out += "  " + h.value("outcome", std::string{}) + "\n";
+        out += fmt::format("  vh mirror relink {} --approve --confirm <name> | --decline\n", vault);
+    } else if (phase == "approved") {
+        out += fmt::format("  approved{}: the other server carries it out\n",
+                           h.contains("approved_by") && h["approved_by"].is_string()
+                               ? " by " + h["approved_by"].get<std::string>() : std::string{});
+    }
+    if (h.contains("expires_at") && h["expires_at"].is_number_integer())
+        out += fmt::format("  expires {}\n", utcTime(static_cast<std::time_t>(h["expires_at"].get<int64_t>())));
+    return out;
+}
+
 CommandResult handlePending(const CommandCall& call) {
     validatePositionals(call, resolveUsage({"mirror", "pending"}));
     const auto json = hasFlag(call, "json");
-    return runMirrorOp("mirror pending", [&] { return mirrors::pending(call.user); },
-                       [&](const std::vector<mirrors::Offer>& list) {
+    return runMirrorOp("mirror pending",
+                       [&] { return std::pair{mirrors::pending(call.user), mirrors::relinkPending(call.user)}; },
+                       [&](const std::pair<std::vector<mirrors::Offer>, nlohmann::json>& both) {
+                           const auto& [list, relinks] = both;
                            if (json) {
                                nlohmann::json offers = nlohmann::json::array();
                                for (const auto& o : list) offers.push_back(mirrors::toJson(o));
-                               return mirrorPretty({{"offers", std::move(offers)}});
+                               return mirrorPretty({{"offers", std::move(offers)}, {"relinks", relinks}});
                            }
-                           if (list.empty()) return std::string("No offers wait here.\n");
+                           if (list.empty() && relinks.empty()) return std::string("No offers or relinks wait here.\n");
                            std::string out;
                            for (const auto& o : list) out += offerLine(o);
+                           for (const auto& q : relinks) out += relinkRequestText(q);
                            return out;
                        });
 }
@@ -562,6 +602,187 @@ CommandResult handleTakeover(const CommandCall& call) {
         });
 }
 
+// ---- relink ---------------------------------------------------------------------------------------------------------------
+
+std::string relinkSideName(const nlohmann::json& st, const std::string& fallback) {
+    if (!st.is_object()) return fallback;
+    return st.value("status", std::string("?"));
+}
+
+std::string relinkSummaryText(const uint32_t vaultId, const nlohmann::json& r) {
+    if (!r.contains("relink") || r["relink"].is_null()) return fmt::format("Vault {} has no relink here.\n", vaultId);
+    const auto& rl = r["relink"];
+    const auto& c = r.value("counts", nlohmann::json::object());
+    const auto n = [&](const char* k) { return c.value(k, uint64_t{0}); };
+    const auto peer = r.contains("peer") && r["peer"].is_object() ? r["peer"].value("name", std::string("?")) : std::string("?");
+    std::string out = fmt::format("Vault {} and server '{}': relink {} ({}).\n", vaultId, peer, rl.value("id", uint64_t{0}),
+                                  rl.value("phase", std::string{}));
+    const auto& h = r.value("handshake", nlohmann::json::object());
+    const auto waiting = h.contains("waiting_for") && h["waiting_for"].is_string() ? h["waiting_for"].get<std::string>()
+                                                                                  : std::string{};
+    const auto phase = rl.value("phase", std::string{});
+    if (rl.value("side", std::string{}) == "responder") {
+        if (phase == "requested") out += "  " + h.value("discloses", std::string{}) + "\n  --accept or --decline it.\n";
+        else if (phase == "proposed") out += "  " + h.value("outcome", std::string{}) + "\n  --approve --confirm <name> or --decline it.\n";
+        else if (phase == "accepted") out += "  Accepted: the other server compares and proposes an outcome, approved here.\n";
+        else if (phase == "approved") out += "  Approved here: the other server carries it out.\n";
+        if (phase == "requested" || phase == "accepted" || phase == "proposed" || phase == "approved") return out;
+    } else if (waiting == "other_admin") {
+        out += phase == "requested"
+                   ? "  Waiting for the other server's admin to accept the request (vh mirror pending there); run this "
+                     "again once they have.\n"
+                   : "  Awaiting the other server's approval of the outcome (vh mirror pending there); it is carried out "
+                     "once they approve.\n";
+        if (phase == "requested") return out;
+    } else if (phase == "accepted") {
+        out += "  The other server accepted: compare again (vh mirror relink <vault> --with <server>).\n";
+        return out;
+    }
+    out += fmt::format("  this server: {}; the other: {}\n", relinkSideName(r["this"], "?"), relinkSideName(r["theirs"], "?"));
+    out += fmt::format("  drifted: {} (only here {}, only there {}, changed here {}, there {}, on both {}, differs {}); "
+                       "{} the same\n",
+                       n("total"), n("only_this"), n("only_theirs"), n("changed_this"), n("changed_theirs"),
+                       n("changed_both"), n("differs"), n("same"));
+    if (r.contains("keys") && r["keys"].is_object() && !r["keys"].value("match", false))
+        out += "  keys: the two servers do not hold the same keys\n";
+    const auto& p = r.value("plan", nlohmann::json::object());
+    const auto core = p.value("core", std::string("this"));
+    out += fmt::format("  plan: {} becomes the core; unset entries take {}\n",
+                       core == "this" ? std::string("this server") : "'" + peer + "'",
+                       p.contains("default_choice") && p["default_choice"].is_string()
+                           ? p["default_choice"].get<std::string>()
+                           : std::string("the core's version"));
+    for (const auto* side : {"this", "theirs"}) {
+        const auto g = p.value(side, nlohmann::json::object());
+        out += fmt::format("    {}: takes {}, keeps {} as held, gains {} conflict cop{}\n",
+                           std::string(side) == "this" ? std::string("this server") : "'" + peer + "'",
+                           g.value("takes", uint64_t{0}), g.value("keeps_held", uint64_t{0}),
+                           g.value("conflict_copies", uint64_t{0}), g.value("conflict_copies", uint64_t{0}) == 1 ? "y" : "ies");
+    }
+    for (const auto& b : r.value("blockers", nlohmann::json::array()))
+        out += fmt::format("  refused now: {}: {}\n", b.value("code", std::string{}), b.value("message", std::string{}));
+    if (rl.contains("error") && rl["error"].is_string()) out += "  " + rl["error"].get<std::string>() + "\n";
+    return out;
+}
+
+std::string relinkEntriesText(const nlohmann::json& page) {
+    std::string out;
+    for (const auto& e : page.value("entries", nlohmann::json::array())) {
+        std::string aspects;
+        for (const auto& a : e.value("aspects", nlohmann::json::array())) aspects += (aspects.empty() ? "" : ",") + a.get<std::string>();
+        out += fmt::format("  {}  {:<14} {:<22} -> {:<6} {}{}\n", e.value("uid", std::string{}),
+                           e.value("kind", std::string{}), aspects.empty() ? std::string("-") : aspects,
+                           e.value("resolution", std::string{}), e.value("path", std::string{}),
+                           e.contains("outcome") && e["outcome"].is_string() ? " [" + e["outcome"].get<std::string>() + "]"
+                                                                             : std::string{});
+    }
+    out += fmt::format("{} of {} entr{} shown.\n", page.value("entries", nlohmann::json::array()).size(),
+                       page.value("total", uint64_t{0}), page.value("total", uint64_t{0}) == 1 ? "y" : "ies");
+    return out;
+}
+
+// "uid=this,kind:changed_theirs=theirs,all=both"
+std::optional<::vh::mirror::relink::PlanEdit> relinkChoices(const std::string& spec, std::string& error) {
+    ::vh::mirror::relink::PlanEdit edit;
+    std::size_t at = 0;
+    while (at <= spec.size()) {
+        const auto comma = spec.find(',', at);
+        const auto item = spec.substr(at, comma == std::string::npos ? std::string::npos : comma - at);
+        at = comma == std::string::npos ? spec.size() + 1 : comma + 1;
+        if (item.empty()) continue;
+        const auto eq = item.find('=');
+        if (eq == std::string::npos) {
+            error = "each choice is <uid|kind:<kind>|all>=<this|theirs|both|default>: " + item;
+            return std::nullopt;
+        }
+        const auto what = item.substr(0, eq);
+        const auto value = item.substr(eq + 1);
+        if (value != "this" && value != "theirs" && value != "both" && value != "default") {
+            error = "a choice is this, theirs, both or default: " + value;
+            return std::nullopt;
+        }
+        const std::optional<std::string> choice = value == "default" ? std::nullopt : std::optional<std::string>(value);
+        if (what == "all") edit.by_kind.push_back({.kind = "", .choice = choice});
+        else if (what.starts_with("kind:")) edit.by_kind.push_back({.kind = what.substr(5), .choice = choice});
+        else edit.set.push_back({.uid = what, .choice = choice});
+    }
+    return edit;
+}
+
+CommandResult handleRelink(const CommandCall& call) {
+    validatePositionals(call, resolveUsage({"mirror", "relink"}));
+    const auto json = hasFlag(call, "json");
+    const auto vault = parseUInt(call.positionals.at(0));
+    if (!vault || *vault == 0) return invalid("mirror relink: the vault is its number (vh vault list)");
+    const auto vaultId = static_cast<uint32_t>(*vault);
+    const auto with = optVal(call, "with");
+    const auto keep = optVal(call, "keep");
+    const auto confirm = optVal(call, "confirm");
+    const auto choose = optVal(call, "choose");
+    const auto core = optVal(call, "core");
+    const auto def = optVal(call, "default");
+    const auto show = optVal(call, "show");
+    const auto offsetText = optVal(call, "offset");
+    const auto offset = offsetText ? parseUInt(*offsetText) : std::optional<unsigned int>(0);
+    if (!offset) return invalid("mirror relink: --offset is a number");
+    const auto render = [&](const nlohmann::json& r) { return json ? mirrorPretty(r) : relinkSummaryText(vaultId, r); };
+    const auto listing = [&](const std::string& kind) {
+        return runMirrorOp("mirror relink", [&] { return mirrors::relinkEntries(call.user, vaultId, kind, *offset, 100); },
+                           [&](const nlohmann::json& p) { return json ? mirrorPretty(p) : relinkEntriesText(p); });
+    };
+
+    // The other side: a linked server asked to relink this vault.
+    if (hasFlag(call, "accept") || hasFlag(call, "decline") || hasFlag(call, "approve")) {
+        const auto asked = [&](const nlohmann::json& q) { return json ? mirrorPretty(q) : relinkRequestText(q); };
+        if (hasFlag(call, "decline"))
+            return runMirrorOp("mirror relink", [&] { return mirrors::relinkDecline(call.user, vaultId); }, asked);
+        if (hasFlag(call, "accept"))
+            return runMirrorOp("mirror relink", [&] { return mirrors::relinkAccept(call.user, vaultId); }, asked);
+        if (!confirm || confirm->empty()) return invalid("mirror relink: type the vault's name with --confirm <name>");
+        return runMirrorOp("mirror relink", [&] { return mirrors::relinkApprove(call.user, vaultId, *confirm); }, asked);
+    }
+    if (keep) {
+        if (!with) return invalid("mirror relink: --keep needs --with <server>");
+        if (!confirm || confirm->empty()) return invalid("mirror relink: type the vault's name with --confirm <name>");
+        return runMirrorOp("mirror relink",
+                           [&] { return mirrors::relinkApply(call.user, vaultId, *confirm, *keep, *with); }, render);
+    }
+    if (hasFlag(call, "discard")) {
+        ::vh::mirror::relink::PlanEdit edit;
+        edit.discard = true;
+        return runMirrorOp("mirror relink", [&] { return mirrors::relinkPlan(call.user, vaultId, edit); }, render);
+    }
+    if (choose || core || def) {
+        ::vh::mirror::relink::PlanEdit edit;
+        if (choose) {
+            std::string error;
+            const auto parsed = relinkChoices(*choose, error);
+            if (!parsed) return invalid("mirror relink: " + error);
+            edit = *parsed;
+        }
+        edit.core = core;
+        if (def) edit.default_choice = *def == "core" ? std::string{} : *def;
+        const auto planned = runMirrorOp("mirror relink", [&] { return mirrors::relinkPlan(call.user, vaultId, edit); },
+                                         render);
+        if (planned.exit_code != 0 || !hasFlag(call, "apply")) return planned;
+    }
+    if (hasFlag(call, "apply")) {
+        if (!confirm || confirm->empty()) return invalid("mirror relink: type the vault's name with --confirm <name>");
+        return runMirrorOp("mirror relink", [&] { return mirrors::relinkApply(call.user, vaultId, *confirm, "", ""); },
+                           render);
+    }
+    if (show) return listing(*show == "all" ? std::string{} : *show);
+    if (hasFlag(call, "status") || !with)
+        return runMirrorOp("mirror relink", [&] { return mirrors::relinkStatus(call.user, vaultId); }, render);
+    auto compared = runMirrorOp("mirror relink", [&] { return mirrors::relinkCompare(call.user, vaultId, *with); }, render);
+    if (compared.exit_code != 0 || !hasFlag(call, "review") || json) return compared;
+    auto list = listing("");
+    if (list.exit_code != 0) return list;
+    compared.stdout_text += list.stdout_text;
+    compared.stdout_text += "Choose with --choose <uid>=this|theirs|both, then --apply --confirm <name>.\n";
+    return compared;
+}
+
 CommandResult handleMirror(const CommandCall& call) {
     if (call.positionals.empty()) return usage(call.constructFullArgs());
     const auto [sub, subcall] = descend(call);
@@ -585,6 +806,7 @@ CommandResult handleMirror(const CommandCall& call) {
     if (is("resync")) return handleResync(subcall);
     if (is("switch")) return handleSwitch(subcall);
     if (is("takeover")) return handleTakeover(subcall);
+    if (is("relink")) return handleRelink(subcall);
     return invalid(call.constructFullArgs(), "Unknown mirror subcommand: '" + std::string(sub) + "'");
 }
 

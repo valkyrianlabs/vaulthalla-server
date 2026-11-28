@@ -2,6 +2,7 @@
 
 #include "db/query/peer/Peer.hpp"
 #include "mirror/follow/Protocol.hpp"
+#include "mirror/relink/Relink.hpp"
 #include "mirror/resync/Resync.hpp"
 #include "mirror/submit/Submit.hpp"
 #include "mirror/switching/Switch.hpp"
@@ -73,6 +74,42 @@ json MirrorFollow::promoted(const json& payload, const std::shared_ptr<Session>&
 
 json MirrorFollow::submit(const json& payload, const std::shared_ptr<Session>& session) {
     return vh::mirror::submit::serveSubmit(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::relinkRequest(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::relink::serveRequest(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::relinkAnswer(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::relink::serveAnswer(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::relinkPropose(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::relink::servePropose(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::relinkCancel(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::relink::serveCancel(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::relinkState(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::relink::serveState(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::relinkTree(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::relink::serveTree(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::relinkPrepare(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::relink::servePrepare(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::relinkGo(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::relink::serveGo(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::relinkAbort(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::relink::serveAbort(mirrorFollowCaller(session), mirrorFollowPayload(payload));
 }
 
 }

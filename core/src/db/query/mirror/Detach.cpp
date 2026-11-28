@@ -22,7 +22,7 @@ void endSwitchesIn(pqxx::work& txn, const uint32_t vaultId, const std::string& r
 constexpr auto kRecordColumns =
     "id, side, vault_id, vault_uid::text AS vault_uid, peer_id, fork_term, fork_seq, digest_matched, was_state, missing, "
     "owner_id, detached_by, EXTRACT(EPOCH FROM detached_at)::BIGINT AS detached_at, "
-    "EXTRACT(EPOCH FROM rekeyed_at)::BIGINT AS rekeyed_at";
+    "EXTRACT(EPOCH FROM rekeyed_at)::BIGINT AS rekeyed_at, EXTRACT(EPOCH FROM relinked_at)::BIGINT AS relinked_at";
 
 DetachRecord recordFrom(const pqxx::row_ref row) {
     DetachRecord r;
@@ -39,6 +39,7 @@ DetachRecord recordFrom(const pqxx::row_ref row) {
     if (!row["detached_by"].is_null()) r.detached_by = row["detached_by"].as<uint32_t>();
     r.detached_at = static_cast<std::time_t>(row["detached_at"].as<int64_t>());
     if (!row["rekeyed_at"].is_null()) r.rekeyed_at = static_cast<std::time_t>(row["rekeyed_at"].as<int64_t>());
+    if (!row["relinked_at"].is_null()) r.relinked_at = static_cast<std::time_t>(row["relinked_at"].as<int64_t>());
     return r;
 }
 
@@ -172,7 +173,7 @@ DetachRecord MirrorDetach::recordCore(const uint32_t vaultId, const uint32_t pee
     return Transactions::exec("mirror::MirrorDetach::recordCore", [&](pqxx::work& txn) {
         const auto existing = txn.exec(std::string("SELECT ") + kRecordColumns +
                                            " FROM mirror_detached WHERE side = 'core' AND vault_id = $1 AND peer_id = $2 "
-                                           "  AND rekeyed_at IS NULL ORDER BY id DESC LIMIT 1",
+                                           "  AND rekeyed_at IS NULL AND relinked_at IS NULL ORDER BY id DESC LIMIT 1",
                                        pqxx::params{vaultId, peerId});
         if (!existing.empty()) return recordFrom(existing[0]);
         return recordFrom(txn.exec(std::string("INSERT INTO mirror_detached (side, vault_id, vault_uid, peer_id, fork_term, "
@@ -189,7 +190,7 @@ std::optional<DetachRecord> MirrorDetach::forVault(const uint32_t vaultId) {
     using namespace mirror_detach_detail;
     return Transactions::exec("mirror::MirrorDetach::forVault", [&](pqxx::work& txn) -> std::optional<DetachRecord> {
         const auto res = txn.exec(std::string("SELECT ") + kRecordColumns +
-                                      " FROM mirror_detached WHERE vault_id = $1 AND rekeyed_at IS NULL "
+                                      " FROM mirror_detached WHERE vault_id = $1 AND rekeyed_at IS NULL AND relinked_at IS NULL "
                                       "ORDER BY id DESC LIMIT 1",
                                   pqxx::params{vaultId});
         if (res.empty()) return std::nullopt;
@@ -202,7 +203,7 @@ std::optional<DetachRecord> MirrorDetach::between(const std::string& vaultUuid, 
     return Transactions::exec("mirror::MirrorDetach::between", [&](pqxx::work& txn) -> std::optional<DetachRecord> {
         const auto res = txn.exec(std::string("SELECT ") + kRecordColumns +
                                       " FROM mirror_detached WHERE vault_uid = $1::uuid AND peer_id = $2 "
-                                      "  AND rekeyed_at IS NULL ORDER BY id DESC LIMIT 1",
+                                      "  AND rekeyed_at IS NULL AND relinked_at IS NULL ORDER BY id DESC LIMIT 1",
                                   pqxx::params{vaultUuid, peerId});
         if (res.empty()) return std::nullopt;
         return recordFrom(res[0]);

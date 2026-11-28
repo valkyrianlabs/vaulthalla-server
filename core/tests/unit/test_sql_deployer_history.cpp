@@ -2713,6 +2713,83 @@ TEST_F(SqlDeployerHistoryDb, MirrorCopyMigration169IsAdditiveAndIdempotent) {
     });
 }
 
+// Migration 171 (relink): on an upgraded database holding a settled take over, an ended rejoin and a detach record, the
+// relink tables and the detach record's relinked columns are added empty, the take over's and rejoin's CHECKs learn
+// 'relinked' without changing a row, and a second run changes nothing.
+TEST_F(SqlDeployerHistoryDb, MirrorRelinkMigration171IsAdditiveAndIdempotent) {
+    inRolledBackTxn([](pqxx::work& txn) {
+        const std::string file = "171_mirror_relink.sql";
+        for (const auto* t : {"mirror_relink_entry", "mirror_relink", "mirror_base", "mirror_base_mark"})
+            txn.exec(std::string("DROP TABLE IF EXISTS ") + t);
+        for (const auto* c : {"relinked_at", "relink_id"})
+            txn.exec(std::string("ALTER TABLE mirror_detached DROP COLUMN IF EXISTS ") + c);
+        // 168's CHECKs, as an upgraded database has them.
+        txn.exec("ALTER TABLE mirror_takeover DROP CONSTRAINT IF EXISTS mirror_takeover_settled_how_check");
+        txn.exec("ALTER TABLE mirror_takeover ADD CONSTRAINT mirror_takeover_settled_how_check CHECK (settled_how IS NULL "
+                 "OR settled_how IN ('switched', 'returned', 'merged', 'ended'))");
+        txn.exec("ALTER TABLE mirror_rejoin DROP CONSTRAINT IF EXISTS mirror_rejoin_phase_check");
+        txn.exec("ALTER TABLE mirror_rejoin ADD CONSTRAINT mirror_rejoin_phase_check CHECK (phase IN ('draining', "
+                 "'following', 'rejoining', 'forked', 'resynced', 'ended'))");
+        txn.exec("DELETE FROM schema_migrations WHERE filename = $1", pqxx::params{file});
+        const auto peer = txn.exec("INSERT INTO peer (node_id, name, spki_sha256, wrap_public_key) VALUES "
+                                   "('claude-171-node', 'vps', repeat('ce', 32), decode(repeat('00', 32), 'hex')) "
+                                   "RETURNING id").one_field_ref().as<int>();
+        const auto vault = txn.exec("SELECT id FROM vault ORDER BY id LIMIT 1");
+        std::optional<int> vaultId;
+        if (!vault.empty()) vaultId = vault[0][0].as<int>();
+        if (vaultId) {
+            txn.exec("INSERT INTO mirror_takeover (vault_id, peer_id, from_term, term, fork_seq, fork_digest, fork_entries, "
+                     "  settled_at, settled_how) VALUES ($1, $2, 1, 2, 0, decode(repeat('00', 32), 'hex'), 0, "
+                     "  CURRENT_TIMESTAMP, 'ended')",
+                     pqxx::params{*vaultId, peer});
+            txn.exec("INSERT INTO mirror_rejoin (vault_id, peer_id, new_term, fork_term, fork_seq, fork_digest, fork_entries, "
+                     "  phase) VALUES ($1, $2, 2, 1, 0, decode(repeat('00', 32), 'hex'), 0, 'ended')",
+                     pqxx::params{*vaultId, peer});
+            txn.exec("INSERT INTO mirror_detached (side, vault_id, vault_uid, peer_id) SELECT 'mirror', id, uid, $2 FROM vault "
+                     "WHERE id = $1 AND uid IS NOT NULL",
+                     pqxx::params{*vaultId, peer});
+        }
+
+        migseed::SqlDeployReport report;
+        ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(applied(report, file));
+        EXPECT_EQ(report.applied.size(), 1u) << "only 171 was missing";
+        EXPECT_EQ(recordedHash(txn, file), currentHash(file));
+        for (const auto* c : {"relinked_at", "relink_id"}) EXPECT_TRUE(columnExists(txn, "mirror_detached", c)) << c;
+        for (const auto* t : {"mirror_relink_entry", "mirror_relink", "mirror_base", "mirror_base_mark"})
+            EXPECT_EQ(txn.exec(std::string("SELECT count(*) FROM ") + t).one_field_ref().as<int>(), 0) << t;
+        // The handshake: the request's expiry, who accepted it, the outcome proposed and who approved it.
+        for (const auto* c : {"expires_at", "accepted_at", "accepted_by", "proposal", "approved_at", "approved_by"})
+            EXPECT_TRUE(columnExists(txn, "mirror_relink", c)) << c;
+        if (vaultId) {
+            // A request waits for the other server's super admin, then an outcome for its approval: one open per vault.
+            txn.exec("INSERT INTO mirror_relink (relink_uid, vault_id, peer_id, side, phase, expires_at) VALUES "
+                     "(gen_random_uuid(), $1, $2, 'responder', 'requested', CURRENT_TIMESTAMP + interval '1 day')",
+                     pqxx::params{*vaultId, peer});
+            EXPECT_ANY_THROW(txn.exec("SAVEPOINT relink_one; INSERT INTO mirror_relink (relink_uid, vault_id, peer_id, side, "
+                                      "phase) VALUES (gen_random_uuid(), " + std::to_string(*vaultId) + ", " +
+                                      std::to_string(peer) + ", 'initiator', 'proposed')"))
+                << "one open relink per vault, a request included";
+            txn.exec("ROLLBACK TO SAVEPOINT relink_one");
+            txn.exec("UPDATE mirror_relink SET phase = 'declined' WHERE peer_id = $1", pqxx::params{peer});
+        }
+        if (vaultId) {
+            EXPECT_EQ(txn.exec("SELECT count(*) FROM mirror_detached WHERE peer_id = $1 AND relinked_at IS NULL",
+                               pqxx::params{peer}).one_field_ref().as<int>(), 1) << "the record is untouched";
+            txn.exec("UPDATE mirror_takeover SET settled_how = 'relinked' WHERE peer_id = $1", pqxx::params{peer});
+            txn.exec("UPDATE mirror_rejoin SET phase = 'relinked' WHERE peer_id = $1", pqxx::params{peer});
+        }
+
+        migseed::SqlDeployReport again;
+        ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
+        EXPECT_TRUE(again.applied.empty());
+        ASSERT_NO_THROW(txn.exec(migseed::readFileToString(repoPsqlDir() / file)));
+        EXPECT_EQ(txn.exec("SELECT count(*) FROM pg_constraint WHERE conrelid = 'mirror_takeover'::regclass AND contype = 'c' "
+                           "AND pg_get_constraintdef(oid) LIKE '%relinked%'").one_field_ref().as<int>(), 1)
+            << "one CHECK, widened once";
+    });
+}
+
 // Migration 170 (mirror every vault to a linked server): on an upgraded database with a linked server, the three
 // peer.mirror_vaults columns are added off, the row is untouched, and a second run changes nothing.
 TEST_F(SqlDeployerHistoryDb, MirrorAllMigration170IsAdditiveAndIdempotent) {

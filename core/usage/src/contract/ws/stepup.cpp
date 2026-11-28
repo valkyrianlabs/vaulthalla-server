@@ -26,6 +26,10 @@ std::vector<WsStepUp> stepUpTable() {
         {"vault.remote.detach", "keys", kTarget, ""},
         {"vault.remote.abort", "keys", kTarget, ""},
         {"mirror.add", "keys", kTarget, "in the web console (bound to the vault): its keys go to another server"},
+        {"mirror.relink.apply", "keys", kTarget,
+         "in the web console (bound to the vault): the chosen server's data becomes the vault's truth on both"},
+        {"mirror.relink.approve", "keys", kTarget,
+         "in the web console (bound to the vault): the other server carries out an outcome that changes this vault"},
         {"mirror.mirror_all.set", "keys", kTarget,
          "in the web console when it turns the setting on (bound to the linked server): every vault's keys go there"},
         // device.trust: target-bound (request id + new key + chosen code), single use

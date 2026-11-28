@@ -297,6 +297,16 @@ bool Router::isPeerWireCommand(const std::string_view command) {
         std::string_view{"peer.mirror.switch.commit"},
         // Take over: the old core learns (wave 5 piece B; handler/MirrorFollow.hpp).
         std::string_view{"peer.mirror.promoted"},
+        // Relink (handler/MirrorFollow.hpp).
+        std::string_view{"peer.mirror.relink.request"},
+        std::string_view{"peer.mirror.relink.answer"},
+        std::string_view{"peer.mirror.relink.propose"},
+        std::string_view{"peer.mirror.relink.cancel"},
+        std::string_view{"peer.mirror.relink.state"},
+        std::string_view{"peer.mirror.relink.tree"},
+        std::string_view{"peer.mirror.relink.prepare"},
+        std::string_view{"peer.mirror.relink.go"},
+        std::string_view{"peer.mirror.relink.abort"},
         // Key rotation on a mirrored vault (handler/Mirrors.hpp).
         std::string_view{"peer.mirror.key"}
     };

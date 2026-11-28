@@ -260,7 +260,7 @@ export const unconfirmed = (row: Pick<MirroredVault, 'role' | 'term' | 'last_seq
 
 // ---- actions
 
-export type MirrorAction = 'cancel' | 'switch' | 'takeover' | 'resync' | 'detach' | 'copy' | 'versions' | 'held'
+export type MirrorAction = 'cancel' | 'switch' | 'takeover' | 'resync' | 'reconnect' | 'detach' | 'copy' | 'versions' | 'held'
 
 const START_OPEN: readonly MirrorStart['state'][] = ['offered', 'pending', 'accepted', 'keys_acked', 'installed', 'started', 'failed', 'expired']
 
@@ -285,7 +285,7 @@ export const actionsFor = (
   switch (row.role) {
     case 'core':
       if (coreReplaced(row)) {
-        out.push('resync', 'detach', 'held')
+        out.push('reconnect', 'resync', 'detach', 'held')
         break
       }
       if (row.state === 'live' && !deleting) out.push('switch')
@@ -299,13 +299,13 @@ export const actionsFor = (
       out.push('detach', 'copy', 'versions', 'held')
       break
     case 'orphaned':
-      out.push('detach', 'copy', 'cancel', 'held')
+      out.push('reconnect', 'detach', 'copy', 'cancel', 'held')
       break
     case 'starting':
       if (row.start && START_OPEN.includes(row.start.state)) out.push('cancel')
       break
     case 'detached':
-      out.push('held')
+      out.push('reconnect', 'held')
       break
     default:
       break

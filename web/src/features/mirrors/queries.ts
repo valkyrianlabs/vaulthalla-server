@@ -15,6 +15,9 @@ export const useMirrorList = () => useWs('mirror.list', null, { refetchInterval:
 
 export const useOffers = () => useWs('mirror.pending', null, { refetchInterval: LIST_POLL_MS })
 
+// Linked servers' relinks of this server's vaults waiting for a super admin here (accept, approve or decline).
+export const useRelinkRequests = () => useWs('mirror.relink.pending', {}, { refetchInterval: LIST_POLL_MS })
+
 // The same read (and cache entry) as the Servers tab's table: names and link health by peer id.
 export const usePeers = () => {
   const list = useWs('peer.list', { all: true }, { refetchInterval: LIST_POLL_MS })

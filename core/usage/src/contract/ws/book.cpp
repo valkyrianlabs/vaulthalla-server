@@ -17,7 +17,7 @@ std::vector<WsCommandUsage> commands() {
                         detail::statsCommands(), detail::dashboardCommands(), detail::s3GatewayCommands(),
                         detail::pricingCommands(), detail::settingsCommands(), detail::emailCommands(),
                         detail::deviceCommands(), detail::peerCommands(), detail::mirrorCommands(), detail::mirrorFollowCommands(),
-                        detail::mirrorLeaveCommands(), detail::vaultKeyCommands(), detail::auditCommands(),
+                        detail::mirrorLeaveCommands(), detail::mirrorRelinkCommands(), detail::vaultKeyCommands(), detail::auditCommands(),
                         detail::healthCommands()})
         all.insert(all.end(), std::make_move_iterator(part.begin()), std::make_move_iterator(part.end()));
 

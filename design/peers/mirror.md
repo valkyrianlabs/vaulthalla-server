@@ -1596,6 +1596,78 @@ Proven: `MirrorLeaveDbTest` (`test_mirror_leave_db.cpp`), `MirrorSubmitDbTest.Ve
 Proven: `MirrorCopyDbTest` (`test_mirror_copy_db.cpp`), `SqlDeployerHistoryDb.MirrorCopyMigration169...`, and `vhh
 drill peers` step 9e.
 
+### As built: relink (migration 171)
+
+`vh mirror relink <vault> --with <server>`, ws `mirror.relink.compare`, `.get`, `.entries`, `.plan`, `.apply`; peer wire
+`peer.mirror.relink.state`, `.tree`, `.prepare`, `.go`, `.abort` (`mirror/relink/Relink.hpp`, `db::query::mirror::Relinks`,
+tables `mirror_relink`, `mirror_relink_entry`, `mirror_base`, `mirror_base_mark`). The owner's request: reconnect a vault
+two servers once mirrored, with a hard override either way and a step-through of the drift. Decided while building
+(owner's instruction to build without waiting for review); each is listed for confirmation in the hand-off:
+
+- **Which vaults.** Both servers hold a vault with the same uid and this server has a record of mirroring it with the
+  other (by node id, so a re-paired link counts): `detached` (a detach record), `ended` (no row, the base kept when the
+  core's row ended: a cancel, an unlink), `orphaned`, `rejoining`, `forked`, or `core` (a new core whose take over is
+  open, or a core whose mirror's detach notice has not arrived). A live pair (`mirror` on either side) is refused
+  (`mirror_relink_mirrored`: resync or switch), as is a vault mirrored with a third server.
+- **The bases.** Every end of a mirror row (`MirrorVaults::remove`: detach, the detach notice, cancel, unlink) keeps the
+  entry hashes the server last agreed with its peer (`mirror_base`, one set per vault): a mirror's recorded hashes at its
+  applied position, a core's recorded hashes with every entry changed since its mirror's acknowledgement taken back to
+  the state its first change replaced (the log's `prev_hash`), an open take over's fork base. A live row computes the
+  same at compare time (an old core's from its rejoin fork point, a core's from the other side's agreed position). An
+  entry is `changed_this` / `changed_theirs` / `changed_both` when both bases hold it with the same hash (or neither
+  holds it) and the current hashes say which side moved; otherwise `differs`. Only-on-one entries carry `created` or
+  `removed` and `by_this` / `by_theirs` when known. Hashes only: no file's contents are read (the tree read is
+  `vh_mirror_tree_states` once per comparison, paged from memory on the other server).
+- **Keys.** No key moves: a relink is refused (`mirror_relink_keys`) unless both current versions are equal and every
+  version either tree uses is proven the same on both, by one server's own key check being the origin check the other
+  recorded for it (`vault_key_origin`). A key rotated on one side since the mirror ended refuses it; that needs a new
+  mirror.
+- **The plan** is the initiator's (`side initiator`): `core` (this | theirs), a default and one choice per drifted entry
+  (this | theirs | both; both is for files: the future mirror's version becomes a conflict copy beside the core's, named
+  by `mirror::submit::conflictName` with the original's uid). It records both trees' digests and statuses: applying
+  re-reads both and a difference makes the plan `stale` (`mirror_relink_stale`, "compare again"). The hard override is a
+  fresh comparison whose plan is every entry the kept server's, applied at once.
+- **Applying**, from either server (the other answers over the link; nothing waits on a nested request): the future
+  mirror prepares first (its detach / take over / rejoin records settle `relinked`, its row goes with its base, files
+  whose contents were `missing` wait again; what the core's tree would end without a trace is held: a trashed version,
+  a live one the core trashed, its place for an entry whose core's place stays; its conflict copies are made by
+  `ops::fs::copy`, new uids; a `mirror` row in the new term, stopped `mirror_relinking`). Then the core (its records
+  settle; each of its versions the plan replaces is held with its bytes, and its place; `startCore` in a term above any
+  either used). Then the mirror goes: with nothing to bring its copy starts over at once (`Resync::resetMirror`);
+  otherwise the follower's pass brings each chosen version onto the core as the mirror's own changes through
+  `peer.mirror.submit` (folders, places, files with their sealed bytes over the sealed lane first, removals; a symlink or
+  an entry the core holds in its trash is not brought and stays held), then `mirror::resync::start` (the core takes its
+  baseline again with them in it) and the first copy runs over the mirror's entries as resync's does. Each side's relink
+  is `done` once the copy completed and the core recorded the matching acknowledgement. The changes the mirror brings and
+  the held changes it makes name a local person there (the initiator when it is that server, else the vault's owner,
+  else a super admin).
+- **Who.** Super admins, people only (`requireSuperAdmin`); apply and the override take the keys step-up in the console,
+  bound to `mirror.relink:<vault>`, after the vault's name typed. Audited `mirror.relink` on both servers and
+  `mirror.relink.done` when each side completes.
+- **Both sides agree (the handshake).** Trust between two servers about a vault holds until either ends it; a detach, an
+  ended mirror or an unlink did, so a relink needs a person on each server. Comparing on X first sends
+  `peer.mirror.relink.request`: Y keeps a `responder` row `requested` for a day and serves nothing of its tree (`state`
+  answers only its status; `tree`, `prepare`, `go` refuse `mirror_relink_not_accepted`) until a super admin of Y accepts
+  (`vh mirror pending`, `vh mirror relink <vault> --accept`, `mirror.relink.accept`); the acceptance holds a day. X's
+  apply sends the outcome (`peer.mirror.relink.propose`: Y's side of the core and mode, what each vault gains and loses,
+  both digests, the plan's hash over each entry's choice and version hashes) and waits (`proposed`); a super admin of Y
+  approves it (`--approve --confirm <name>`, `mirror.relink.approve`, the keys step-up bound to Y's vault) or declines.
+  X then carries it out (its apply again, or `relink::tick` on its `approved` row); Y's `prepare` takes only the approved
+  plan: its role and mode, its digest unchanged, the plan hash and the gains it recomputes from the entries it receives
+  (else `mirror_relink_not_approved`, and the approval is void). A plan edited after it was proposed, or a tree that
+  changed on either server, voids the approval and asks again. Declines, cancels (`peer.mirror.relink.cancel`) and
+  expiries change neither vault; answers travel back as `peer.mirror.relink.answer` (informational: each server checks
+  its own rows). Every step is audited on both servers. The link's "accept every vault" never applies to a relink.
+
+Known limits: the plan and its entries are kept on the initiator only (the other server keeps the approved outcome's
+counts and hash, and its part once applied);
+metadata other than place (mode, times) is the core's afterwards, as for resync; a vault whose two sides use different
+keys is refused rather than re-keyed; a failure after the core prepared leaves the mirror stopped (`mirror_relinking`),
+which `vh mirror resync` there resumes.
+
+Proven: `MirrorRelinkDbTest` (`test_mirror_relink_db.cpp`), `SqlDeployerHistoryDb.MirrorRelinkMigration171...`, and
+`vhh drill peers` step 9f.
+
 ## A mirrored vault with a remote
 
 - **Remote sync runs on the core only,** with the existing engine, under the vault's own strategy. The mirror never

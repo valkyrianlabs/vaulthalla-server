@@ -1065,6 +1065,17 @@ export interface WebSocketCommandMap {
   'mirror.switch': WsContract['mirror.switch']
   // A mirror whose core is gone takes over as the vault's core (super admins; the vault's name typed).
   'mirror.takeover': WsContract['mirror.takeover']
+  // Relink a vault both servers hold since their mirror ended: compare, plan, apply (super admins; keys step-up).
+  'mirror.relink.compare': WsContract['mirror.relink.compare']
+  'mirror.relink.get': WsContract['mirror.relink.get']
+  'mirror.relink.entries': WsContract['mirror.relink.entries']
+  'mirror.relink.plan': WsContract['mirror.relink.plan']
+  'mirror.relink.apply': WsContract['mirror.relink.apply']
+  // The other side: a linked server's relink of a vault here waits for a super admin (accept, decline, approve).
+  'mirror.relink.pending': WsContract['mirror.relink.pending']
+  'mirror.relink.accept': WsContract['mirror.relink.accept']
+  'mirror.relink.decline': WsContract['mirror.relink.decline']
+  'mirror.relink.approve': WsContract['mirror.relink.approve']
   'peer.mirror.offer': WsContract['peer.mirror.offer']
   'peer.mirror.answer': WsContract['peer.mirror.answer']
   'peer.mirror.keys': WsContract['peer.mirror.keys']
@@ -1093,6 +1104,16 @@ export interface WebSocketCommandMap {
   'peer.mirror.detached': WsContract['peer.mirror.detached']
   'peer.mirror.deleting': WsContract['peer.mirror.deleting']
   'peer.mirror.resync': WsContract['peer.mirror.resync']
+  // Relink: the other server's side (the handshake first: request, answer, propose, cancel).
+  'peer.mirror.relink.request': WsContract['peer.mirror.relink.request']
+  'peer.mirror.relink.answer': WsContract['peer.mirror.relink.answer']
+  'peer.mirror.relink.propose': WsContract['peer.mirror.relink.propose']
+  'peer.mirror.relink.cancel': WsContract['peer.mirror.relink.cancel']
+  'peer.mirror.relink.state': WsContract['peer.mirror.relink.state']
+  'peer.mirror.relink.tree': WsContract['peer.mirror.relink.tree']
+  'peer.mirror.relink.prepare': WsContract['peer.mirror.relink.prepare']
+  'peer.mirror.relink.go': WsContract['peer.mirror.relink.go']
+  'peer.mirror.relink.abort': WsContract['peer.mirror.relink.abort']
   // The planned switch between the two linked servers (design/peers/mirror.md "As built: the planned switch").
   'peer.mirror.switch.request': WsContract['peer.mirror.switch.request']
   'peer.mirror.switch.prepare': WsContract['peer.mirror.switch.prepare']
