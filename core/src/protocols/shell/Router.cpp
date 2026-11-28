@@ -1,6 +1,7 @@
 #include "protocols/shell/Router.hpp"
 #include "protocols/shell/Token.hpp"
 #include "protocols/shell/Parser.hpp"
+#include "protocols/shell/types.hpp"
 #include "log/Registry.hpp"
 #include "identities/User.hpp"
 #include "CommandUsage.hpp"
@@ -12,8 +13,10 @@
 #include <cctype>
 #include <string>
 #include <algorithm>
+#include <memory>
 #include <optional>
 #include <utility>
+#include <vector>
 
 using vh::identities::User;
 using vh::identities::Group;
@@ -93,6 +96,34 @@ std::string redactLineForLog(const std::string& line) {
 
 namespace {
 
+bool isHelpKey(const std::string& key) { return key == "help" || key == "h" || key == "?"; }
+
+// The usage path (primaries, from the top-level command) that `--help` on this line asks about, or nothing without a
+// help option. Subcommands are found among the positionals the way unknownOptionError finds them (argument words are
+// skipped). The parser takes the word after `--help` as its value (`vh peer --help pair`), so that word names a
+// subcommand too, wherever in the walk it fits.
+std::optional<std::vector<std::string>> helpPath(const CommandCall& call, const std::shared_ptr<CommandUsage>& root) {
+    const auto help = std::ranges::find_if(call.options, [](const FlagKV& o) { return isHelpKey(o.key); });
+    if (!root || help == call.options.end()) return std::nullopt;
+
+    std::vector<std::string> path{root->primary()};
+    auto node = root;
+    auto pending = help->value;
+    const auto descend = [&](const std::string& word) {
+        auto child = node->findSubcommand(word);
+        if (!child) return false;
+        path.push_back(child->primary());
+        node = std::move(child);
+        return true;
+    };
+    const auto takePending = [&] { if (pending && descend(*pending)) pending.reset(); };
+    for (const auto& positional : call.original_positionals) {
+        takePending();
+        (void)descend(positional);
+    }
+    takePending();
+    return path;
+}
 
 // Options are definition-driven: each must be declared by the command or by a subcommand its positionals select
 // (or belong to a family the definition declares in option_prefixes). Unknown options used to be silently
@@ -107,7 +138,7 @@ std::optional<std::string> unknownOptionError(const CommandCall& call, const std
         if (auto child = path.back()->findSubcommand(positional)) path.push_back(std::move(child));
 
     for (const auto& opt : call.options) {
-        if (opt.key == "help" || opt.key == "h") continue;
+        if (isHelpKey(opt.key)) continue;
         if (std::ranges::any_of(path, [&](const auto& node) {
                 return usageDeclaresOption(*node, opt.key) ||
                        std::ranges::any_of(node->option_prefixes, [&](const std::string& p) { return opt.key.starts_with(p); });
@@ -185,6 +216,10 @@ CommandResult Router::executeLine(const std::string& line, const std::shared_ptr
         return invalid(call.constructFullArgs(), fmt::format("[Router] Unknown command or alias: {}", call.name));
 
     const auto& info = commands_.at(canonical);
+    // `--help` (or -h, -?) anywhere on a line shows the help of the command it names and runs nothing. It used to reach
+    // the handler as one more option, and most handlers looked for it only with no positionals: `vh peer pair --help`
+    // opened a pairing window, `vh peer link --help` complained about its positionals.
+    if (const auto path = helpPath(call, info.usage)) return usage(*path);
     if (const auto err = unknownOptionError(call, info.usage)) return invalid(*err);
     (void)takeConfirmationNeeded();
     auto result = info.handler(call);
