@@ -20,6 +20,7 @@
 #include "identities/User.hpp"
 #include "stats/model/CacheStats.hpp"
 #include "stats/model/ConnectionStats.hpp"
+#include "health/Findings.hpp"
 #include "stats/model/DashboardOverview.hpp"
 #include "stats/model/DbStats.hpp"
 #include "stats/model/FuseStats.hpp"
@@ -156,13 +157,18 @@ json Stats::vaultSecurity(const json& payload, const std::shared_ptr<Session>& s
 
 json Stats::dashboardOverview(const json& payload, const std::shared_ptr<Session>& session) {
     vh::ops::stats::requireSystem(session->user, "dashboard overview stats");
-    return {{"stats", vh::stats::model::DashboardOverview::snapshot(vh::stats::model::dashboardOverviewRequestFromJson(payload))}};
+    auto overview = vh::stats::model::DashboardOverview::snapshot(vh::stats::model::dashboardOverviewRequestFromJson(payload));
+    // What operators said about the findings (acknowledged, silenced); severities and counts are untouched.
+    vh::health::annotate(overview);
+    return {{"stats", overview}};
 }
 
 json Stats::dashboardSeverity(const std::shared_ptr<Session>& session) {
     vh::ops::stats::requireSystem(session->user, "dashboard overview stats");
+    auto overview = vh::stats::model::DashboardOverview::severity();
+    vh::health::annotate(overview);
     // Wrapped in `stats` like every other stats.* response.
-    return {{"stats", vh::stats::model::dashboardSeverityJson(vh::stats::model::DashboardOverview::severity())}};
+    return {{"stats", vh::stats::model::dashboardSeverityJson(overview)}};
 }
 
 json Stats::systemHealth(const std::shared_ptr<Session>& session) {

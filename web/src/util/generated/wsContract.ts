@@ -6,10 +6,10 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '2d929ea0319172a28adf80a6156ada78111213be91e7140752130dfb8cd5a876'
+export const WS_CONTRACT_HASH = 'f9647cd0a3ece2f68aa8ae5f09aa77c92012bf9921247bf721e39ad45d1dd5b3'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
-export const WS_MODELS_HASH = '22ee63a7649f4d3e730bfe38c9e071777204f292e084265c7a867a3729b941e6'
+export const WS_MODELS_HASH = 'fb2eb50b685f7091174b75d352410329a3ab874281197b5e75237c9eacb3def9'
 
 // The ws protocol range this book is (core/usage WsProtocol.hpp): send it in meta.hello.
 export const WS_PROTOCOL_VERSION = 1
@@ -33,6 +33,7 @@ export const WS_CAPABILITIES: readonly string[] = [
   'fs.entry.content_version',
   'fs.entry.metadata_version',
   'fs.entry.stable_id',
+  'health.findings',
   'http.upload.content',
   'http.upload.resumable',
   'ws.envelope.optional_payload',
@@ -497,6 +498,8 @@ export interface WsModels {
     overall_status: string
     warning_count: number
     error_count: number
+    unattended_warning_count: number
+    unattended_error_count: number
     checked_at: number
     attention: {
       code: string
@@ -506,6 +509,7 @@ export interface WsModels {
       message: string
       href: string | null
       metric_key: string | null
+      state: 'active' | 'acknowledged' | 'silenced'
     }[]
     sections: WsModels['DashboardSectionSummary'][]
     cards: WsModels['DashboardCardSummary'][]
@@ -550,7 +554,14 @@ export interface WsModels {
   /**
    * The overview's overall severity only (core/src/stats/model/DashboardOverview.cpp dashboardSeverityJson).
    */
-  'DashboardSeverity': { overall_status: string; error_count: number; warning_count: number; checked_at: number }
+  'DashboardSeverity': {
+    overall_status: string
+    error_count: number
+    warning_count: number
+    unattended_error_count: number
+    unattended_warning_count: number
+    checked_at: number
+  }
   /**
    * database.* (Config.cpp to_json(DatabaseConfig)); the password is never part of it.
    */
@@ -804,6 +815,79 @@ export interface WsModels {
    * A group membership (identities::to_json(GroupMember), core/src/identities/Group.cpp).
    */
   'GroupMember': { user: WsModels['PublicUser'] | null; joined_at: string }
+  /**
+   * An active health finding with its state (core/src/health/Findings.cpp to_json).
+   */
+  'HealthFinding': {
+    class: string
+    subject: string
+    card_id: string
+    severity: 'warning' | 'error'
+    title: string
+    class_title: string
+    message: string
+    href: string | null
+    metric_key: string | null
+    notifies: boolean
+    state: 'active' | 'acknowledged' | 'silenced'
+    mark: WsModels['HealthFindingMark'] | null
+    remedies: WsModels['HealthRemedy'][]
+  }
+  /**
+   * A class of health finding (core/src/health/Catalog.cpp to_json).
+   */
+  'HealthFindingClass': {
+    class: string
+    card_id: string
+    title: string
+    max_severity: 'warning' | 'error'
+    notifies: boolean
+    remedies: WsModels['HealthRemedy'][]
+  }
+  /**
+   * What an operator said about a finding class (core/src/health/Findings.cpp to_json; health_finding_state).
+   */
+  'HealthFindingMark': {
+    class: string
+    subject: string
+    state: 'acknowledged' | 'silenced'
+    severity: 'warning' | 'error'
+    set_by: number | null
+    set_by_name: string
+    set_at: number
+    expires_at: number | null
+    note: string | null
+  }
+  /**
+   * The health answer (ops::health::list): the dashboard's status and counts as they are, the counts without
+   * acknowledged and silenced findings, the findings and the silences that are set for classes not active
+   * now.
+   */
+  'HealthFindings': {
+    overall_status: string
+    error_count: number
+    warning_count: number
+    unattended_error_count: number
+    unattended_warning_count: number
+    checked_at: number
+    findings: WsModels['HealthFinding'][]
+    silences: WsModels['HealthFindingMark'][]
+    can_manage: boolean
+    catalog?: WsModels['HealthFindingClass'][]
+  }
+  /**
+   * Something a person can do about a finding (core/src/health/Catalog.cpp to_json). It only names a place or
+   * an existing command: running it goes through that command's own permission check and confirmation.
+   */
+  'HealthRemedy': {
+    id: string
+    label: string
+    kind: 'open' | 'command'
+    href: string | null
+    command: string | null
+    payload: object | null
+    effect: 'read' | 'write' | 'destructive' | null
+  }
   /**
    * http_preview_server.* (Config.cpp to_json(HttpPreviewConfig)).
    */
@@ -5478,6 +5562,50 @@ export interface WsContract {
     response: { groups: WsModels['Group'][] }
   }
   /**
+   * "I have seen this occurrence": marks an active finding acknowledged. The mark ends when the finding
+   * clears or its severity rises. Refused (conflict) when the class is not active or is silenced. Needs
+   * admin.stats.manage; recorded in the audit trail. Never available to agents or scoped devices.
+   */
+  'health.finding.acknowledge': {
+    payload: { class: string; subject?: string; note?: string | null }
+    response: { health: WsModels['HealthFindings'] }
+  }
+  /**
+   * "Do not tell me about this class": silences a finding class, active or not, for a time or until it is
+   * turned back on. A silence does not cover a severity above the one it was set for. Needs
+   * admin.stats.manage; recorded in the audit trail. Never available to agents or scoped devices.
+   */
+  'health.finding.silence': {
+    payload: {
+      class: string
+      subject?: string
+      for_seconds?: number | null
+      until?: number | null
+      severity?: 'warning' | 'error' | null
+      note?: string | null
+    }
+    response: { health: WsModels['HealthFindings'] }
+  }
+  /**
+   * Turns a finding class back on: removes its silence or acknowledgement. Refused (not_found) when it has
+   * neither. Needs admin.stats.manage; recorded in the audit trail. Never available to agents or scoped
+   * devices.
+   */
+  'health.finding.unsilence': {
+    payload: { class: string; subject?: string }
+    response: { health: WsModels['HealthFindings'] }
+  }
+  /**
+   * The health findings that are active now, each with what an operator said about it (active, acknowledged,
+   * silenced), whether it is worth a notification, and its remedies; the silences whose class is not active;
+   * and the counts with and without acknowledged and silenced findings. Severity is never changed by a mark.
+   * Needs admin.stats.view.
+   */
+  'health.findings.list': {
+    payload: { include_catalog?: boolean }
+    response: { health: WsModels['HealthFindings'] }
+  }
+  /**
    * The contract this daemon was built from: contract_version, contract_hash (the whole document vh_usage
    * --json publishes), ws_hash (the ws command book, what the web console is generated from) and models_hash
    * (the model shapes the book refers to). Read-only, no secrets; needs a signed-in session (no build
@@ -9819,6 +9947,10 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'group.update',
   'groups.list',
   'groups.list.byUser',
+  'health.finding.acknowledge',
+  'health.finding.silence',
+  'health.finding.unsilence',
+  'health.findings.list',
   'meta.contract.get',
   'meta.hello',
   'mirror.accept',
@@ -10328,6 +10460,10 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'group.update': 15000,
   'groups.list': 15000,
   'groups.list.byUser': 15000,
+  'health.finding.acknowledge': 15000,
+  'health.finding.silence': 15000,
+  'health.finding.unsilence': 15000,
+  'health.findings.list': 15000,
   'meta.contract.get': 15000,
   'meta.hello': 15000,
   'mirror.accept': 15000,

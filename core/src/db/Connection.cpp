@@ -285,6 +285,7 @@ void Connection::initPrepared() {
 
     // Dashboard
     initPreparedDashboardPreferences();
+    initPreparedHealthFindingState();
 
     // Admin
     initPreparedSecrets();

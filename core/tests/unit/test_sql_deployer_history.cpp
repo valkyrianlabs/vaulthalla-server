@@ -255,6 +255,10 @@ TEST_F(SqlDeployerHistoryDb, StatsPermissionMigrationMatchesFreshSeedAndKeepsOld
         txn.exec("ALTER TABLE admin_role DROP COLUMN stats_permissions");
         txn.exec("DELETE FROM schema_migrations WHERE filename = '105_admin_stats_permission.sql'");
         txn.exec("DELETE FROM permission WHERE name = 'admin.stats.view' AND category = 'admin'");
+        // Such a database has not run 172 either (admin.stats.manage, bit 1, for the built-in super_admin): it runs
+        // after 105 on the same upgrade.
+        txn.exec("DELETE FROM schema_migrations WHERE filename = '172_health_finding_state.sql'");
+        txn.exec("DELETE FROM permission WHERE name = 'admin.stats.manage' AND category = 'admin'");
 
         const auto upsert = [&](const std::string& name, const vh::rbac::role::Admin& bits) {
             txn.exec(R"SQL(
@@ -289,6 +293,7 @@ TEST_F(SqlDeployerHistoryDb, StatsPermissionMigrationMatchesFreshSeedAndKeepsOld
         migseed::SqlDeployReport report;
         ASSERT_NO_THROW(report = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
         EXPECT_TRUE(applied(report, "105_admin_stats_permission.sql"));
+        EXPECT_TRUE(applied(report, "172_health_finding_state.sql"));
 
         const auto bitsOf = [&](const std::string& name) {
             return txn.exec("SELECT stats_permissions::text FROM admin_role WHERE name = $1", pqxx::params{name})
@@ -306,6 +311,10 @@ TEST_F(SqlDeployerHistoryDb, StatsPermissionMigrationMatchesFreshSeedAndKeepsOld
             "SELECT bit_position FROM permission WHERE name = 'admin.stats.view' AND category = 'admin'");
         ASSERT_EQ(catalog.size(), 1u);
         EXPECT_EQ(catalog.one_row_ref()[0].as<int>(), 0);
+        const auto manage = txn.exec(
+            "SELECT bit_position FROM permission WHERE name = 'admin.stats.manage' AND category = 'admin'");
+        ASSERT_EQ(manage.size(), 1u);
+        EXPECT_EQ(manage.one_row_ref()[0].as<int>(), 1);
 
         migseed::SqlDeployReport again;
         ASSERT_NO_THROW(again = migseed::SqlDeployer::applyDir(txn, repoPsqlDir()));
