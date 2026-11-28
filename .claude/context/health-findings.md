@@ -39,4 +39,15 @@ valkyrianlabs/vaulthalla-desktop#75; server issues #482, #483).
 - **Tests:** `core/tests/unit/test_health_findings.cpp` (`HealthPushDb.*` for the push, driven by explicit times
   through `tick(now)` and the delivery seam), `contract/models_health.cpp`. A test replaces the source of findings
   with `health::setActiveSourceForTesting`.
-- **Not built yet:** the console UI (#483), email following findings.
+- **Console** (#483, `web/src/features/health/findings/`): the Overview's "Needs attention" (`FindingsPanel`, from
+  `health.findings.list {include_catalog: true}`) shows each finding's state; `can_manage` accounts get Acknowledge,
+  Silence (`SilenceDialog`, lazy: 1 h, 24 h, 7 d, until turned back on; note up to 500 UTF-8 bytes as the server counts
+  it), Turn back on and each `open` remedy whose href is a console path. "Silenced" lists silenced findings and the
+  answer's `silences` (titles from the catalog). Change answers replace the cached list (catalog kept) and the
+  severity rollup. The top bar dot (`HealthIndicator`) reads the unattended counts (`badgeFor`: all seen = "Nothing
+  new", never green); the Hero and section badges keep the true counts. `push.ts` holds one ref-counted
+  `health.subscribe` while the top bar or any health view is mounted (capability `health.push` via `lib/hello.ts`),
+  invalidates the findings and severity on each `health.changed`, resubscribes on every socket open, and reports
+  "subscribed" so those reads stop polling; `"subscribed": false`, a dropped socket or no capability means polling.
+  Words in `copy.ts`, rules in `model.ts` (both unit-tested); `tests/e2e/health.spec.ts` scripts it offline.
+- **Not built yet:** email following findings.

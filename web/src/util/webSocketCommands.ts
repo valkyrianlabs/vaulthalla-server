@@ -976,6 +976,9 @@ export interface WebSocketCommandMap {
         overall_status: DashboardSeverity
         error_count: number
         warning_count: number
+        // Without acknowledged and silenced findings (design/health/findings.md §3): what the top bar badge counts.
+        unattended_error_count?: number
+        unattended_warning_count?: number
         checked_at: number | string | null
       }
     }

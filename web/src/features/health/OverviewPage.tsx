@@ -39,6 +39,8 @@ import { useOverview } from '@/features/health/hooks'
 import { HealthBadge, IssueList, LiveStatus, SeverityIcon } from '@/features/health/components'
 import { OverviewCard, type CustomizeHandlers } from '@/features/health/OverviewCard'
 import { healthHref, issueCountText, metricDisplay, metricTone, severityText, type Card, type Overview } from '@/features/health/model'
+import { FindingsPanel } from '@/features/health/findings/FindingsPanel'
+import { useHealthFindings } from '@/features/health/findings/queries'
 
 const PREF = { preference_key: DASHBOARD_HOME_PREFERENCE_KEY }
 
@@ -188,6 +190,9 @@ export function OverviewPage() {
   const payload = useMemo(() => overviewPayload(current), [current])
   const overview = useOverview(payload, undefined, layout !== null)
   const data = overview.data
+  // Findings with their state (health.findings.list). Until they load, or if they can't be, the overview's own
+  // attention list stands in, without state or controls.
+  const findings = useHealthFindings()
 
   const visible = useMemo(() => visibleCards(current), [current])
   const dirty = Boolean(layout && saved && layoutKey(layout) !== layoutKey(saved))
@@ -373,7 +378,9 @@ export function OverviewPage() {
         </Panel>
       ) : null}
 
-      {attention.length ? (
+      {findings.data ? (
+        <FindingsPanel health={findings.data} />
+      ) : attention.length ? (
         <Panel
           title={
             <span className="inline-flex items-center gap-2">

@@ -7,6 +7,7 @@ import { ErrorState } from '@/components/ui/State'
 import { ChartLineIcon, FolderTreeIcon, GaugeHighIcon, HardDriveIcon, MicrochipIcon } from '@/components/ui/icons'
 import { STATS_VIEW, useCan } from '@/lib/permissions'
 import { WsError } from '@/lib/ws/errors'
+import { useHealthPush } from '@/features/health/findings/push'
 
 const TABS: LinkTab[] = [
   { href: '/health', label: 'Overview', icon: GaugeHighIcon, exact: true },
@@ -17,9 +18,10 @@ const TABS: LinkTab[] = [
 ]
 
 // Every health command needs admin.stats.view on the server; without it the page shows the denied state instead of a
-// page of refusals.
+// page of refusals. Every health view follows health.changed while mounted (findings/push.ts).
 export const HealthShell = ({ children }: { children: React.ReactNode }) => {
   const canView = useCan(STATS_VIEW)
+  useHealthPush(canView)
   if (!canView) return <ErrorState error={new WsError('denied', 'Health needs the "view stats" admin permission.')} />
   return (
     <div className="w-full">

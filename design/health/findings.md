@@ -2,8 +2,8 @@
 
 Design for the server half of the "Round out the Mac experience" epic (valkyrianlabs/vaulthalla-desktop;
 its Desktop half is `docs/mac-experience.md` there). Status: design 2026-11-26; built 2026-11-27: classes, state,
-commands, agents, remedies as data and audit (#499), and the push of §6 (`protocols::ws::HealthNotifier`). Not built:
-the console (§11, #483).
+commands, agents, remedies as data and audit (#499), the push of §6 (`protocols::ws::HealthNotifier`) and the console
+of §11 (#483, `web/src/features/health/findings/`).
 
 The goal: a warning or error should lead somewhere. A person can say "I have seen this" (acknowledge), "stop
 telling me about this kind of thing" (silence), or do something about it (a remedy), and every surface (the web
