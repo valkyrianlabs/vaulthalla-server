@@ -10,6 +10,7 @@
 #include "device/ServerIdentity.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "ops/PeerPolicy.hpp"
 #include "peer/Crypto.hpp"
 #include "peer/Keys.hpp"
 #include "protocols/ws/Session.hpp"
@@ -60,8 +61,8 @@ std::optional<std::string> normalizedSpki(const std::optional<std::string>& text
 // device; never an agent, a scoped device, a relayed device or a linked server (design/peers/link.md).
 void requireLinker(const Actor& actor, const std::string& what) {
     requireActor(actor);
-    if (actor->systemOnly() || !actor->authorizing()) throw Denied("this account cannot " + what);
-    if (!actor->isSuperAdmin()) throw Denied("only super admins may " + what);
+    if (actor->systemOnly() || !actor->authorizing() || !actor->isSuperAdmin())
+        throw Denied(peer_policy::refusalFor(actor, "linked servers are managed by super admins", what));
     const auto* scope = auth::stepup::Scope::current();
     if (!scope) return;  // the daemon's own callers and tests (ops/Actor.hpp)
     switch (scope->channel()) {

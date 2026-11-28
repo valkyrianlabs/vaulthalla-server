@@ -59,8 +59,9 @@ bool mayDetach(const Actor& actor) {
 void requireDetacher(const Actor& actor, const std::string& what) {
     peer_policy::requirePerson(actor, what);
     if (actor->isSuperAdmin() || actor->mirrorPerms().canDetach()) return;
-    throw Denied("only super admins of this server, or people its admin roles let detach mirrored vaults "
-                 "(admin.mirror.detach), may " + what);
+    throw Denied(peer_policy::refusalFor(actor, "this is for super admins of this server, and people its admin roles "
+                                                "let detach mirrored vaults (admin.mirror.detach)",
+                                         what));
 }
 
 vh::mirror::leave::Preview detachPreview(const Actor& actor, const uint32_t vaultId) {
@@ -117,7 +118,9 @@ vh::mirror::copy::Job cancelCopy(const Actor& actor, const uint32_t vaultId) {
 
 vh::mirror::versions::Setting setVersions(const Actor& actor, const VersionsRequest& request) {
     peer_policy::requirePerson(actor, "decide which versions this server keeps of a mirrored vault");
-    if (!actor->isSuperAdmin()) throw Denied("only super admins of this server may decide which versions it keeps");
+    if (!actor->isSuperAdmin())
+        throw Denied(peer_policy::refusalFor(actor, "this is for super admins of this server",
+                                             "decide which versions it keeps of a mirrored vault"));
     if (request.vault_id == 0) throw Invalid("vault ID must be a positive integer");
     const auto row = vh::db::query::mirror::MirrorVaults::get(request.vault_id);
     if (!row || row->role != "mirror")
@@ -155,7 +158,8 @@ nlohmann::json toJson(const vh::mirror::versions::Setting& s) {
 
 HeldContent heldContent(const Actor& actor, const uint64_t id) {
     peer_policy::requirePerson(actor, "read a held change");
-    if (!actor->isSuperAdmin()) throw Denied("only super admins of this server may read held changes");
+    if (!actor->isSuperAdmin())
+        throw Denied(peer_policy::refusalFor(actor, "this is for super admins of this server", "read held changes"));
     const auto h = vh::db::query::mirror::Pending::heldChange(id);
     if (!h) throw NotFound("no held change " + std::to_string(id));
     if (h->op != "write" || h->state == "discarded")
