@@ -83,6 +83,8 @@ class WsContractTests(unittest.TestCase):
         overridden = sorted(local & {c["command"] for c in committed()["ws"]})
         self.assertFalse(overridden, "client.ts overrides server-declared timeouts (change core/usage instead): "
                          + ", ".join(overridden))
+        # The generated table leaves out the client's default: the two agree.
+        self.assertIn(f"const DEFAULT_TIMEOUT_MS = {ws_contract.DEFAULT_CLIENT_TIMEOUT_MS:_}", source)
 
     def test_a_server_side_change_is_drift(self) -> None:
         changed = copy.deepcopy(committed())

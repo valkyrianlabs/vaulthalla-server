@@ -44906,6 +44906,5096 @@
     },
     {
       "auth": "human",
+      "client_timeout_ms": 180000,
+      "command": "mirror.relink.apply",
+      "confirmations": [],
+      "description": "Carries the open plan out, or with keep (this | theirs) compares again and keeps that server's tree everywhere (the hard override). The chosen server becomes the vault's core in a term above any either used, the other its mirror: the mirror first brings each entry whose chosen version is its own onto the core as its own changes (contents over the sealed lane), then starts its copy over from the core's tree. Nothing is dropped: what leaves a tree is a held change with its bytes, a conflict copy, or in the core's trash. The detach, take over and rejoin records it resolves settle. Refused when either tree changed since it was compared (mirror_relink_stale), and while either server has pending changes, a switch, a start or a copy running, or is deleting the vault. `confirm` is the vault's name, typed. Answers mirror.relink.get; follow its progress there. Super admins; the keys step-up in the console; audited mirror.relink on both servers.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The vault's name, typed exactly.",
+          "generator": {
+            "attrs": [
+              "name"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "confirm",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "this",
+            "theirs"
+          ],
+          "name": "keep",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "With keep: the linked server.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "peer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "peer",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_forbidden",
+        "mirror_name_mismatch",
+        "mirror_relink_no_plan",
+        "mirror_relink_stale",
+        "mirror_relink_running",
+        "mirror_relink_no_vault",
+        "mirror_relink_unrelated",
+        "mirror_relink_no_person",
+        "mirror_relink_refused",
+        "mirror_core_unreachable",
+        "peer_not_linked",
+        "peer_link_down",
+        "mirror_relink_mirrored",
+        "mirror_relink_pending",
+        "mirror_relink_switch",
+        "mirror_relink_busy",
+        "mirror_relink_deleting",
+        "mirror_relink_keys",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_forbidden",
+        "mirror_name_mismatch",
+        "mirror_relink_no_plan",
+        "mirror_relink_stale",
+        "mirror_relink_running",
+        "mirror_relink_no_vault",
+        "mirror_relink_unrelated",
+        "mirror_relink_no_person",
+        "mirror_relink_refused",
+        "mirror_core_unreachable",
+        "peer_not_linked",
+        "peer_link_down",
+        "mirror_relink_mirrored",
+        "mirror_relink_pending",
+        "mirror_relink_switch",
+        "mirror_relink_busy",
+        "mirror_relink_deleting",
+        "mirror_relink_keys",
+        "step_up_required",
+        "recovery_cooldown"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The vault's open relink here, else its last; null: none.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "relink_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "initiator",
+                "responder"
+              ],
+              "name": "side",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "open",
+                "prepared",
+                "bring",
+                "copying",
+                "done",
+                "failed",
+                "stale",
+                "cancelled"
+              ],
+              "name": "phase",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "plan",
+                "override"
+              ],
+              "name": "mode",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs"
+              ],
+              "name": "core",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "default_choice",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "core",
+                "mirror"
+              ],
+              "name": "role",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "by",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "applied_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "finished_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "relink",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "peer",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "This server, when compared.",
+          "fields": [
+            {
+              "description": "The vault's id on that server.",
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "That server's node id.",
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What it holds of the vault: detached (it or its mirror detached), ended (its core ended the mirror or the servers were unlinked), orphaned (the copy its core left), rejoining or forked (an old core after a take over), core, mirror.",
+              "enum": [
+                "detached",
+                "ended",
+                "orphaned",
+                "rejoining",
+                "forked",
+                "core",
+                "mirror",
+                "unrelated"
+              ],
+              "name": "status",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "row_state",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The highest term its records of the vault reached.",
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The last position it agreed on with the other server, when it knows one.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "seq",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "agreed",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "Changes not yet confirmed or numbered there.",
+              "minimum": 0,
+              "name": "pending",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "switch_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "start_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "deleting",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "contents_missing",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "mirrored_elsewhere",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Its tree's digest now.",
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "this",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "The other server, when compared.",
+          "fields": [
+            {
+              "description": "The vault's id on that server.",
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "That server's node id.",
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What it holds of the vault: detached (it or its mirror detached), ended (its core ended the mirror or the servers were unlinked), orphaned (the copy its core left), rejoining or forked (an old core after a take over), core, mirror.",
+              "enum": [
+                "detached",
+                "ended",
+                "orphaned",
+                "rejoining",
+                "forked",
+                "core",
+                "mirror",
+                "unrelated"
+              ],
+              "name": "status",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "row_state",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The highest term its records of the vault reached.",
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The last position it agreed on with the other server, when it knows one.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "seq",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "agreed",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "Changes not yet confirmed or numbered there.",
+              "minimum": 0,
+              "name": "pending",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "switch_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "start_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "deleting",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "contents_missing",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "mirrored_elsewhere",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Its tree's digest now.",
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "theirs",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "Drifted entries by kind (changed_*: on both and changed on that side since the last position both agreed on; differs: that cannot be told), and the entries that are the same.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "only_this",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "only_theirs",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "changed_this",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "changed_theirs",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "changed_both",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "differs",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "total",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "same",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "counts",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Whether both servers hold the same keys (by key check and origin; no key moves).",
+          "fields": [
+            {
+              "name": "match",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "this",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "theirs",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "current",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "items": "integer",
+              "name": "mismatched",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "name": "keys",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "Each side's base (what it last agreed with the other), and whether both have one.",
+          "fields": [
+            {
+              "fields": [
+                {
+                  "name": "available",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "fork_base | rejoin | agreed | acknowledged | entry_hashes | kept",
+                  "name": "source",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "at",
+                  "required": true,
+                  "types": [
+                    "object",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "this",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "available",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "fork_base | rejoin | agreed | acknowledged | entry_hashes | kept",
+                  "name": "source",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "at",
+                  "required": true,
+                  "types": [
+                    "object",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "theirs",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "both",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            }
+          ],
+          "name": "base",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "What refuses applying now.",
+          "fields": [
+            {
+              "name": "code",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "side",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "message",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "blockers",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "What each server will gain and lose as the plan stands.",
+          "fields": [
+            {
+              "fields": [
+                {
+                  "description": "Entries it takes from the other server's version.",
+                  "minimum": 0,
+                  "name": "takes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Its versions that leave its tree, kept as held changes (with their bytes) or in the core's trash.",
+                  "minimum": 0,
+                  "name": "keeps_held",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Conflict copies it gains (keep both).",
+                  "minimum": 0,
+                  "name": "conflict_copies",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "this",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "Entries it takes from the other server's version.",
+                  "minimum": 0,
+                  "name": "takes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Its versions that leave its tree, kept as held changes (with their bytes) or in the core's trash.",
+                  "minimum": 0,
+                  "name": "keeps_held",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Conflict copies it gains (keep both).",
+                  "minimum": 0,
+                  "name": "conflict_copies",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "theirs",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "core",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "mirror",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "both",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "chosen",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs"
+              ],
+              "name": "core",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "default_choice",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            }
+          ],
+          "name": "plan",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Applying: the versions brought onto the core, and the vault's mirror row.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "bring_total",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "bring_done",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "executed",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "refused",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "kept",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The vault's mirror row here once applied.",
+              "fields": [
+                {
+                  "name": "role",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "state",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "copy_finished",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "copy_cursor",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "stop_reason",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "row",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "name": "progress",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "step_up": "keys",
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 120000,
+      "command": "mirror.relink.compare",
+      "confirmations": [],
+      "description": "Compares a vault this server and a linked server both hold since a mirror between them ended (detached, the core ended it or the servers were unlinked, an old core rejoining or forked after a take over) with the other server's, by entry uid: what is only on one server, and what both hold and changed on this side, the other or both since the last position both agreed on (differs where that cannot be told). Entry hashes only: no file's contents are read. Kept as the vault's open plan (replacing an open one): every entry the default (the core's), this server the core. Super admins.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The linked server.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "peer",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "peer",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_forbidden",
+        "peer_not_linked",
+        "peer_link_down",
+        "mirror_core_unreachable",
+        "mirror_relink_no_vault",
+        "mirror_relink_unrelated",
+        "mirror_relink_running",
+        "mirror_relink_refused"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_forbidden",
+        "peer_not_linked",
+        "peer_link_down",
+        "mirror_core_unreachable",
+        "mirror_relink_no_vault",
+        "mirror_relink_unrelated",
+        "mirror_relink_running",
+        "mirror_relink_refused"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The vault's open relink here, else its last; null: none.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "relink_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "initiator",
+                "responder"
+              ],
+              "name": "side",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "open",
+                "prepared",
+                "bring",
+                "copying",
+                "done",
+                "failed",
+                "stale",
+                "cancelled"
+              ],
+              "name": "phase",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "plan",
+                "override"
+              ],
+              "name": "mode",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs"
+              ],
+              "name": "core",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "default_choice",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "core",
+                "mirror"
+              ],
+              "name": "role",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "by",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "applied_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "finished_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "relink",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "peer",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "This server, when compared.",
+          "fields": [
+            {
+              "description": "The vault's id on that server.",
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "That server's node id.",
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What it holds of the vault: detached (it or its mirror detached), ended (its core ended the mirror or the servers were unlinked), orphaned (the copy its core left), rejoining or forked (an old core after a take over), core, mirror.",
+              "enum": [
+                "detached",
+                "ended",
+                "orphaned",
+                "rejoining",
+                "forked",
+                "core",
+                "mirror",
+                "unrelated"
+              ],
+              "name": "status",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "row_state",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The highest term its records of the vault reached.",
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The last position it agreed on with the other server, when it knows one.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "seq",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "agreed",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "Changes not yet confirmed or numbered there.",
+              "minimum": 0,
+              "name": "pending",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "switch_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "start_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "deleting",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "contents_missing",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "mirrored_elsewhere",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Its tree's digest now.",
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "this",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "The other server, when compared.",
+          "fields": [
+            {
+              "description": "The vault's id on that server.",
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "That server's node id.",
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What it holds of the vault: detached (it or its mirror detached), ended (its core ended the mirror or the servers were unlinked), orphaned (the copy its core left), rejoining or forked (an old core after a take over), core, mirror.",
+              "enum": [
+                "detached",
+                "ended",
+                "orphaned",
+                "rejoining",
+                "forked",
+                "core",
+                "mirror",
+                "unrelated"
+              ],
+              "name": "status",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "row_state",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The highest term its records of the vault reached.",
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The last position it agreed on with the other server, when it knows one.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "seq",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "agreed",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "Changes not yet confirmed or numbered there.",
+              "minimum": 0,
+              "name": "pending",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "switch_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "start_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "deleting",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "contents_missing",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "mirrored_elsewhere",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Its tree's digest now.",
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "theirs",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "Drifted entries by kind (changed_*: on both and changed on that side since the last position both agreed on; differs: that cannot be told), and the entries that are the same.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "only_this",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "only_theirs",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "changed_this",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "changed_theirs",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "changed_both",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "differs",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "total",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "same",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "counts",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Whether both servers hold the same keys (by key check and origin; no key moves).",
+          "fields": [
+            {
+              "name": "match",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "this",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "theirs",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "current",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "items": "integer",
+              "name": "mismatched",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "name": "keys",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "Each side's base (what it last agreed with the other), and whether both have one.",
+          "fields": [
+            {
+              "fields": [
+                {
+                  "name": "available",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "fork_base | rejoin | agreed | acknowledged | entry_hashes | kept",
+                  "name": "source",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "at",
+                  "required": true,
+                  "types": [
+                    "object",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "this",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "available",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "fork_base | rejoin | agreed | acknowledged | entry_hashes | kept",
+                  "name": "source",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "at",
+                  "required": true,
+                  "types": [
+                    "object",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "theirs",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "both",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            }
+          ],
+          "name": "base",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "What refuses applying now.",
+          "fields": [
+            {
+              "name": "code",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "side",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "message",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "blockers",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "What each server will gain and lose as the plan stands.",
+          "fields": [
+            {
+              "fields": [
+                {
+                  "description": "Entries it takes from the other server's version.",
+                  "minimum": 0,
+                  "name": "takes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Its versions that leave its tree, kept as held changes (with their bytes) or in the core's trash.",
+                  "minimum": 0,
+                  "name": "keeps_held",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Conflict copies it gains (keep both).",
+                  "minimum": 0,
+                  "name": "conflict_copies",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "this",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "Entries it takes from the other server's version.",
+                  "minimum": 0,
+                  "name": "takes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Its versions that leave its tree, kept as held changes (with their bytes) or in the core's trash.",
+                  "minimum": 0,
+                  "name": "keeps_held",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Conflict copies it gains (keep both).",
+                  "minimum": 0,
+                  "name": "conflict_copies",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "theirs",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "core",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "mirror",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "both",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "chosen",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs"
+              ],
+              "name": "core",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "default_choice",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            }
+          ],
+          "name": "plan",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Applying: the versions brought onto the core, and the vault's mirror row.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "bring_total",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "bring_done",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "executed",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "refused",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "kept",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The vault's mirror row here once applied.",
+              "fields": [
+                {
+                  "name": "role",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "state",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "copy_finished",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "copy_cursor",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "stop_reason",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "row",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "name": "progress",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.relink.entries",
+      "confirmations": [],
+      "description": "A page of the relink's drifted entries, by path, with both versions and the plan's choice and resolution for each. Super admins.",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "enum": [
+            "only_this",
+            "only_theirs",
+            "changed_this",
+            "changed_theirs",
+            "changed_both",
+            "differs"
+          ],
+          "name": "kind",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "offset",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "1-500 (default 100).",
+          "minimum": 0,
+          "name": "limit",
+          "required": false,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "relink_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "total",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "offset",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "only_this",
+                "only_theirs",
+                "changed_this",
+                "changed_theirs",
+                "changed_both",
+                "differs"
+              ],
+              "name": "kind",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "place, contents, trashed, target, attributes; for an entry on one server only: created or removed, and by_this, by_theirs or by_both when known.",
+              "items": "string",
+              "name": "aspects",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "description": "Vault-relative: this server's, else the other's.",
+              "name": "path",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "This server's version; null: not here.",
+              "fields": [
+                {
+                  "enum": [
+                    "file",
+                    "directory",
+                    "symlink"
+                  ],
+                  "name": "kind",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "trashed",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "Vault-relative (a trashed file's: where it was).",
+                  "name": "path",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Its entry hash.",
+                  "name": "hash",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Its folder's uid (the vault's uid at the top); null when trashed.",
+                  "name": "parent",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "generation",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "size",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "key_version",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "content_hash",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "mime",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "mode",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "this",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "The other server's version; null: not there.",
+              "fields": [
+                {
+                  "enum": [
+                    "file",
+                    "directory",
+                    "symlink"
+                  ],
+                  "name": "kind",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "trashed",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "Vault-relative (a trashed file's: where it was).",
+                  "name": "path",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Its entry hash.",
+                  "name": "hash",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Its folder's uid (the vault's uid at the top); null when trashed.",
+                  "name": "parent",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "generation",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "size",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "key_version",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "content_hash",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "mime",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "mode",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "theirs",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "null: the plan's default.",
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "choice",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "What the plan does: the core's version stays, the future mirror's is brought onto the core, or both (the mirror's as a conflict copy).",
+              "enum": [
+                "core",
+                "mirror",
+                "both"
+              ],
+              "name": "resolution",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "Applying: copied, executed, refused, kept.",
+              "name": "outcome",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "outcome_note",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "entries",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.relink.get",
+      "confirmations": [],
+      "description": "The vault's open relink here (else its last): both sides, the drift counts, the keys, what refuses applying, the plan with what each server gains and loses, and the progress of one being applied. relink null: none. Super admins.",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_forbidden"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_forbidden"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The vault's open relink here, else its last; null: none.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "relink_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "initiator",
+                "responder"
+              ],
+              "name": "side",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "open",
+                "prepared",
+                "bring",
+                "copying",
+                "done",
+                "failed",
+                "stale",
+                "cancelled"
+              ],
+              "name": "phase",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "plan",
+                "override"
+              ],
+              "name": "mode",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs"
+              ],
+              "name": "core",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "default_choice",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "core",
+                "mirror"
+              ],
+              "name": "role",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "by",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "applied_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "finished_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "relink",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "peer",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "This server, when compared.",
+          "fields": [
+            {
+              "description": "The vault's id on that server.",
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "That server's node id.",
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What it holds of the vault: detached (it or its mirror detached), ended (its core ended the mirror or the servers were unlinked), orphaned (the copy its core left), rejoining or forked (an old core after a take over), core, mirror.",
+              "enum": [
+                "detached",
+                "ended",
+                "orphaned",
+                "rejoining",
+                "forked",
+                "core",
+                "mirror",
+                "unrelated"
+              ],
+              "name": "status",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "row_state",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The highest term its records of the vault reached.",
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The last position it agreed on with the other server, when it knows one.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "seq",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "agreed",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "Changes not yet confirmed or numbered there.",
+              "minimum": 0,
+              "name": "pending",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "switch_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "start_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "deleting",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "contents_missing",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "mirrored_elsewhere",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Its tree's digest now.",
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "this",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "The other server, when compared.",
+          "fields": [
+            {
+              "description": "The vault's id on that server.",
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "That server's node id.",
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What it holds of the vault: detached (it or its mirror detached), ended (its core ended the mirror or the servers were unlinked), orphaned (the copy its core left), rejoining or forked (an old core after a take over), core, mirror.",
+              "enum": [
+                "detached",
+                "ended",
+                "orphaned",
+                "rejoining",
+                "forked",
+                "core",
+                "mirror",
+                "unrelated"
+              ],
+              "name": "status",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "row_state",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The highest term its records of the vault reached.",
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The last position it agreed on with the other server, when it knows one.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "seq",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "agreed",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "Changes not yet confirmed or numbered there.",
+              "minimum": 0,
+              "name": "pending",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "switch_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "start_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "deleting",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "contents_missing",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "mirrored_elsewhere",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Its tree's digest now.",
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "theirs",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "Drifted entries by kind (changed_*: on both and changed on that side since the last position both agreed on; differs: that cannot be told), and the entries that are the same.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "only_this",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "only_theirs",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "changed_this",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "changed_theirs",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "changed_both",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "differs",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "total",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "same",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "counts",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Whether both servers hold the same keys (by key check and origin; no key moves).",
+          "fields": [
+            {
+              "name": "match",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "this",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "theirs",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "current",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "items": "integer",
+              "name": "mismatched",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "name": "keys",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "Each side's base (what it last agreed with the other), and whether both have one.",
+          "fields": [
+            {
+              "fields": [
+                {
+                  "name": "available",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "fork_base | rejoin | agreed | acknowledged | entry_hashes | kept",
+                  "name": "source",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "at",
+                  "required": true,
+                  "types": [
+                    "object",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "this",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "available",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "fork_base | rejoin | agreed | acknowledged | entry_hashes | kept",
+                  "name": "source",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "at",
+                  "required": true,
+                  "types": [
+                    "object",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "theirs",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "both",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            }
+          ],
+          "name": "base",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "What refuses applying now.",
+          "fields": [
+            {
+              "name": "code",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "side",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "message",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "blockers",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "What each server will gain and lose as the plan stands.",
+          "fields": [
+            {
+              "fields": [
+                {
+                  "description": "Entries it takes from the other server's version.",
+                  "minimum": 0,
+                  "name": "takes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Its versions that leave its tree, kept as held changes (with their bytes) or in the core's trash.",
+                  "minimum": 0,
+                  "name": "keeps_held",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Conflict copies it gains (keep both).",
+                  "minimum": 0,
+                  "name": "conflict_copies",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "this",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "Entries it takes from the other server's version.",
+                  "minimum": 0,
+                  "name": "takes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Its versions that leave its tree, kept as held changes (with their bytes) or in the core's trash.",
+                  "minimum": 0,
+                  "name": "keeps_held",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Conflict copies it gains (keep both).",
+                  "minimum": 0,
+                  "name": "conflict_copies",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "theirs",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "core",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "mirror",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "both",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "chosen",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs"
+              ],
+              "name": "core",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "default_choice",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            }
+          ],
+          "name": "plan",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Applying: the versions brought onto the core, and the vault's mirror row.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "bring_total",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "bring_done",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "executed",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "refused",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "kept",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The vault's mirror row here once applied.",
+              "fields": [
+                {
+                  "name": "role",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "state",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "copy_finished",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "copy_cursor",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "stop_reason",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "row",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "name": "progress",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "mirror.relink.plan",
+      "confirmations": [],
+      "description": "Changes the open plan: which server becomes the core (core), the choice for entries left unset (default; \"\" is the core's), choices one at a time (set: {uid, choice}) or by kind (by_kind: {kind, choice}; kind \"\" is every entry); a choice is this, theirs, both (files only: the future mirror's version becomes a conflict copy beside the core's) or null (the default). discard ends the plan. Answers mirror.relink.get. Super admins.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "description": "Vault id.",
+          "generator": {
+            "attrs": [
+              "id"
+            ],
+            "entity": "vault",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "enum": [
+            "this",
+            "theirs"
+          ],
+          "name": "core",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "",
+            "this",
+            "theirs",
+            "both"
+          ],
+          "name": "default",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "choice",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "set",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "kind",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "choice",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "by_kind",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "name": "discard",
+          "required": false,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_forbidden",
+        "mirror_relink_no_plan"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_forbidden",
+        "mirror_relink_no_plan"
+      ],
+      "response": [
+        {
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The vault's open relink here, else its last; null: none.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "relink_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "initiator",
+                "responder"
+              ],
+              "name": "side",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "open",
+                "prepared",
+                "bring",
+                "copying",
+                "done",
+                "failed",
+                "stale",
+                "cancelled"
+              ],
+              "name": "phase",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "plan",
+                "override"
+              ],
+              "name": "mode",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs"
+              ],
+              "name": "core",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "default_choice",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "core",
+                "mirror"
+              ],
+              "name": "role",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "error",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "id",
+                  "required": true,
+                  "types": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "by",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "created_at",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "applied_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            },
+            {
+              "name": "finished_at",
+              "required": true,
+              "types": [
+                "integer",
+                "null"
+              ]
+            }
+          ],
+          "name": "relink",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "name": "peer",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "This server, when compared.",
+          "fields": [
+            {
+              "description": "The vault's id on that server.",
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "That server's node id.",
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What it holds of the vault: detached (it or its mirror detached), ended (its core ended the mirror or the servers were unlinked), orphaned (the copy its core left), rejoining or forked (an old core after a take over), core, mirror.",
+              "enum": [
+                "detached",
+                "ended",
+                "orphaned",
+                "rejoining",
+                "forked",
+                "core",
+                "mirror",
+                "unrelated"
+              ],
+              "name": "status",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "row_state",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The highest term its records of the vault reached.",
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The last position it agreed on with the other server, when it knows one.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "seq",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "agreed",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "Changes not yet confirmed or numbered there.",
+              "minimum": 0,
+              "name": "pending",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "switch_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "start_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "deleting",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "contents_missing",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "mirrored_elsewhere",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Its tree's digest now.",
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "this",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "The other server, when compared.",
+          "fields": [
+            {
+              "description": "The vault's id on that server.",
+              "minimum": 0,
+              "name": "vault_id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "vault_uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "vault_name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "That server's node id.",
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "What it holds of the vault: detached (it or its mirror detached), ended (its core ended the mirror or the servers were unlinked), orphaned (the copy its core left), rejoining or forked (an old core after a take over), core, mirror.",
+              "enum": [
+                "detached",
+                "ended",
+                "orphaned",
+                "rejoining",
+                "forked",
+                "core",
+                "mirror",
+                "unrelated"
+              ],
+              "name": "status",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "row_state",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "description": "The highest term its records of the vault reached.",
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The last position it agreed on with the other server, when it knows one.",
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "seq",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "agreed",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "Changes not yet confirmed or numbered there.",
+              "minimum": 0,
+              "name": "pending",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "switch_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "start_running",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "deleting",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "contents_missing",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "mirrored_elsewhere",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "Its tree's digest now.",
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "theirs",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "Drifted entries by kind (changed_*: on both and changed on that side since the last position both agreed on; differs: that cannot be told), and the entries that are the same.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "only_this",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "only_theirs",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "changed_this",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "changed_theirs",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "changed_both",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "differs",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "total",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "same",
+              "required": false,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "counts",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Whether both servers hold the same keys (by key check and origin; no key moves).",
+          "fields": [
+            {
+              "name": "match",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "this",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "theirs",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "current",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "items": "integer",
+              "name": "mismatched",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            }
+          ],
+          "name": "keys",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "Each side's base (what it last agreed with the other), and whether both have one.",
+          "fields": [
+            {
+              "fields": [
+                {
+                  "name": "available",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "fork_base | rejoin | agreed | acknowledged | entry_hashes | kept",
+                  "name": "source",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "at",
+                  "required": true,
+                  "types": [
+                    "object",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "this",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "available",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "fork_base | rejoin | agreed | acknowledged | entry_hashes | kept",
+                  "name": "source",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "fields": [
+                    {
+                      "minimum": 0,
+                      "name": "term",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    },
+                    {
+                      "minimum": 0,
+                      "name": "seq",
+                      "required": true,
+                      "types": [
+                        "integer"
+                      ]
+                    }
+                  ],
+                  "name": "at",
+                  "required": true,
+                  "types": [
+                    "object",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "theirs",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "name": "both",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            }
+          ],
+          "name": "base",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "What refuses applying now.",
+          "fields": [
+            {
+              "name": "code",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "side",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "message",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "blockers",
+          "required": false,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "description": "What each server will gain and lose as the plan stands.",
+          "fields": [
+            {
+              "fields": [
+                {
+                  "description": "Entries it takes from the other server's version.",
+                  "minimum": 0,
+                  "name": "takes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Its versions that leave its tree, kept as held changes (with their bytes) or in the core's trash.",
+                  "minimum": 0,
+                  "name": "keeps_held",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Conflict copies it gains (keep both).",
+                  "minimum": 0,
+                  "name": "conflict_copies",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "this",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "description": "Entries it takes from the other server's version.",
+                  "minimum": 0,
+                  "name": "takes",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Its versions that leave its tree, kept as held changes (with their bytes) or in the core's trash.",
+                  "minimum": 0,
+                  "name": "keeps_held",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "description": "Conflict copies it gains (keep both).",
+                  "minimum": 0,
+                  "name": "conflict_copies",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "theirs",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "core",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "mirror",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "both",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "chosen",
+              "required": true,
+              "types": [
+                "object"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs"
+              ],
+              "name": "core",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "default_choice",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            }
+          ],
+          "name": "plan",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "description": "Applying: the versions brought onto the core, and the vault's mirror row.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "bring_total",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "bring_done",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "executed",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "refused",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "kept",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "description": "The vault's mirror row here once applied.",
+              "fields": [
+                {
+                  "name": "role",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "state",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "copy_finished",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "copy_cursor",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "stop_reason",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                }
+              ],
+              "name": "row",
+              "required": false,
+              "types": [
+                "object"
+              ]
+            }
+          ],
+          "name": "progress",
+          "required": false,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
       "client_timeout_ms": 15000,
       "command": "mirror.resync",
       "confirmations": [],
@@ -49627,6 +54717,1299 @@
           "required": false,
           "types": [
             "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.relink.abort",
+      "confirmations": [],
+      "description": "The other server could not prepare its side: this server's prepared side ends (its new mirror row goes; the vault is this server's own; what it settled stays settled).",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "relink_uid"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "relink_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "why"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "why",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_revoked"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_revoked"
+      ],
+      "response": [
+        {
+          "name": "phase",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.relink.go",
+      "confirmations": [],
+      "description": "The relink's core is ready: this server, its future mirror, starts its copy over from the core's tree at once, or first brings its chosen versions onto the core (the follower's pass). Told again, it answers its phase.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "relink_uid"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "relink_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_revoked"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_revoked"
+      ],
+      "response": [
+        {
+          "name": "phase",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 120000,
+      "command": "peer.mirror.relink.prepare",
+      "confirmations": [],
+      "description": "A relink's plan for this server, in parts: its role (core or mirror), the term, and every drifted entry with both versions and the choice seen from this server. The last part prepares it here: the records the relink resolves settle; a future core keeps the versions the plan replaces as held changes and starts the pair; a future mirror keeps what the core's tree replaces without a trace, makes its conflict copies and holds a mirror row (stopped, mirror_relinking) until it is told to go. Refused when this server's tree changed since it was compared.",
+      "effect": "write",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "relink_uid"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "relink_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "enum": [
+            "core",
+            "mirror"
+          ],
+          "name": "role",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "term"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "term",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "enum": [
+            "plan",
+            "override"
+          ],
+          "name": "mode",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "part"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "part",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "more"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "more",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "kind",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "items": "string",
+              "name": "aspects",
+              "required": true,
+              "types": [
+                "array"
+              ]
+            },
+            {
+              "name": "path",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "The receiving server's version.",
+              "fields": [
+                {
+                  "enum": [
+                    "file",
+                    "directory",
+                    "symlink"
+                  ],
+                  "name": "kind",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "trashed",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "Vault-relative (a trashed file's: where it was).",
+                  "name": "path",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Its entry hash.",
+                  "name": "hash",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Its folder's uid (the vault's uid at the top); null when trashed.",
+                  "name": "parent",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "generation",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "size",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "key_version",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "content_hash",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "mime",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "mode",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "yours",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "description": "The asking server's version.",
+              "fields": [
+                {
+                  "enum": [
+                    "file",
+                    "directory",
+                    "symlink"
+                  ],
+                  "name": "kind",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "trashed",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "Vault-relative (a trashed file's: where it was).",
+                  "name": "path",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Its entry hash.",
+                  "name": "hash",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Its folder's uid (the vault's uid at the top); null when trashed.",
+                  "name": "parent",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "generation",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "size",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "key_version",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "content_hash",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "mime",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "mode",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "mine",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "enum": [
+                "this",
+                "theirs",
+                "both"
+              ],
+              "name": "choice",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "entries"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "items": "object",
+          "name": "entries",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "node",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "id",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "name",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "node",
+              "id",
+              "name"
+            ],
+            "entity": "mirror.person",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "by",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "name": "digest",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "name": "entries",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "digest",
+              "entries"
+            ],
+            "entity": "mirror.digest",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "digest",
+          "required": true,
+          "types": [
+            "object"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_revoked",
+        "mirror_relink_stale",
+        "mirror_relink_running",
+        "mirror_relink_no_person",
+        "mirror_relink_mirrored",
+        "mirror_relink_pending",
+        "mirror_relink_switch",
+        "mirror_relink_busy",
+        "mirror_relink_deleting",
+        "mirror_relink_keys"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_revoked",
+        "mirror_relink_stale",
+        "mirror_relink_running",
+        "mirror_relink_no_person",
+        "mirror_relink_mirrored",
+        "mirror_relink_pending",
+        "mirror_relink_switch",
+        "mirror_relink_busy",
+        "mirror_relink_deleting",
+        "mirror_relink_keys"
+      ],
+      "response": [
+        {
+          "name": "prepared",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "part",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "phase",
+          "required": false,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.relink.state",
+      "confirmations": [],
+      "description": "A relink's other server asks what this server holds of the vault with this uid: its status, the highest term, the last position it agreed on with the asking server, what refuses a relink here, its tree's digest and its key versions (key checks and origins, never a key). not_found unless this server has a record of mirroring the vault with the asking server.",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_revoked"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_revoked"
+      ],
+      "response": [
+        {
+          "description": "The vault's id on that server.",
+          "minimum": 0,
+          "name": "vault_id",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "vault_name",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "That server's node id.",
+          "name": "node",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "What it holds of the vault: detached (it or its mirror detached), ended (its core ended the mirror or the servers were unlinked), orphaned (the copy its core left), rejoining or forked (an old core after a take over), core, mirror.",
+          "enum": [
+            "detached",
+            "ended",
+            "orphaned",
+            "rejoining",
+            "forked",
+            "core",
+            "mirror",
+            "unrelated"
+          ],
+          "name": "status",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "row_state",
+          "required": true,
+          "types": [
+            "string",
+            "null"
+          ]
+        },
+        {
+          "description": "The highest term its records of the vault reached.",
+          "minimum": 0,
+          "name": "term",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The last position it agreed on with the other server, when it knows one.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "seq",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "name": "agreed",
+          "required": true,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "description": "Changes not yet confirmed or numbered there.",
+          "minimum": 0,
+          "name": "pending",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "switch_running",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "start_running",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "name": "deleting",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "contents_missing",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "name": "mirrored_elsewhere",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "description": "Its tree's digest now.",
+          "name": "digest",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "name": "entries",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "version",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "name": "current",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "name": "check",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "name": "node",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "vault_id",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "check",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                }
+              ],
+              "name": "origin",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "keys",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "peer",
+      "client_timeout_ms": 15000,
+      "command": "peer.mirror.relink.tree",
+      "confirmations": [],
+      "description": "A page of this server's tree of the vault for a relink's comparison, by uid: each entry's version (or null when only its base holds it) and its base hash (what this server last agreed with the asking server). The tree is read at the first page (after 0) and paged from that read.",
+      "effect": "read",
+      "input": "payload",
+      "operation": null,
+      "payload": [
+        {
+          "generator": {
+            "attrs": [
+              "vault_uid"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "vault_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "relink_uid"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "relink_uid",
+          "required": true,
+          "types": [
+            "string"
+          ]
+        },
+        {
+          "description": "The asking server's agreed position.",
+          "fields": [
+            {
+              "minimum": 0,
+              "name": "term",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            },
+            {
+              "minimum": 0,
+              "name": "seq",
+              "required": true,
+              "types": [
+                "integer"
+              ]
+            }
+          ],
+          "generator": {
+            "attrs": [
+              "since"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "name": "since",
+          "required": false,
+          "types": [
+            "object",
+            "null"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "after"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "after",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "generator": {
+            "attrs": [
+              "limit"
+            ],
+            "entity": "mirror.relink",
+            "kind": "ref",
+            "scope": "any"
+          },
+          "minimum": 0,
+          "name": "limit",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "refusal_codes": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_revoked"
+      ],
+      "refusal_kinds": [
+        "denied",
+        "invalid",
+        "not_found",
+        "conflict",
+        "unauthorized",
+        "peer_revoked"
+      ],
+      "response": [
+        {
+          "fields": [
+            {
+              "name": "uid",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "description": "null: only its base holds it.",
+              "fields": [
+                {
+                  "enum": [
+                    "file",
+                    "directory",
+                    "symlink"
+                  ],
+                  "name": "kind",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "trashed",
+                  "required": true,
+                  "types": [
+                    "boolean"
+                  ]
+                },
+                {
+                  "description": "Vault-relative (a trashed file's: where it was).",
+                  "name": "path",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Its entry hash.",
+                  "name": "hash",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "name",
+                  "required": true,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "description": "Its folder's uid (the vault's uid at the top); null when trashed.",
+                  "name": "parent",
+                  "required": true,
+                  "types": [
+                    "string",
+                    "null"
+                  ]
+                },
+                {
+                  "name": "generation",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "size",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "key_version",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "name": "content_hash",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "mime",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "target",
+                  "required": false,
+                  "types": [
+                    "string"
+                  ]
+                },
+                {
+                  "name": "mode",
+                  "required": false,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "state",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            },
+            {
+              "name": "base",
+              "required": true,
+              "types": [
+                "string",
+                "null"
+              ]
+            }
+          ],
+          "items": "object",
+          "name": "entries",
+          "required": true,
+          "types": [
+            "array"
+          ]
+        },
+        {
+          "name": "more",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "next",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "minimum": 0,
+          "name": "total",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        },
+        {
+          "description": "The first page: this server's base.",
+          "fields": [
+            {
+              "name": "available",
+              "required": true,
+              "types": [
+                "boolean"
+              ]
+            },
+            {
+              "description": "fork_base | rejoin | agreed | acknowledged | entry_hashes | kept",
+              "name": "source",
+              "required": true,
+              "types": [
+                "string"
+              ]
+            },
+            {
+              "fields": [
+                {
+                  "minimum": 0,
+                  "name": "term",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                },
+                {
+                  "minimum": 0,
+                  "name": "seq",
+                  "required": true,
+                  "types": [
+                    "integer"
+                  ]
+                }
+              ],
+              "name": "at",
+              "required": true,
+              "types": [
+                "object",
+                "null"
+              ]
+            }
+          ],
+          "name": "base",
+          "required": false,
+          "types": [
+            "object"
           ]
         }
       ],
@@ -72952,5 +79335,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "2d929ea0319172a28adf80a6156ada78111213be91e7140752130dfb8cd5a876"
+  "ws_hash": "c948ac250468430e160d3be3e4e4302ce4f88b2f08c163902934f48d370cd9ee"
 }

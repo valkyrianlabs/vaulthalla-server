@@ -43,6 +43,10 @@ LINE_LIMIT = 110
 
 # ---- canonical form and hashes (must match core/usage/src/contract/Export.cpp) ---------------------------------
 
+
+# The web client's default request timeout (web/src/lib/ws/client.ts DEFAULT_TIMEOUT_MS): the generated table omits it.
+DEFAULT_CLIENT_TIMEOUT_MS = 15_000
+
 def canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
@@ -272,9 +276,12 @@ def generate_ts(snapshot: dict[str, Any]) -> str:
     out.extend(f"  {ts_string(c['command'])}: {ts_string(c['step_up'])}," for c in commands if c.get("step_up"))
     out.append("}")
     out.append("")
-    out.append("// Client timeouts the server declares per command (a timeout means \"no answer yet\", never \"failed\").")
-    out.append("export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> = {")
-    out.extend(f"  {ts_string(c['command'])}: {c['client_timeout_ms']}," for c in commands)
+    out.append("// Client timeouts the server declares per command (a timeout means \"no answer yet\", never \"failed\"): only")
+    out.append(f"// those other than the client's default ({DEFAULT_CLIENT_TIMEOUT_MS} ms), and none of a linked server's own wire")
+    out.append("// set (the console never sends one). Every route ships this table.")
+    out.append("export const WS_CONTRACT_TIMEOUTS: Readonly<Partial<Record<WsContractCommand, number>>> = {")
+    out.extend(f"  {ts_string(c['command'])}: {c['client_timeout_ms']}," for c in commands
+               if c['client_timeout_ms'] != DEFAULT_CLIENT_TIMEOUT_MS and c.get('auth') != 'peer')
     out.append("}")
     out.append("")
     return "\n".join(out)

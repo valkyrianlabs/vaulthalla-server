@@ -18,12 +18,18 @@ type AllKeys<T> = T extends object ? keyof T : never
 
 type Extra<Client, Server> = Exclude<AllKeys<Client>, AllKeys<Server>>
 
+// The messages are built by aliases that take their parts once they are concrete: a template literal over the
+// generic command and member names would be the cross product of every command and every member name, which outgrows
+// what the compiler represents (TS2590) as the book grows.
+type SendsExtra<C extends string, K> = K extends string ? `${C}: the payload sends '${K}', which the server does not read` : never
+type ReadsExtra<C extends string, K> = K extends string ? `${C}: the client reads response.${K}, which the server never sends` : never
+
 type PayloadProblem<C extends keyof WsContract & keyof WebSocketCommandMap> = [
   WebSocketCommandMap[C]['payload'],
 ] extends [WsContract[C]['payload']]
   ? [Extra<WebSocketCommandMap[C]['payload'], WsContract[C]['payload']>] extends [never]
     ? never
-    : `${C}: the payload sends '${Extra<WebSocketCommandMap[C]['payload'], WsContract[C]['payload']> & string}', which the server does not read`
+    : SendsExtra<C, Extra<WebSocketCommandMap[C]['payload'], WsContract[C]['payload']>>
   : `${C}: the payload does not satisfy the server's contract`
 
 type PrimitiveMismatch<Client, Server, C extends string> = {
@@ -37,7 +43,7 @@ type PrimitiveMismatch<Client, Server, C extends string> = {
 type ResponseProblem<C extends keyof WsContract & keyof WebSocketCommandMap> =
   | ([Extra<WebSocketCommandMap[C]['response'], WsContract[C]['response']>] extends [never]
       ? never
-      : `${C}: the client reads response.${Extra<WebSocketCommandMap[C]['response'], WsContract[C]['response']> & string}, which the server never sends`)
+      : ReadsExtra<C, Extra<WebSocketCommandMap[C]['response'], WsContract[C]['response']>>)
   | (WebSocketCommandMap[C]['response'] extends object
       ? WsContract[C]['response'] extends object
         ? PrimitiveMismatch<WebSocketCommandMap[C]['response'], WsContract[C]['response'], C>

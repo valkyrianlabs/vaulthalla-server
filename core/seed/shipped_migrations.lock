@@ -122,3 +122,4 @@ current    dca276657894f02fd424e7ca13868d3b9b93f1d55848f0269b8c2c853291b400  167
 current    31d558377f958d7be34cb1c20dc5e938cb86ea9410bbd97bd4a56105bcaf6751  168_mirror_switch.sql  unreleased
 current    24d0614245bb0478c6ac2f7cafe4f057c5079741f21cb00199d0006f3f774680  169_mirror_copy.sql  unreleased
 current    dfc5cd503789605b007ac34ccafc506e88740eae1e80e8c8abf4d17b875e0dfe  170_mirror_all.sql  unreleased
+current    a6ab9d44e5a028bda9f571046fd17544556a6b8a3da8675636543f71ad4bba18  171_mirror_relink.sql  unreleased

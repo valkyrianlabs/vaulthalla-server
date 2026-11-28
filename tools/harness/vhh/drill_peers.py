@@ -65,7 +65,9 @@ detaches with a change pending and one file's contents held back: the preview na
 opens, the missing one is refused, B writes to the vault; A restarted learns of it and ends its side, and refuses to
 mirror that vault with B again; a vault deleted on A (restorable) leaves B's copy read-only with the reason, a restore
 and B follows again; deleted --now with --mirror-copy remove it is gone on B, another with leave is orphaned on B and
-then detached there; the held write from 7k is saved with `vh mirror save`.
+then detached there; the held write from 7k is saved with `vh mirror save`. 9f, relink: B and A, both holding the
+detached vault and each with a file of its own since, compare it by uid and relink it keeping B's tree: B the core, A
+its mirror, equal digests, A's own file a held change with its bytes, the detach records settled, audited on both.
 
 Nothing secret is printed or kept: the drill's directory holds only its report.
 """
@@ -1242,6 +1244,36 @@ def _leaving(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, report:
     report.check("9c: A won't mirror that vault with B again (they share its uid and keys)",
                  code != 0 and "mirror_detached_copy" in text, text[-300:])
 
+    # ---- 9f. Relink: B (detached, with its own file) and A (with one of its own) mirror the vault again, B's tree wins
+    a.sh("printf 'only on A since\\n' > MNT/whole/docs/a_since.txt")
+    a_since = _sql(a, f"SELECT f.object_uid::text FROM fs_entry e JOIN files f ON f.fs_entry_id = e.id WHERE "
+                      f"e.vault_id = {va} AND e.path = '/docs/a_since.txt'")
+    code, cmp, text = _json(b, "mirror", "relink", str(vb), "--with", node_a)
+    counts = cmp.get("counts") or {}
+    report.check("9f: B compares the detached vault with A's: what only each holds since, by uid, and nothing refuses",
+                 code == 0 and counts.get("only_this", 0) >= 1 and counts.get("only_theirs", 0) >= 1
+                 and not cmp.get("blockers") and (cmp.get("keys") or {}).get("match") is True, text[-600:])
+    code, rel, text = _json(b, "mirror", "relink", str(vb), "--with", node_a, "--keep", "this", "--confirm", "whole")
+    report.check("9f: B relinks it keeping its tree: B the core, A its mirror again",
+                 code == 0 and (rel.get("relink") or {}).get("role") == "core", text[-600:])
+    ok = _wait_synced(b, vb, a, va, "A following B after the relink", timeout=180) if code == 0 else None
+    _wait("both relinks done", lambda: _sql(a, f"SELECT phase FROM mirror_relink WHERE vault_id = {va} ORDER BY id DESC "
+                                              "LIMIT 1") == "done" and _sql(b, f"SELECT phase FROM mirror_relink WHERE "
+                                              f"vault_id = {vb} ORDER BY id DESC LIMIT 1") == "done" or None, timeout=60)
+    report.check("9f: both end live with equal digests; A's own file left its tree, kept as a held change with its "
+                 "bytes; B's reached A; the detach records settled",
+                 bool(ok) and _sql(a, f"SELECT count(*) FROM fs_entry WHERE vault_id = {va} AND path = '/docs/a_since.txt'")
+                 == "0" and _sql(a, f"SELECT count(*) FROM mirror_held WHERE vault_id = {va} AND entry_uid = '{a_since}' "
+                                    "AND op = 'write' AND state = 'open'") == "1"
+                 and _sql(a, f"SELECT count(*) FROM fs_entry WHERE vault_id = {va} AND path = '/docs/after_detach.txt'")
+                 == "1"
+                 and _sql(a, f"SELECT count(*) FROM mirror_detached WHERE vault_id = {va} AND relinked_at IS NULL") == "0"
+                 and _sql(b, f"SELECT count(*) FROM mirror_detached WHERE vault_id = {vb} AND relinked_at IS NULL") == "0",
+                 json.dumps(ok)[:300])
+    report.check("9f: audited mirror.relink on both servers",
+                 _sql(a, f"SELECT count(*) FROM audit_event WHERE action = 'mirror.relink' AND vault_id = {va}") == "1"
+                 and _sql(b, f"SELECT count(*) FROM audit_event WHERE action = 'mirror.relink' AND vault_id = {vb}") == "1")
+
     # ---- 9d. Deleting a mirrored vault on A in one step
     v2, bv2, uid2 = _new_mirror(a, b, node_b, "dropped")
     cp = a.vh("vault", "delete", str(v2), "--yes", check=False)
@@ -1464,7 +1496,7 @@ def run(build: Path, *, keep: bool = False, out: Path | None = None) -> tuple[bo
         _ending_rule(a, b, faults["b"], node_a, node_b, report)
 
         # ------------------------------------------------------------------ 9. leaving a mirror
-        print("vhh drill peers: 9. leaving a mirror: versions on B, detach with A down, A told, delete in one step",
+        print("vhh drill peers: 9. leaving a mirror: versions on B, detach with A down, A told, relink, delete in one step",
               flush=True)
         _leaving(a, b, faults["b"], node_a, node_b, report)
 

@@ -2,6 +2,7 @@
 
 #include "db/Transactions.hpp"
 #include "db/query/device/Device.hpp"
+#include "db/query/mirror/Relink.hpp"
 #include "ops/Error.hpp"
 #include "mirror/access/Access.hpp"
 #include "rbac/Mirrored.hpp"
@@ -330,6 +331,8 @@ bool MirrorVaults::remove(const uint32_t vaultId) {
 
 bool MirrorVaults::remove(pqxx::work& txn, const uint32_t vaultId) {
     {
+        // Migration 171: what this server last agreed with its peer stays (a relink tells who changed what since).
+        Relinks::keepBase(txn, vaultId);
         const auto gone = txn.exec("DELETE FROM mirror_vault WHERE vault_id = $1", pqxx::params{vaultId}).affected_rows();
         txn.exec("DELETE FROM vault_replication_log WHERE vault_id = $1", pqxx::params{vaultId});
         txn.exec("DELETE FROM mirror_entry_hash WHERE vault_id = $1", pqxx::params{vaultId});

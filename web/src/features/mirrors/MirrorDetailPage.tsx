@@ -22,6 +22,7 @@ import {
   ClockIcon,
   CopyIcon,
   FolderOpenIcon,
+  LinkIcon,
   ShieldHalvedIcon,
   TrashIcon,
   VaultIcon,
@@ -56,6 +57,7 @@ const DetachDialog = dynamic(() => import('@/features/mirrors/DetachDialog'), { 
 const VersionsDialog = dynamic(() => import('@/features/mirrors/VersionsDialog'), { ssr: false })
 const TakeoverDialog = dynamic(() => import('@/features/mirrors/TakeoverDialog'), { ssr: false })
 const DetachCopyDialog = dynamic(() => import('@/features/mirrors/DetachCopyDialog'), { ssr: false })
+const RelinkDialog = dynamic(() => import('@/features/mirrors/RelinkDialog'), { ssr: false })
 
 const useVaultParam = () => {
   const params = useParams<{ vaultId: string }>()
@@ -101,6 +103,7 @@ const ACTION_ICON: Record<MirrorAction, React.ComponentType<React.SVGProps<SVGSV
   switch: ArrowRightArrowLeftIcon,
   takeover: ShieldHalvedIcon,
   resync: ArrowsRotateIcon,
+  reconnect: LinkIcon,
   detach: FolderOpenIcon,
   copy: CopyIcon,
   versions: ClockIcon,
@@ -178,6 +181,8 @@ const Loaded = ({ row }: { row: MirroredVault }) => {
         return { label: 'Switch the core…', hint: row.role === 'core' ? `Make ${peer} the core; this server keeps a copy.` : `Make this server the core; ${peer} keeps a copy.` }
       case 'takeover':
         return { label: C.takeoverAction, hint: C.takeoverHint(peer), danger: true }
+      case 'reconnect':
+        return { label: C.reconnectAction, hint: C.reconnectHint(peer) }
       case 'copy':
         return { label: C.copyAction, hint: C.copyHint }
       case 'resync':
@@ -316,6 +321,7 @@ const Loaded = ({ row }: { row: MirroredVault }) => {
       {open === 'versions' ? <VersionsDialog row={row} open onOpenChange={onOpenChange} /> : null}
       {open === 'takeover' ? <TakeoverDialog row={row} open onOpenChange={onOpenChange} /> : null}
       {open === 'copy' ? <DetachCopyDialog row={row} open onOpenChange={onOpenChange} /> : null}
+      {open === 'reconnect' ? <RelinkDialog row={row} open onOpenChange={onOpenChange} /> : null}
     </>
   )
 }

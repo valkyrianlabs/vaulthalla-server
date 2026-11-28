@@ -213,7 +213,7 @@ std::vector<Mirrored> list(const Actor& actor) {
     }
     // Vaults detached here (wave 5): standalone now, sharing the original's uid and keys until the re-key pass.
     for (const auto& d : db::query::mirror::MirrorDetach::list()) {
-        if (d.side != "mirror" || d.rekeyed_at || byVault.contains(d.vault_id)) continue;
+        if (d.side != "mirror" || d.rekeyed_at || d.relinked_at || byVault.contains(d.vault_id)) continue;
         const auto v = db::query::vault::Vault::getVault(d.vault_id);
         if (!v) continue;
         Mirrored m{.vault_id = d.vault_id, .vault_name = v->name, .role = "detached", .detached = d};
@@ -543,6 +543,51 @@ nlohmann::json resync(const Actor& actor, const uint32_t vaultId) {
     ops_mirrors_detail::requireSuperAdmin(actor, "start a mirrored vault's copy over");
     (void)ops_mirrors_detail::liveVault(vaultId);
     return vh::mirror::resync::start(vaultId, actor->id, actor->name(), *vh::mirror::follow::linkTransport());
+}
+
+// ---- relink ---------------------------------------------------------------------------------------------------------
+
+nlohmann::json relinkCompare(const Actor& actor, const uint32_t vaultId, const std::string& peer) {
+    ops_mirrors_detail::requireSuperAdmin(actor, "compare a vault with a linked server's copy of it");
+    (void)ops_mirrors_detail::liveVault(vaultId);
+    if (peer.empty()) throw Invalid("a linked server is required (--with <server>)");
+    const auto p = peers::resolveRef(peer);
+    return vh::mirror::relink::compare(vaultId, p.id, {.id = actor->id, .name = actor->name()},
+                                       *vh::mirror::follow::linkTransport());
+}
+
+nlohmann::json relinkStatus(const Actor& actor, const uint32_t vaultId) {
+    ops_mirrors_detail::requireSuperAdmin(actor, "see a vault's relink");
+    (void)ops_mirrors_detail::liveVault(vaultId);
+    return vh::mirror::relink::status(vaultId);
+}
+
+nlohmann::json relinkEntries(const Actor& actor, const uint32_t vaultId, const std::string& kind, const uint64_t offset,
+                             const uint64_t limit) {
+    ops_mirrors_detail::requireSuperAdmin(actor, "see a vault's relink");
+    (void)ops_mirrors_detail::liveVault(vaultId);
+    return vh::mirror::relink::entries(vaultId, kind, offset, limit);
+}
+
+nlohmann::json relinkPlan(const Actor& actor, const uint32_t vaultId, const vh::mirror::relink::PlanEdit& edit) {
+    ops_mirrors_detail::requireSuperAdmin(actor, "plan a vault's relink");
+    (void)ops_mirrors_detail::liveVault(vaultId);
+    return vh::mirror::relink::plan(vaultId, edit);
+}
+
+nlohmann::json relinkApply(const Actor& actor, const uint32_t vaultId, const std::string& confirm, const std::string& keep,
+                           const std::string& peer) {
+    ops_mirrors_detail::requireSuperAdmin(actor, "relink a vault with a linked server");
+    const auto vault = ops_mirrors_detail::liveVault(vaultId);
+    if (!keep.empty() && keep != "this" && keep != "theirs") throw Invalid("keep is this or theirs");
+    if (confirm != vault->name) throw Refused("mirror_name_mismatch", "type the vault's name exactly to relink it");
+    if (!keep.empty() && peer.empty()) throw Invalid("a linked server is required (--with <server>)");
+    const vh::mirror::relink::Who who{.id = actor->id, .name = actor->name()};
+    // Which server's data wins is decided here: the console asks the keys step-up, bound to the vault.
+    auth::stepup::require(auth::stepup::Family::Keys, "mirror.relink:" + std::to_string(vaultId));
+    const auto transport = vh::mirror::follow::linkTransport();
+    if (keep.empty()) return vh::mirror::relink::apply(vaultId, confirm, who, *transport);
+    return vh::mirror::relink::override(vaultId, peers::resolveRef(peer).id, keep, confirm, who, *transport);
 }
 
 // ---- the planned switch (wave 5 piece B) ----------------------------------------------------------------------------

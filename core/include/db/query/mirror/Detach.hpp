@@ -41,6 +41,7 @@ struct DetachRecord {
     std::optional<uint32_t> owner_id{}, detached_by{};
     std::time_t detached_at{};
     std::optional<std::time_t> rekeyed_at{};
+    std::optional<std::time_t> relinked_at{};   // migration 171: a relink settled it (the two mirror the vault again)
 };
 
 // What the detach transaction does with the copy's pending changes (decided by the caller from Pending::list under the

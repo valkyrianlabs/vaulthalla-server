@@ -324,6 +324,8 @@ export const MIRROR_COPY = {
     n === 1 ? '1 change made here becomes an ordinary change.' : `${n.toLocaleString('en-US')} changes made here become ordinary changes.`,
   takeoverType: (name: string) => `Type “${name}” to confirm`,
   takeoverConfirm: 'Take over',
+  reconnectAction: 'Reconnect…',
+  reconnectHint: (peer: string) => `Mirror it with ${peer} again and resolve how the two copies drifted.`,
   takingOver: 'Taking over…',
   tookOver: 'This server is the core now',
   tookOverBody: (made: number, held: number) =>

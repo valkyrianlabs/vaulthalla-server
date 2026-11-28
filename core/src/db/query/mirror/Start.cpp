@@ -381,7 +381,7 @@ std::vector<uint32_t> MirrorStart::mirrorEveryVaultCandidates(const uint32_t pee
                  "  AND NOT EXISTS (SELECT 1 FROM mirror_vault m WHERE m.vault_id = v.id) "
                  // Detached between these two servers and not re-keyed: the same uid and keys on both (never offered).
                  "  AND NOT EXISTS (SELECT 1 FROM mirror_detached d WHERE d.vault_uid = v.uid AND d.peer_id = $1 "
-                 "                  AND d.rekeyed_at IS NULL) "
+                 "                  AND d.rekeyed_at IS NULL AND d.relinked_at IS NULL) "
                  "  AND NOT EXISTS (SELECT 1 FROM mirror_offer o WHERE o.vault_uid = v.uid AND o.side = 'core' "
                  "                  AND (o.finished_at IS NULL OR (o.peer_id = $1 AND o.updated_at >= "
                  "                       (SELECT COALESCE(p.mirror_vaults_set_at, '-infinity') FROM peer p "

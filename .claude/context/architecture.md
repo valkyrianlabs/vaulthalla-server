@@ -752,6 +752,15 @@ through on a Live mirror.
   the tree into `mirror_entry_hash`, makes the row core in term + 1 (baseline (term + 1, 0)), ends an open switch
   (`mirror_taken_over`). A later `switched` commit from the old core for that switch is answered as switched when the
   fork point and term agree (`takeover::settledBySwitch`). `Switches::endUnlinked` ends a switch of an unlinked peer.
+- **Relink (`mirror/relink`, `db::query::mirror::Relinks`, migration 171 `mirror_relink`, `mirror_relink_entry`,
+  `mirror_base`):** a vault both servers hold since their mirror ended (detached, ended, orphaned, rejoining, forked).
+  `MirrorVaults::remove` keeps the agreed entry hashes (`Relinks::keepBase`); `relink::compare` merges both trees
+  (`vh_mirror_tree_states`, the other's over `peer.mirror.relink.tree`) by uid against both bases into the
+  initiator's plan; `apply` prepares the future mirror (records settle `relinked`, holds, conflict copies, a `mirror`
+  row stopped `mirror_relinking`), then the core (holds, `startCore` in max term + 1), then `go`: an empty bring list
+  resets the copy at once, else `relink::tick` (follower loop) submits each chosen version (`peer.mirror.submit`, sealed
+  bytes first) and calls `resync::start`. Keys are compared by key check and origin only (`mirror_relink_keys`).
+  ops: `relinkCompare|Status|Entries|Plan|Apply` (super admins, keys step-up `mirror.relink:<vault>`).
 - **Submit (`mirror::submit::submitPending`, from `Follower::step` before the log):** `peer.mirror.submit` (peer wire
   set), one change at a time per vault in order. Core: `serveSubmit` answers at once from `mirror_submission` (queued,
   running, executed with groups, refused with code: never executed twice) and `drain`s on the sync pool, one vault's in

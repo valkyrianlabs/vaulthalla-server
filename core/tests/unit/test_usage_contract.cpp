@@ -464,7 +464,8 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
                               "peer.mirror.grant", "peer.mirror.cancel", "peer.mirror.submit", "peer.mirror.detached",
                               "peer.mirror.deleting", "peer.mirror.resync", "peer.mirror.switch.request",
                               "peer.mirror.switch.prepare", "peer.mirror.switch.commit", "peer.mirror.promoted",
-                              "peer.mirror.key"}},
+                              "peer.mirror.key", "peer.mirror.relink.state", "peer.mirror.relink.tree",
+                              "peer.mirror.relink.prepare", "peer.mirror.relink.go", "peer.mirror.relink.abort"}},
             {"mirror_already", {"mirror.add"}}, {"mirror_start_running", {"mirror.add"}},
             {"vault_replicated", {"mirror.add"}}, {"vault_attach_running", {"mirror.add"}},
             {"vault_detach_running", {"mirror.add"}}, {"layout_migration_running", {"mirror.add"}},
@@ -472,8 +473,8 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"vault_pending_deletion", {"mirror.add"}}, {"vault_unavailable", {"mirror.add"}},
             {"legacy_content", {"mirror.add"}}, {"key_version_missing", {"mirror.add"}},
             {"key_version_unattested", {"mirror.add"}}, {"trashed_without_uid", {"mirror.add"}},
-            {"contents_not_held", {"mirror.add"}}, {"peer_not_linked", {"mirror.add", "mirror.mirror_all.set"}},
-            {"peer_link_down", {"mirror.add", "mirror.switch"}},
+            {"contents_not_held", {"mirror.add"}}, {"peer_not_linked", {"mirror.add", "mirror.mirror_all.set", "mirror.relink.compare", "mirror.relink.apply"}},
+            {"peer_link_down", {"mirror.add", "mirror.switch", "mirror.relink.compare", "mirror.relink.apply"}},
             {"mirror_offer_not_pending", {"mirror.accept", "mirror.decline"}},
             {"mirror_vault_exists", {"mirror.accept", "peer.mirror.keys"}},
             {"mirror_name_taken", {"mirror.accept", "peer.mirror.keys"}},
@@ -495,7 +496,7 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"too_large", {"mirror.held.get"}},
             {"mirror_detached_copy", {"mirror.add", "mirror.accept", "peer.mirror.keys"}},
             // Resync (wave 5 piece B, mirror::resync).
-            {"mirror_not_stopped", {"mirror.resync"}}, {"mirror_core_unreachable", {"mirror.resync", "mirror.switch"}},
+            {"mirror_not_stopped", {"mirror.resync"}}, {"mirror_core_unreachable", {"mirror.resync", "mirror.switch", "mirror.relink.compare", "mirror.relink.apply"}},
             {"mirror_core_gone", {"mirror.resync", "mirror.switch"}}, {"mirror_resync_refused", {"mirror.resync"}},
             {"mirror_paused", {"mirror.resync", "peer.mirror.resync"}},
             {"mirror_resync_failed", {"mirror.resync", "peer.mirror.resync"}},
@@ -515,7 +516,22 @@ TEST(UsageContract, RefusalsSplitGenericKindsFromConfirmations) {
             {"mirror_term_stale", {"peer.mirror.promoted"}},
             // Take over (wave 5 piece B, mirror::takeover).
             {"mirror_not_mirror", {"mirror.takeover"}}, {"mirror_diverged", {"mirror.takeover"}},
-            {"mirror_core_reachable", {"mirror.takeover"}}, {"mirror_name_mismatch", {"mirror.takeover"}},
+            {"mirror_core_reachable", {"mirror.takeover"}},
+            {"mirror_name_mismatch", {"mirror.takeover", "mirror.relink.apply"}},
+            // Relink (mirror::relink).
+            {"mirror_relink_no_vault", {"mirror.relink.compare", "mirror.relink.apply"}},
+            {"mirror_relink_unrelated", {"mirror.relink.compare", "mirror.relink.apply"}},
+            {"mirror_relink_running", {"mirror.relink.compare", "mirror.relink.apply", "peer.mirror.relink.prepare"}},
+            {"mirror_relink_refused", {"mirror.relink.compare", "mirror.relink.apply"}},
+            {"mirror_relink_no_plan", {"mirror.relink.plan", "mirror.relink.apply"}},
+            {"mirror_relink_stale", {"mirror.relink.apply", "peer.mirror.relink.prepare"}},
+            {"mirror_relink_no_person", {"mirror.relink.apply", "peer.mirror.relink.prepare"}},
+            {"mirror_relink_mirrored", {"mirror.relink.apply", "peer.mirror.relink.prepare"}},
+            {"mirror_relink_pending", {"mirror.relink.apply", "peer.mirror.relink.prepare"}},
+            {"mirror_relink_switch", {"mirror.relink.apply", "peer.mirror.relink.prepare"}},
+            {"mirror_relink_busy", {"mirror.relink.apply", "peer.mirror.relink.prepare"}},
+            {"mirror_relink_deleting", {"mirror.relink.apply", "peer.mirror.relink.prepare"}},
+            {"mirror_relink_keys", {"mirror.relink.apply", "peer.mirror.relink.prepare"}},
         };
         if (const auto m = kMirrorCodes.find(code); m != kMirrorCodes.end() && m->second.contains(command)) return true;
         if ((code == "no_pairing_window" || code == "rate_limited" || code == "device_unknown") &&

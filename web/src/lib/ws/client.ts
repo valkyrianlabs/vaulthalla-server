@@ -47,7 +47,8 @@ const BACKOFF_MAX_MS = 15_000
 
 // Per-command client timeouts. A timeout means "no answer yet", not "failed": callers surface it as such and must
 // not blindly resend. Every command the daemon registers is in the server-owned contract, which declares its timeout
-// (core/usage); a command not in the book would be listed here after the spread.
+// (core/usage); the generated table holds the ones other than DEFAULT_TIMEOUT_MS. A command not in the book would be
+// listed here after the spread.
 const COMMAND_TIMEOUTS: Partial<Record<Command, number>> = {
   ...WS_CONTRACT_TIMEOUTS,
 }

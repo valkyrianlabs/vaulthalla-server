@@ -297,6 +297,45 @@ std::shared_ptr<CommandUsage> takeover(const std::weak_ptr<CommandUsage>& parent
     return cmd;
 }
 
+std::shared_ptr<CommandUsage> relink(const std::weak_ptr<CommandUsage>& parent) {
+    auto cmd = build(parent);
+    cmd->effect = CommandEffect::Write;
+    cmd->aliases = {"relink", "reconnect"};
+    cmd->description = "Mirror a vault again with a linked server that holds it too since a mirror between them ended "
+                       "(detached, the core ended it or the servers were unlinked, an old core rejoining or forked after a "
+                       "take over), and resolve how the two trees drifted. With --with alone: compare both trees by entry "
+                       "and keep the result as a plan (counts, what refuses it, what each server gains and loses). "
+                       "--keep this|theirs: the hard override, that server's tree wins everywhere. --review: compare and "
+                       "list every drifted entry by path; --choose sets choices (uid=this|theirs|both|default, "
+                       "kind:<kind>=..., all=...), --core and --default the rest, --apply carries the plan out. Nothing "
+                       "is dropped: the losing versions are kept as held changes (vh mirror held) or conflict copies. "
+                       "Type the vault's name with --confirm to apply. Super admins only; audited on both servers.";
+    cmd->positionals = {vaultPos};
+    cmd->optional = {
+        Optional::ManyToOne("with", "The linked server holding the vault too", {"with"}, "server"),
+        Optional::ManyToOne("keep", "The hard override: this or theirs, whose tree wins everywhere", {"keep"}, "side")
+            .withLiteralValues(),
+        Optional::ManyToOne("choose", "Choices: uid=this|theirs|both|default, kind:<kind>=..., all=... (comma-separated)",
+                            {"choose"}, "choices"),
+        Optional::ManyToOne("core", "Which server becomes the core: this or theirs", {"core"}, "side"),
+        Optional::ManyToOne("default", "The choice for entries left unset: this, theirs, both or core", {"default"},
+                            "choice"),
+        Optional::ManyToOne("show", "List the drifted entries of one kind (or all)", {"show"}, "kind"),
+        Optional::ManyToOne("offset", "With --show or --review: skip this many entries", {"offset"}, "n"),
+        Optional::ManyToOne("confirm", "The vault's name, typed exactly (to apply)", {"confirm"}, "name")};
+    cmd->optional_flags = {Flag::WithAliases("review", "Compare and list the drifted entries to choose for each", {"review"}),
+                           Flag::WithAliases("apply", "Carry the saved plan out", {"apply"}),
+                           Flag::WithAliases("status", "The plan or the relink running, without comparing again",
+                                             {"status"}),
+                           Flag::WithAliases("discard", "End the saved plan", {"discard"}), jsonFlag};
+    cmd->examples = {{"vh mirror relink 4 --with vps", "Compare vault 4 with vps's and keep the plan."},
+                     {"vh mirror relink 4 --with vps --keep this --confirm photos", "This server's tree wins."},
+                     {"vh mirror relink 4 --with vps --review", "Compare and list each drifted entry."},
+                     {"vh mirror relink 4 --choose kind:changed_theirs=theirs,all=both", "Set choices in bulk."},
+                     {"vh mirror relink 4 --apply --confirm photos", "Carry the plan out."}};
+    return cmd;
+}
+
 std::shared_ptr<CommandUsage> acceptAll(const std::weak_ptr<CommandUsage>& parent) {
     auto cmd = build(parent);
     cmd->effect = CommandEffect::Write;
@@ -340,7 +379,8 @@ std::shared_ptr<CommandBook> get(const std::weak_ptr<CommandUsage>& parent) {
                          keep(root->weak_from_this()),    held(root->weak_from_this()),    discard(root->weak_from_this()),
                          retry(root->weak_from_this()), save(root->weak_from_this()), detach(root->weak_from_this()),
                          versions(root->weak_from_this()), resync(root->weak_from_this()),
-                         switchCore(root->weak_from_this()), takeover(root->weak_from_this())};
+                         switchCore(root->weak_from_this()), takeover(root->weak_from_this()),
+                         relink(root->weak_from_this())};
     root->examples = {
         {"vh mirror add <vault> --to <server>", "On the core: offer a vault."},
         {"vh mirror pending", "On the other server: offers waiting."},

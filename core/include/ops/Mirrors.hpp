@@ -4,6 +4,7 @@
 #include "db/query/mirror/MirrorVault.hpp"
 #include "db/query/mirror/Pending.hpp"
 #include "db/query/mirror/Start.hpp"
+#include "mirror/relink/Relink.hpp"
 #include "mirror/versions/Versions.hpp"
 #include "ops/Actor.hpp"
 #include "peer/Peer.hpp"
@@ -162,6 +163,20 @@ void requireTakeover(const Actor& actor, const std::string& what);
 // its core is gone or does not answer. requireTakeover, the vault's name typed (`confirmName`), and the data-destroy
 // step-up in the console (target mirror.takeover:<vault>). Audited mirror.takeover.
 [[nodiscard]] nlohmann::json takeover(const Actor& actor, uint32_t vaultId, const std::string& confirmName);
+
+// Relink (design/peers/mirror.md "As built: relink"; mirror::relink): a vault both servers hold since a mirror between
+// them ended (detached, orphaned, rejoining, forked) is compared, planned and mirrored again. Super admins of this
+// server, people only (never an agent, a scoped or relayed device, a linked server); apply and the hard override take
+// the keys step-up in the console (target mirror.relink:<vault>: the vault's truth moves to the chosen server) and the
+// vault's name typed. Audited mirror.relink on both servers.
+[[nodiscard]] nlohmann::json relinkCompare(const Actor& actor, uint32_t vaultId, const std::string& peer);
+[[nodiscard]] nlohmann::json relinkStatus(const Actor& actor, uint32_t vaultId);
+[[nodiscard]] nlohmann::json relinkEntries(const Actor& actor, uint32_t vaultId, const std::string& kind,
+                                           uint64_t offset, uint64_t limit);
+[[nodiscard]] nlohmann::json relinkPlan(const Actor& actor, uint32_t vaultId, const vh::mirror::relink::PlanEdit& edit);
+// keep empty: the saved plan; this | theirs: compare again and keep that server's tree everywhere (peer required).
+[[nodiscard]] nlohmann::json relinkApply(const Actor& actor, uint32_t vaultId, const std::string& confirm,
+                                         const std::string& keep, const std::string& peer);
 
 [[nodiscard]] nlohmann::json toJson(const Offer& offer);
 [[nodiscard]] nlohmann::json toJson(const Mirrored& m);

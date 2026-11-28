@@ -91,6 +91,7 @@ std::vector<WsCommandUsage> peerCommands();
 std::vector<WsCommandUsage> mirrorCommands();
 std::vector<WsCommandUsage> mirrorFollowCommands();
 std::vector<WsCommandUsage> mirrorLeaveCommands();
+std::vector<WsCommandUsage> mirrorRelinkCommands();
 std::vector<WsCommandUsage> vaultKeyCommands();
 
 }

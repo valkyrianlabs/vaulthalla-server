@@ -4,6 +4,7 @@
 #include "log/Registry.hpp"
 #include "mirror/Contents.hpp"
 #include "mirror/follow/Protocol.hpp"
+#include "mirror/relink/Relink.hpp"
 #include "mirror/resync/Resync.hpp"
 #include "mirror/start/Start.hpp"
 #include "mirror/submit/Contents.hpp"
@@ -387,6 +388,7 @@ void Follower::runLoop() {
             try {
                 (void)vh::mirror::switching::tick(*t);
                 (void)vh::mirror::takeover::tick(*t);   // the old core learns (telling, deciding)
+                (void)vh::mirror::relink::tick(*t);     // a relink's future mirror brings its versions, then copies
             } catch (const std::exception& e) {
                 log::Registry::sync()->warn("[MirrorFollower] Switches: {}", e.what());
             }
