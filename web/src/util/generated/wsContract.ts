@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = '8d780caacdea8070224f124bfffdb03eab2d3eb6a57fde9d31b4ea25e1ce9a09'
+export const WS_CONTRACT_HASH = '79e188e016173bc52e47c6d38443611328e5c2cd1eef6b0f13649751f10df740'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'fb2eb50b685f7091174b75d352410329a3ab874281197b5e75237c9eacb3def9'
@@ -34,6 +34,7 @@ export const WS_CAPABILITIES: readonly string[] = [
   'fs.entry.metadata_version',
   'fs.entry.stable_id',
   'health.findings',
+  'health.push',
   'http.upload.content',
   'http.upload.resumable',
   'ws.envelope.optional_payload',
@@ -5606,6 +5607,27 @@ export interface WsContract {
     response: { health: WsModels['HealthFindings'] }
   }
   /**
+   * Follow the health findings by push (design/health/findings.md §6): whenever the findings or their state
+   * change, the session gets an unsolicited frame {"command": "health.changed", "data": {"revision",
+   * "overall_status", "error_count", "warning_count", "unattended_error_count", "unattended_warning_count"}}
+   * (no requestId) and calls health.findings.list; the event carries no findings. Findings are evaluated
+   * every 15 seconds while anyone is subscribed; an acknowledge, silence or unsilence is pushed at once.
+   * Needs admin.stats.view, re-checked every 30 seconds: a session that lost it gets one last event
+   * {"revision", "subscribed": false}. One pending event per session, the newest wins, held while the session
+   * is slow to read. Subscribing again is harmless; the subscription ends with the session.
+   */
+  'health.subscribe': {
+    payload: null
+    response: { revision: number }
+  }
+  /**
+   * Stop following the health findings by push (health.subscribe). Harmless when not subscribed.
+   */
+  'health.unsubscribe': {
+    payload: null
+    response: { subscribed: boolean }
+  }
+  /**
    * The contract this daemon was built from: contract_version, contract_hash (the whole document vh_usage
    * --json publishes), ws_hash (the ws command book, what the web console is generated from) and models_hash
    * (the model shapes the book refers to). Read-only, no secrets; needs a signed-in session (no build
@@ -6392,495 +6414,6 @@ export interface WsContract {
     }
   }
   /**
-   * Carries the open plan out, or with keep (this | theirs) compares again and keeps that server's tree
-   * everywhere (the hard override). The chosen server becomes the vault's core in a term above any either
-   * used, the other its mirror: the mirror first brings each entry whose chosen version is its own onto the
-   * core as its own changes (contents over the sealed lane), then starts its copy over from the core's tree.
-   * Nothing is dropped: what leaves a tree is a held change with its bytes, a conflict copy, or in the core's
-   * trash. The detach, take over and rejoin records it resolves settle. Refused when either tree changed
-   * since it was compared (mirror_relink_stale), and while either server has pending changes, a switch, a
-   * start or a copy running, or is deleting the vault. `confirm` is the vault's name, typed. Answers
-   * mirror.relink.get; follow its progress there. Super admins; the keys step-up in the console; audited
-   * mirror.relink on both servers.
-   */
-  'mirror.relink.apply': {
-    payload: { vault_id: number; confirm: string; keep?: 'this' | 'theirs'; peer?: string }
-    response: {
-      vault_id: number
-      relink: {
-        id: number
-        relink_uid: string
-        side: 'initiator' | 'responder'
-        phase: 'open' | 'prepared' | 'bring' | 'copying' | 'done' | 'failed' | 'stale' | 'cancelled'
-        mode: 'plan' | 'override'
-        core: 'this' | 'theirs'
-        default_choice: 'this' | 'theirs' | 'both' | null
-        role: 'core' | 'mirror' | null
-        term: number | null
-        error: string | null
-        by: { node: string; id: number | null; name: string }
-        created_at: number
-        applied_at: number | null
-        finished_at: number | null
-      } | null
-      peer?: { id: number; name: string; node: string } | null
-      this?: {
-        vault_id: number
-        vault_uid: string
-        vault_name: string
-        node: string
-        status: 'detached' | 'ended' | 'orphaned' | 'rejoining' | 'forked' | 'core' | 'mirror' | 'unrelated'
-        row_state: string | null
-        term: number
-        agreed: { term: number; seq: number } | null
-        pending: number
-        switch_running: boolean
-        start_running: boolean
-        deleting: boolean
-        contents_missing: number
-        mirrored_elsewhere: boolean
-        digest: string
-        entries: number
-      } | null
-      theirs?: {
-        vault_id: number
-        vault_uid: string
-        vault_name: string
-        node: string
-        status: 'detached' | 'ended' | 'orphaned' | 'rejoining' | 'forked' | 'core' | 'mirror' | 'unrelated'
-        row_state: string | null
-        term: number
-        agreed: { term: number; seq: number } | null
-        pending: number
-        switch_running: boolean
-        start_running: boolean
-        deleting: boolean
-        contents_missing: number
-        mirrored_elsewhere: boolean
-        digest: string
-        entries: number
-      } | null
-      counts?: {
-        only_this?: number
-        only_theirs?: number
-        changed_this?: number
-        changed_theirs?: number
-        changed_both?: number
-        differs?: number
-        total?: number
-        same?: number
-      }
-      keys?: { match: boolean; current: { this: number; theirs: number }; mismatched: number[] } | null
-      base?: {
-        this: { available: boolean; source: string; at: { term: number; seq: number } | null }
-        theirs: { available: boolean; source: string; at: { term: number; seq: number } | null }
-        both: boolean
-      } | null
-      blockers?: { code: string; side: 'this' | 'theirs' | 'both'; message: string }[]
-      plan?: {
-        this: { takes: number; keeps_held: number; conflict_copies: number }
-        theirs: { takes: number; keeps_held: number; conflict_copies: number }
-        chosen: { core: number; mirror: number; both: number }
-        core: 'this' | 'theirs'
-        default_choice: 'this' | 'theirs' | 'both' | null
-      }
-      progress?: {
-        bring_total: number
-        bring_done: number
-        executed: number
-        refused: number
-        kept: number
-        row?: {
-          role: string
-          state: string
-          copy_finished: boolean
-          copy_cursor: number
-          term: number
-          stop_reason: string | null
-        }
-      }
-    }
-  }
-  /**
-   * Compares a vault this server and a linked server both hold since a mirror between them ended (detached,
-   * the core ended it or the servers were unlinked, an old core rejoining or forked after a take over) with
-   * the other server's, by entry uid: what is only on one server, and what both hold and changed on this
-   * side, the other or both since the last position both agreed on (differs where that cannot be told). Entry
-   * hashes only: no file's contents are read. Kept as the vault's open plan (replacing an open one): every
-   * entry the default (the core's), this server the core. Super admins.
-   */
-  'mirror.relink.compare': {
-    payload: { vault_id: number; peer: string }
-    response: {
-      vault_id: number
-      relink: {
-        id: number
-        relink_uid: string
-        side: 'initiator' | 'responder'
-        phase: 'open' | 'prepared' | 'bring' | 'copying' | 'done' | 'failed' | 'stale' | 'cancelled'
-        mode: 'plan' | 'override'
-        core: 'this' | 'theirs'
-        default_choice: 'this' | 'theirs' | 'both' | null
-        role: 'core' | 'mirror' | null
-        term: number | null
-        error: string | null
-        by: { node: string; id: number | null; name: string }
-        created_at: number
-        applied_at: number | null
-        finished_at: number | null
-      } | null
-      peer?: { id: number; name: string; node: string } | null
-      this?: {
-        vault_id: number
-        vault_uid: string
-        vault_name: string
-        node: string
-        status: 'detached' | 'ended' | 'orphaned' | 'rejoining' | 'forked' | 'core' | 'mirror' | 'unrelated'
-        row_state: string | null
-        term: number
-        agreed: { term: number; seq: number } | null
-        pending: number
-        switch_running: boolean
-        start_running: boolean
-        deleting: boolean
-        contents_missing: number
-        mirrored_elsewhere: boolean
-        digest: string
-        entries: number
-      } | null
-      theirs?: {
-        vault_id: number
-        vault_uid: string
-        vault_name: string
-        node: string
-        status: 'detached' | 'ended' | 'orphaned' | 'rejoining' | 'forked' | 'core' | 'mirror' | 'unrelated'
-        row_state: string | null
-        term: number
-        agreed: { term: number; seq: number } | null
-        pending: number
-        switch_running: boolean
-        start_running: boolean
-        deleting: boolean
-        contents_missing: number
-        mirrored_elsewhere: boolean
-        digest: string
-        entries: number
-      } | null
-      counts?: {
-        only_this?: number
-        only_theirs?: number
-        changed_this?: number
-        changed_theirs?: number
-        changed_both?: number
-        differs?: number
-        total?: number
-        same?: number
-      }
-      keys?: { match: boolean; current: { this: number; theirs: number }; mismatched: number[] } | null
-      base?: {
-        this: { available: boolean; source: string; at: { term: number; seq: number } | null }
-        theirs: { available: boolean; source: string; at: { term: number; seq: number } | null }
-        both: boolean
-      } | null
-      blockers?: { code: string; side: 'this' | 'theirs' | 'both'; message: string }[]
-      plan?: {
-        this: { takes: number; keeps_held: number; conflict_copies: number }
-        theirs: { takes: number; keeps_held: number; conflict_copies: number }
-        chosen: { core: number; mirror: number; both: number }
-        core: 'this' | 'theirs'
-        default_choice: 'this' | 'theirs' | 'both' | null
-      }
-      progress?: {
-        bring_total: number
-        bring_done: number
-        executed: number
-        refused: number
-        kept: number
-        row?: {
-          role: string
-          state: string
-          copy_finished: boolean
-          copy_cursor: number
-          term: number
-          stop_reason: string | null
-        }
-      }
-    }
-  }
-  /**
-   * A page of the relink's drifted entries, by path, with both versions and the plan's choice and resolution
-   * for each. Super admins.
-   */
-  'mirror.relink.entries': {
-    payload: {
-      vault_id: number
-      kind?: 'only_this' | 'only_theirs' | 'changed_this' | 'changed_theirs' | 'changed_both' | 'differs'
-      offset?: number
-      limit?: number
-    }
-    response: {
-      vault_id: number
-      relink_id: number
-      total: number
-      offset: number
-      entries: {
-        uid: string
-        kind: 'only_this' | 'only_theirs' | 'changed_this' | 'changed_theirs' | 'changed_both' | 'differs'
-        aspects: string[]
-        path: string
-        this: {
-          kind: 'file' | 'directory' | 'symlink'
-          trashed: boolean
-          path: string
-          hash: string
-          name: string
-          parent: string | null
-          generation?: string
-          size?: number
-          key_version?: number
-          content_hash?: string
-          mime?: string
-          target?: string
-          mode?: number
-        } | null
-        theirs: {
-          kind: 'file' | 'directory' | 'symlink'
-          trashed: boolean
-          path: string
-          hash: string
-          name: string
-          parent: string | null
-          generation?: string
-          size?: number
-          key_version?: number
-          content_hash?: string
-          mime?: string
-          target?: string
-          mode?: number
-        } | null
-        choice: 'this' | 'theirs' | 'both' | null
-        resolution: 'core' | 'mirror' | 'both'
-        outcome: string | null
-        outcome_note: string | null
-      }[]
-    }
-  }
-  /**
-   * The vault's open relink here (else its last): both sides, the drift counts, the keys, what refuses
-   * applying, the plan with what each server gains and loses, and the progress of one being applied. relink
-   * null: none. Super admins.
-   */
-  'mirror.relink.get': {
-    payload: { vault_id: number }
-    response: {
-      vault_id: number
-      relink: {
-        id: number
-        relink_uid: string
-        side: 'initiator' | 'responder'
-        phase: 'open' | 'prepared' | 'bring' | 'copying' | 'done' | 'failed' | 'stale' | 'cancelled'
-        mode: 'plan' | 'override'
-        core: 'this' | 'theirs'
-        default_choice: 'this' | 'theirs' | 'both' | null
-        role: 'core' | 'mirror' | null
-        term: number | null
-        error: string | null
-        by: { node: string; id: number | null; name: string }
-        created_at: number
-        applied_at: number | null
-        finished_at: number | null
-      } | null
-      peer?: { id: number; name: string; node: string } | null
-      this?: {
-        vault_id: number
-        vault_uid: string
-        vault_name: string
-        node: string
-        status: 'detached' | 'ended' | 'orphaned' | 'rejoining' | 'forked' | 'core' | 'mirror' | 'unrelated'
-        row_state: string | null
-        term: number
-        agreed: { term: number; seq: number } | null
-        pending: number
-        switch_running: boolean
-        start_running: boolean
-        deleting: boolean
-        contents_missing: number
-        mirrored_elsewhere: boolean
-        digest: string
-        entries: number
-      } | null
-      theirs?: {
-        vault_id: number
-        vault_uid: string
-        vault_name: string
-        node: string
-        status: 'detached' | 'ended' | 'orphaned' | 'rejoining' | 'forked' | 'core' | 'mirror' | 'unrelated'
-        row_state: string | null
-        term: number
-        agreed: { term: number; seq: number } | null
-        pending: number
-        switch_running: boolean
-        start_running: boolean
-        deleting: boolean
-        contents_missing: number
-        mirrored_elsewhere: boolean
-        digest: string
-        entries: number
-      } | null
-      counts?: {
-        only_this?: number
-        only_theirs?: number
-        changed_this?: number
-        changed_theirs?: number
-        changed_both?: number
-        differs?: number
-        total?: number
-        same?: number
-      }
-      keys?: { match: boolean; current: { this: number; theirs: number }; mismatched: number[] } | null
-      base?: {
-        this: { available: boolean; source: string; at: { term: number; seq: number } | null }
-        theirs: { available: boolean; source: string; at: { term: number; seq: number } | null }
-        both: boolean
-      } | null
-      blockers?: { code: string; side: 'this' | 'theirs' | 'both'; message: string }[]
-      plan?: {
-        this: { takes: number; keeps_held: number; conflict_copies: number }
-        theirs: { takes: number; keeps_held: number; conflict_copies: number }
-        chosen: { core: number; mirror: number; both: number }
-        core: 'this' | 'theirs'
-        default_choice: 'this' | 'theirs' | 'both' | null
-      }
-      progress?: {
-        bring_total: number
-        bring_done: number
-        executed: number
-        refused: number
-        kept: number
-        row?: {
-          role: string
-          state: string
-          copy_finished: boolean
-          copy_cursor: number
-          term: number
-          stop_reason: string | null
-        }
-      }
-    }
-  }
-  /**
-   * Changes the open plan: which server becomes the core (core), the choice for entries left unset (default;
-   * "" is the core's), choices one at a time (set: {uid, choice}) or by kind (by_kind: {kind, choice}; kind
-   * "" is every entry); a choice is this, theirs, both (files only: the future mirror's version becomes a
-   * conflict copy beside the core's) or null (the default). discard ends the plan. Answers mirror.relink.get.
-   * Super admins.
-   */
-  'mirror.relink.plan': {
-    payload: {
-      vault_id: number
-      core?: 'this' | 'theirs'
-      default?: '' | 'this' | 'theirs' | 'both'
-      set?: { uid: string; choice: 'this' | 'theirs' | 'both' | null }[]
-      by_kind?: { kind: string; choice: 'this' | 'theirs' | 'both' | null }[]
-      discard?: boolean
-    }
-    response: {
-      vault_id: number
-      relink: {
-        id: number
-        relink_uid: string
-        side: 'initiator' | 'responder'
-        phase: 'open' | 'prepared' | 'bring' | 'copying' | 'done' | 'failed' | 'stale' | 'cancelled'
-        mode: 'plan' | 'override'
-        core: 'this' | 'theirs'
-        default_choice: 'this' | 'theirs' | 'both' | null
-        role: 'core' | 'mirror' | null
-        term: number | null
-        error: string | null
-        by: { node: string; id: number | null; name: string }
-        created_at: number
-        applied_at: number | null
-        finished_at: number | null
-      } | null
-      peer?: { id: number; name: string; node: string } | null
-      this?: {
-        vault_id: number
-        vault_uid: string
-        vault_name: string
-        node: string
-        status: 'detached' | 'ended' | 'orphaned' | 'rejoining' | 'forked' | 'core' | 'mirror' | 'unrelated'
-        row_state: string | null
-        term: number
-        agreed: { term: number; seq: number } | null
-        pending: number
-        switch_running: boolean
-        start_running: boolean
-        deleting: boolean
-        contents_missing: number
-        mirrored_elsewhere: boolean
-        digest: string
-        entries: number
-      } | null
-      theirs?: {
-        vault_id: number
-        vault_uid: string
-        vault_name: string
-        node: string
-        status: 'detached' | 'ended' | 'orphaned' | 'rejoining' | 'forked' | 'core' | 'mirror' | 'unrelated'
-        row_state: string | null
-        term: number
-        agreed: { term: number; seq: number } | null
-        pending: number
-        switch_running: boolean
-        start_running: boolean
-        deleting: boolean
-        contents_missing: number
-        mirrored_elsewhere: boolean
-        digest: string
-        entries: number
-      } | null
-      counts?: {
-        only_this?: number
-        only_theirs?: number
-        changed_this?: number
-        changed_theirs?: number
-        changed_both?: number
-        differs?: number
-        total?: number
-        same?: number
-      }
-      keys?: { match: boolean; current: { this: number; theirs: number }; mismatched: number[] } | null
-      base?: {
-        this: { available: boolean; source: string; at: { term: number; seq: number } | null }
-        theirs: { available: boolean; source: string; at: { term: number; seq: number } | null }
-        both: boolean
-      } | null
-      blockers?: { code: string; side: 'this' | 'theirs' | 'both'; message: string }[]
-      plan?: {
-        this: { takes: number; keeps_held: number; conflict_copies: number }
-        theirs: { takes: number; keeps_held: number; conflict_copies: number }
-        chosen: { core: number; mirror: number; both: number }
-        core: 'this' | 'theirs'
-        default_choice: 'this' | 'theirs' | 'both' | null
-      }
-      progress?: {
-        bring_total: number
-        bring_done: number
-        executed: number
-        refused: number
-        kept: number
-        row?: {
-          role: string
-          state: string
-          copy_finished: boolean
-          copy_cursor: number
-          term: number
-          stop_reason: string | null
-        }
-      }
-    }
-  }
-  /**
    * Starts a copy that stopped (diverged, expired or stopped) over from its core's tree without making it
    * again: the core takes its baseline again in the next term and this server runs the first copy over the
    * entries it has (files whose bytes are here already are not fetched). Changes still pending, this server's
@@ -7387,154 +6920,6 @@ export interface WsContract {
       baseline?: { digest: string; entries: number }
     }
     response: { outcome: 'pending' | 'following' | 'rejoining' | 'forced'; changes?: number }
-  }
-  /**
-   * The other server could not prepare its side: this server's prepared side ends (its new mirror row goes;
-   * the vault is this server's own; what it settled stays settled).
-   */
-  'peer.mirror.relink.abort': {
-    payload: { vault_uid: string; relink_uid: string; why: string }
-    response: { phase: string }
-  }
-  /**
-   * The relink's core is ready: this server, its future mirror, starts its copy over from the core's tree at
-   * once, or first brings its chosen versions onto the core (the follower's pass). Told again, it answers its
-   * phase.
-   */
-  'peer.mirror.relink.go': {
-    payload: { vault_uid: string; relink_uid: string }
-    response: { phase: string }
-  }
-  /**
-   * A relink's plan for this server, in parts: its role (core or mirror), the term, and every drifted entry
-   * with both versions and the choice seen from this server. The last part prepares it here: the records the
-   * relink resolves settle; a future core keeps the versions the plan replaces as held changes and starts the
-   * pair; a future mirror keeps what the core's tree replaces without a trace, makes its conflict copies and
-   * holds a mirror row (stopped, mirror_relinking) until it is told to go. Refused when this server's tree
-   * changed since it was compared.
-   */
-  'peer.mirror.relink.prepare': {
-    payload: {
-      vault_uid: string
-      relink_uid: string
-      role: 'core' | 'mirror'
-      term: number
-      mode: 'plan' | 'override'
-      part: number
-      more: boolean
-      entries: {
-        uid: string
-        kind: string
-        aspects: string[]
-        path: string
-        yours: {
-          kind: 'file' | 'directory' | 'symlink'
-          trashed: boolean
-          path: string
-          hash: string
-          name: string
-          parent: string | null
-          generation?: string
-          size?: number
-          key_version?: number
-          content_hash?: string
-          mime?: string
-          target?: string
-          mode?: number
-        } | null
-        mine: {
-          kind: 'file' | 'directory' | 'symlink'
-          trashed: boolean
-          path: string
-          hash: string
-          name: string
-          parent: string | null
-          generation?: string
-          size?: number
-          key_version?: number
-          content_hash?: string
-          mime?: string
-          target?: string
-          mode?: number
-        } | null
-        choice: 'this' | 'theirs' | 'both'
-      }[]
-      by: { node: string; id: number; name: string }
-      digest: { digest: string; entries: number }
-    }
-    response: { prepared: boolean; part: number; phase?: string }
-  }
-  /**
-   * A relink's other server asks what this server holds of the vault with this uid: its status, the highest
-   * term, the last position it agreed on with the asking server, what refuses a relink here, its tree's
-   * digest and its key versions (key checks and origins, never a key). not_found unless this server has a
-   * record of mirroring the vault with the asking server.
-   */
-  'peer.mirror.relink.state': {
-    payload: { vault_uid: string }
-    response: {
-      vault_id: number
-      vault_uid: string
-      vault_name: string
-      node: string
-      status: 'detached' | 'ended' | 'orphaned' | 'rejoining' | 'forked' | 'core' | 'mirror' | 'unrelated'
-      row_state: string | null
-      term: number
-      agreed: { term: number; seq: number } | null
-      pending: number
-      switch_running: boolean
-      start_running: boolean
-      deleting: boolean
-      contents_missing: number
-      mirrored_elsewhere: boolean
-      digest: string
-      entries: number
-      keys: {
-        version: number
-        current: boolean
-        check: string | null
-        origin: { node: string; vault_id: number; check: string } | null
-      }[]
-    }
-  }
-  /**
-   * A page of this server's tree of the vault for a relink's comparison, by uid: each entry's version (or
-   * null when only its base holds it) and its base hash (what this server last agreed with the asking
-   * server). The tree is read at the first page (after 0) and paged from that read.
-   */
-  'peer.mirror.relink.tree': {
-    payload: {
-      vault_uid: string
-      relink_uid: string
-      since?: { term: number; seq: number } | null
-      after: number
-      limit: number
-    }
-    response: {
-      entries: {
-        uid: string
-        state: {
-          kind: 'file' | 'directory' | 'symlink'
-          trashed: boolean
-          path: string
-          hash: string
-          name: string
-          parent: string | null
-          generation?: string
-          size?: number
-          key_version?: number
-          content_hash?: string
-          mime?: string
-          target?: string
-          mode?: number
-        } | null
-        base: string | null
-      }[]
-      more: boolean
-      next: number
-      total: number
-      base?: { available: boolean; source: string; at: { term: number; seq: number } | null }
-    }
   }
   /**
    * The mirror starts its copy over (mirror.resync on the mirror): the core takes its baseline again in the
@@ -10588,6 +9973,8 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'health.finding.silence',
   'health.finding.unsilence',
   'health.findings.list',
+  'health.subscribe',
+  'health.unsubscribe',
   'meta.contract.get',
   'meta.hello',
   'mirror.accept',
@@ -10609,11 +9996,6 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'mirror.list',
   'mirror.mirror_all.set',
   'mirror.pending',
-  'mirror.relink.apply',
-  'mirror.relink.compare',
-  'mirror.relink.entries',
-  'mirror.relink.get',
-  'mirror.relink.plan',
   'mirror.resync',
   'mirror.switch',
   'mirror.takeover',
@@ -10639,11 +10021,6 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'peer.mirror.notify',
   'peer.mirror.offer',
   'peer.mirror.promoted',
-  'peer.mirror.relink.abort',
-  'peer.mirror.relink.go',
-  'peer.mirror.relink.prepare',
-  'peer.mirror.relink.state',
-  'peer.mirror.relink.tree',
   'peer.mirror.resync',
   'peer.mirror.submit',
   'peer.mirror.switch.commit',
@@ -10930,7 +10307,6 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'mirror.add': 'keys',
   'mirror.cancel': 'data.destroy',
   'mirror.mirror_all.set': 'keys',
-  'mirror.relink.apply': 'keys',
   'mirror.takeover': 'data.destroy',
   'peer.link.start': 'device.trust',
   'peer.pairing.approve': 'device.trust',
@@ -10981,9 +10357,10 @@ export const WS_CONTRACT_STEP_UP: Readonly<Partial<Record<WsContractCommand, str
   'vault.remote.detach': 'keys',
 }
 
-// Client timeouts the server declares per command (a timeout means "no answer yet", never "failed"): only
-// those other than the client's default (15000 ms), and none of a linked server's own wire
-// set (the console never sends one). Every route ships this table.
+// Client timeouts the server declares per command (a timeout means "no answer yet", never "failed"): the
+// timeout most commands declare, and every command that declares another one.
+export const WS_CONTRACT_DEFAULT_TIMEOUT_MS = 15000
+
 export const WS_CONTRACT_TIMEOUTS: Readonly<Partial<Record<WsContractCommand, number>>> = {
   'audit.export': 120000,
   'audit.verify': 120000,
@@ -11003,9 +10380,9 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Partial<Record<WsContractCommand, nu
   'fs.list': 30000,
   'fs.upload.finish': 180000,
   'fs.upload.start': 30000,
-  'mirror.relink.apply': 180000,
-  'mirror.relink.compare': 120000,
   'mirror.switch': 60000,
+  'peer.mirror.key': 30000,
+  'peer.mirror.keys': 60000,
   'pricing.budget.preflight': 60000,
   'recovery.costs': 60000,
   'recovery.inspect': 30000,

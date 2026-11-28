@@ -3,6 +3,7 @@
 #include "identities/User.hpp"
 #include "ops/Error.hpp"
 #include "ops/Health.hpp"
+#include "protocols/ws/HealthNotifier.hpp"
 #include "protocols/ws/Session.hpp"
 
 #include <nlohmann/json.hpp>
@@ -59,6 +60,15 @@ json Health::findingUnsilence(const json& payload, const std::shared_ptr<Session
     const auto cls = healthClass(payload, "health.finding.unsilence");
     return {{"health", ops::health::unsilence(healthActor(session), cls,
                                               healthField<std::string>(payload, "subject").value_or(""))}};
+}
+
+json Health::subscribe(const std::shared_ptr<Session>& session) {
+    return {{"revision", HealthNotifier::instance()->subscribe(session)}};
+}
+
+json Health::unsubscribe(const std::shared_ptr<Session>& session) {
+    HealthNotifier::instance()->unsubscribe(session);
+    return {{"subscribed", false}};
 }
 
 }

@@ -106,6 +106,7 @@ nlohmann::json acknowledge(const Actor& actor, const std::string& cls, const std
                                                             .setByName = actor->name(),
                                                             .note = cleaned});
     record(actor, "health.finding.acknowledge", "acknowledged", mark);
+    vh::health::stateChanged();
     return answer(actor, false);
 }
 
@@ -150,6 +151,7 @@ nlohmann::json silence(const Actor& actor, const SilenceRequest& request) {
                                                             .expiresAt = expiresAt,
                                                             .note = cleaned});
     record(actor, "health.finding.silence", "silenced", mark);
+    vh::health::stateChanged();
     return answer(actor, false);
 }
 
@@ -161,6 +163,7 @@ nlohmann::json unsilence(const Actor& actor, const std::string& cls, const std::
         throw NotFound("'" + cls + "' is neither silenced nor acknowledged");
     record(actor, "health.finding.unsilence", "turned back on",
            {.cls = cls, .subject = subject, .state = "", .severity = vh::health::findClass(cls)->maxSeverity});
+    vh::health::stateChanged();
     return answer(actor, false);
 }
 

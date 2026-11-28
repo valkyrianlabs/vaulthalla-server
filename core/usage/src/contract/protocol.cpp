@@ -90,6 +90,11 @@ std::vector<Capability> capabilities() {
                         "acknowledge, .silence and .unsilence with admin.stats.manage), and stats.dashboard.overview "
                         "and .severity answer unattended_error_count and unattended_warning_count: the counts "
                         "without acknowledged and silenced findings (design/health/findings.md)."},
+        {.name = "health.push",
+         .since = "1.28.0",
+         .description = "health.subscribe / health.unsubscribe and the unsolicited health.changed event (the status, "
+                        "the counts and a revision; no findings) whenever the findings or their state change "
+                        "(design/health/findings.md §6). Without it, poll stats.dashboard.severity."},
         {.name = "http.upload.content",
          .since = "1.17.0",
          .description = "PUT /upload/content: a streaming conditional create (If-None-Match) or replace (If-Match) "

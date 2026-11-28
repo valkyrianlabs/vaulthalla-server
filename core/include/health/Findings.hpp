@@ -96,6 +96,12 @@ void annotate(stats::model::DashboardOverview& overview);
 // Tests only: what the cards raise comes from `source` instead of the dashboard, until reset with an empty function.
 void setActiveSourceForTesting(std::function<std::vector<Active>()> source);
 
+// An operator changed a finding's state (ops::health acknowledge, silence, unsilence): tells the listener (the ws
+// HealthNotifier), which then looks again at once instead of at its next evaluation. Never blocks, never throws.
+void stateChanged() noexcept;
+// The one listener stateChanged() calls; an empty function removes it.
+void setStateListener(std::function<void()> listener);
+
 // A value that changes exactly when what a client would show changes: the findings, their severities and states.
 [[nodiscard]] std::string digest(const Snapshot& snapshot);
 

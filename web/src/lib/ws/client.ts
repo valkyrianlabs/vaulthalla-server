@@ -2,7 +2,7 @@ import type { WebSocketCommandMap } from '@/util/webSocketCommands'
 import { getWebsocketUrl } from '@/util/getUrl'
 import { WsError, wsErrorFromMessage } from '@/lib/ws/errors'
 import { randomId } from '@/lib/randomId'
-import { WS_CONTRACT_TIMEOUTS } from '@/util/generated/wsContract'
+import { WS_CONTRACT_DEFAULT_TIMEOUT_MS, WS_CONTRACT_TIMEOUTS } from '@/util/generated/wsContract'
 
 export type Command = keyof WebSocketCommandMap
 export type Payload<C extends Command> = WebSocketCommandMap[C]['payload']
@@ -41,19 +41,19 @@ interface WsClientOptions {
 }
 
 const CONNECT_DEADLINE_MS = 8_000
-const DEFAULT_TIMEOUT_MS = 15_000
 const BACKOFF_BASE_MS = 500
 const BACKOFF_MAX_MS = 15_000
 
 // Per-command client timeouts. A timeout means "no answer yet", not "failed": callers surface it as such and must
 // not blindly resend. Every command the daemon registers is in the server-owned contract, which declares its timeout
-// (core/usage); the generated table holds the ones other than DEFAULT_TIMEOUT_MS. A command not in the book would be
+// (core/usage): the generated table lists the commands whose timeout differs from the common one
+// (WS_CONTRACT_DEFAULT_TIMEOUT_MS), so the table in every first load stays small. A command not in the book would be
 // listed here after the spread.
 const COMMAND_TIMEOUTS: Partial<Record<Command, number>> = {
   ...WS_CONTRACT_TIMEOUTS,
 }
 
-export const commandTimeout = (command: Command) => COMMAND_TIMEOUTS[command] ?? DEFAULT_TIMEOUT_MS
+export const commandTimeout = (command: Command) => COMMAND_TIMEOUTS[command] ?? WS_CONTRACT_DEFAULT_TIMEOUT_MS
 
 type Listener = (status: ConnectionStatus) => void
 type MessageListener = (message: Record<string, unknown>) => void

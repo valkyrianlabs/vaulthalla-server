@@ -143,6 +143,8 @@ std::vector<WsEffect> effectTable() {
         {"health.finding.silence", "write"},
         {"health.finding.unsilence", "write"},
         {"health.findings.list", "read"},
+        {"health.subscribe", "read"},
+        {"health.unsubscribe", "read"},
         {"meta.contract.get", "read"},
         {"meta.hello", "read"},
         {"mirror.accept", "write"},

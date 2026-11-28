@@ -25,6 +25,7 @@ Standard library only.
 from __future__ import annotations
 
 import argparse
+import collections
 import difflib
 import hashlib
 import json
@@ -42,10 +43,6 @@ LINE_LIMIT = 110
 
 
 # ---- canonical form and hashes (must match core/usage/src/contract/Export.cpp) ---------------------------------
-
-
-# The web client's default request timeout (web/src/lib/ws/client.ts DEFAULT_TIMEOUT_MS): the generated table omits it.
-DEFAULT_CLIENT_TIMEOUT_MS = 15_000
 
 def canonical(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -276,12 +273,18 @@ def generate_ts(snapshot: dict[str, Any]) -> str:
     out.extend(f"  {ts_string(c['command'])}: {ts_string(c['step_up'])}," for c in commands if c.get("step_up"))
     out.append("}")
     out.append("")
-    out.append("// Client timeouts the server declares per command (a timeout means \"no answer yet\", never \"failed\"): only")
-    out.append(f"// those other than the client's default ({DEFAULT_CLIENT_TIMEOUT_MS} ms), and none of a linked server's own wire")
-    out.append("// set (the console never sends one). Every route ships this table.")
+    # The timeouts are runtime data in every route's first load (the ws client), so most commands, which declare the
+    # same timeout, share one constant and only the others are listed: a new command at the common timeout adds
+    # nothing to the bundle.
+    tally = collections.Counter(c["client_timeout_ms"] for c in commands)
+    default_timeout = min(tally, key=lambda ms: (-tally[ms], ms)) if tally else 15000
+    out.append("// Client timeouts the server declares per command (a timeout means \"no answer yet\", never \"failed\"): the")
+    out.append("// timeout most commands declare, and every command that declares another one.")
+    out.append(f"export const WS_CONTRACT_DEFAULT_TIMEOUT_MS = {default_timeout}")
+    out.append("")
     out.append("export const WS_CONTRACT_TIMEOUTS: Readonly<Partial<Record<WsContractCommand, number>>> = {")
     out.extend(f"  {ts_string(c['command'])}: {c['client_timeout_ms']}," for c in commands
-               if c['client_timeout_ms'] != DEFAULT_CLIENT_TIMEOUT_MS and c.get('auth') != 'peer')
+               if c["client_timeout_ms"] != default_timeout)
     out.append("}")
     out.append("")
     return "\n".join(out)

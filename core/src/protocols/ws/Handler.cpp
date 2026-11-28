@@ -414,6 +414,8 @@ void Handler::registerSettingsHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("health.finding.acknowledge", &handler::Health::findingAcknowledge);
     r->registerPayload("health.finding.silence", &handler::Health::findingSilence);
     r->registerPayload("health.finding.unsilence", &handler::Health::findingUnsilence);
+    r->registerSessionOnlyHandler("health.subscribe", &handler::Health::subscribe);
+    r->registerSessionOnlyHandler("health.unsubscribe", &handler::Health::unsubscribe);
     r->registerPayload("audit.list", &handler::Audit::list);
     r->registerSessionOnlyHandler("audit.verify", &handler::Audit::verify);
     r->registerPayload("audit.export", &handler::Audit::exportEvents);

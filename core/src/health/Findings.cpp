@@ -9,6 +9,7 @@
 #include <exception>
 #include <functional>
 #include <map>
+#include <mutex>
 
 namespace vh::health {
 
@@ -143,6 +144,42 @@ std::vector<Active> activeFindings(const stats::model::DashboardOverview& overvi
                        .href = item.href,
                        .metricKey = item.metricKey});
     return out;
+}
+
+namespace {
+
+struct HealthStateListener {
+    std::mutex mutex;
+    std::function<void()> listener;
+};
+
+HealthStateListener& healthStateListener() {
+    static HealthStateListener held;
+    return held;
+}
+
+}
+
+void stateChanged() noexcept {
+    try {
+        std::function<void()> listener;
+        {
+            auto& held = healthStateListener();
+            std::scoped_lock lock(held.mutex);
+            listener = held.listener;
+        }
+        if (listener) listener();
+    } catch (const std::exception& e) {
+        log::Registry::vaulthalla()->warn("[health] state change not passed on: {}", e.what());
+    } catch (...) {
+        log::Registry::vaulthalla()->warn("[health] state change not passed on");
+    }
+}
+
+void setStateListener(std::function<void()> listener) {
+    auto& held = healthStateListener();
+    std::scoped_lock lock(held.mutex);
+    held.listener = std::move(listener);
 }
 
 void setActiveSourceForTesting(std::function<std::vector<Active>()> source) { testSource() = std::move(source); }

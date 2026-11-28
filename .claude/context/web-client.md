@@ -87,6 +87,11 @@
   dot from `stats.dashboard.severity` for `admin.stats.view`, Sync Conflicts button, transfers, cost-alerts bell, user
   menu), session gate (reconnecting state, never
   an endless spinner), initial-password warning (`data-testid="initial-password-warning"`).
+- **Health findings** (#483, `features/health/findings`, details in `health-findings.md`): the top bar health dot counts
+  the unattended findings only; the Overview's "Needs attention" and "Silenced" lists carry each finding's state and,
+  for `can_manage` accounts, Acknowledge / Silence / Turn back on. The dot and every health view share one
+  `health.subscribe` (`push.ts`) and stop polling while it holds. `lib/hello.ts` `useHelloCapability` is the shared
+  `meta.hello` capability read.
 - **Cost-alerts bell** (`features/cost/NotificationsBell.tsx`, super admins only): `pricing.notifications.list`
   `{limit: 8, include_acknowledged: false}` every 60 s (paused in hidden tabs). The badge count (capped "9+") and tone
   come from the response's `summary` (`open_count`, `worst_severity`), which core computes over every open alert in
@@ -118,7 +123,10 @@
   its reason). The generated TS has `WsModels` and `WsPartial`.
 - The book covers every command the daemon registers (229; `UsageContract.EveryRegisteredWsCommandHasABookEntry` and
   `test_ws_contract.py` fail on a registered command without an entry; an explicit, reasoned allowlist exists and is
-  empty), so `COMMAND_TIMEOUTS` is just the server-declared `WS_CONTRACT_TIMEOUTS`.
+  empty), so `COMMAND_TIMEOUTS` is just the server-declared `WS_CONTRACT_TIMEOUTS`. That table is in every route's
+  first load, so the generator lists only commands whose timeout differs from the common one and emits that one as
+  `WS_CONTRACT_DEFAULT_TIMEOUT_MS` (`commandTimeout` falls back to it): a new command at the common timeout adds
+  nothing to `/login`.
 - Drift fails the meson test `ws_contract_drift` and `tools/contracts/test_ws_contract.py` (which also checks every
   book command is registered in core and typed in the web map). A breaking change to the ws surface (protocol policy:
   `docs/reference/ws-protocol.md`) fails the meson test `protocol_compat` and `tools/contracts/test_protocol_compat.py`

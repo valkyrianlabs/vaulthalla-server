@@ -18,6 +18,7 @@
 #include "protocols/device/Service.hpp"
 #include "protocols/s3/GatewayService.hpp"
 #include "protocols/ws/ChangeNotifier.hpp"
+#include "protocols/ws/HealthNotifier.hpp"
 #include "protocols/shell/Server.hpp"
 #include "protocols/ws/ConnectionLifecycleManager.hpp"
 #include "runtime/Deps.hpp"
@@ -64,6 +65,7 @@ constexpr std::array kBaseStartOrder{
     "StatsSnapshotService",
     "OperatorEmailService",
     "FsChangeNotifier",
+    "HealthNotifier",
     "ConnectionLifecycleManager",
     "ProtocolService",
     "DeviceServer",
@@ -88,6 +90,7 @@ constexpr std::array kBaseStopOrder{
     "ProtocolService",
     "ShellServer",
     "ConnectionLifecycleManager",
+    "HealthNotifier",
     "FsChangeNotifier",
     "OperatorEmailService",
     "StatsSnapshotService",
@@ -156,6 +159,7 @@ Manager::Manager()
     services_["OperatorEmailService"] = operatorEmailService;
     services_["UpstreamEventService"] = upstreamEventService;
     services_["FsChangeNotifier"] = protocols::ws::ChangeNotifier::instance();
+    services_["HealthNotifier"] = protocols::ws::HealthNotifier::instance();
     services_["MirrorSequencer"] = vh::mirror::Sequencer::instance();
     services_["MirrorFollower"] = vh::mirror::follow::Follower::instance();
     services_["MirrorAccessWatcher"] = vh::rbac::mirrored::Watcher::instance();

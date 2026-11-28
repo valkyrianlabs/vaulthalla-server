@@ -1,24 +1,11 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
-import { api } from '@/lib/session'
-import { queryClient, useWs, wsKey } from '@/lib/query'
+import { useHelloCapability } from '@/lib/hello'
+import { queryClient, useWs } from '@/lib/query'
 import { MANAGED_STORAGE_CAPABILITY } from '@/features/managedStorage/model'
 
 export { useCloudView } from '@/features/managedStorage/signal'
-
-const HELLO = { client: { name: 'Vaulthalla Web' } } as const
-
-// Whether this server announces a meta.hello capability, cached 10 min like the upload probe (one request per page:
-// every caller shares the query).
-export const useHelloCapability = (capability: string, enabled = true) =>
-  !!useQuery({
-    queryKey: wsKey('meta.hello', HELLO),
-    queryFn: ({ signal }) => api.send('meta.hello', HELLO, { signal }),
-    staleTime: 10 * 60_000,
-    enabled,
-    retry: false,
-  }).data?.capabilities.includes(capability)
+export { useHelloCapability }
 
 // Whether this server offers managed storage.
 export const useManagedStorageCapability = (enabled = true) => useHelloCapability(MANAGED_STORAGE_CAPABILITY, enabled)
