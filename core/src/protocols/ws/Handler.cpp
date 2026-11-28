@@ -165,6 +165,10 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("mirror.relink.entries", &handler::Mirrors::relinkEntries);
     r->registerPayload("mirror.relink.plan", &handler::Mirrors::relinkPlan);
     r->registerPayload("mirror.relink.apply", &handler::Mirrors::relinkApply);
+    r->registerPayload("mirror.relink.pending", &handler::Mirrors::relinkPending);
+    r->registerPayload("mirror.relink.accept", &handler::Mirrors::relinkAccept);
+    r->registerPayload("mirror.relink.decline", &handler::Mirrors::relinkDecline);
+    r->registerPayload("mirror.relink.approve", &handler::Mirrors::relinkApprove);
     r->registerPayload("peer.mirror.offer", &handler::Mirrors::offer);
     r->registerPayload("peer.mirror.answer", &handler::Mirrors::answer);
     r->registerPayload("peer.mirror.keys", &handler::Mirrors::keys);
@@ -197,6 +201,10 @@ void Handler::registerPeerHandlers(const std::shared_ptr<Router>& r) {
     r->registerPayload("peer.mirror.switch.commit", &handler::MirrorFollow::switchCommit);
     r->registerPayload("peer.mirror.promoted", &handler::MirrorFollow::promoted);
     // Relink (mirror/relink/Relink.hpp).
+    r->registerPayload("peer.mirror.relink.request", &handler::MirrorFollow::relinkRequest);
+    r->registerPayload("peer.mirror.relink.answer", &handler::MirrorFollow::relinkAnswer);
+    r->registerPayload("peer.mirror.relink.propose", &handler::MirrorFollow::relinkPropose);
+    r->registerPayload("peer.mirror.relink.cancel", &handler::MirrorFollow::relinkCancel);
     r->registerPayload("peer.mirror.relink.state", &handler::MirrorFollow::relinkState);
     r->registerPayload("peer.mirror.relink.tree", &handler::MirrorFollow::relinkTree);
     r->registerPayload("peer.mirror.relink.prepare", &handler::MirrorFollow::relinkPrepare);

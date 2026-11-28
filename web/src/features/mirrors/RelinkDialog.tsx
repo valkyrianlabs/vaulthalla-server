@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useEffect, useId, useState } from 'react'
+import React, { useEffect, useId, useRef, useState } from 'react'
 import { useWs, useWsMutation } from '@/lib/query'
 import { formatInt } from '@/lib/format'
 import { Badge } from '@/components/ui/Badge'
@@ -14,6 +14,7 @@ import { PeerError } from '@/features/peers/parts'
 import { MIRROR_READS, peerName, type MirroredVault } from '@/features/mirrors/model'
 import { usePeers } from '@/features/mirrors/queries'
 import {
+  AWAITING_OTHER,
   DRIFT_KINDS,
   canKeepBoth,
   choicePayload,
@@ -32,14 +33,17 @@ import {
 
 const PAGE = 50
 const RELINK_READS = ['mirror.relink.get', 'mirror.relink.entries'] as const
+const ENDED = ['done', 'failed', 'stale', 'cancelled', 'declined', 'expired']
 
 type Step = 'summary' | 'review' | 'confirm'
 
 // Reconnect a vault both servers hold since their mirror ended (detached, orphaned, rejoining, forked): mirror.relink.*.
-// Compares the two trees (once on open, again on request), shows the drift, and offers the two hard overrides (one
-// server's tree wins everywhere) and the step-through (a choice per entry, in bulk by kind, the plan's gains and
-// losses). Applying names the winning server and asks for the vault's name; the keys step-up runs through the shell's
-// dialog. Loaded with next/dynamic, mounted while open.
+// Both servers agree, each by a super admin: opening asks the other server, and the dialog waits ("waiting for the other
+// server's admin") until its admin accepts, then compares the two trees, shows the drift, and offers the two hard
+// overrides (one server's tree wins everywhere) and the step-through (a choice per entry, in bulk by kind, the plan's
+// gains and losses). Applying names the winning server and asks for the vault's name (the keys step-up runs through the
+// shell's dialog); it proposes the outcome, which the other server's admin approves before anything changes, and this
+// server then carries it out. Loaded with next/dynamic, mounted while open.
 export default function RelinkDialog({ row, open, onOpenChange }: { row: MirroredVault; open: boolean; onOpenChange: (open: boolean) => void }) {
   const ids = useId()
   const { byId, linked } = usePeers()
@@ -57,20 +61,28 @@ export default function RelinkDialog({ row, open, onOpenChange }: { row: Mirrore
     refetchInterval: q => (phaseText(q.state.data as RelinkStatus | undefined).running ? 2_000 : false),
   })
   const s = status.data
-  const phase = phaseText(s)
+  const phase = phaseText(s, peer)
   const isOpen = s?.relink?.phase === 'open' && s.relink.side === 'initiator'
 
   const compare = useWsMutation<'mirror.relink.compare', void>('mirror.relink.compare', {
     toPayload: () => ({ vault_id: row.vault_id, peer: String(peerId ?? '') }),
     invalidates: [...RELINK_READS],
   })
-  // Compared once on open when there is no plan to show (a relink running is shown as it is).
+  // Asked (and compared) once on open when there is no relink to show, and compared once the other server's admin
+  // accepted (a relink waiting or running is shown as it is).
   const relinkPhase = s?.relink?.phase
+  const relinkSide = s?.relink?.side
+  const relinkKey = s?.relink ? `${s.relink.relink_uid}:${relinkPhase}` : 'none'
+  const comparedFor = useRef<string | null>(null)
   useEffect(() => {
-    if (!open || !status.isSuccess || !peerId || compare.isPending || compare.isSuccess || compare.isError) return
-    if (!relinkPhase || relinkPhase === 'done' || relinkPhase === 'failed' || relinkPhase === 'stale' || relinkPhase === 'cancelled')
-      compare.mutate()
-  }, [open, status.isSuccess, relinkPhase, peerId, compare])
+    if (!open || !status.isSuccess || !peerId || compare.isPending || comparedFor.current === relinkKey) return
+    const fresh = (!relinkPhase || ENDED.includes(relinkPhase)) && !compare.isSuccess && !compare.isError
+    const accepted = relinkPhase === 'accepted' && relinkSide === 'initiator'
+    if (!fresh && !accepted) return
+    comparedFor.current = relinkKey
+    compare.mutate()
+  }, [open, status.isSuccess, relinkPhase, relinkSide, relinkKey, peerId, compare])
+  const waiting = relinkSide === 'initiator' && !!relinkPhase && AWAITING_OTHER.includes(relinkPhase)
 
   const plan = useWsMutation<'mirror.relink.plan', Record<string, unknown>>('mirror.relink.plan', {
     toPayload: edit => ({ vault_id: row.vault_id, ...edit }),
@@ -79,8 +91,10 @@ export default function RelinkDialog({ row, open, onOpenChange }: { row: Mirrore
   const apply = useWsMutation<'mirror.relink.apply', void>('mirror.relink.apply', {
     toPayload: () => ({ vault_id: row.vault_id, confirm: typed, ...(keep ? { keep, peer: String(peerId ?? '') } : {}) }),
     invalidates: [...RELINK_READS, ...MIRROR_READS, 'storage.vault.list', 'storage.vault.get'],
-    onSuccess: () => {
-      notify.success(`Relinking “${row.vault_name}” with ${peer}`, 'The vault is read-only here until the copy completes.')
+    onSuccess: data => {
+      if (data.relink?.phase === 'proposed' || data.relink?.phase === 'requested')
+        notify.info(`Waiting for ${peer}’s admin`, `Nothing changes on either server until ${peer}’s admin approves; this server carries it out then.`)
+      else notify.success(`Relinking “${row.vault_name}” with ${peer}`, 'The vault is read-only here until the copy completes.')
       setStep('summary')
       setTyped('')
     },
@@ -147,12 +161,28 @@ export default function RelinkDialog({ row, open, onOpenChange }: { row: Mirrore
                 <Badge tone={phase.tone} dot>
                   {phase.text}
                 </Badge>
-                {!phase.running ?
+                {!phase.running && relinkSide !== 'responder' ?
                   <Button variant="ghost" size="sm" onClick={() => compare.mutate()} disabled={!peerId} data-testid="mirror-relink-compare">
-                    Compare again
+                    {relinkPhase && ENDED.includes(relinkPhase) && relinkPhase !== 'done' && relinkPhase !== 'stale' ? 'Ask again' : 'Compare again'}
+                  </Button>
+                : null}
+                {waiting ?
+                  <Button variant="ghost" size="sm" onClick={() => plan.mutate({ discard: true })} disabled={plan.isPending} data-testid="mirror-relink-cancel">
+                    Cancel the request
                   </Button>
                 : null}
               </div>
+              {waiting && s.relink?.phase === 'proposed' && s.handshake?.proposal ?
+                <ul className="space-y-1 text-xs text-fg-subtle" data-testid="mirror-relink-proposed">
+                  <li>
+                    Proposed: {coreName(s.handshake.proposal.core, peer)} becomes the core ({s.handshake.proposal.mode === 'override' ? 'its tree wins everywhere' : 'the plan decides each entry'}).
+                  </li>
+                  <li>This server {gainsText(s.handshake.proposal.this)}.</li>
+                  <li>
+                    {peer} {gainsText(s.handshake.proposal.theirs)}.
+                  </li>
+                </ul>
+              : null}
               {s.relink && (s.relink.phase === 'bring' || s.relink.phase === 'copying') && s.progress ?
                 <p className="text-sm text-fg-muted tabular">
                   {formatInt(Number((s.progress as Record<string, unknown>).bring_done ?? 0))} of{' '}
@@ -309,7 +339,7 @@ export default function RelinkDialog({ row, open, onOpenChange }: { row: Mirrore
                       {keep ? `${coreName(winner, peer)}’s data wins everywhere` : `${coreName(core, peer)} becomes the core; the plan decides each entry`}
                     </p>
                     <p className="mt-1 text-sm text-fg-muted">
-                      {`${coreName(keep ?? core, peer)} becomes the vault’s core and the other server its mirror. What the other server held that differs is kept there as held changes, with its bytes.`}
+                      {`${coreName(keep ?? core, peer)} becomes the vault’s core and the other server its mirror. What the other server held that differs is kept there as held changes, with its bytes. ${peer}’s admin approves this outcome before anything changes on either server.`}
                     </p>
                   </div>
                   <Field label={`Type “${row.vault_name}” to confirm`} htmlFor={`${ids}-typed`}>

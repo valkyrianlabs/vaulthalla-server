@@ -32,9 +32,26 @@
 //
 // A plan is invalidated (stale) when either tree changed since it was compared. Refused while either side has pending
 // changes, a switch running, a start or a copy running, or is deleting the vault.
+//
+// The handshake (two sides agree; trust between two servers about a vault ended with the detach, the ended mirror or the
+// unlink, so neither server's word alone reconnects them):
+//   request   comparing on X first asks Y (peer.mirror.relink.request). Y records it (requested, for a day) and says
+//             nothing of its tree: until a super admin of Y, a person, accepts it (vh mirror pending, mirror.relink.accept)
+//             peer.mirror.relink.state answers only whether Y holds a related vault and its status, and tree, prepare and
+//             go are refused (mirror_relink_not_accepted). Y tells X its answer (peer.mirror.relink.answer); X asks again
+//             when it compares, so a lost answer costs nothing. X may cancel (discard) at any time.
+//   outcome   X's apply sends the outcome (peer.mirror.relink.propose: which server becomes the core, the mode, what Y's
+//             vault gains and loses, both digests and the plan's hash) and waits ("awaiting the other server's approval").
+//             Y's super admin approves it (mirror.relink.approve: the vault's name typed, the keys step-up in the console)
+//             or declines. Only then does X carry it out (its apply again, or its follower's pass): Y prepares only the
+//             approved plan (the same hash, the same counts, its tree unchanged). A changed plan or tree voids the
+//             approval. Each step is audited on both servers; a decline or an expiry changes neither vault. There is no
+//             "accept every relink" setting.
 namespace vh::mirror::relink {
 
 inline constexpr std::size_t kTreePage = 2000;
+// How long a request waits for an answer, and an acceptance holds before the relink is carried out.
+inline constexpr std::chrono::hours kRequestHolds{24};
 inline constexpr std::size_t kPreparePage = 2000;
 inline constexpr std::chrono::seconds kStepBudget{3};
 
@@ -69,15 +86,32 @@ struct PlanEdit {
     std::vector<ByKind> by_kind{};
     bool discard{false};                          // cancels the open plan
 };
-[[nodiscard]] nlohmann::json plan(uint32_t vaultId, const PlanEdit& edit);
+// A change to a proposed (or approved) plan withdraws it: the other server's approval is void, ask again. discard ends
+// the relink at any step before it is applied, and tells the other server.
+[[nodiscard]] nlohmann::json plan(uint32_t vaultId, const PlanEdit& edit, vh::mirror::follow::Transport& transport);
 
-// Carries the open plan out (confirm: the vault's name, typed). Answers status().
+// Proposes the open plan's outcome to the other server, and carries it out once its super admin approved it (confirm:
+// the vault's name, typed). Answers status(): phase proposed while the approval waits.
 [[nodiscard]] nlohmann::json apply(uint32_t vaultId, const std::string& confirm, const Who& who,
                                    vh::mirror::follow::Transport& transport);
-// Compare and apply at once, every entry the kept server's: keep is this | theirs.
+// Compare and apply at once, every entry the kept server's: keep is this | theirs. Each step waits for the other
+// server's super admin as compare and apply do: run it again once they answered.
 [[nodiscard]] nlohmann::json override(uint32_t vaultId, uint32_t peerId, const std::string& keep,
                                       const std::string& confirm, const Who& who,
                                       vh::mirror::follow::Transport& transport);
+
+// ---- a person on the other server, asked (ops::mirrors authorizes: super admins, people only)
+
+// The linked servers' relinks of this server's vaults waiting for an answer or an approval here (and those accepted or
+// approved and not carried out yet): who asks, which vault, what accepting discloses, the outcome in plain words.
+[[nodiscard]] nlohmann::json requests();
+// The vault's request: accepted (its tree may be served for the comparison), or declined (the relink ends on both).
+[[nodiscard]] nlohmann::json accept(uint32_t vaultId, const Who& who, vh::mirror::follow::Transport& transport);
+[[nodiscard]] nlohmann::json decline(uint32_t vaultId, const Who& who, vh::mirror::follow::Transport& transport);
+// The outcome proposed for the vault, approved (confirm: its name, typed): refused (and void) when its tree changed
+// since it was compared.
+[[nodiscard]] nlohmann::json approve(uint32_t vaultId, const std::string& confirm, const Who& who,
+                                     vh::mirror::follow::Transport& transport);
 
 // The follower's pass: the future mirror brings its chosen versions onto the core and starts its copy over; either
 // side's relink is done once the copy completed and matched. How many moved on.
@@ -85,6 +119,10 @@ std::size_t tick(vh::mirror::follow::Transport& transport);
 
 // ---- the wire (the other server's session; the handlers check it is a linked server)
 
+[[nodiscard]] nlohmann::json serveRequest(uint32_t callerPeerId, const nlohmann::json& payload);
+[[nodiscard]] nlohmann::json serveAnswer(uint32_t callerPeerId, const nlohmann::json& payload);
+[[nodiscard]] nlohmann::json servePropose(uint32_t callerPeerId, const nlohmann::json& payload);
+[[nodiscard]] nlohmann::json serveCancel(uint32_t callerPeerId, const nlohmann::json& payload);
 [[nodiscard]] nlohmann::json serveState(uint32_t callerPeerId, const nlohmann::json& payload);
 [[nodiscard]] nlohmann::json serveTree(uint32_t callerPeerId, const nlohmann::json& payload);
 [[nodiscard]] nlohmann::json servePrepare(uint32_t callerPeerId, const nlohmann::json& payload);

@@ -423,7 +423,8 @@ std::vector<std::string> peerWireSet() {
             // take over: the old core learns (wave 5 piece B)
             "peer.mirror.promoted",
             // relink
-            "peer.mirror.relink.state", "peer.mirror.relink.tree", "peer.mirror.relink.prepare",
+            "peer.mirror.relink.request", "peer.mirror.relink.answer", "peer.mirror.relink.propose",
+            "peer.mirror.relink.cancel", "peer.mirror.relink.state", "peer.mirror.relink.tree", "peer.mirror.relink.prepare",
             "peer.mirror.relink.go", "peer.mirror.relink.abort",
             // key rotation on a mirrored vault
             "peer.mirror.key"};

@@ -572,7 +572,7 @@ nlohmann::json relinkEntries(const Actor& actor, const uint32_t vaultId, const s
 nlohmann::json relinkPlan(const Actor& actor, const uint32_t vaultId, const vh::mirror::relink::PlanEdit& edit) {
     ops_mirrors_detail::requireSuperAdmin(actor, "plan a vault's relink");
     (void)ops_mirrors_detail::liveVault(vaultId);
-    return vh::mirror::relink::plan(vaultId, edit);
+    return vh::mirror::relink::plan(vaultId, edit, *vh::mirror::follow::linkTransport());
 }
 
 nlohmann::json relinkApply(const Actor& actor, const uint32_t vaultId, const std::string& confirm, const std::string& keep,
@@ -588,6 +588,35 @@ nlohmann::json relinkApply(const Actor& actor, const uint32_t vaultId, const std
     const auto transport = vh::mirror::follow::linkTransport();
     if (keep.empty()) return vh::mirror::relink::apply(vaultId, confirm, who, *transport);
     return vh::mirror::relink::override(vaultId, peers::resolveRef(peer).id, keep, confirm, who, *transport);
+}
+
+nlohmann::json relinkPending(const Actor& actor) {
+    ops_mirrors_detail::requireSuperAdmin(actor, "see the relinks linked servers ask of this one");
+    return vh::mirror::relink::requests();
+}
+
+nlohmann::json relinkAccept(const Actor& actor, const uint32_t vaultId) {
+    ops_mirrors_detail::requireSuperAdmin(actor, "let a linked server compare a vault with its copy");
+    (void)ops_mirrors_detail::liveVault(vaultId);
+    return vh::mirror::relink::accept(vaultId, {.id = actor->id, .name = actor->name()},
+                                      *vh::mirror::follow::linkTransport());
+}
+
+nlohmann::json relinkDecline(const Actor& actor, const uint32_t vaultId) {
+    ops_mirrors_detail::requireSuperAdmin(actor, "decline a linked server's relink");
+    (void)ops_mirrors_detail::liveVault(vaultId);
+    return vh::mirror::relink::decline(vaultId, {.id = actor->id, .name = actor->name()},
+                                       *vh::mirror::follow::linkTransport());
+}
+
+nlohmann::json relinkApprove(const Actor& actor, const uint32_t vaultId, const std::string& confirm) {
+    ops_mirrors_detail::requireSuperAdmin(actor, "approve a linked server's relink of a vault");
+    const auto vault = ops_mirrors_detail::liveVault(vaultId);
+    if (confirm != vault->name) throw Refused("mirror_name_mismatch", "type the vault's name exactly to approve its relink");
+    // Which server's data wins, here too: the console asks the keys step-up, bound to the vault.
+    auth::stepup::require(auth::stepup::Family::Keys, "mirror.relink:" + std::to_string(vaultId));
+    return vh::mirror::relink::approve(vaultId, confirm, {.id = actor->id, .name = actor->name()},
+                                       *vh::mirror::follow::linkTransport());
 }
 
 // ---- the planned switch (wave 5 piece B) ----------------------------------------------------------------------------

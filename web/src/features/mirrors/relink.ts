@@ -5,6 +5,8 @@ import type { Response } from '@/lib/ws/client'
 
 export type RelinkStatus = Response<'mirror.relink.get'>
 export type RelinkEntry = Response<'mirror.relink.entries'>['entries'][number]
+export type RelinkRequest = Response<'mirror.relink.pending'>['requests'][number]
+export type RelinkPhase = NonNullable<RelinkStatus['relink']>['phase']
 export type DriftKind = RelinkEntry['kind']
 export type Choice = 'this' | 'theirs' | 'both'
 
@@ -66,11 +68,39 @@ export const gainsText = (g: { takes: number; keeps_held: number; conflict_copie
   return parts.join(', ')
 }
 
-// The relink running: a sentence and whether it is still moving.
-export const phaseText = (status: RelinkStatus | undefined): { text: string; running: boolean; tone: 'ok' | 'info' | 'warn' | 'danger' } => {
+// Both servers agree, each by a super admin: the other server's accepts the request (before its tree is compared), then
+// approves the outcome (before anything changes on either). The phases that wait on the other server's admin.
+export const AWAITING_OTHER: readonly RelinkPhase[] = ['requested', 'proposed']
+// Asked and answered, nothing applied yet: the dialog polls these.
+export const HANDSHAKE: readonly RelinkPhase[] = ['requested', 'accepted', 'open', 'proposed', 'approved']
+
+// The relink running: a sentence and whether it is still moving (the dialog polls while it is).
+export const phaseText = (status: RelinkStatus | undefined, peer = 'the other server'): { text: string; running: boolean; tone: 'ok' | 'info' | 'warn' | 'danger' } => {
   const r = status?.relink
   if (!r) return { text: 'Not compared yet.', running: false, tone: 'info' }
+  if (r.side === 'responder' && HANDSHAKE.includes(r.phase))
+    return {
+      text:
+        r.phase === 'requested' ? `${peer} asks to compare its copy with this vault: answer it under Relink requests.`
+        : r.phase === 'proposed' ? `${peer} proposes an outcome: approve or decline it under Relink requests.`
+        : r.phase === 'approved' ? `Approved here: ${peer} carries it out.`
+        : `Accepted here: ${peer} compares and proposes an outcome.`,
+      running: false,
+      tone: r.phase === 'requested' || r.phase === 'proposed' ? 'warn' : 'info',
+    }
   switch (r.phase) {
+    case 'requested':
+      return { text: `Waiting for ${peer}’s admin to accept the request. Nothing of its copy is compared before they do.`, running: true, tone: 'info' }
+    case 'accepted':
+      return { text: `${peer}’s admin accepted: comparing…`, running: true, tone: 'info' }
+    case 'proposed':
+      return { text: `Awaiting ${peer}’s approval of the outcome. Nothing changes on either server before they approve.`, running: true, tone: 'info' }
+    case 'approved':
+      return { text: `${peer}’s admin approved: carrying it out…`, running: true, tone: 'info' }
+    case 'declined':
+      return { text: r.error ?? `${peer}’s admin declined. Neither copy changed.`, running: false, tone: 'warn' }
+    case 'expired':
+      return { text: r.error ?? 'The request expired. Neither copy changed: ask again.', running: false, tone: 'warn' }
     case 'open':
       return { text: 'Compared. Choose how to resolve the drift.', running: false, tone: 'info' }
     case 'prepared':
@@ -85,6 +115,23 @@ export const phaseText = (status: RelinkStatus | undefined): { text: string; run
     case 'failed':
       return { text: r.error ?? 'The relink failed.', running: false, tone: 'danger' }
     default:
-      return { text: 'The plan was discarded.', running: false, tone: 'info' }
+      return { text: r.error && r.error !== 'discarded' ? r.error : 'The relink was discarded.', running: false, tone: 'info' }
+  }
+}
+
+// A request a linked server made of this server, in words: what it asks the person here to decide.
+export const requestAsk = (q: Pick<RelinkRequest, 'phase' | 'handshake' | 'peer' | 'asked_by'>): string => {
+  const who = q.asked_by ? `${q.peer.name} (${q.asked_by})` : q.peer.name
+  switch (q.phase) {
+    case 'requested':
+      return `${who} asks to compare its copy with this vault.`
+    case 'proposed':
+      return `${who} proposes how to reconnect this vault.`
+    case 'accepted':
+      return `Accepted${q.handshake?.accepted_by ? ` by ${q.handshake.accepted_by}` : ''}: ${q.peer.name} compares and proposes an outcome, approved here.`
+    case 'approved':
+      return `Approved${q.handshake?.approved_by ? ` by ${q.handshake.approved_by}` : ''}: ${q.peer.name} carries it out.`
+    default:
+      return `${q.peer.name}’s relink is ${q.phase}.`
   }
 }

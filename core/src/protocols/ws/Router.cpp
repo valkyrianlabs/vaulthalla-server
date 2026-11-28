@@ -298,6 +298,10 @@ bool Router::isPeerWireCommand(const std::string_view command) {
         // Take over: the old core learns (wave 5 piece B; handler/MirrorFollow.hpp).
         std::string_view{"peer.mirror.promoted"},
         // Relink (handler/MirrorFollow.hpp).
+        std::string_view{"peer.mirror.relink.request"},
+        std::string_view{"peer.mirror.relink.answer"},
+        std::string_view{"peer.mirror.relink.propose"},
+        std::string_view{"peer.mirror.relink.cancel"},
         std::string_view{"peer.mirror.relink.state"},
         std::string_view{"peer.mirror.relink.tree"},
         std::string_view{"peer.mirror.relink.prepare"},

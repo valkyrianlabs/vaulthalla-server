@@ -43,9 +43,11 @@ std::shared_ptr<CommandUsage> pending(const std::weak_ptr<CommandUsage>& parent)
     auto cmd = build(parent);
     cmd->effect = CommandEffect::Read;
     cmd->aliases = {"pending", "offers"};
-    cmd->description = "List the vaults linked servers offer this server that wait for a super admin's answer.";
+    cmd->description = "List the vaults linked servers offer this server that wait for a super admin's answer, and the "
+                       "relinks they ask of this server's vaults (vh mirror relink <vault> --accept | --decline | "
+                       "--approve): who asks, which vault, what accepting lets them see, the outcome to approve.";
     cmd->optional_flags = {jsonFlag};
-    cmd->examples = {{"vh mirror pending", "Offers waiting here."}};
+    cmd->examples = {{"vh mirror pending", "Offers and relink requests waiting here."}};
     return cmd;
 }
 
@@ -309,7 +311,14 @@ std::shared_ptr<CommandUsage> relink(const std::weak_ptr<CommandUsage>& parent) 
                        "list every drifted entry by path; --choose sets choices (uid=this|theirs|both|default, "
                        "kind:<kind>=..., all=...), --core and --default the rest, --apply carries the plan out. Nothing "
                        "is dropped: the losing versions are kept as held changes (vh mirror held) or conflict copies. "
-                       "Type the vault's name with --confirm to apply. Super admins only; audited on both servers.";
+                       "Type the vault's name with --confirm to apply. Both servers agree, each by a super admin: "
+                       "comparing first asks the other server, whose super admin accepts (or declines) before anything "
+                       "of its tree is shown (run the command again once they have); applying proposes the outcome "
+                       "(which server becomes the core, the mode, what their vault gains and loses), which they approve "
+                       "before anything changes on either server (it is then carried out on its own). On the other "
+                       "server: --accept or --decline the request, --approve --confirm <name> the outcome (vh mirror "
+                       "pending lists them). A request expires in a day; --discard cancels it. Super admins only; "
+                       "audited on both servers.";
     cmd->positionals = {vaultPos};
     cmd->optional = {
         Optional::ManyToOne("with", "The linked server holding the vault too", {"with"}, "server"),
@@ -327,12 +336,22 @@ std::shared_ptr<CommandUsage> relink(const std::weak_ptr<CommandUsage>& parent) 
                            Flag::WithAliases("apply", "Carry the saved plan out", {"apply"}),
                            Flag::WithAliases("status", "The plan or the relink running, without comparing again",
                                              {"status"}),
-                           Flag::WithAliases("discard", "End the saved plan", {"discard"}), jsonFlag};
+                           Flag::WithAliases("discard", "End the relink here: the plan, or the request (the other "
+                                             "server is told)", {"discard"}),
+                           Flag::WithAliases("accept", "Asked by a linked server: let it compare its copy with this "
+                                             "vault (names, places, hashes; no contents)", {"accept"}),
+                           Flag::WithAliases("decline", "Asked by a linked server: decline its request or its outcome "
+                                             "(nothing changes on either server)", {"decline"}),
+                           Flag::WithAliases("approve", "Asked by a linked server: approve the outcome it proposes "
+                                             "(with --confirm <name>)", {"approve"}),
+                           jsonFlag};
     cmd->examples = {{"vh mirror relink 4 --with vps", "Compare vault 4 with vps's and keep the plan."},
                      {"vh mirror relink 4 --with vps --keep this --confirm photos", "This server's tree wins."},
                      {"vh mirror relink 4 --with vps --review", "Compare and list each drifted entry."},
                      {"vh mirror relink 4 --choose kind:changed_theirs=theirs,all=both", "Set choices in bulk."},
-                     {"vh mirror relink 4 --apply --confirm photos", "Carry the plan out."}};
+                     {"vh mirror relink 4 --apply --confirm photos", "Propose the plan; carried out once approved."},
+                     {"vh mirror relink 7 --accept", "Asked by a linked server: let it compare."},
+                     {"vh mirror relink 7 --approve --confirm photos", "Asked by a linked server: approve its outcome."}};
     return cmd;
 }
 

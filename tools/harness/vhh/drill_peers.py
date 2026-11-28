@@ -66,8 +66,10 @@ opens, the missing one is refused, B writes to the vault; A restarted learns of 
 mirror that vault with B again; a vault deleted on A (restorable) leaves B's copy read-only with the reason, a restore
 and B follows again; deleted --now with --mirror-copy remove it is gone on B, another with leave is orphaned on B and
 then detached there; the held write from 7k is saved with `vh mirror save`. 9f, relink: B and A, both holding the
-detached vault and each with a file of its own since, compare it by uid and relink it keeping B's tree: B the core, A
-its mirror, equal digests, A's own file a held change with its bytes, the detach records settled, audited on both.
+detached vault and each with a file of its own since, agree each by a super admin: B asks, and A says nothing of its tree
+until A's super admin accepts (vh mirror pending); B compares it by uid and proposes keeping B's tree, which waits (A
+unchanged) until A's super admin approves; B then carries it out on its own: B the core, A its mirror, equal digests,
+A's own file a held change with its bytes, the detach records settled, each step audited on both.
 
 Nothing secret is printed or kept: the drill's directory holds only its report.
 """
@@ -1248,14 +1250,45 @@ def _leaving(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, report:
     a.sh("printf 'only on A since\\n' > MNT/whole/docs/a_since.txt")
     a_since = _sql(a, f"SELECT f.object_uid::text FROM fs_entry e JOIN files f ON f.fs_entry_id = e.id WHERE "
                       f"e.vault_id = {va} AND e.path = '/docs/a_since.txt'")
+    # B asks; A records the request and says nothing of its tree until its super admin accepts.
+    code, asked, text = _json(b, "mirror", "relink", str(vb), "--with", node_a)
+    report.check("9f: B's relink first asks A: waiting for A's admin, nothing compared",
+                 code == 0 and (asked.get("relink") or {}).get("phase") == "requested"
+                 and (asked.get("handshake") or {}).get("waiting_for") == "other_admin" and not asked.get("counts"),
+                 text[-600:])
+    code, pend, text = _json(a, "mirror", "pending")
+    req = next((q for q in pend.get("relinks") or [] if q.get("vault_id") == va), {})
+    report.check("9f: A's super admin sees the request (who asks, which vault, what accepting shows)",
+                 code == 0 and req.get("phase") == "requested" and (req.get("peer") or {}).get("node") == node_b
+                 and "names" in ((req.get("handshake") or {}).get("discloses") or ""), text[-600:])
+    report.check("9f: A served no tree before accepting",
+                 _sql(a, f"SELECT count(*) FROM audit_event WHERE action = 'mirror.relink.request' AND vault_id = {va}") == "1"
+                 and _sql(a, f"SELECT phase FROM mirror_relink WHERE vault_id = {va} ORDER BY id DESC LIMIT 1") == "requested")
+    code, acc, text = _json(a, "mirror", "relink", str(va), "--accept")
+    report.check("9f: A's super admin accepts the comparison", code == 0 and acc.get("phase") == "accepted", text[-400:])
     code, cmp, text = _json(b, "mirror", "relink", str(vb), "--with", node_a)
     counts = cmp.get("counts") or {}
     report.check("9f: B compares the detached vault with A's: what only each holds since, by uid, and nothing refuses",
                  code == 0 and counts.get("only_this", 0) >= 1 and counts.get("only_theirs", 0) >= 1
                  and not cmp.get("blockers") and (cmp.get("keys") or {}).get("match") is True, text[-600:])
+    a_digest = _sql(a, f"SELECT count(*) FROM fs_entry WHERE vault_id = {va}")
     code, rel, text = _json(b, "mirror", "relink", str(vb), "--with", node_a, "--keep", "this", "--confirm", "whole")
-    report.check("9f: B relinks it keeping its tree: B the core, A its mirror again",
-                 code == 0 and (rel.get("relink") or {}).get("role") == "core", text[-600:])
+    report.check("9f: B proposes keeping its tree; it waits for A's approval and nothing changed on A",
+                 code == 0 and (rel.get("relink") or {}).get("phase") == "proposed"
+                 and _sql(a, f"SELECT count(*) FROM mirror_vault WHERE vault_id = {va}") == "0"
+                 and _sql(a, f"SELECT count(*) FROM fs_entry WHERE vault_id = {va}") == a_digest, text[-600:])
+    code, pend, text = _json(a, "mirror", "pending")
+    req = next((q for q in pend.get("relinks") or [] if q.get("vault_id") == va), {})
+    report.check("9f: A's super admin sees the outcome in plain words: B the core, A its mirror",
+                 req.get("phase") == "proposed"
+                 and "becomes the vault's core and this server its mirror" in ((req.get("handshake") or {}).get("outcome") or ""),
+                 text[-600:])
+    code, appr, text = _json(a, "mirror", "relink", str(va), "--approve", "--confirm", "whole")
+    report.check("9f: A's super admin approves it", code == 0 and appr.get("phase") == "approved", text[-400:])
+    rel = _wait("B carrying the approved relink out", lambda: _json(b, "mirror", "relink", str(vb))[1].get("relink", {})
+                if (_json(b, "mirror", "relink", str(vb))[1].get("relink") or {}).get("role") == "core" else None, timeout=120)
+    report.check("9f: B relinks it keeping its tree: B the core, A its mirror again", (rel or {}).get("role") == "core",
+                 json.dumps(rel)[:400])
     ok = _wait_synced(b, vb, a, va, "A following B after the relink", timeout=180) if code == 0 else None
     _wait("both relinks done", lambda: _sql(a, f"SELECT phase FROM mirror_relink WHERE vault_id = {va} ORDER BY id DESC "
                                               "LIMIT 1") == "done" and _sql(b, f"SELECT phase FROM mirror_relink WHERE "
@@ -1270,9 +1303,14 @@ def _leaving(a: Node, b: Node, faults_b: Path, node_a: str, node_b: str, report:
                  and _sql(a, f"SELECT count(*) FROM mirror_detached WHERE vault_id = {va} AND relinked_at IS NULL") == "0"
                  and _sql(b, f"SELECT count(*) FROM mirror_detached WHERE vault_id = {vb} AND relinked_at IS NULL") == "0",
                  json.dumps(ok)[:300])
-    report.check("9f: audited mirror.relink on both servers",
+    report.check("9f: audited mirror.relink on both servers, and each step of the handshake",
                  _sql(a, f"SELECT count(*) FROM audit_event WHERE action = 'mirror.relink' AND vault_id = {va}") == "1"
-                 and _sql(b, f"SELECT count(*) FROM audit_event WHERE action = 'mirror.relink' AND vault_id = {vb}") == "1")
+                 and _sql(b, f"SELECT count(*) FROM audit_event WHERE action = 'mirror.relink' AND vault_id = {vb}") == "1"
+                 and _sql(a, f"SELECT count(*) FROM audit_event WHERE vault_id = {va} AND action IN ('mirror.relink.accept', "
+                             "'mirror.relink.propose', 'mirror.relink.approve')") == "3"
+                 and _sql(b, f"SELECT count(*) FROM audit_event WHERE vault_id = {vb} AND action IN ("
+                             "'mirror.relink.request', 'mirror.relink.accepted', 'mirror.relink.propose', "
+                             "'mirror.relink.answer')") != "0")
 
     # ---- 9d. Deleting a mirrored vault on A in one step
     v2, bv2, uid2 = _new_mirror(a, b, node_b, "dropped")

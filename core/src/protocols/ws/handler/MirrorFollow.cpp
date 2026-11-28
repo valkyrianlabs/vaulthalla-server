@@ -76,6 +76,22 @@ json MirrorFollow::submit(const json& payload, const std::shared_ptr<Session>& s
     return vh::mirror::submit::serveSubmit(mirrorFollowCaller(session), mirrorFollowPayload(payload));
 }
 
+json MirrorFollow::relinkRequest(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::relink::serveRequest(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::relinkAnswer(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::relink::serveAnswer(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::relinkPropose(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::relink::servePropose(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
+json MirrorFollow::relinkCancel(const json& payload, const std::shared_ptr<Session>& session) {
+    return vh::mirror::relink::serveCancel(mirrorFollowCaller(session), mirrorFollowPayload(payload));
+}
+
 json MirrorFollow::relinkState(const json& payload, const std::shared_ptr<Session>& session) {
     return vh::mirror::relink::serveState(mirrorFollowCaller(session), mirrorFollowPayload(payload));
 }

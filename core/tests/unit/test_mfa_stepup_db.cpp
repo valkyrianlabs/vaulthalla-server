@@ -158,6 +158,7 @@ TEST_F(StepUpDb, EveryAnnotatedCommandRefusesWithoutAGrantAndRunsWithOne) {
                           "TheConsoleStepsUpToSendAVaultsKeysToRemoveACopyOrAnOrphanedCopyAndForNothingElse"},
         {"mirror.takeover", "needs a mirror whose core is gone: MirrorTakeoverDbTest.TheConsoleStepsUpBoundToTheVault..."},
         {"mirror.relink.apply", "needs two servers that once mirrored the vault: MirrorRelinkDbTest.OnlyASuperAdminPerson..."},
+        {"mirror.relink.approve", "needs an outcome a linked server proposed: MirrorRelinkDbTest.OnlyASuperAdminPerson..."},
         {"vault.keys.import", "console: import_requires_device first; needs a sealed vault key (test_vault_keys)"},
         {"vault.keys.recipients.add", "console: recipient_requires_device first; device refusal and host exemption in "
                                       "RecoveryRecipient.EnrollmentIsForTheCliAndPairedDevicesWithTheExportPermission"},

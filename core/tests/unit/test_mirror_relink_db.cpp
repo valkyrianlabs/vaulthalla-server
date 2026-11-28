@@ -4,13 +4,16 @@
 // helpers/mirror_pair.hpp. Every request between them is served live on the other server's turn (RelinkWire), so the
 // follower, the submits, the resync and the relink's own wire all meet the real other side.
 //
-// Covered: the comparison by entry uid (only here, only there, changed here, there, on both, with the bases kept when
-// the mirror ended), the paths and the counts; the hard override in each direction from each starting state
-// (detached, orphaned, forked), ending with both servers live, equal digests, and what the losing side had kept as
-// held changes; a step-through plan mixing all three choices (the future mirror's versions brought onto the core as its
-// changes, a conflict copy, the core's version kept) ending equal with nothing lost; the invalidated plan; the
-// refusals (a live mirror pair, keys that differ, a wrong name, no relationship); who may (super admins, people only)
-// and the console's keys step-up.
+// Covered: the handshake (nothing of the other server's tree is served, and nothing changes there, before a super
+// admin there accepted the request and approved the outcome; a declined, cancelled or expired request changes neither
+// vault; an approval is void when the plan or either tree changes after it, or the plan sent is not the one approved);
+// the comparison by entry uid (only here, only there, changed here, there, on both, with the bases kept when the mirror
+// ended), the paths and the counts; the hard override in each direction from each starting state (detached, orphaned,
+// forked), ending with both servers live, equal digests, and what the losing side had kept as held changes; a
+// step-through plan mixing all three choices (the future mirror's versions brought onto the core as its changes, a
+// conflict copy, the core's version kept) ending equal with nothing lost, carried out by the follower's pass once
+// approved; the invalidated plan; the refusals (a live mirror pair, keys that differ, a wrong name, no relationship);
+// who may ask, accept and approve (super admins, people only) and the console's keys step-up on both servers.
 
 #include "../helpers/mirror_pair.hpp"
 
@@ -22,6 +25,7 @@
 #include "db/query/mirror/Detach.hpp"
 #include "db/query/mirror/Relink.hpp"
 #include "db/query/mirror/Rejoin.hpp"
+#include "db/query/mirror/Start.hpp"
 #include "db/query/mirror/Switch.hpp"
 #include "db/query/mirror/Takeover.hpp"
 #include "db/query/peer/Peer.hpp"
@@ -72,7 +76,8 @@ protected:
             "  ended_at = COALESCE(ended_at, CURRENT_TIMESTAMP) WHERE ended_at IS NULL OR notify");
         sql("UPDATE mirror_takeover SET settled_at = CURRENT_TIMESTAMP, settled_how = 'ended' WHERE settled_at IS NULL");
         sql("UPDATE mirror_rejoin SET phase = 'resynced' WHERE phase IN ('draining', 'rejoining', 'forked')");
-        sql("UPDATE mirror_relink SET phase = 'cancelled' WHERE phase IN ('open', 'prepared', 'bring', 'copying')");
+        sql("UPDATE mirror_relink SET phase = 'cancelled' WHERE phase IN ('requested', 'accepted', 'open', 'proposed', "
+            "'approved', 'prepared', 'bring', 'copying')");
         // Either server may become the other's core: each holds a role on the vault there (its link's default).
         (void)ops::peer_policy::set(superUser, std::to_string(corePeer), ops::roles::Ref{std::string("power_user")});
         (void)ops::peer_policy::set(superUser, std::to_string(mirrorPeer), ops::roles::Ref{std::string("power_user")});
@@ -146,6 +151,10 @@ protected:
                 if (command == "peer.mirror.switch.commit") return sw::serveCommit(caller, payload);
                 if (command == "peer.mirror.switch.request") return sw::serveRequest(caller, payload);
                 if (command == "peer.mirror.promoted") return tk::servePromoted(caller, payload);
+                if (command == "peer.mirror.relink.request") return rl::serveRequest(caller, payload);
+                if (command == "peer.mirror.relink.answer") return rl::serveAnswer(caller, payload);
+                if (command == "peer.mirror.relink.propose") return rl::servePropose(caller, payload);
+                if (command == "peer.mirror.relink.cancel") return rl::serveCancel(caller, payload);
                 if (command == "peer.mirror.relink.state") return rl::serveState(caller, payload);
                 if (command == "peer.mirror.relink.tree") return rl::serveTree(caller, payload);
                 if (command == "peer.mirror.relink.prepare") return rl::servePrepare(caller, payload);
@@ -345,14 +354,58 @@ protected:
         ASSERT_EQ(rowOf(s, true).state, "forked");
     }
 
-    // The relink, started on `here` (true: the fixture's core server) keeping `keep`'s tree.
-    static json overrideFrom(Scenario& s, const bool here, const std::string& keep, RelinkWire& wire) {
-        const auto vaultId = here ? s.coreId : s.mirrorId;
-        const auto peer = here ? mirrorPeer : corePeer;
-        const auto name = here ? s.core->vault->name : s.mirror->vault->name;
-        return on(s, here, [&] {
-            return rl::override(vaultId, peer, keep, name, {.id = superUser->id, .name = "admin"}, wire);
+    static rl::Who admin() { return {.id = superUser->id, .name = "admin"}; }
+    static uint32_t vaultOf(const Scenario& s, const bool core) { return core ? s.coreId : s.mirrorId; }
+    static std::string nameOf(const Scenario& s, const bool core) {
+        return core ? s.core->vault->name : s.mirror->vault->name;
+    }
+    static std::string phaseOf(Scenario& s, const bool core) {
+        return on(s, core, [&] {
+            const auto r = mq::Relinks::latestOf(vaultOf(s, core));
+            return r ? r->phase : std::string("none");
         });
+    }
+
+    // The other server's super admin: accepts the request, approves the outcome.
+    static json acceptOn(Scenario& s, const bool core, RelinkWire& wire) {
+        return on(s, core, [&] { return rl::accept(vaultOf(s, core), admin(), wire); });
+    }
+    static json approveOn(Scenario& s, const bool core, RelinkWire& wire) {
+        return on(s, core, [&] { return rl::approve(vaultOf(s, core), nameOf(s, core), admin(), wire); });
+    }
+
+    // Compared on `here` once the other server accepted (asked, accepted, compared).
+    static json compareFrom(Scenario& s, const bool here, RelinkWire& wire) {
+        const auto ask = [&] {
+            return on(s, here, [&] { return rl::compare(vaultOf(s, here), here ? mirrorPeer : corePeer, admin(), wire); });
+        };
+        const auto asked = ask();
+        if (asked.at("relink").value("phase", "") != "requested") return asked;
+        EXPECT_EQ(asked.at("handshake").value("waiting_for", ""), "other_admin");
+        (void)acceptOn(s, !here, wire);
+        return ask();
+    }
+
+    // The relink, started on `here` (true: the fixture's core server) keeping `keep`'s tree: each step waits for the
+    // other server's super admin, and the person here runs it again once they answered.
+    static json overrideFrom(Scenario& s, const bool here, const std::string& keep, RelinkWire& wire) {
+        const auto run = [&] {
+            return on(s, here, [&] {
+                return rl::override(vaultOf(s, here), here ? mirrorPeer : corePeer, keep, nameOf(s, here), admin(), wire);
+            });
+        };
+        const auto otherBefore = treeDigest(s, !here);
+        auto st = run();
+        if (st.at("relink").value("phase", "") == "requested") {
+            (void)acceptOn(s, !here, wire);
+            st = run();
+        }
+        if (st.at("relink").value("phase", "") != "proposed") return st;
+        EXPECT_EQ(st.at("handshake").value("waiting_for", ""), "other_admin") << "awaiting the other server's approval";
+        EXPECT_EQ(phaseOf(s, !here), "proposed");
+        EXPECT_EQ(treeDigest(s, !here), otherBefore) << "nothing changed on the other server before its approval";
+        (void)approveOn(s, !here, wire);
+        return run();
     }
 
     static uint64_t count(const json& status, const char* kind) {
@@ -384,7 +437,7 @@ TEST_F(MirrorRelinkDbTest, CompareReportsWhatDriftedOnWhichSideByUidWithPaths) {
         return 0;
     });
     const auto before = treeDigest(s, false);
-    const auto st = on(s, false, [&] { return rl::compare(s.mirrorId, corePeer, {.id = superUser->id, .name = "admin"}, wire); });
+    const auto st = compareFrom(s, false, wire);
     EXPECT_EQ(st.at("this").value("status", ""), "detached");
     EXPECT_EQ(st.at("theirs").value("status", ""), "detached");
     EXPECT_TRUE(st.at("base").value("both", false)) << st.at("base").dump();
@@ -554,22 +607,41 @@ TEST_F(MirrorRelinkDbTest, AStepThroughPlanMixingEveryChoiceEndsEqualWithNothing
     const auto a = uid("/docs/a.txt"), b = uid("/docs/b.txt"), c = uid("/docs/c.txt"), d = uid("/docs/d.txt");
     const auto coreOnly = uidAt(s, false, "/docs/core-only.txt");
     const rl::Who admin{.id = superUser->id, .name = "admin"};
-    auto st = on(s, false, [&] { return rl::compare(s.mirrorId, corePeer, admin, wire); });
+    auto st = compareFrom(s, false, wire);
     ASSERT_TRUE(st.at("blockers").empty()) << st.at("blockers").dump();
     rl::PlanEdit edit;
     edit.set = {{.uid = brought, .choice = "theirs"}, {.uid = a, .choice = "theirs"}, {.uid = b, .choice = "both"},
                 {.uid = c, .choice = "this"}, {.uid = d, .choice = "theirs"}};
-    st = on(s, false, [&] { return rl::plan(s.mirrorId, edit); });
+    st = on(s, false, [&] { return rl::plan(s.mirrorId, edit, wire); });
     EXPECT_EQ(st.at("plan").at("chosen").value("mirror", 0), 3) << st.at("plan").dump();
     EXPECT_EQ(st.at("plan").at("chosen").value("both", 0), 1);
     EXPECT_EQ(st.at("plan").at("this").value("conflict_copies", 0), 1);
     // A folder keeps one place or the other.
     rl::PlanEdit folder;
     folder.set = {{.uid = uid("/docs"), .choice = "both"}};
-    EXPECT_NE(refusalOf([&] { (void)on(s, false, [&] { return rl::plan(s.mirrorId, folder); }); }), "not refused");
+    EXPECT_NE(refusalOf([&] { (void)on(s, false, [&] { return rl::plan(s.mirrorId, folder, wire); }); }), "not refused");
 
+    const auto oldCoreBefore = treeDigest(s, true);
     st = on(s, false, [&] { return rl::apply(s.mirrorId, s.mirror->vault->name, admin, wire); });
-    EXPECT_EQ(st.at("relink").value("phase", ""), "copying");
+    EXPECT_EQ(st.at("relink").value("phase", ""), "proposed") << "awaiting the other server's approval";
+    // What the old core's super admin is asked to approve: its side of the plan, in counts and in words.
+    const auto asked = on(s, true, [&] { return rl::requests(); });
+    ASSERT_EQ(asked.size(), 1u) << asked.dump();
+    const auto& p = asked[0].at("handshake").at("proposal");
+    EXPECT_EQ(p.value("core", ""), "theirs") << "seen from the old core: the other server becomes the core";
+    EXPECT_EQ(p.value("mode", ""), "plan");
+    EXPECT_EQ(p.at("this").value("conflict_copies", 0), 1) << p.dump();
+    EXPECT_EQ(p.at("this"), st.at("plan").at("theirs")) << "the counts it approves are the plan's for its side";
+    EXPECT_NE(asked[0].at("handshake").value("outcome", "").find("becomes the vault's core and this server its mirror"),
+              std::string::npos)
+        << asked[0].dump();
+    EXPECT_EQ(treeDigest(s, true), oldCoreBefore) << "nothing changed there before its approval";
+    EXPECT_FALSE(rowOf(s, true).vault_id);
+    (void)approveOn(s, true, wire);
+    // The follower's pass on the server that asked carries the approved outcome out.
+    EXPECT_EQ(phaseOf(s, false), "approved");
+    (void)on(s, false, [&] { return rl::tick(wire); });
+    EXPECT_EQ(phaseOf(s, false), "copying");
     follow(s, true, wire);
     expectRelinked(s, false);
 
@@ -602,7 +674,7 @@ TEST_F(MirrorRelinkDbTest, APlanIsInvalidatedWhenEitherTreeChangesUnderIt) {
     RelinkWire wire(s);
     detachBoth(s);
     const rl::Who admin{.id = superUser->id, .name = "admin"};
-    (void)on(s, false, [&] { return rl::compare(s.mirrorId, corePeer, admin, wire); });
+    (void)compareFrom(s, false, wire);
     on(s, true, [&] { write(s.core, "/docs/late.txt", "after the comparison"); return 0; });
     EXPECT_EQ(refusalOf([&] { (void)on(s, false, [&] { return rl::apply(s.mirrorId, s.mirror->vault->name, admin, wire); }); }),
               "mirror_relink_stale");
@@ -611,9 +683,16 @@ TEST_F(MirrorRelinkDbTest, APlanIsInvalidatedWhenEitherTreeChangesUnderIt) {
     EXPECT_NE(st.at("relink").value("error", "").find("compare again"), std::string::npos);
     EXPECT_FALSE(rowOf(s, false).vault_id) << "nothing changed";
     EXPECT_FALSE(rowOf(s, true).vault_id);
-    // Compared again, it goes.
-    (void)on(s, false, [&] { return rl::compare(s.mirrorId, corePeer, admin, wire); });
-    (void)on(s, false, [&] { return rl::apply(s.mirrorId, s.mirror->vault->name, admin, wire); });
+    // Compared again (the acceptance holds: no new request), proposed, approved, it goes.
+    const auto again = on(s, false, [&] { return rl::compare(s.mirrorId, corePeer, admin, wire); });
+    EXPECT_EQ(again.at("relink").value("phase", ""), "open") << again.dump();
+    EXPECT_EQ(on(s, false, [&] { return rl::apply(s.mirrorId, s.mirror->vault->name, admin, wire); })
+                  .at("relink").value("phase", ""),
+              "proposed");
+    (void)approveOn(s, true, wire);
+    EXPECT_EQ(on(s, false, [&] { return rl::apply(s.mirrorId, s.mirror->vault->name, admin, wire); })
+                  .at("relink").value("phase", ""),
+              "copying");
     follow(s, true, wire);
     expectRelinked(s, false);
 }
@@ -623,7 +702,7 @@ TEST_F(MirrorRelinkDbTest, RefusedForALivePairKeysThatDifferAWrongNameOrAVaultNe
     {
         auto s = pair();
         RelinkWire wire(s);
-        const auto st = on(s, false, [&] { return rl::compare(s.mirrorId, corePeer, admin, wire); });
+        const auto st = compareFrom(s, false, wire);
         ASSERT_FALSE(st.at("blockers").empty());
         EXPECT_EQ(st.at("blockers")[0].value("code", ""), "mirror_relink_mirrored");
         EXPECT_EQ(refusalOf([&] { (void)overrideFrom(s, false, "this", wire); }), "mirror_relink_mirrored");
@@ -648,22 +727,251 @@ TEST_F(MirrorRelinkDbTest, RefusedForALivePairKeysThatDifferAWrongNameOrAVaultNe
     }
 }
 
+
+// ---- the handshake ---------------------------------------------------------------------------------------------------------
+
+// Comparing asks the other server first: it records the request and says nothing of its tree. Until a super admin there
+// accepts, its state is only whether it holds the vault and how, and tree, prepare and go are refused; accepted, the
+// tree is served but nothing is prepared before an outcome is approved.
+TEST_F(MirrorRelinkDbTest, NothingOfTheOtherServersTreeIsServedBeforeItsSuperAdminAccepts) {
+    auto s = pair();
+    RelinkWire wire(s);
+    detachBoth(s);
+    const auto asked = on(s, false, [&] { return rl::compare(s.mirrorId, corePeer, admin(), wire); });
+    ASSERT_EQ(asked.at("relink").value("phase", ""), "requested") << asked.dump();
+    EXPECT_EQ(asked.at("handshake").value("waiting_for", ""), "other_admin");
+    EXPECT_TRUE(asked.at("this").is_null()) << "nothing compared yet";
+    EXPECT_EQ(std::ranges::count(wire.asked, std::string("peer.mirror.relink.tree")), 0) << "no tree asked for";
+    EXPECT_EQ(std::ranges::count(wire.asked, std::string("peer.mirror.relink.state")), 0);
+    const auto uid = asked.at("relink").value("relink_uid", "");
+    EXPECT_EQ(phaseOf(s, true), "requested");
+
+    // The asking server, on its own: what the other server answers it.
+    const json ask{{"vault_uid", s.vaultUid}, {"relink_uid", uid}};
+    const auto state = on(s, true, [&] { return rl::serveState(mirrorPeer, ask); });
+    EXPECT_FALSE(state.value("accepted", true));
+    EXPECT_EQ(state.value("status", ""), "detached");
+    for (const auto* k : {"digest", "entries", "keys", "agreed", "term", "vault_name", "pending"})
+        EXPECT_FALSE(state.contains(k)) << k << " is not said before the acceptance: " << state.dump();
+    const auto refused = [&](const std::string& command, const json& payload) {
+        return on(s, true, [&] {
+            return refusalOf([&] {
+                if (command == "tree") (void)rl::serveTree(mirrorPeer, payload);
+                else if (command == "prepare") (void)rl::servePrepare(mirrorPeer, payload);
+                else (void)rl::serveGo(mirrorPeer, payload);
+            });
+        });
+    };
+    auto tree = ask;
+    tree["after"] = 0;
+    tree["limit"] = 100;
+    EXPECT_EQ(refused("tree", tree), "mirror_relink_not_accepted");
+    auto prep = ask;
+    prep.update({{"role", "mirror"}, {"term", 9}, {"mode", "override"}, {"part", 0}, {"more", false},
+                 {"entries", json::array()}, {"digest", json::object()}});
+    EXPECT_EQ(refused("prepare", prep), "mirror_relink_not_accepted");
+    EXPECT_EQ(refused("go", ask), "mirror_relink_not_accepted");
+    // A relink uid it never asked: the same.
+    auto forged = tree;
+    forged["relink_uid"] = "00000000-0000-4000-8000-000000000001";
+    EXPECT_EQ(refused("tree", forged), "mirror_relink_not_accepted");
+    // Applying before anything was compared is refused here too.
+    EXPECT_EQ(refusalOf([&] { (void)on(s, false, [&] { return rl::apply(s.mirrorId, nameOf(s, false), admin(), wire); }); }),
+              "mirror_relink_no_plan");
+
+    // Accepted: the comparison is served, the plan proposed, and still nothing is prepared before the approval.
+    const auto accepted = acceptOn(s, true, wire);
+    EXPECT_EQ(accepted.value("phase", ""), "accepted");
+    EXPECT_EQ(phaseOf(s, false), "accepted") << "the asking server was told";
+    EXPECT_EQ(on(s, true, [&] { return rl::serveState(mirrorPeer, ask); }).value("accepted", false), true);
+    const auto compared = on(s, false, [&] { return rl::compare(s.mirrorId, corePeer, admin(), wire); });
+    EXPECT_EQ(compared.at("relink").value("phase", ""), "open");
+    EXPECT_EQ(compared.at("relink").value("relink_uid", ""), uid) << "the same relink";
+    EXPECT_EQ(refused("prepare", prep), "mirror_relink_not_approved");
+    EXPECT_EQ(refused("go", ask), "mirror_relink_not_accepted");
+    EXPECT_FALSE(rowOf(s, true).vault_id);
+    EXPECT_FALSE(rowOf(s, false).vault_id);
+}
+
+// A declined request, a declined outcome, a request the asking server cancels and one nobody answered in a day: each
+// ends on both servers and leaves both vaults exactly as they were.
+TEST_F(MirrorRelinkDbTest, DeclinedCancelledOrExpiredRelinksChangeNothingOnEitherServer) {
+    auto s = pair();
+    RelinkWire wire(s);
+    detachBoth(s);
+    on(s, false, [&] { write(s.mirror, "/docs/copy-only.txt", "copy"); return 0; });
+    const auto before = std::pair{treeDigest(s, true), treeDigest(s, false)};
+    const auto heldBefore = std::pair{heldOn(s, true).size(), heldOn(s, false).size()};
+    const auto unchanged = [&](const std::string& what) {
+        EXPECT_EQ(treeDigest(s, true), before.first) << what;
+        EXPECT_EQ(treeDigest(s, false), before.second) << what;
+        EXPECT_EQ(heldOn(s, true).size(), heldBefore.first) << what;
+        EXPECT_EQ(heldOn(s, false).size(), heldBefore.second) << what;
+        EXPECT_FALSE(rowOf(s, true).vault_id) << what;
+        EXPECT_FALSE(rowOf(s, false).vault_id) << what;
+        EXPECT_TRUE(on(s, true, [&] { return mq::MirrorDetach::forVault(s.coreId); })) << what << ": still detached";
+    };
+    const auto ask = [&] { return on(s, false, [&] { return rl::compare(s.mirrorId, corePeer, admin(), wire); }); };
+
+    // Declined: the asking server is told; asking again is a new request.
+    EXPECT_EQ(ask().at("relink").value("phase", ""), "requested");
+    EXPECT_EQ(on(s, true, [&] { return rl::requests(); }).size(), 1u);
+    EXPECT_EQ(on(s, true, [&] { return rl::decline(s.coreId, admin(), wire); }).value("phase", ""), "declined");
+    EXPECT_EQ(phaseOf(s, false), "declined");
+    EXPECT_TRUE(on(s, true, [&] { return rl::requests(); }).empty());
+    unchanged("declined request");
+
+    // The outcome declined.
+    const auto first = ask();
+    EXPECT_EQ(first.at("relink").value("phase", ""), "requested") << "a new request after a decline";
+    (void)acceptOn(s, true, wire);
+    (void)ask();
+    EXPECT_EQ(on(s, false, [&] { return rl::override(s.mirrorId, corePeer, "this", nameOf(s, false), admin(), wire); })
+                  .at("relink").value("phase", ""),
+              "proposed");
+    EXPECT_EQ(on(s, true, [&] { return rl::decline(s.coreId, admin(), wire); }).value("phase", ""), "declined");
+    EXPECT_EQ(phaseOf(s, false), "declined");
+    EXPECT_NE(refusalOf([&] { (void)approveOn(s, true, wire); }), "not refused");
+    unchanged("declined outcome");
+
+    // Cancelled by the asking server (discard).
+    EXPECT_EQ(ask().at("relink").value("phase", ""), "requested");
+    rl::PlanEdit discard;
+    discard.discard = true;
+    EXPECT_EQ(on(s, false, [&] { return rl::plan(s.mirrorId, discard, wire); }).at("relink").value("phase", ""), "cancelled");
+    EXPECT_EQ(phaseOf(s, true), "cancelled") << "the other server was told";
+    EXPECT_NE(refusalOf([&] { (void)acceptOn(s, true, wire); }), "not refused");
+    unchanged("cancelled");
+
+    // Unanswered for a day: both expire.
+    EXPECT_EQ(ask().at("relink").value("phase", ""), "requested");
+    sql("UPDATE mirror_relink SET expires_at = CURRENT_TIMESTAMP - interval '1 minute' WHERE phase = 'requested'");
+    EXPECT_TRUE(on(s, true, [&] { return rl::requests(); }).empty());
+    EXPECT_EQ(phaseOf(s, true), "expired");
+    EXPECT_EQ(phaseOf(s, false), "expired");
+    EXPECT_NE(refusalOf([&] { (void)acceptOn(s, true, wire); }), "not refused");
+    // Accepted and not carried out in time: the same.
+    EXPECT_EQ(ask().at("relink").value("phase", ""), "requested");
+    (void)acceptOn(s, true, wire);
+    EXPECT_EQ(ask().at("relink").value("phase", ""), "open");
+    sql("UPDATE mirror_relink SET expires_at = CURRENT_TIMESTAMP - interval '1 minute' WHERE phase IN ('accepted', 'open')");
+    EXPECT_EQ(refusalOf([&] { (void)on(s, false, [&] { return rl::apply(s.mirrorId, nameOf(s, false), admin(), wire); }); }),
+              "mirror_relink_no_plan");
+    EXPECT_EQ(phaseOf(s, true), "expired");
+    unchanged("expired");
+    // No "accept every vault" setting reaches a relink: the link's accept-all on, a request still waits for a person.
+    sql("UPDATE peer SET accept_vaults = TRUE WHERE id = " + std::to_string(mirrorPeer));
+    EXPECT_EQ(ask().at("relink").value("phase", ""), "requested");
+    EXPECT_EQ(phaseOf(s, true), "requested");
+    sql("UPDATE peer SET accept_vaults = FALSE WHERE id = " + std::to_string(mirrorPeer));
+}
+
+// An approval holds for the outcome approved only: a plan changed after it, a tree changed on either server, or a plan
+// sent that is not the one approved voids it, and it is asked again.
+TEST_F(MirrorRelinkDbTest, AnApprovalIsVoidWhenThePlanOrEitherTreeChangesAfterIt) {
+    auto s = pair();
+    RelinkWire wire(s);
+    detachBoth(s);
+    on(s, true, [&] { write(s.core, "/docs/a.txt", "a on the old core"); return 0; });
+    const auto a = uidAt(s, true, "/docs/a.txt");
+    const auto apply = [&] {
+        return on(s, false, [&] { return rl::apply(s.mirrorId, nameOf(s, false), admin(), wire); });
+    };
+    (void)compareFrom(s, false, wire);
+    EXPECT_EQ(apply().at("relink").value("phase", ""), "proposed");
+    (void)approveOn(s, true, wire);
+    EXPECT_EQ(phaseOf(s, false), "approved");
+
+    // The plan changed after the approval: withdrawn there, proposed again.
+    rl::PlanEdit edit;
+    edit.set = {{.uid = a, .choice = "theirs"}};
+    EXPECT_EQ(on(s, false, [&] { return rl::plan(s.mirrorId, edit, wire); }).at("relink").value("phase", ""), "open");
+    EXPECT_EQ(phaseOf(s, true), "accepted") << "the approval there is void";
+    EXPECT_EQ(apply().at("relink").value("phase", ""), "proposed");
+    EXPECT_EQ(phaseOf(s, true), "proposed");
+
+    // The tree there changed after the approval: its approval is void at the next step, the plan stale here.
+    (void)approveOn(s, true, wire);
+    on(s, true, [&] { write(s.core, "/docs/late.txt", "after the approval"); return 0; });
+    EXPECT_EQ(refusalOf([&] { (void)apply(); }), "mirror_relink_stale");
+    EXPECT_EQ(phaseOf(s, false), "stale");
+    EXPECT_EQ(phaseOf(s, true), "accepted");
+    // Approving an outcome compared before a change there is refused too.
+    (void)on(s, false, [&] { return rl::compare(s.mirrorId, corePeer, admin(), wire); });
+    EXPECT_EQ(apply().at("relink").value("phase", ""), "proposed");
+    on(s, true, [&] { write(s.core, "/docs/later.txt", "before the approval"); return 0; });
+    EXPECT_EQ(refusalOf([&] { (void)approveOn(s, true, wire); }), "mirror_relink_stale");
+    EXPECT_EQ(phaseOf(s, true), "accepted");
+    EXPECT_EQ(phaseOf(s, false), "open") << "the asking server was told";
+
+    // A prepare that is not the approved plan: refused, and the approval is void.
+    (void)on(s, false, [&] { return rl::compare(s.mirrorId, corePeer, admin(), wire); });
+    EXPECT_EQ(apply().at("relink").value("phase", ""), "proposed");
+    (void)approveOn(s, true, wire);
+    const auto uid = on(s, true, [&] { return mq::Relinks::latestOf(s.coreId)->relink_uid; });
+    const auto digest = treeDigest(s, true);
+    const json prep{{"vault_uid", s.vaultUid}, {"relink_uid", uid}, {"role", "core"}, {"term", 9}, {"mode", "plan"},
+                    {"part", 0}, {"more", false}, {"entries", json::array()},
+                    {"digest", {{"digest", digest.hex()}, {"entries", digest.entries}}}};
+    EXPECT_EQ(on(s, true, [&] { return refusalOf([&] { (void)rl::servePrepare(mirrorPeer, prep); }); }),
+              "mirror_relink_not_approved")
+        << "approved: the old core becomes the mirror, not the core";
+    EXPECT_EQ(phaseOf(s, true), "accepted");
+    EXPECT_EQ(apply().at("relink").value("phase", ""), "proposed");
+    (void)approveOn(s, true, wire);
+    auto tampered = prep;
+    tampered["role"] = "mirror";   // the approved role, with none of the approved plan's entries
+    EXPECT_EQ(on(s, true, [&] { return refusalOf([&] { (void)rl::servePrepare(mirrorPeer, tampered); }); }),
+              "mirror_relink_not_approved");
+    EXPECT_EQ(phaseOf(s, true), "accepted");
+    EXPECT_FALSE(rowOf(s, true).vault_id) << "nothing changed there";
+    EXPECT_FALSE(rowOf(s, false).vault_id);
+
+    // Asked again and approved, it goes.
+    EXPECT_EQ(apply().at("relink").value("phase", ""), "proposed");
+    (void)approveOn(s, true, wire);
+    EXPECT_EQ(apply().at("relink").value("phase", ""), "copying");
+    follow(s, true, wire);
+    expectRelinked(s, false);
+}
+
 // ---- who may ---------------------------------------------------------------------------------------------------------------
 
 TEST_F(MirrorRelinkDbTest, OnlyASuperAdminPersonMayRelinkAndTheConsoleStepsUpBoundToTheVault) {
     auto s = pair();
+    RelinkWire wire(s);
     detachBoth(s);
+    // A request waits on the old core for its super admin (asked here, on the copy).
+    EXPECT_EQ(on(s, false, [&] { return rl::compare(s.mirrorId, corePeer, admin(), wire); }).at("relink").value("phase", ""),
+              "requested");
     const auto name = "mr_user_" + msTag();
     const auto plain = test::identities::createUser(name, db::query::rbac::role::Admin::get("unprivileged"),
                                                     name + "@vaulthalla.test");
     const auto peerRef = std::to_string(corePeer);
     EXPECT_THROW((void)ops::mirrors::relinkCompare(plain, s.mirrorId, peerRef), ops::Denied);
     EXPECT_THROW((void)ops::mirrors::relinkApply(plain, s.mirrorId, s.mirror->vault->name, "this", peerRef), ops::Denied);
+    // Who may answer it on the old core: the same people.
+    on(s, true, [&] {
+        EXPECT_THROW((void)ops::mirrors::relinkPending(plain), ops::Denied);
+        EXPECT_THROW((void)ops::mirrors::relinkAccept(plain, s.coreId), ops::Denied);
+        EXPECT_THROW((void)ops::mirrors::relinkDecline(plain, s.coreId), ops::Denied);
+        EXPECT_THROW((void)ops::mirrors::relinkApprove(plain, s.coreId, s.core->vault->name), ops::Denied);
+        return 0;
+    });
     {
         const auth::stepup::Scope agent(auth::stepup::Channel::Agent);
         EXPECT_EQ(refusalOf([&] { (void)ops::mirrors::relinkCompare(superUser, s.mirrorId, peerRef); }), "peer_forbidden");
         EXPECT_EQ(refusalOf([&] { (void)ops::mirrors::relinkStatus(superUser, s.mirrorId); }), "peer_forbidden");
+        on(s, true, [&] {
+            EXPECT_EQ(refusalOf([&] { (void)ops::mirrors::relinkPending(superUser); }), "peer_forbidden");
+            EXPECT_EQ(refusalOf([&] { (void)ops::mirrors::relinkAccept(superUser, s.coreId); }), "peer_forbidden");
+            EXPECT_EQ(refusalOf([&] { (void)ops::mirrors::relinkDecline(superUser, s.coreId); }), "peer_forbidden");
+            EXPECT_EQ(refusalOf([&] { (void)ops::mirrors::relinkApprove(superUser, s.coreId, s.core->vault->name); }),
+                      "peer_forbidden");
+            return 0;
+        });
     }
+    EXPECT_EQ(phaseOf(s, true), "requested") << "nobody but a super admin, a person, answered it";
     auto p = std::make_shared<vh::device::Peer>();
     p->spki.fill(0x32);
     p->spkiHex = std::string(64, '3');
@@ -677,8 +985,27 @@ TEST_F(MirrorRelinkDbTest, OnlyASuperAdminPersonMayRelinkAndTheConsoleStepsUpBou
                       (void)ops::mirrors::relinkApply(superUser, s.mirrorId, s.mirror->vault->name, "this", peerRef);
                   }),
                   "peer_forbidden");
+        on(s, true, [&] {
+            EXPECT_EQ(refusalOf([&] { (void)ops::mirrors::relinkAccept(superUser, s.coreId); }), "peer_forbidden");
+            EXPECT_EQ(refusalOf([&] { (void)ops::mirrors::relinkApprove(superUser, s.coreId, s.core->vault->name); }),
+                      "peer_forbidden");
+            return 0;
+        });
     }
     relayed->close();
+    EXPECT_EQ(phaseOf(s, true), "requested");
+    // A super admin, a person on this server's own CLI, sees and accepts it.
+    on(s, true, [&] {
+        const auto listed = ops::mirrors::relinkPending(superUser);
+        EXPECT_EQ(listed.size(), 1u) << listed.dump();
+        if (!listed.empty()) {
+            EXPECT_EQ(listed[0].value("vault_id", 0u), s.coreId);
+            EXPECT_EQ(listed[0].at("peer").value("id", 0u), mirrorPeer) << "who asks";
+            EXPECT_NE(listed[0].at("handshake").value("discloses", "").find("names"), std::string::npos);
+        }
+        EXPECT_EQ(ops::mirrors::relinkAccept(superUser, s.coreId).value("phase", ""), "accepted");
+        return 0;
+    });
     // The console: the keys step-up, bound to the vault, before anything changes.
     auto web = std::make_shared<protocols::ws::Session>(std::make_shared<protocols::ws::Router>());
     web->user = superUser;
@@ -696,6 +1023,17 @@ TEST_F(MirrorRelinkDbTest, OnlyASuperAdminPersonMayRelinkAndTheConsoleStepsUpBou
         EXPECT_EQ(e.target.value_or(""), "mirror.relink:" + std::to_string(s.mirrorId));
     }
     EXPECT_FALSE(rowOf(s, false).vault_id) << "nothing changed without the step-up";
+    // Approving on the other server steps up too, bound to its vault.
+    on(s, true, [&] {
+        try {
+            (void)ops::mirrors::relinkApprove(superUser, s.coreId, s.core->vault->name);
+            ADD_FAILURE() << "approved without the step-up";
+        } catch (const ops::StepUpRequired& e) {
+            EXPECT_EQ(e.family, "keys");
+            EXPECT_EQ(e.target.value_or(""), "mirror.relink:" + std::to_string(s.coreId));
+        }
+        return 0;
+    });
 }
 
 }

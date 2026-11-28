@@ -39,6 +39,11 @@ struct Mirrors {
     static json relinkEntries(const json& payload, const std::shared_ptr<Session>& session);
     static json relinkPlan(const json& payload, const std::shared_ptr<Session>& session);
     static json relinkApply(const json& payload, const std::shared_ptr<Session>& session);
+    // The other side: a linked server's relink requests here, accepted, declined, its outcome approved.
+    static json relinkPending(const json& payload, const std::shared_ptr<Session>& session);
+    static json relinkAccept(const json& payload, const std::shared_ptr<Session>& session);
+    static json relinkDecline(const json& payload, const std::shared_ptr<Session>& session);
+    static json relinkApprove(const json& payload, const std::shared_ptr<Session>& session);
 
     // A linked server's session.
     static json offer(const json& payload, const std::shared_ptr<Session>& session);

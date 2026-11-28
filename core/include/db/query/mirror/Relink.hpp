@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 #include <pqxx/transaction>
 
+#include <chrono>
 #include <cstdint>
 #include <ctime>
 #include <map>
@@ -79,7 +80,9 @@ struct Relink {
     uint32_t vault_id{};
     uint32_t peer_id{};
     std::string side{};     // initiator | responder
-    std::string phase{};    // open | prepared | bring | copying | done | failed | stale | cancelled
+    // requested | accepted | open | proposed | approved | prepared | bring | copying | done | failed | stale | cancelled |
+    // declined | expired (migration 171)
+    std::string phase{};
     std::string mode{};     // plan | override
     std::string core{};     // this | theirs
     std::optional<std::string> default_choice{};
@@ -94,8 +97,20 @@ struct Relink {
     std::optional<std::string> error{};
     std::time_t created_at{}, updated_at{};
     std::optional<std::time_t> applied_at{}, finished_at{};
+    // The handshake: until when the request (then its acceptance) holds; the responder's super admin who accepted it;
+    // the outcome proposed (null: none) and who approved it.
+    std::optional<std::time_t> expires_at{}, accepted_at{}, approved_at{};
+    std::optional<std::string> accepted_by{}, approved_by{};
+    nlohmann::json proposal{};
 
-    [[nodiscard]] bool open() const { return phase == "open" || phase == "prepared" || phase == "bring" || phase == "copying"; }
+    [[nodiscard]] bool open() const {
+        return phase == "requested" || phase == "accepted" || phase == "open" || phase == "proposed" ||
+               phase == "approved" || phase == "prepared" || phase == "bring" || phase == "copying";
+    }
+    // Asked and answered, nothing applied yet.
+    [[nodiscard]] bool handshaking() const {
+        return phase == "requested" || phase == "accepted" || phase == "open" || phase == "proposed" || phase == "approved";
+    }
 };
 
 struct RelinkEntry {
@@ -124,6 +139,9 @@ struct NewRelink {
     std::optional<std::string> by_node{};
     std::optional<uint32_t> by_id{};
     std::optional<std::string> by_name{};
+    // The handshake carried over from an earlier row of the same relink (a comparison made again).
+    std::optional<std::time_t> expires_at{}, accepted_at{};
+    std::optional<std::string> accepted_by{};
 };
 
 class Relinks {
@@ -164,6 +182,28 @@ public:
     // Compare-and-set on the phase: false when it was in none of `from`. `error` is recorded when given.
     static bool setPhase(uint64_t id, const std::vector<std::string>& from, const std::string& to,
                          const std::optional<std::string>& error = std::nullopt);
+
+    // ---- the handshake (both servers agree: first to compare, then to the outcome)
+
+    // A person accepted the request (on the initiator: the other server said its super admin did): `from` -> accepted,
+    // and the acceptance holds `holds` from now. False when the phase was in none of `from`.
+    static bool accept(uint64_t id, const std::vector<std::string>& from, const std::string& by,
+                       std::chrono::seconds holds);
+    // The outcome proposed: `from` -> proposed, any approval void. False when the phase was in none of `from`.
+    static bool propose(uint64_t id, const std::vector<std::string>& from, const nlohmann::json& proposal);
+    // The outcome approved: proposed -> approved, only while the proposal's plan_hash is still `planHash`.
+    static bool approve(uint64_t id, const std::string& by, const std::string& planHash);
+    // The approval (and the proposal) void: `from` -> `to` (accepted on the responder, open on the initiator), with why.
+    static bool unapprove(uint64_t id, const std::vector<std::string>& from, const std::string& to,
+                          const std::string& why);
+    static void setExpiry(uint64_t id, std::time_t at);
+    // Requests and acceptances past their expiry end 'expired' (nothing was applied). The rows that did.
+    static std::vector<Relink> expire();
+    // The other servers' relinks this server is asked to answer or has answered and not applied yet (responder,
+    // requested | accepted | proposed | approved), newest first.
+    [[nodiscard]] static std::vector<Relink> requests();
+    // The entries a prepare received in earlier parts go (a prepare told again from its first part).
+    static void clearEntries(uint64_t id);
     static void setPlan(uint64_t id, const std::optional<std::string>& core, const std::optional<std::string>& defaultChoice,
                         bool clearDefault);
     static void setApplied(uint64_t id, const std::string& role, uint64_t term, const std::string& mode);

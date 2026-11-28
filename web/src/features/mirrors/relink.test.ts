@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canKeepBoth, choicePayload, countLines, gainsText, kindPayload, kindText, phaseText, winnerOf, type RelinkEntry, type RelinkStatus } from './relink.ts'
+import { canKeepBoth, choicePayload, countLines, gainsText, kindPayload, kindText, phaseText, requestAsk, winnerOf, type RelinkEntry, type RelinkRequest, type RelinkStatus } from './relink.ts'
 
 type Version = NonNullable<RelinkEntry['this']>
 const version = (kind: Version['kind']): Version => ({ kind, trashed: false, path: '/a', hash: 'h', name: 'a', parent: null })
@@ -53,4 +53,22 @@ test('the phase in words: running while bringing or copying, the server sentence
   assert.equal(phaseText(at('copying')).running, true)
   assert.equal(phaseText(at('done')).tone, 'ok')
   assert.equal(phaseText(at('stale', 'the vault changed on this server')).text, 'the vault changed on this server')
+})
+
+test('the handshake in words: the asking side waits (and polls) for the other admin, the asked side is told where to answer', () => {
+  const at = (phase: string, side = 'initiator') => ({ relink: { phase, side, error: null } }) as unknown as RelinkStatus
+  assert.match(phaseText(at('requested'), 'vps').text, /Waiting for vps’s admin to accept/)
+  assert.equal(phaseText(at('requested'), 'vps').running, true)
+  assert.match(phaseText(at('proposed'), 'vps').text, /Awaiting vps’s approval/)
+  assert.equal(phaseText(at('approved'), 'vps').running, true)
+  assert.equal(phaseText(at('declined'), 'vps').tone, 'warn')
+  assert.match(phaseText(at('requested', 'responder'), 'vps').text, /Relink requests/)
+  assert.equal(phaseText(at('requested', 'responder'), 'vps').running, false)
+})
+
+test('a request asks the person here in words', () => {
+  const q = (phase: RelinkRequest['phase']) =>
+    ({ phase, peer: { id: 1, name: 'vps', node: 'n' }, asked_by: 'cooper', handshake: { accepted_by: 'admin', approved_by: null } }) as unknown as RelinkRequest
+  assert.equal(requestAsk(q('requested')), 'vps (cooper) asks to compare its copy with this vault.')
+  assert.match(requestAsk(q('accepted')), /^Accepted by admin/)
 })

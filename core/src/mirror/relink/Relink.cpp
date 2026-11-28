@@ -18,6 +18,7 @@
 #include "identities/Manager.hpp"
 #include "identities/User.hpp"
 #include "log/Registry.hpp"
+#include "mirror/Hash.hpp"
 #include "mirror/access/Access.hpp"
 #include "mirror/resync/Resync.hpp"
 #include "mirror/start/Start.hpp"
@@ -31,8 +32,12 @@
 
 #include <fmt/format.h>
 #include <pqxx/pqxx>
+#include <sodium.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -391,6 +396,102 @@ json relinkRowJson(const mq::Relink& r) {
             {"finished_at", t(r.finished_at)}};
 }
 
+// ---- the handshake: what each side is asked to agree to ----------------------------------------------------------------
+
+std::time_t relinkNow() { return std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()); }
+
+json relinkTime(const std::optional<std::time_t>& t) { return t ? json(static_cast<int64_t>(*t)) : json(nullptr); }
+
+// One drifted entry of a plan, seen from the server it is sent to (the responder): its choice, and both versions' hashes.
+struct PlanRow {
+    std::string uid, choice, here, there;
+};
+
+// The plan's hash, as both servers compute it from the responder's side: which server becomes the core there, the
+// mode, both trees' digests as compared, and each drifted entry's choice and versions. The approval is bound to it.
+std::string relinkPlanHash(const std::string& core, const std::string& mode, const std::string& hereDigest,
+                           const std::string& thereDigest, std::vector<PlanRow> rows) {
+    std::ranges::sort(rows, {}, &PlanRow::uid);
+    std::string text = "vh.mirror.relink.plan/1\n" + core + "\n" + mode + "\n" + hereDigest + "\n" + thereDigest + "\n";
+    for (const auto& r : rows) text += r.uid + " " + r.choice + " " + r.here + " " + r.there + "\n";
+    vh::mirror::Hash h{};
+    crypto_hash_sha256(h.data(), reinterpret_cast<const unsigned char*>(text.data()), text.size());
+    return vh::mirror::toHex(h);
+}
+
+std::string relinkStateHash(const json& st) { return st.is_null() ? std::string("-") : relinkStr(st, "hash"); }
+
+json relinkGainsJson(const json& g) {
+    return {{"takes", g.value("takes", uint64_t{0})}, {"keeps_held", g.value("keeps_held", uint64_t{0})},
+            {"conflict_copies", g.value("conflict_copies", uint64_t{0})}};
+}
+
+bool relinkSameGains(const json& a, const json& b) {
+    for (const auto* k : {"takes", "keeps_held", "conflict_copies"})
+        if (a.value(k, uint64_t{0}) != b.value(k, uint64_t{0})) return false;
+    return true;
+}
+
+// The outcome a responder's super admin is asked to approve, in plain words (seen from the responder: "this server").
+std::string relinkOutcomeText(const json& p, const std::string& peer) {
+    if (!p.is_object()) return {};
+    const auto other = "server '" + peer + "'";
+    const bool coreHere = p.value("core", std::string{}) == "this";
+    std::string out = coreHere ? "This server becomes the vault's core and " + other + " its mirror"
+                               : other + " becomes the vault's core and this server its mirror";
+    out += p.value("mode", std::string{}) == "override"
+               ? "; " + (coreHere ? std::string("this server's") : other + "'s") + " tree wins everywhere."
+               : "; a plan decides each drifted entry.";
+    const auto here = p.contains("this") ? p["this"] : json::object();
+    const auto n = [&](const char* k) { return here.value(k, uint64_t{0}); };
+    const auto entries = [](const uint64_t v) { return std::to_string(v) + (v == 1 ? " entry" : " entries"); };
+    out += fmt::format(" Here: {} take{} {}'s version (replaced, added or removed here); {} of this server's versions "
+                       "leave its tree and are kept as held changes (with their bytes) or in the core's trash; {} conflict "
+                       "cop{} added. Nothing is dropped.",
+                       entries(n("takes")), n("takes") == 1 ? "s" : "", other, n("keeps_held"), n("conflict_copies"),
+                       n("conflict_copies") == 1 ? "y is" : "ies are");
+    return out;
+}
+
+// What accepting a request lets the asking server see.
+std::string relinkDisclosure(const std::string& peer) {
+    return "Accepting lets server '" + peer + "' read this vault's file and folder names, their places, sizes and "
+           "hashes, and what is in its trash (never a file's contents), to compare them with its copy. Nothing changes "
+           "here until you approve an outcome it proposes.";
+}
+
+json relinkHandshakeJson(const mq::Relink& r) {
+    const auto peerName = r.summary.contains("peer") && r.summary["peer"].is_object()
+                              ? r.summary["peer"].value("name", std::string{})
+                              : std::string{};
+    std::optional<std::string> waiting;
+    if (r.phase == "requested" || r.phase == "proposed") waiting = r.side == "initiator" ? "other_admin" : "this_admin";
+    else if (r.phase == "accepted") waiting = r.side == "initiator" ? "this_compare" : "other_compare";
+    json proposal = nullptr;
+    if (r.proposal.is_object()) {
+        // The initiator keeps the proposal as it sent it (the responder's side); shown from its own side here.
+        proposal = r.proposal;
+        if (r.side == "initiator") {
+            proposal["core"] = r.proposal.value("core", std::string{}) == "this" ? "theirs" : "this";
+            proposal["this"] = r.proposal.contains("theirs") ? r.proposal["theirs"] : json::object();
+            proposal["theirs"] = r.proposal.contains("this") ? r.proposal["this"] : json::object();
+        }
+        proposal.erase("by");
+        proposal.erase("digest");
+        proposal.erase("their_digest");
+    }
+    return {{"waiting_for", waiting ? json(*waiting) : json(nullptr)},
+            {"expires_at", relinkTime(r.expires_at)},
+            {"accepted_at", relinkTime(r.accepted_at)},
+            {"accepted_by", r.accepted_by ? json(*r.accepted_by) : json(nullptr)},
+            {"approved_at", relinkTime(r.approved_at)},
+            {"approved_by", r.approved_by ? json(*r.approved_by) : json(nullptr)},
+            {"proposal", proposal},
+            {"outcome", r.side == "responder" && r.proposal.is_object() ? json(relinkOutcomeText(r.proposal, peerName))
+                                                                        : json(nullptr)},
+            {"discloses", r.side == "responder" ? json(relinkDisclosure(peerName)) : json(nullptr)}};
+}
+
 json relinkStatusOf(const mq::Relink& r) {
     const auto entries = mq::Relinks::entries(r.id);
     json out{{"vault_id", r.vault_id}, {"relink", relinkRowJson(r)}};
@@ -419,6 +520,7 @@ json relinkStatusOf(const mq::Relink& r) {
                            {"stop_reason", mv->stop_reason ? json(*mv->stop_reason) : json(nullptr)}};
     }
     out["progress"] = progress;
+    out["handshake"] = relinkHandshakeJson(r);
     return out;
 }
 
@@ -556,7 +658,7 @@ void relinkPrepareCore(const mq::Relink& r, const uint32_t peerId, const uint64_
     relinkRepublish();
     (void)mq::MirrorVaults::startCore(vaultId, peerId, term);
     mq::Relinks::setApplied(r.id, "core", term, r.mode);
-    (void)mq::Relinks::setPhase(r.id, {"open", "prepared"}, "copying");
+    (void)mq::Relinks::setPhase(r.id, {"approved", "prepared"}, "copying");
     vh::mirror::start::Service::instance()->wake();
 }
 
@@ -740,7 +842,7 @@ void relinkPrepareMirror(const mq::Relink& r, const uint32_t peerId, const uint6
     summary["person"] = {{"id", person.id}, {"name", person.name}};
     mq::Relinks::setSummary(r.id, summary);
     mq::Relinks::setApplied(r.id, "mirror", term, r.mode);
-    (void)mq::Relinks::setPhase(r.id, {"open"}, "prepared");
+    (void)mq::Relinks::setPhase(r.id, {"approved"}, "prepared");
     relinkRepublish();
 }
 
@@ -777,7 +879,7 @@ void relinkAbortLocal(const mq::Relink& r, const std::string& why) {
         std::scoped_lock step(vh::mirror::start::stepMutex());
         (void)mq::MirrorVaults::remove(r.vault_id);
     }
-    (void)mq::Relinks::setPhase(r.id, {"open", "prepared", "bring", "copying"}, "failed", why);
+    (void)mq::Relinks::setPhase(r.id, {"approved", "prepared", "bring", "copying"}, "failed", why);
     relinkRepublish();
 }
 
@@ -793,6 +895,104 @@ void relinkAudit(const std::string& action, const mq::Relink& r, const json& by,
                                    : std::nullopt,
                    .actor = by.value("name", std::string{}), .vault_id = r.vault_id, .details = details},
                   message);
+}
+
+// ---- the handshake on both sides -----------------------------------------------------------------------------------------
+
+const std::vector<std::string>& relinkAsking() {
+    static const std::vector<std::string> phases{"requested", "accepted", "open", "proposed", "approved"};
+    return phases;
+}
+
+// Requests and acceptances past their time end (nothing was applied), audited where they end.
+void relinkExpire() {
+    for (const auto& r : mq::Relinks::expire())
+        relinkAudit("mirror.relink.expired", r, json::object(), {},
+                    fmt::format("[mirror] vault {}: the relink {} with linked server {} ({}) expired before it was "
+                                "answered or carried out; neither vault changed",
+                                r.vault_id, r.relink_uid, r.peer_id,
+                                r.side == "responder" ? "asked by that server" : "asked by this server"));
+}
+
+json relinkPersonJson(const Who& who) { return {{"node", relinkOwnNode()}, {"id", who.id}, {"name", who.name}}; }
+
+std::string relinkPeerName(const mq::Relink& r) {
+    if (r.summary.contains("peer") && r.summary["peer"].is_object())
+        if (const auto n = r.summary["peer"].value("name", std::string{}); !n.empty()) return n;
+    const auto p = vh::db::query::peer::Peers::byId(r.peer_id);
+    return p ? p->name : std::to_string(r.peer_id);
+}
+
+// Tells the other server what happened to the relink here (best effort: it asks again when it compares or applies).
+void relinkTell(vh::mirror::follow::Transport& t, const mq::Relink& r, const std::string& command, json payload) {
+    const auto vaultUid = mq::MirrorVaults::vaultUidOf(r.vault_id);
+    if (!vaultUid) return;
+    payload["vault_uid"] = *vaultUid;
+    payload["relink_uid"] = r.relink_uid;
+    const auto a = t.request(r.peer_id, command, payload);
+    if (!a || !a->ok)
+        vh::log::Registry::sync()->info("[MirrorRelink] Vault {}: server {} was not told ({}: {}); it learns when it asks "
+                                        "again",
+                                        r.vault_id, r.peer_id, command, a ? a->error : std::string("no answer"));
+}
+
+// The asking server's relink of the vault here, once this server's super admin accepted it; refused otherwise.
+mq::Relink relinkAccepted(const uint32_t vaultId, const json& payload, const uint32_t callerPeerId) {
+    relinkExpire();
+    const auto uid = relinkUidField(payload, "relink_uid");
+    const auto r = mq::Relinks::byUid(vaultId, uid);
+    const bool ours = r && r->side == "responder" && r->peer_id == callerPeerId;
+    if (ours && (r->phase == "accepted" || r->phase == "proposed" || r->phase == "approved")) return *r;
+    throw vh::ops::Refused("mirror_relink_not_accepted",
+                           ours && r->phase == "requested"
+                               ? std::string("this server's super admin has not accepted the relink yet")
+                           : ours ? "this server's relink with the asking server is " + r->phase + ": ask again"
+                                  : std::string("this server's super admin has not accepted a relink of this vault with "
+                                                "the asking server: ask first"));
+}
+
+// What the responder answers of its relink (its phase, who answered, the approved plan's hash).
+json relinkAnswerOf(const mq::Relink& r) {
+    return {{"relink_uid", r.relink_uid}, {"phase", r.phase}, {"expires_at", relinkTime(r.expires_at)},
+            {"accepted_by", r.accepted_by ? json(*r.accepted_by) : json(nullptr)},
+            {"approved_by", r.approved_by ? json(*r.approved_by) : json(nullptr)},
+            {"plan_hash", r.phase == "approved" && r.proposal.is_object() ? json(r.proposal.value("plan_hash", std::string{}))
+                                                                          : json(nullptr)}};
+}
+
+// The outcome, as the responder is asked to approve it (its side: "this" is the responder).
+json relinkProposalOf(const mq::Relink& r, const json& by) {
+    const auto entries = mq::Relinks::entries(r.id);
+    std::vector<PlanRow> rows;
+    rows.reserve(entries.size());
+    for (const auto& e : entries) {
+        const auto res = relinkResolve(e, r);
+        const auto choice = res == "both" ? std::string("both")
+                                          : (res == "core") == (r.core == "this") ? std::string("theirs")
+                                                                                  : std::string("this");
+        rows.push_back({.uid = e.uid, .choice = choice, .here = relinkStateHash(e.theirs_state),
+                        .there = relinkStateHash(e.this_state)});
+    }
+    const auto gains = relinkGains(r, entries);
+    const auto theirCore = r.core == "this" ? std::string("theirs") : std::string("this");
+    const auto hex = [](const std::optional<vh::mirror::Digest>& d) { return d ? d->hex() : std::string{}; };
+    const auto count = [](const std::optional<vh::mirror::Digest>& d) { return d ? d->entries : int64_t{0}; };
+    return {{"plan_hash", relinkPlanHash(theirCore, r.mode, hex(r.theirs_digest), hex(r.this_digest), rows)},
+            {"core", theirCore},
+            {"mode", r.mode},
+            {"this", gains["theirs"]},
+            {"theirs", gains["this"]},
+            {"chosen", gains["chosen"]},
+            {"entries", entries.size()},
+            {"digest", {{"digest", hex(r.theirs_digest)}, {"entries", count(r.theirs_digest)}}},
+            {"their_digest", {{"digest", hex(r.this_digest)}, {"entries", count(r.this_digest)}}},
+            {"by", by}};
+}
+
+// One apply at a time on this server (a person's and the follower's pass).
+std::mutex& relinkCarryMutex() {
+    static std::mutex m;
+    return m;
 }
 
 // ---- the initiator's side of the wire ----------------------------------------------------------------------------------
@@ -863,16 +1063,83 @@ void relinkSendPrepare(vh::mirror::follow::Transport& t, const mq::Relink& r, co
 
 json relinkCompareInto(const uint32_t vaultId, const uint32_t peerId, const Who& who,
                        vh::mirror::follow::Transport& transport, const std::string& mode, const std::string& core) {
+    relinkExpire();
     const auto peer = relinkLinked(peerId, transport);
     const auto vaultUid = relinkVaultUid(vaultId);
     const auto mine = relinkLocal(vaultId, peer.node_id);
     if (!mine.related && !mine.elsewhere)
         throw vh::ops::Refused("mirror_relink_unrelated", "this server has no record of mirroring this vault with server '" +
                                                               peer.name + "'");
-    const auto theirs = relinkAsk(transport, peerId, "peer.mirror.relink.state", {{"vault_uid", vaultUid}});
+    const json by = relinkPersonJson(who);
 
-    // A new relink row first: its uid names the other server's served tree.
+    // One relink of the vault at a time here: a linked server's request waits for this server's answer first.
+    const auto current = mq::Relinks::openOf(vaultId);
+    if (current && current->side == "responder")
+        throw vh::ops::Refused("mirror_relink_asked", "server '" + relinkPeerName(*current) + "' asked to relink this "
+                                                      "vault: answer its request first (vh mirror pending)");
+    if (current && !current->handshaking())
+        throw vh::ops::Refused("mirror_relink_running", "a relink of this vault is being applied (" + current->phase + ")");
+    // The same relink asked again: after the other server's answer, or a plan gone stale while the acceptance holds.
+    std::optional<mq::Relink> asked;
+    if (current && current->peer_id == peerId) {
+        asked = current;
+    } else if (!current) {
+        if (const auto latest = mq::Relinks::latestOf(vaultId);
+            latest && latest->side == "initiator" && latest->peer_id == peerId && latest->phase == "stale" &&
+            latest->accepted_at && latest->expires_at && *latest->expires_at > relinkNow())
+            asked = latest;
+    }
+    if (!asked) {
+        mq::NewRelink n;
+        n.vault_id = vaultId;
+        n.peer_id = peerId;
+        n.phase = "requested";
+        n.mode = mode;
+        n.core = core;
+        n.this_status = mine.state.value("status", std::string{});
+        n.by_node = relinkOwnNode();
+        n.by_id = who.id;
+        n.by_name = who.name;
+        n.expires_at = relinkNow() + std::chrono::duration_cast<std::chrono::seconds>(kRequestHolds).count();
+        n.summary = {{"peer", {{"id", peer.id}, {"name", peer.name}, {"node", peer.node_id}}}};
+        asked = mq::Relinks::create(n);   // ends a relink this server asked of another linked server
+        if (current) relinkTell(transport, *current, "peer.mirror.relink.cancel", {{"why", "replaced by a new request"}});
+        relinkAudit("mirror.relink.request", *asked, by, {{"to", peer.name}},
+                    fmt::format("[mirror] {} asked linked server '{}' to relink vault {} (relink {}): its super admin "
+                                "decides whether this server may compare the two trees",
+                                who.name.empty() ? std::string("someone") : who.name, peer.name, vaultId,
+                                asked->relink_uid));
+    }
+    const auto answer = relinkAsk(transport, peerId, "peer.mirror.relink.request",
+                                  {{"vault_uid", vaultUid}, {"relink_uid", asked->relink_uid}, {"by", by}});
+    const auto theirPhase = relinkStr(answer, "phase");
+    if (theirPhase == "declined" || theirPhase == "expired" || theirPhase == "cancelled") {
+        (void)mq::Relinks::setPhase(asked->id, relinkAsking(), theirPhase,
+                                    "server '" + peer.name + "' answered the request: " + theirPhase);
+        return relinkStatusOf(*mq::Relinks::get(asked->id));
+    }
+    if (theirPhase == "requested") {
+        if (asked->phase != "requested")
+            (void)mq::Relinks::unapprove(asked->id, {"accepted", "open", "proposed", "approved"}, "requested",
+                                         "server '" + peer.name + "' waits for its super admin's answer");
+        return relinkStatusOf(*mq::Relinks::get(asked->id));
+    }
+    if (theirPhase != "accepted" && theirPhase != "proposed" && theirPhase != "approved")
+        throw vh::ops::Refused("mirror_relink_refused", "server '" + peer.name + "' answered the request: " + theirPhase);
+    const auto acceptedBy = relinkStr(answer, "accepted_by");
+    if (asked->phase == "requested")
+        relinkAudit("mirror.relink.accepted", *asked, json{{"name", acceptedBy}}, {{"from", peer.name}},
+                    fmt::format("[mirror] linked server '{}' accepted the relink {} of vault {} ({}): this server may "
+                                "compare the two trees",
+                                peer.name, asked->relink_uid, vaultId, acceptedBy.empty() ? "its super admin" : acceptedBy));
+    const auto theirs = relinkAsk(transport, peerId, "peer.mirror.relink.state",
+                                  {{"vault_uid", vaultUid}, {"relink_uid", asked->relink_uid}});
+    if (!theirs.value("accepted", false))
+        throw vh::ops::Refused("mirror_relink_not_accepted", "server '" + peer.name + "' no longer accepts the relink");
+
+    // A new row: the comparison (the relink's uid and its acceptance carried over; its uid names the served tree).
     mq::NewRelink n;
+    n.relink_uid = asked->relink_uid;
     n.vault_id = vaultId;
     n.peer_id = peerId;
     n.mode = mode;
@@ -882,6 +1149,11 @@ json relinkCompareInto(const uint32_t vaultId, const uint32_t peerId, const Who&
     n.by_node = relinkOwnNode();
     n.by_id = who.id;
     n.by_name = who.name;
+    n.accepted_at = asked->accepted_at.value_or(relinkNow());
+    n.accepted_by = acceptedBy.empty() ? asked->accepted_by : std::optional<std::string>(acceptedBy);
+    n.expires_at = asked->phase == "requested" || !asked->expires_at
+                       ? relinkNow() + std::chrono::duration_cast<std::chrono::seconds>(kRequestHolds).count()
+                       : *asked->expires_at;
     const auto digestOf = [](const json& st) {
         return vh::mirror::Digest::fromBytes(vh::mirror::hashFromHex(st.value("digest", std::string(64, '0'))),
                                              st.value("entries", int64_t{0}));
@@ -987,20 +1259,38 @@ json relinkCompareInto(const uint32_t vaultId, const uint32_t peerId, const Who&
 }
 
 json relinkApplyOpen(const uint32_t vaultId, const Who& who, vh::mirror::follow::Transport& transport) {
+    relinkExpire();
+    std::scoped_lock carry(relinkCarryMutex());
     auto r = mq::Relinks::openOf(vaultId);
-    if (!r || r->side != "initiator" || r->phase != "open")
+    if (!r || r->side != "initiator" || !(r->phase == "open" || r->phase == "proposed" || r->phase == "approved")) {
+        if (r && r->side == "responder")
+            throw vh::ops::Refused("mirror_relink_no_plan", "server '" + relinkPeerName(*r) + "' asked for this relink: "
+                                                            "its plan is applied from there, once approved here");
+        if (r && (r->phase == "requested" || r->phase == "accepted"))
+            throw vh::ops::Refused("mirror_relink_no_plan",
+                                   r->phase == "requested"
+                                       ? "server '" + relinkPeerName(*r) + "'s super admin has not accepted the relink yet"
+                                       : std::string("the other server accepted the relink: compare the vault first"));
         throw vh::ops::Refused("mirror_relink_no_plan", r ? "the vault's relink is " + r->phase + " already"
                                                           : "compare the vault with the other server first");
+    }
     const auto peer = relinkLinked(r->peer_id, transport);
     const auto vaultUid = relinkVaultUid(vaultId);
     const auto mine = relinkLocal(vaultId, peer.node_id);
-    const auto theirs = relinkAsk(transport, r->peer_id, "peer.mirror.relink.state", {{"vault_uid", vaultUid}});
+    const auto theirs = relinkAsk(transport, r->peer_id, "peer.mirror.relink.state",
+                                  {{"vault_uid", vaultUid}, {"relink_uid", r->relink_uid}});
+    if (!theirs.value("accepted", false)) {
+        const auto why = "server '" + peer.name + "' no longer accepts this relink (declined, cancelled or expired there): "
+                         "compare again to ask again";
+        (void)mq::Relinks::setPhase(r->id, relinkAsking(), "cancelled", why);
+        throw vh::ops::Refused("mirror_relink_not_accepted", why);
+    }
     const auto keys = r->summary.contains("keys") ? r->summary["keys"] : json{{"match", false}};
     const auto blockers = relinkBlockers(mine.state, theirs, keys);
     if (!blockers.empty())
         throw vh::ops::Refused(blockers[0].value("code", std::string("mirror_relink_refused")),
                                blockers[0].value("message", std::string{}));
-    // A tree that changed under the plan: compare again.
+    // A tree that changed under the plan: compare again (an approval of it is void).
     const auto changed = [](const json& now, const std::optional<vh::mirror::Digest>& then,
                             const std::optional<std::string>& status) {
         return !then || now.value("digest", std::string{}) != then->hex() || now.value("entries", int64_t{0}) != then->entries ||
@@ -1008,27 +1298,77 @@ json relinkApplyOpen(const uint32_t vaultId, const Who& who, vh::mirror::follow:
     };
     const bool hereChanged = changed(mine.state, r->this_digest, r->this_status);
     const bool thereChanged = changed(theirs, r->theirs_digest, r->theirs_status);
+    const auto goStale = [&](const std::string& why) {
+        (void)mq::Relinks::setPhase(r->id, {"open", "proposed", "approved"}, "stale", why);
+        relinkTell(transport, *r, "peer.mirror.relink.propose", {{"withdraw", true}, {"why", why}});
+        return vh::ops::Refused("mirror_relink_stale", why);
+    };
     if (hereChanged || thereChanged) {
         const auto where = hereChanged && thereChanged ? std::string("on both servers")
                            : hereChanged              ? std::string("on this server")
                                                       : "on server '" + peer.name + "'";
-        const auto why = "the vault changed " + where + " since it was compared: the plan no longer describes it; compare "
-                         "again";
-        (void)mq::Relinks::setPhase(r->id, {"open"}, "stale", why);
-        throw vh::ops::Refused("mirror_relink_stale", why);
+        throw goStale("the vault changed " + where + " since it was compared: the plan no longer describes it; compare "
+                      "again");
     }
+    const json by = relinkPersonJson(who);
+
+    // The outcome goes to the other server's super admin; it is carried out once approved there.
+    auto proposal = relinkProposalOf(*r, by);
+    const auto hash = proposal["plan_hash"].get<std::string>();
+    const bool asked = r->proposal.is_object() && r->proposal.value("plan_hash", std::string{}) == hash;
+    if (!asked) {
+        (void)mq::Relinks::propose(r->id, {"open", "proposed", "approved"}, proposal);
+        r = mq::Relinks::get(r->id);
+        relinkAudit("mirror.relink.propose", *r, by,
+                    {{"plan_hash", hash}, {"core", r->core}, {"to", peer.name}},
+                    fmt::format("[mirror] {} proposed the relink {} of vault {} to linked server '{}' ({} the core, {}): "
+                                "it is carried out once that server's super admin approves it",
+                                who.name.empty() ? std::string("someone") : who.name, r->relink_uid, vaultId, peer.name,
+                                r->core == "this" ? std::string("this server") : "server '" + peer.name + "'", r->mode));
+    } else {
+        proposal = r->proposal;
+    }
+    json answer;
+    try {
+        answer = relinkAsk(transport, r->peer_id, "peer.mirror.relink.propose",
+                           {{"vault_uid", vaultUid}, {"relink_uid", r->relink_uid}, {"proposal", proposal}});
+    } catch (const vh::ops::Refused& e) {
+        if (e.code == "mirror_relink_stale") throw goStale(e.what());
+        throw;
+    }
+    const auto theirPhase = relinkStr(answer, "phase");
+    if (theirPhase != "approved" || relinkStr(answer, "plan_hash") != hash) {
+        if (theirPhase == "declined" || theirPhase == "cancelled" || theirPhase == "expired")
+            (void)mq::Relinks::setPhase(r->id, relinkAsking(), theirPhase,
+                                        "server '" + peer.name + "' answered the outcome: " + theirPhase);
+        else if (r->phase == "approved")
+            (void)mq::Relinks::propose(r->id, {"approved"}, proposal);   // waits for the approval again
+        return relinkStatusOf(*mq::Relinks::get(r->id));
+    }
+    if (r->phase == "proposed") (void)mq::Relinks::approve(r->id, relinkStr(answer, "approved_by"), hash);
+    r = mq::Relinks::get(r->id);
+    if (!r || r->phase != "approved") throw vh::ops::Conflict("the relink changed while it was being applied");
+
+    // Approved on both: carried out.
     const auto term = std::max(mine.state.value("term", uint64_t{0}), theirs.value("term", uint64_t{0})) + 1;
-    const json by{{"node", relinkOwnNode()}, {"id", who.id}, {"name", who.name}};
     const bool coreHere = r->core == "this";
     const json theirDigest{{"digest", r->theirs_digest->hex()}, {"entries", r->theirs_digest->entries}};
     if (coreHere) {
-        relinkSendPrepare(transport, *r, vaultUid, "mirror", term, by, theirDigest);
+        try {
+            relinkSendPrepare(transport, *r, vaultUid, "mirror", term, by, theirDigest);
+        } catch (const vh::ops::Refused& e) {
+            // Nothing changed here yet: an approval the other server voided is asked again.
+            if (e.code == "mirror_relink_stale") throw goStale(e.what());
+            if (e.code == "mirror_relink_not_approved")
+                (void)mq::Relinks::unapprove(r->id, {"approved"}, "open", e.what());
+            throw;
+        }
         try {
             relinkPrepareCore(*r, r->peer_id, term, by);
         } catch (const std::exception& e) {
             (void)transport.request(r->peer_id, "peer.mirror.relink.abort",
                                     {{"vault_uid", vaultUid}, {"relink_uid", r->relink_uid}, {"why", e.what()}});
-            (void)mq::Relinks::setPhase(r->id, {"open", "prepared", "copying"}, "failed", e.what());
+            (void)mq::Relinks::setPhase(r->id, {"approved", "prepared", "copying"}, "failed", e.what());
             throw;
         }
         const auto told = transport.request(r->peer_id, "peer.mirror.relink.go",
@@ -1048,10 +1388,13 @@ json relinkApplyOpen(const uint32_t vaultId, const Who& who, vh::mirror::follow:
         relinkGo(*mq::Relinks::get(r->id));
     }
     r = mq::Relinks::get(r->id);
-    relinkAudit("mirror.relink", *r, by, {{"core", coreHere ? "this" : "theirs"}, {"entries", r->summary.value("counts", json::object()).value("total", 0)}},
-                fmt::format("[mirror] {} relinked vault {} with linked server {} (relink {}): {} is its core in term {}, "
-                            "the other its mirror; what the mirror held that differs is kept as held changes",
+    relinkAudit("mirror.relink", *r, by, {{"core", coreHere ? "this" : "theirs"}, {"entries", r->summary.value("counts", json::object()).value("total", 0)},
+                                          {"approved_by", r->approved_by.value_or("")}},
+                fmt::format("[mirror] {} relinked vault {} with linked server {} (relink {}, approved there by {}): {} is "
+                            "its core in term {}, the other its mirror; what the mirror held that differs is kept as held "
+                            "changes",
                             who.name.empty() ? std::string("someone") : who.name, vaultId, r->peer_id, r->relink_uid,
+                            r->approved_by.value_or("its super admin"),
                             coreHere ? std::string("this server") : "server '" + peer.name + "'", term));
     return relinkStatusOf(*r);
 }
@@ -1206,6 +1549,7 @@ json compare(const uint32_t vaultId, const uint32_t peerId, const Who& who, vh::
 }
 
 json status(const uint32_t vaultId) {
+    relinkExpire();
     const auto r = mq::Relinks::openOf(vaultId);
     const auto latest = r ? r : mq::Relinks::latestOf(vaultId);
     if (!latest) return {{"vault_id", vaultId}, {"relink", nullptr}};
@@ -1226,16 +1570,25 @@ json entries(const uint32_t vaultId, const std::string& kind, const uint64_t off
     return {{"vault_id", vaultId}, {"relink_id", r->id}, {"total", total}, {"offset", offset}, {"entries", list}};
 }
 
-json plan(const uint32_t vaultId, const PlanEdit& edit) {
+json plan(const uint32_t vaultId, const PlanEdit& edit, vh::mirror::follow::Transport& transport) {
+    relinkExpire();
     const auto r = mq::Relinks::openOf(vaultId);
-    if (!r || r->side != "initiator" || r->phase != "open")
-        throw vh::ops::Refused("mirror_relink_no_plan", r ? "the vault's relink is " + r->phase + " already: it can no "
-                                                            "longer be changed"
-                                                          : "compare the vault with the other server first");
     if (edit.discard) {
-        (void)mq::Relinks::setPhase(r->id, {"open"}, "cancelled", "discarded");
+        if (!r || r->side != "initiator" || !r->handshaking())
+            throw vh::ops::Refused("mirror_relink_no_plan", r ? "the vault's relink is " + r->phase + ": it can no longer "
+                                                                "be discarded here"
+                                                              : "the vault has no relink to discard");
+        (void)mq::Relinks::setPhase(r->id, relinkAsking(), "cancelled", "discarded");
+        relinkTell(transport, *r, "peer.mirror.relink.cancel", {{"why", "discarded by a super admin of the other server"}});
+        relinkAudit("mirror.relink.cancel", *r, json{{"node", relinkOwnNode()}}, {},
+                    fmt::format("[mirror] the relink {} of vault {} with linked server {} was discarded here; neither "
+                                "vault changed",
+                                r->relink_uid, vaultId, r->peer_id));
         return relinkStatusOf(*mq::Relinks::get(r->id));
     }
+    if (!r || r->side != "initiator" || !(r->phase == "open" || r->phase == "proposed" || r->phase == "approved"))
+        throw vh::ops::Refused("mirror_relink_no_plan", r ? "the vault's relink is " + r->phase + ": it can not be changed now"
+                                                          : "compare the vault with the other server first");
     static const std::set<std::string> sides{"this", "theirs"};
     static const std::set<std::string> choices{"this", "theirs", "both"};
     if (edit.core && !sides.contains(*edit.core)) throw vh::ops::Invalid("core is this or theirs");
@@ -1266,6 +1619,16 @@ json plan(const uint32_t vaultId, const PlanEdit& edit) {
         }
     }
     for (const auto& one : edit.set) (void)mq::Relinks::setChoice(r->id, one.uid, one.choice);
+    // A plan proposed (or approved) and changed since: the other server is asked again.
+    if (r->phase != "open") {
+        const auto now = relinkProposalOf(*mq::Relinks::get(r->id), json::object());
+        if (now.value("plan_hash", std::string{}) != r->proposal.value("plan_hash", std::string{})) {
+            const auto why = std::string("the plan changed after it was proposed: the other server's approval is void; "
+                                         "propose it again");
+            (void)mq::Relinks::unapprove(r->id, {"proposed", "approved"}, "open", why);
+            relinkTell(transport, *r, "peer.mirror.relink.propose", {{"withdraw", true}, {"why", why}});
+        }
+    }
     return relinkStatusOf(*mq::Relinks::get(r->id));
 }
 
@@ -1279,14 +1642,127 @@ json override(const uint32_t vaultId, const uint32_t peerId, const std::string& 
     if (keep != "this" && keep != "theirs") throw vh::ops::Invalid("keep is this or theirs");
     relinkRequireConfirm(vaultId, confirm);
     const auto compared = relinkCompareInto(vaultId, peerId, who, transport, "override", keep);
+    // Asked and not accepted yet (or declined): the answer is the relink as it stands.
+    if (!compared.at("relink").is_object() || compared.at("relink").value("phase", std::string{}) != "open")
+        return compared;
     if (const auto& b = compared.at("blockers"); !b.empty())
         throw vh::ops::Refused(b[0].value("code", std::string("mirror_relink_refused")),
                                b[0].value("message", std::string{}));
     return relinkApplyOpen(vaultId, who, transport);
 }
 
+// ---- the other server's super admin ---------------------------------------------------------------------------------------
+
+namespace {
+
+json relinkRequestJson(const mq::Relink& r) {
+    const auto vault = vh::db::query::vault::Vault::getVault(r.vault_id);
+    const auto peer = vh::db::query::peer::Peers::byId(r.peer_id);
+    return {{"vault_id", r.vault_id},
+            {"vault_name", vault ? vault->name : std::string{}},
+            {"relink_uid", r.relink_uid},
+            {"phase", r.phase},
+            {"peer", {{"id", r.peer_id}, {"name", peer ? peer->name : relinkPeerName(r)},
+                      {"node", peer ? peer->node_id : std::string{}}}},
+            {"asked_by", r.by_name.value_or("")},
+            {"status", r.this_status.value_or("")},
+            {"created_at", static_cast<int64_t>(r.created_at)},
+            {"handshake", relinkHandshakeJson(r)}};
+}
+
+mq::Relink relinkAsked(const uint32_t vaultId, const std::vector<std::string>& phases, const std::string& none) {
+    relinkExpire();
+    const auto r = mq::Relinks::openOf(vaultId);
+    if (!r || r->side != "responder" || std::ranges::find(phases, r->phase) == phases.end())
+        throw vh::ops::Refused("mirror_relink_no_request",
+                               r && r->side == "responder" ? "the vault's relink is " + r->phase + ": " + none : none);
+    return *r;
+}
+
+}
+
+json requests() {
+    relinkExpire();
+    json out = json::array();
+    for (const auto& r : mq::Relinks::requests()) out.push_back(relinkRequestJson(r));
+    return out;
+}
+
+json accept(const uint32_t vaultId, const Who& who, vh::mirror::follow::Transport& transport) {
+    const auto r = relinkAsked(vaultId, {"requested"}, "no relink request for this vault waits here (vh mirror pending)");
+    if (!mq::Relinks::accept(r.id, {"requested"}, who.name,
+                             std::chrono::duration_cast<std::chrono::seconds>(kRequestHolds)))
+        throw vh::ops::Conflict("the request changed while it was being accepted");
+    const auto now = *mq::Relinks::get(r.id);
+    relinkAudit("mirror.relink.accept", now, relinkPersonJson(who), {{"from", relinkPeerName(now)}},
+                fmt::format("[mirror] {} accepted linked server '{}''s request to relink vault {} (relink {}): it may "
+                            "compare the two trees (names, places and hashes; no contents); nothing changes here until an "
+                            "outcome is approved",
+                            who.name.empty() ? std::string("someone") : who.name, relinkPeerName(now), vaultId,
+                            now.relink_uid));
+    relinkTell(transport, now, "peer.mirror.relink.answer", {{"answer", "accepted"}, {"by", who.name}});
+    return relinkRequestJson(now);
+}
+
+json decline(const uint32_t vaultId, const Who& who, vh::mirror::follow::Transport& transport) {
+    const auto r = relinkAsked(vaultId, {"requested", "accepted", "proposed", "approved"},
+                               "no relink of this vault waits here (vh mirror pending)");
+    if (!mq::Relinks::setPhase(r.id, {"requested", "accepted", "proposed", "approved"}, "declined",
+                               "declined by " + (who.name.empty() ? std::string("a super admin") : who.name)))
+        throw vh::ops::Conflict("the relink changed while it was being declined");
+    const auto now = *mq::Relinks::get(r.id);
+    relinkAudit("mirror.relink.decline", now, relinkPersonJson(who), {{"from", relinkPeerName(now)}, {"was", r.phase}},
+                fmt::format("[mirror] {} declined linked server '{}''s relink of vault {} (relink {}, {}); neither vault "
+                            "changed",
+                            who.name.empty() ? std::string("someone") : who.name, relinkPeerName(now), vaultId,
+                            now.relink_uid, r.phase));
+    relinkTell(transport, now, "peer.mirror.relink.answer", {{"answer", "declined"}, {"by", who.name}});
+    return relinkRequestJson(now);
+}
+
+json approve(const uint32_t vaultId, const std::string& confirm, const Who& who, vh::mirror::follow::Transport& transport) {
+    relinkRequireConfirm(vaultId, confirm);
+    const auto r = relinkAsked(vaultId, {"proposed"}, "no relink outcome waits for approval for this vault");
+    const auto& p = r.proposal;
+    // The tree here is still the one the outcome was compared against.
+    const auto digest = mq::Relinks::digest(vaultId);
+    const auto seen = p.contains("digest") ? p["digest"] : json::object();
+    if (seen.value("digest", std::string{}) != digest.hex() || seen.value("entries", int64_t{0}) != digest.entries) {
+        const auto why = std::string("the vault changed here since the other server compared it: the outcome no longer "
+                                     "describes it; it is asked again once compared again");
+        (void)mq::Relinks::unapprove(r.id, {"proposed"}, "accepted", why);
+        relinkTell(transport, r, "peer.mirror.relink.answer", {{"answer", "voided"}, {"why", why}});
+        throw vh::ops::Refused("mirror_relink_stale", why);
+    }
+    const auto hash = p.value("plan_hash", std::string{});
+    if (!mq::Relinks::approve(r.id, who.name, hash))
+        throw vh::ops::Conflict("the outcome changed while it was being approved: look at it again");
+    auto summary = r.summary;
+    summary["approver"] = {{"id", who.id}, {"name", who.name}};
+    mq::Relinks::setSummary(r.id, summary);
+    const auto now = *mq::Relinks::get(r.id);
+    relinkAudit("mirror.relink.approve", now, relinkPersonJson(who),
+                {{"from", relinkPeerName(now)}, {"plan_hash", hash}, {"core", p.value("core", std::string{})},
+                 {"mode", p.value("mode", std::string{})}, {"gains", p.contains("this") ? p["this"] : json(nullptr)}},
+                fmt::format("[mirror] {} approved linked server '{}''s relink of vault {} (relink {}): {}",
+                            who.name.empty() ? std::string("someone") : who.name, relinkPeerName(now), vaultId,
+                            now.relink_uid, relinkOutcomeText(p, relinkPeerName(now))));
+    relinkTell(transport, now, "peer.mirror.relink.answer",
+               {{"answer", "approved"}, {"by", who.name}, {"plan_hash", hash}});
+    return relinkRequestJson(now);
+}
+
 std::size_t tick(vh::mirror::follow::Transport& transport) {
     std::size_t n = 0;
+    // Requests and acceptances past their time, once a minute (every read of them expires them too).
+    static std::atomic<int64_t> lastExpired{0};
+    const auto nowSec = std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (auto last = lastExpired.load(); nowSec - last >= 60 && lastExpired.compare_exchange_strong(last, nowSec)) try {
+            relinkExpire();
+        } catch (const std::exception& e) {
+            vh::log::Registry::sync()->warn("[MirrorRelink] Expiring requests: {}", e.what());
+        }
     for (const auto& r : mq::Relinks::inPhase("bring")) {
         try {
             if (r.role.value_or("") == "mirror" && relinkBring(r, transport)) ++n;
@@ -1301,18 +1777,202 @@ std::size_t tick(vh::mirror::follow::Transport& transport) {
             vh::log::Registry::sync()->warn("[MirrorRelink] Vault {}: {}", r.vault_id, e.what());
         }
     }
+    // An outcome the other server's super admin approved: carried out by this server, which asked for it (last: what
+    // it starts moves on at the next pass).
+    for (const auto& r : mq::Relinks::inPhase("approved")) {
+        if (r.side != "initiator") continue;
+        const auto by = r.proposal.contains("by") && r.proposal["by"].is_object() ? r.proposal["by"] : json::object();
+        const Who who{.id = by.contains("id") && by["id"].is_number_unsigned() ? by["id"].get<uint32_t>() : 0u,
+                      .name = by.value("name", std::string{})};
+        try {
+            (void)relinkApplyOpen(r.vault_id, who, transport);
+            ++n;
+        } catch (const vh::ops::Refused& e) {
+            if (e.code == "mirror_core_unreachable" || e.code == "peer_link_down") continue;   // the next pass
+            // Anything else waits for a person here (apply again); the reason is kept.
+            if (mq::Relinks::propose(r.id, {"approved"}, r.proposal))
+                (void)mq::Relinks::setPhase(r.id, {"proposed"}, "proposed", std::string(e.code) + ": " + e.what());
+            vh::log::Registry::sync()->warn("[MirrorRelink] Vault {}: the approved relink was not carried out: {}",
+                                            r.vault_id, e.what());
+        } catch (const std::exception& e) {
+            vh::log::Registry::sync()->warn("[MirrorRelink] Vault {}: carrying the approved relink out: {}", r.vault_id,
+                                            e.what());
+        }
+    }
     return n;
 }
 
 // ---- the wire ------------------------------------------------------------------------------------------------------------
 
+json serveRequest(const uint32_t callerPeerId, const json& payload) {
+    vh::peer::Record peer;
+    const auto vaultId = relinkVaultForPeer(payload, callerPeerId, peer);
+    const auto mine = relinkLocal(vaultId, peer.node_id);
+    if (!mine.related) throw vh::ops::NotFound("this server has no record of mirroring that vault with the asking server");
+    relinkExpire();
+    const auto uid = relinkUidField(payload, "relink_uid");
+    const json by = payload.contains("by") && payload["by"].is_object() ? payload["by"] : json::object();
+    auto r = mq::Relinks::byUid(vaultId, uid);
+    if (r && (r->side != "responder" || r->peer_id != callerPeerId)) throw vh::ops::Conflict("no such relink here");
+    if (!r) {
+        if (const auto open = mq::Relinks::openOf(vaultId)) {
+            if (open->side == "initiator" || !open->handshaking())
+                throw vh::ops::Refused("mirror_relink_running",
+                                       open->side == "initiator"
+                                           ? std::string("this server's super admin is relinking the vault already: "
+                                                         "answer that request instead")
+                                           : "a relink of this vault is being applied here (" + open->phase + ")");
+            if (open->peer_id != callerPeerId)
+                throw vh::ops::Refused("mirror_relink_running", "another linked server's relink of this vault waits here");
+        }
+        mq::NewRelink n;
+        n.relink_uid = uid;
+        n.vault_id = vaultId;
+        n.peer_id = callerPeerId;
+        n.side = "responder";
+        n.phase = "requested";
+        n.this_status = mine.state.value("status", std::string{});
+        n.by_node = by.value("node", std::string{}).substr(0, 64);
+        if (by.contains("id") && by["id"].is_number_unsigned()) n.by_id = by["id"].get<uint32_t>();
+        n.by_name = by.value("name", std::string{}).substr(0, 255);
+        n.expires_at = relinkNow() + std::chrono::duration_cast<std::chrono::seconds>(kRequestHolds).count();
+        n.summary = {{"peer", {{"id", peer.id}, {"name", peer.name}, {"node", peer.node_id}}}};
+        r = mq::Relinks::create(n);   // replaces the same server's older request
+        relinkAudit("mirror.relink.request", *r, json{{"name", *n.by_name}}, {{"from", peer.name}},
+                    fmt::format("[mirror] linked server '{}' ({}) asks to relink vault {} (relink {}): nothing of its tree "
+                                "is shown to it until a super admin here accepts (vh mirror pending)",
+                                peer.name, n.by_name->empty() ? std::string("someone") : *n.by_name, vaultId, uid));
+    }
+    return relinkAnswerOf(*r);
+}
+
+json serveAnswer(const uint32_t callerPeerId, const json& payload) {
+    vh::peer::Record peer;
+    const auto vaultId = relinkVaultForPeer(payload, callerPeerId, peer);
+    const auto r = mq::Relinks::byUid(vaultId, relinkUidField(payload, "relink_uid"));
+    if (!r || r->side != "initiator" || r->peer_id != callerPeerId) throw vh::ops::NotFound("no such relink here");
+    const auto answer = relinkStr(payload, "answer");
+    const auto by = relinkStr(payload, "by").substr(0, 255);
+    bool moved = false;
+    if (answer == "accepted") {
+        moved = mq::Relinks::accept(r->id, {"requested"}, by, std::chrono::duration_cast<std::chrono::seconds>(kRequestHolds));
+    } else if (answer == "approved") {
+        moved = r->phase == "proposed" && mq::Relinks::approve(r->id, by, relinkStr(payload, "plan_hash"));
+        if (moved) vh::mirror::follow::Follower::instance()->wake(r->vault_id);   // the pass carries it out
+    } else if (answer == "declined") {
+        moved = mq::Relinks::setPhase(r->id, relinkAsking(), "declined",
+                                      "server '" + peer.name + "'s super admin" + (by.empty() ? "" : " (" + by + ")") +
+                                          " declined the relink");
+    } else if (answer == "voided") {
+        moved = mq::Relinks::unapprove(r->id, {"proposed", "approved"}, "open",
+                                       "server '" + peer.name + "' voided the proposal: " +
+                                           relinkStr(payload, "why").substr(0, 400));
+    } else {
+        throw vh::ops::Invalid("answer is accepted, approved, declined or voided");
+    }
+    if (moved)
+        relinkAudit("mirror.relink.answer", *mq::Relinks::get(r->id), json{{"name", by}},
+                    {{"answer", answer}, {"from", peer.name}},
+                    fmt::format("[mirror] linked server '{}' answered the relink {} of vault {}: {}{}", peer.name,
+                                r->relink_uid, vaultId, answer, by.empty() ? std::string{} : " (" + by + ")"));
+    return {{"phase", mq::Relinks::get(r->id)->phase}};
+}
+
+json servePropose(const uint32_t callerPeerId, const json& payload) {
+    vh::peer::Record peer;
+    const auto vaultId = relinkVaultForPeer(payload, callerPeerId, peer);
+    const auto r = relinkAccepted(vaultId, payload, callerPeerId);
+    if (payload.value("withdraw", false)) {
+        if (mq::Relinks::unapprove(r.id, {"proposed", "approved"}, "accepted",
+                                   "the other server withdrew its proposal: " + relinkStr(payload, "why").substr(0, 400)))
+            relinkAudit("mirror.relink.withdrawn", r, json::object(), {{"from", peer.name}},
+                        fmt::format("[mirror] linked server '{}' withdrew its proposal for the relink {} of vault {}",
+                                    peer.name, r.relink_uid, vaultId));
+        return relinkAnswerOf(*mq::Relinks::get(r.id));
+    }
+    const auto in = payload.contains("proposal") && payload["proposal"].is_object() ? payload["proposal"] : json::object();
+    static const std::regex hex("^[0-9a-f]{64}$");
+    const auto hash = relinkStr(in, "plan_hash");
+    const auto core = relinkStr(in, "core");
+    const auto mode = relinkStr(in, "mode");
+    if (!std::regex_match(hash, hex)) throw vh::ops::Invalid("plan_hash is 64 hex digits");
+    if (core != "this" && core != "theirs") throw vh::ops::Invalid("core is this or theirs");
+    if (mode != "plan" && mode != "override") throw vh::ops::Invalid("mode is plan or override");
+    const auto digestOf = [](const json& d) {
+        const auto o = d.is_object() ? d : json::object();
+        return json{{"digest", relinkStr(o, "digest")},
+                    {"entries", o.contains("entries") && o["entries"].is_number_integer() ? o["entries"].get<int64_t>() : 0}};
+    };
+    // What this server's super admin approves: only what it can read (counts, sides, digests, the hash).
+    const auto chosen = in.contains("chosen") && in["chosen"].is_object() ? in["chosen"] : json::object();
+    const json proposal{{"plan_hash", hash}, {"core", core}, {"mode", mode},
+                        {"this", relinkGainsJson(in.contains("this") && in["this"].is_object() ? in["this"] : json::object())},
+                        {"theirs", relinkGainsJson(in.contains("theirs") && in["theirs"].is_object() ? in["theirs"]
+                                                                                                     : json::object())},
+                        {"chosen", {{"core", chosen.value("core", uint64_t{0})}, {"mirror", chosen.value("mirror", uint64_t{0})},
+                                    {"both", chosen.value("both", uint64_t{0})}}},
+                        {"entries", in.value("entries", uint64_t{0})},
+                        {"digest", digestOf(in.contains("digest") ? in["digest"] : json())},
+                        {"their_digest", digestOf(in.contains("their_digest") ? in["their_digest"] : json())},
+                        {"by", {{"name", in.contains("by") && in["by"].is_object() ? relinkStr(in["by"], "name").substr(0, 255)
+                                                                                   : std::string{}}}}};
+    // The tree here is still the one the other server compared.
+    const auto digest = mq::Relinks::digest(vaultId);
+    if (proposal["digest"].value("digest", std::string{}) != digest.hex() ||
+        proposal["digest"].value("entries", int64_t{0}) != digest.entries) {
+        (void)mq::Relinks::unapprove(r.id, {"proposed", "approved"}, "accepted",
+                                     "the vault changed here since the other server compared it");
+        throw vh::ops::Refused("mirror_relink_stale", "the vault changed on this server since it was compared: compare "
+                                                      "again");
+    }
+    // The same outcome again (its apply asks before it goes): an approval of it stands.
+    if ((r.phase == "approved" || r.phase == "proposed") && r.proposal.is_object() &&
+        r.proposal.value("plan_hash", std::string{}) == hash)
+        return relinkAnswerOf(r);
+    if (!mq::Relinks::propose(r.id, {"accepted", "proposed", "approved"}, proposal))
+        throw vh::ops::Conflict("the relink changed while the outcome was proposed");
+    mq::Relinks::setPlan(r.id, core, std::nullopt, true);
+    const auto now = *mq::Relinks::get(r.id);
+    relinkAudit("mirror.relink.propose", now, json{{"name", proposal["by"].value("name", std::string{})}},
+                {{"from", peer.name}, {"plan_hash", hash}},
+                fmt::format("[mirror] linked server '{}' proposes an outcome for the relink {} of vault {}, waiting for a "
+                            "super admin's approval here: {}",
+                            peer.name, r.relink_uid, vaultId, relinkOutcomeText(proposal, peer.name)));
+    return relinkAnswerOf(now);
+}
+
+json serveCancel(const uint32_t callerPeerId, const json& payload) {
+    vh::peer::Record peer;
+    const auto vaultId = relinkVaultForPeer(payload, callerPeerId, peer);
+    const auto r = mq::Relinks::byUid(vaultId, relinkUidField(payload, "relink_uid"));
+    if (!r || r->side != "responder" || r->peer_id != callerPeerId) throw vh::ops::NotFound("no such relink here");
+    if (mq::Relinks::setPhase(r->id, {"requested", "accepted", "proposed", "approved"}, "cancelled",
+                              "the other server cancelled it: " + relinkStr(payload, "why").substr(0, 400)))
+        relinkAudit("mirror.relink.cancel", *mq::Relinks::get(r->id), json::object(), {{"from", peer.name}},
+                    fmt::format("[mirror] linked server '{}' cancelled its relink {} of vault {}; this vault did not change",
+                                peer.name, r->relink_uid, vaultId));
+    return {{"phase", mq::Relinks::get(r->id)->phase}};
+}
+
 json serveState(const uint32_t callerPeerId, const json& payload) {
     vh::peer::Record peer;
     const auto vaultId = relinkVaultForPeer(payload, callerPeerId, peer);
     const auto mine = relinkLocal(vaultId, peer.node_id);
-    if (!mine.related && !mine.elsewhere)
+    if (!mine.related)
         throw vh::ops::NotFound("this server has no record of mirroring that vault with the asking server");
-    return mine.state;
+    // Before this server's super admin accepted the relink: that it holds the vault, and how. Nothing else.
+    bool accepted = false;
+    if (payload.is_object() && payload.contains("relink_uid")) try {
+            (void)relinkAccepted(vaultId, payload, callerPeerId);
+            accepted = true;
+        } catch (const vh::ops::Refused&) {
+        }
+    if (!accepted)
+        return {{"vault_uid", mine.state.value("vault_uid", std::string{})}, {"status", mine.state.value("status", std::string{})},
+                {"accepted", false}};
+    auto out = mine.state;
+    out["accepted"] = true;
+    return out;
 }
 
 json serveTree(const uint32_t callerPeerId, const json& payload) {
@@ -1320,7 +1980,7 @@ json serveTree(const uint32_t callerPeerId, const json& payload) {
     const auto vaultId = relinkVaultForPeer(payload, callerPeerId, peer);
     const auto mine = relinkLocal(vaultId, peer.node_id);
     if (!mine.related) throw vh::ops::NotFound("this server has no record of mirroring that vault with the asking server");
-    const auto relinkUid = relinkUidField(payload, "relink_uid");
+    const auto relinkUid = relinkAccepted(vaultId, payload, callerPeerId).relink_uid;
     const auto after = payload.value("after", uint64_t{0});
     const auto limit = std::clamp<uint64_t>(payload.value("limit", uint64_t{kTreePage}), 1, 10'000);
     const auto key = std::to_string(vaultId) + ":" + relinkUid;
@@ -1348,46 +2008,55 @@ json serveTree(const uint32_t callerPeerId, const json& payload) {
 json servePrepare(const uint32_t callerPeerId, const json& payload) {
     vh::peer::Record peer;
     const auto vaultId = relinkVaultForPeer(payload, callerPeerId, peer);
-    const auto relinkUid = relinkUidField(payload, "relink_uid");
+    auto r = std::optional<mq::Relink>(relinkAccepted(vaultId, payload, callerPeerId));
+    const auto relinkUid = r->relink_uid;
+    if (r->phase != "approved")
+        throw vh::ops::Refused("mirror_relink_not_approved", "this server's super admin has not approved an outcome for "
+                                                             "this relink: propose it and wait for the approval");
     const auto role = relinkStr(payload, "role");
     if (role != "core" && role != "mirror") throw vh::ops::Invalid("role is core or mirror");
     const auto term = payload.value("term", uint64_t{0});
     if (term < 1) throw vh::ops::Invalid("term is at least 1");
     const auto part = payload.value("part", uint64_t{0});
     const auto mode = relinkStr(payload, "mode") == "override" ? std::string("override") : std::string("plan");
-    const json by = payload.contains("by") && payload["by"].is_object() ? payload["by"] : json::object();
-    auto r = mq::Relinks::byUid(vaultId, relinkUid);
+    const auto approved = r->proposal;
+    const auto voidIt = [&](const std::string& code, const std::string& why) {
+        (void)mq::Relinks::unapprove(r->id, {"approved"}, "accepted", why);
+        relinkAudit("mirror.relink.voided", *r, json::object(), {{"from", peer.name}, {"why", why}},
+                    fmt::format("[mirror] vault {}: the approval of linked server '{}''s relink {} is void: {}", vaultId,
+                                peer.name, relinkUid, why));
+        return vh::ops::Refused(code, why);
+    };
+    // The approved outcome only: this server's part, the mode.
+    if ((role == "core") != (approved.value("core", std::string{}) == "this") || mode != approved.value("mode", std::string{}))
+        throw voidIt("mirror_relink_not_approved", "the outcome asked for is not the one approved here: ask again");
+    // Who makes this server's changes: the super admin who approved them.
+    const auto approver = r->summary.contains("approver") ? r->summary["approver"] : json::object();
+    const json by{{"node", relinkOwnNode()},
+                  {"id", approver.contains("id") && approver["id"].is_number_unsigned() ? json(approver["id"]) : json(nullptr)},
+                  {"name", approver.value("name", r->approved_by.value_or(""))}};
     if (part == 0) {
         const auto mine = relinkLocal(vaultId, peer.node_id);
         if (!mine.related) throw vh::ops::NotFound("this server has no record of mirroring that vault with the asking server");
-        // The digest the other server compared against: a change here since invalidates its plan.
+        // The digest the other server compared against, and the one approved here: a change here since voids it.
         const auto seen = payload.contains("digest") ? payload["digest"] : json::object();
+        const auto ok = approved.contains("digest") ? approved["digest"] : json::object();
         if (seen.value("digest", std::string{}) != mine.state.value("digest", std::string{}) ||
-            seen.value("entries", int64_t{0}) != mine.state.value("entries", int64_t{0}))
-            throw vh::ops::Refused("mirror_relink_stale", "the vault changed on this server since it was compared: compare "
-                                                          "again");
+            seen.value("entries", int64_t{0}) != mine.state.value("entries", int64_t{0}) ||
+            ok.value("digest", std::string{}) != mine.state.value("digest", std::string{}) ||
+            ok.value("entries", int64_t{0}) != mine.state.value("entries", int64_t{0}))
+            throw voidIt("mirror_relink_stale", "the vault changed on this server since it was compared and approved: "
+                                                "compare again");
         const auto blockers = relinkBlockers(mine.state, json{{"status", "detached"}}, json{{"match", true}});
         for (const auto& b : blockers)
             if (b.value("side", std::string{}) == "this")
                 throw vh::ops::Refused(b.value("code", std::string{}), b.value("message", std::string{}));
-        if (r && r->phase != "open") throw vh::ops::Refused("mirror_relink_running", "this relink is " + r->phase + " here");
-        mq::NewRelink n;
-        n.relink_uid = relinkUid;
-        n.vault_id = vaultId;
-        n.peer_id = callerPeerId;
-        n.side = "responder";
-        n.mode = mode;
-        n.core = role == "core" ? "this" : "theirs";
-        n.this_status = mine.state.value("status", std::string{});
-        n.by_node = by.value("node", std::string{});
-        if (by.contains("id") && by["id"].is_number_unsigned()) n.by_id = by["id"].get<uint32_t>();
-        n.by_name = by.value("name", std::string{});
-        n.summary = {{"peer", {{"id", peer.id}, {"name", peer.name}, {"node", peer.node_id}}},
-                     {"this", [&] { auto o = mine.state; o.erase("keys"); return o; }()}};
-        r = mq::Relinks::create(n);
+        mq::Relinks::clearEntries(r->id);
+        auto summary = r->summary;
+        summary["peer"] = {{"id", peer.id}, {"name", peer.name}, {"node", peer.node_id}};
+        summary["this"] = [&] { auto o = mine.state; o.erase("keys"); return o; }();
+        mq::Relinks::setSummary(r->id, summary);
     }
-    if (!r || r->side != "responder" || r->phase != "open")
-        throw vh::ops::Conflict("no relink being prepared here under that uid");
     std::vector<mq::RelinkEntry> list;
     for (const auto& e : payload.value("entries", json::array())) {
         mq::RelinkEntry x;
@@ -1411,17 +2080,36 @@ json servePrepare(const uint32_t callerPeerId, const json& payload) {
     }
     mq::Relinks::addEntries(r->id, list);
     if (payload.value("more", false)) return {{"prepared", false}, {"part", part}};
+
+    // The plan received is the plan approved: its hash, and what it does to this vault.
+    mq::Relinks::setPlan(r->id, role == "core" ? std::string("this") : std::string("theirs"), std::nullopt, true);
+    r = mq::Relinks::get(r->id);
+    const auto entries = mq::Relinks::entries(r->id);
+    std::vector<PlanRow> rows;
+    rows.reserve(entries.size());
+    for (const auto& e : entries)
+        rows.push_back({.uid = e.uid, .choice = e.choice.value_or(""), .here = relinkStateHash(e.this_state),
+                        .there = relinkStateHash(e.theirs_state)});
+    const auto there = approved.contains("their_digest") ? approved["their_digest"] : json::object();
+    const auto got = relinkPlanHash(r->core, mode, approved["digest"].value("digest", std::string{}),
+                                    there.value("digest", std::string{}), rows);
+    const auto gains = relinkGains(*r, entries);
+    if (got != approved.value("plan_hash", std::string{}) || !relinkSameGains(gains["this"], approved["this"]) ||
+        !relinkSameGains(gains["theirs"], approved["theirs"]))
+        throw voidIt("mirror_relink_not_approved", "the plan sent is not the one approved here (its entries or what it "
+                                                   "does to this vault differ): the approval is void; ask again");
     try {
         if (role == "core") relinkPrepareCore(*r, callerPeerId, term, by);
         else relinkPrepareMirror(*r, callerPeerId, term, by);
     } catch (const vh::ops::Error&) {
-        (void)mq::Relinks::setPhase(r->id, {"open"}, "failed", "the preparation was refused");
+        (void)mq::Relinks::setPhase(r->id, {"approved"}, "failed", "the preparation was refused");
         throw;
     }
     r = mq::Relinks::get(r->id);
-    relinkAudit("mirror.relink", *r, by, {{"core", role == "core" ? "this" : "theirs"}},
-                fmt::format("[mirror] linked server {} relinked vault {} (relink {}): this server becomes its {} in term {}",
-                            peer.id, vaultId, relinkUid, role, term));
+    relinkAudit("mirror.relink", *r, by, {{"core", role == "core" ? "this" : "theirs"}, {"from", peer.name}},
+                fmt::format("[mirror] linked server {} relinked vault {} (relink {}, approved here by {}): this server "
+                            "becomes its {} in term {}",
+                            peer.id, vaultId, relinkUid, r->approved_by.value_or("a super admin"), role, term));
     return {{"prepared", true}, {"part", part}, {"phase", r->phase}};
 }
 
@@ -1430,6 +2118,8 @@ json serveGo(const uint32_t callerPeerId, const json& payload) {
     const auto vaultId = relinkVaultForPeer(payload, callerPeerId, peer);
     const auto r = mq::Relinks::byUid(vaultId, relinkUidField(payload, "relink_uid"));
     if (!r || r->peer_id != callerPeerId) throw vh::ops::NotFound("no such relink here");
+    if (r->side != "responder" || !r->approved_at)
+        throw vh::ops::Refused("mirror_relink_not_accepted", "this server's super admin has not approved that relink");
     relinkGo(*r);
     return {{"phase", mq::Relinks::get(r->id)->phase}};
 }

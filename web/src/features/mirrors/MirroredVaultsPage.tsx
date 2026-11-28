@@ -18,14 +18,16 @@ import { MIRROR_COPY as C } from '@/features/mirrors/copy'
 import { MIRROR_READS, cancelTarget, peerName, type MirroredVault } from '@/features/mirrors/model'
 import { MirrorTable } from '@/features/mirrors/MirrorTable'
 import { OffersPanel } from '@/features/mirrors/OffersPanel'
-import { useHeldCounts, useMirrorList, useOffers, usePeers } from '@/features/mirrors/queries'
+import { useHeldCounts, useMirrorList, useOffers, usePeers, useRelinkRequests } from '@/features/mirrors/queries'
 
 // Dialogs load only when someone opens one.
 const AddMirrorDialog = dynamic(() => import('@/features/mirrors/AddMirrorDialog'), { ssr: false })
 const LinkSettingsDialog = dynamic(() => import('@/features/mirrors/LinkSettingsDialog'), { ssr: false })
+// Shown only while a linked server's relink waits for an answer here.
+const RelinkRequestsPanel = dynamic(() => import('@/features/mirrors/RelinkRequestsPanel'), { ssr: false })
 
-// /linked-servers/mirrors (design/peers/mirror.md): every vault mirrored with a linked server, the offers waiting
-// here, starting a mirror and each link's settings. Super admins (PeersGate); the same operations as `vh mirror`, and the daemon decides everything.
+// /linked-servers/mirrors (design/peers/mirror.md): every vault mirrored with a linked server, the offers and the
+// relink requests waiting here, starting a mirror and each link's settings. Super admins (PeersGate); the same operations as `vh mirror`, and the daemon decides everything.
 export const MirroredVaultsPage = () => (
   <PeersGate denied={C.denied}>
     <MirroredVaults />
@@ -47,6 +49,7 @@ export const MirrorHeader = ({ actions }: { actions?: React.ReactNode }) => (
 const MirroredVaults = () => {
   const list = useMirrorList()
   const offers = useOffers()
+  const relinks = useRelinkRequests()
   const { byId, linked } = usePeers()
   const held = useHeldCounts()
   const [adding, setAdding] = useState(false)
@@ -83,6 +86,7 @@ const MirroredVaults = () => {
         }
       />
       <OffersPanel offers={offers.data?.offers ?? []} peers={byId} />
+      {relinks.data?.requests.length ? <RelinkRequestsPanel requests={relinks.data.requests} /> : null}
       <PeerError error={error} fallback={C.cancelFailed} className="mb-3" />
       <QueryState query={list}>
         {data => (

@@ -241,6 +241,25 @@ json Mirrors::relinkApply(const json& payload, const std::shared_ptr<Session>& s
                                 payload.at("confirm").get<std::string>(), keep, peer);
 }
 
+json Mirrors::relinkPending(const json&, const std::shared_ptr<Session>& session) {
+    return {{"requests", mirrors::relinkPending(mirrorActorOf(session))}};
+}
+
+json Mirrors::relinkAccept(const json& payload, const std::shared_ptr<Session>& session) {
+    return mirrors::relinkAccept(mirrorActorOf(session), mirrorRequiredId(payload, "vault_id"));
+}
+
+json Mirrors::relinkDecline(const json& payload, const std::shared_ptr<Session>& session) {
+    return mirrors::relinkDecline(mirrorActorOf(session), mirrorRequiredId(payload, "vault_id"));
+}
+
+json Mirrors::relinkApprove(const json& payload, const std::shared_ptr<Session>& session) {
+    if (!payload.is_object() || !payload.contains("confirm") || !payload.at("confirm").is_string())
+        throw ops::Invalid("confirm is the vault's name, typed");
+    return mirrors::relinkApprove(mirrorActorOf(session), mirrorRequiredId(payload, "vault_id"),
+                                  payload.at("confirm").get<std::string>());
+}
+
 json Mirrors::offer(const json& payload, const std::shared_ptr<Session>& session) {
     return vh::mirror::start::offerReceived(mirrorPeerOf(session), payload);
 }

@@ -177,6 +177,15 @@ void requireTakeover(const Actor& actor, const std::string& what);
 // keep empty: the saved plan; this | theirs: compare again and keep that server's tree everywhere (peer required).
 [[nodiscard]] nlohmann::json relinkApply(const Actor& actor, uint32_t vaultId, const std::string& confirm,
                                          const std::string& keep, const std::string& peer);
+// The other side of the handshake (mirror::relink): a linked server's request to relink a vault of this server, and the
+// outcome it proposes. The same people only (super admins of this server, never an agent, a scoped or relayed device, a
+// linked server); there is no "accept every relink" setting. Accepting lets the other server compare the two trees
+// (names, places, hashes; never contents); approving (the vault's name typed, the keys step-up in the console, target
+// mirror.relink:<vault>) lets it carry the outcome out. Audited on both servers.
+[[nodiscard]] nlohmann::json relinkPending(const Actor& actor);
+[[nodiscard]] nlohmann::json relinkAccept(const Actor& actor, uint32_t vaultId);
+[[nodiscard]] nlohmann::json relinkDecline(const Actor& actor, uint32_t vaultId);
+[[nodiscard]] nlohmann::json relinkApprove(const Actor& actor, uint32_t vaultId, const std::string& confirm);
 
 [[nodiscard]] nlohmann::json toJson(const Offer& offer);
 [[nodiscard]] nlohmann::json toJson(const Mirrored& m);

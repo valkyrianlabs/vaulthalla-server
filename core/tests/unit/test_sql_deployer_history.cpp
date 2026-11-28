@@ -2758,6 +2758,21 @@ TEST_F(SqlDeployerHistoryDb, MirrorRelinkMigration171IsAdditiveAndIdempotent) {
         for (const auto* c : {"relinked_at", "relink_id"}) EXPECT_TRUE(columnExists(txn, "mirror_detached", c)) << c;
         for (const auto* t : {"mirror_relink_entry", "mirror_relink", "mirror_base", "mirror_base_mark"})
             EXPECT_EQ(txn.exec(std::string("SELECT count(*) FROM ") + t).one_field_ref().as<int>(), 0) << t;
+        // The handshake: the request's expiry, who accepted it, the outcome proposed and who approved it.
+        for (const auto* c : {"expires_at", "accepted_at", "accepted_by", "proposal", "approved_at", "approved_by"})
+            EXPECT_TRUE(columnExists(txn, "mirror_relink", c)) << c;
+        if (vaultId) {
+            // A request waits for the other server's super admin, then an outcome for its approval: one open per vault.
+            txn.exec("INSERT INTO mirror_relink (relink_uid, vault_id, peer_id, side, phase, expires_at) VALUES "
+                     "(gen_random_uuid(), $1, $2, 'responder', 'requested', CURRENT_TIMESTAMP + interval '1 day')",
+                     pqxx::params{*vaultId, peer});
+            EXPECT_ANY_THROW(txn.exec("SAVEPOINT relink_one; INSERT INTO mirror_relink (relink_uid, vault_id, peer_id, side, "
+                                      "phase) VALUES (gen_random_uuid(), " + std::to_string(*vaultId) + ", " +
+                                      std::to_string(peer) + ", 'initiator', 'proposed')"))
+                << "one open relink per vault, a request included";
+            txn.exec("ROLLBACK TO SAVEPOINT relink_one");
+            txn.exec("UPDATE mirror_relink SET phase = 'declined' WHERE peer_id = $1", pqxx::params{peer});
+        }
         if (vaultId) {
             EXPECT_EQ(txn.exec("SELECT count(*) FROM mirror_detached WHERE peer_id = $1 AND relinked_at IS NULL",
                                pqxx::params{peer}).one_field_ref().as<int>(), 1) << "the record is untouched";

@@ -7,7 +7,10 @@
 --                                   (a detach, an orphaned copy's removal, a cancel, an unlink): with the other side's,
 --                                   they say on which side an entry changed since. One per vault, replaced each time.
 --   mirror_relink                   one relink of a vault on this server: the initiator keeps the comparison and the
---                                   plan; the other server keeps its part once the plan is applied. One open per vault.
+--                                   plan; the other server (the responder) keeps the request, its super admin's answer
+--                                   and the outcome it approved, then its part once the plan is applied. One open per
+--                                   vault. Nothing of the responder's tree is served before a person there accepted
+--                                   the request, and nothing changes there before one approved the outcome.
 --   mirror_relink_entry             each drifted entry: how it differs, both sides' versions, the plan's choice and, on
 --                                   the future mirror, what bringing its version onto the core did.
 --   mirror_detached.relinked_at     a detach record a relink settled (it no longer refuses mirroring the uid).
@@ -46,11 +49,15 @@ CREATE TABLE IF NOT EXISTS mirror_relink
     peer_id        INTEGER     NOT NULL REFERENCES peer (id),
     -- initiator: a person here compared (and planned); responder: the other server's relink, applied here
     side           TEXT        NOT NULL CHECK (side IN ('initiator', 'responder')),
-    -- open (compared, the plan editable) -> prepared -> bring (the future mirror brings its chosen versions onto the
+    -- the handshake: requested (the responder's super admin has not answered) -> accepted (its tree may be served for
+    -- the comparison) -> open (the initiator compared; the plan editable) -> proposed (the outcome waits for the
+    -- responder's approval) -> approved; then prepared -> bring (the future mirror brings its chosen versions onto the
     -- core) -> copying (its copy starts over from the core's tree) -> done | failed | stale (a tree changed under the
-    -- plan) | cancelled
-    phase          TEXT        NOT NULL CHECK (phase IN ('open', 'prepared', 'bring', 'copying', 'done', 'failed',
-                                                        'stale', 'cancelled')),
+    -- plan) | cancelled | declined (the responder's super admin said no) | expired (unanswered, or not carried out, in
+    -- a day)
+    phase          TEXT        NOT NULL CHECK (phase IN ('requested', 'accepted', 'open', 'proposed', 'approved',
+                                                        'prepared', 'bring', 'copying', 'done', 'failed', 'stale',
+                                                        'cancelled', 'declined', 'expired')),
     mode           TEXT        NOT NULL DEFAULT 'plan' CHECK (mode IN ('plan', 'override')),
     -- the plan: which server becomes the core (seen from this server), and the choice for entries left unset
     core           TEXT        NOT NULL DEFAULT 'this' CHECK (core IN ('this', 'theirs')),
@@ -70,6 +77,15 @@ CREATE TABLE IF NOT EXISTS mirror_relink
     by_id          INTEGER,
     by_name        TEXT        CHECK (by_name IS NULL OR length(by_name) <= 255),
     error          TEXT        CHECK (error IS NULL OR length(error) <= 2000),
+    -- the handshake: until when the request (then the acceptance) holds; the responder's super admin who accepted it
+    -- (on the initiator: the other server's, as it said); the outcome proposed (who becomes the core, the mode, what
+    -- the responder's vault gains and loses, both digests, the plan's hash) and who approved it
+    expires_at     TIMESTAMPTZ,
+    accepted_at    TIMESTAMPTZ,
+    accepted_by    TEXT        CHECK (accepted_by IS NULL OR length(accepted_by) <= 255),
+    proposal       JSONB,
+    approved_at    TIMESTAMPTZ,
+    approved_by    TEXT        CHECK (approved_by IS NULL OR length(approved_by) <= 255),
     created_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     applied_at     TIMESTAMPTZ,
@@ -77,7 +93,7 @@ CREATE TABLE IF NOT EXISTS mirror_relink
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS mirror_relink_open_key ON mirror_relink (vault_id)
-    WHERE phase IN ('open', 'prepared', 'bring', 'copying');
+    WHERE phase IN ('requested', 'accepted', 'open', 'proposed', 'approved', 'prepared', 'bring', 'copying');
 CREATE INDEX IF NOT EXISTS mirror_relink_uid_idx ON mirror_relink (relink_uid);
 
 CREATE TABLE IF NOT EXISTS mirror_relink_entry

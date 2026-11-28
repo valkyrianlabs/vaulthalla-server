@@ -29,6 +29,10 @@ struct MirrorFollow {
     // peer.mirror.promoted: the new core tells its old core it took over (wave 5 piece B; mirror::takeover).
     static json promoted(const json& payload, const std::shared_ptr<Session>& session);
     // peer.mirror.relink.*: the other server of a relink (mirror::relink).
+    static json relinkRequest(const json& payload, const std::shared_ptr<Session>& session);
+    static json relinkAnswer(const json& payload, const std::shared_ptr<Session>& session);
+    static json relinkPropose(const json& payload, const std::shared_ptr<Session>& session);
+    static json relinkCancel(const json& payload, const std::shared_ptr<Session>& session);
     static json relinkState(const json& payload, const std::shared_ptr<Session>& session);
     static json relinkTree(const json& payload, const std::shared_ptr<Session>& session);
     static json relinkPrepare(const json& payload, const std::shared_ptr<Session>& session);

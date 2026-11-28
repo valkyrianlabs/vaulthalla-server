@@ -6,6 +6,7 @@
 #include <pqxx/pqxx>
 
 #include <algorithm>
+#include <chrono>
 #include <string>
 
 namespace vh::db::query::mirror {
@@ -27,7 +28,15 @@ constexpr auto kRelinkColumns =
     "this_status, theirs_status, encode(this_digest, 'hex') AS this_digest, this_entries, "
     "encode(theirs_digest, 'hex') AS theirs_digest, theirs_entries, summary::text AS summary, by_node, by_id, by_name, "
     "error, EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at, EXTRACT(EPOCH FROM updated_at)::BIGINT AS updated_at, "
-    "EXTRACT(EPOCH FROM applied_at)::BIGINT AS applied_at, EXTRACT(EPOCH FROM finished_at)::BIGINT AS finished_at";
+    "EXTRACT(EPOCH FROM applied_at)::BIGINT AS applied_at, EXTRACT(EPOCH FROM finished_at)::BIGINT AS finished_at, "
+    "EXTRACT(EPOCH FROM expires_at)::BIGINT AS expires_at, EXTRACT(EPOCH FROM accepted_at)::BIGINT AS accepted_at, "
+    "accepted_by, proposal::text AS proposal, EXTRACT(EPOCH FROM approved_at)::BIGINT AS approved_at, approved_by";
+
+constexpr auto kOpenPhases = "('requested', 'accepted', 'open', 'proposed', 'approved', 'prepared', 'bring', 'copying')";
+
+std::optional<std::time_t> timeOr(const pqxx::field_ref f) {
+    return f.is_null() ? std::nullopt : std::optional<std::time_t>(static_cast<std::time_t>(f.as<int64_t>()));
+}
 
 Relink relinkFrom(const pqxx::row_ref row) {
     Relink r;
@@ -56,6 +65,15 @@ Relink relinkFrom(const pqxx::row_ref row) {
     r.updated_at = static_cast<std::time_t>(row["updated_at"].as<int64_t>());
     if (!row["applied_at"].is_null()) r.applied_at = static_cast<std::time_t>(row["applied_at"].as<int64_t>());
     if (!row["finished_at"].is_null()) r.finished_at = static_cast<std::time_t>(row["finished_at"].as<int64_t>());
+    r.expires_at = timeOr(row["expires_at"]);
+    r.accepted_at = timeOr(row["accepted_at"]);
+    r.approved_at = timeOr(row["approved_at"]);
+    r.accepted_by = textOr(row["accepted_by"]);
+    r.approved_by = textOr(row["approved_by"]);
+    if (!row["proposal"].is_null()) {
+        r.proposal = nlohmann::json::parse(row["proposal"].as<std::string>(), nullptr, false);
+        if (r.proposal.is_discarded()) r.proposal = nullptr;
+    }
     return r;
 }
 
@@ -335,11 +353,10 @@ std::vector<RelinkKey> Relinks::keys(const uint32_t vaultId) {
 Relink Relinks::create(const NewRelink& in) {
     using namespace relink_db_detail;
     return Transactions::exec("mirror::Relinks::create", [&](pqxx::work& txn) {
-        // One open relink per vault: an open plan (nothing applied yet) is replaced; one being applied is not.
-        const auto open = relinkOne(txn, "WHERE vault_id = $1 AND phase IN ('open', 'prepared', 'bring', 'copying') "
-                                         "FOR UPDATE",
+        // One open relink per vault: one asked or compared (nothing applied yet) is replaced; one being applied is not.
+        const auto open = relinkOne(txn, std::string("WHERE vault_id = $1 AND phase IN ") + kOpenPhases + " FOR UPDATE",
                                     pqxx::params{in.vault_id});
-        if (open && open->phase != "open")
+        if (open && !open->handshaking())
             throw ops::Refused("mirror_relink_running", "a relink of this vault is being applied (" + open->phase + ")");
         if (open)
             txn.exec("UPDATE mirror_relink SET phase = 'cancelled', error = 'replaced by a new comparison', "
@@ -353,15 +370,20 @@ Relink Relinks::create(const NewRelink& in) {
         };
         const auto id = txn.exec("INSERT INTO mirror_relink (relink_uid, vault_id, peer_id, side, phase, mode, core, "
                                  "  default_choice, this_status, theirs_status, this_digest, this_entries, theirs_digest, "
-                                 "  theirs_entries, summary, by_node, by_id, by_name) "
+                                 "  theirs_entries, summary, by_node, by_id, by_name, expires_at, accepted_at, accepted_by) "
                                  "VALUES (COALESCE(NULLIF($1, '')::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, decode($11, 'hex'), $12, "
-                                 "  decode($13, 'hex'), $14, $15::jsonb, $16, $17, $18) RETURNING id",
+                                 "  decode($13, 'hex'), $14, $15::jsonb, $16, $17, $18, to_timestamp($19), to_timestamp($20), "
+                                 "  $21) RETURNING id",
                                  pqxx::params{in.relink_uid, in.vault_id, in.peer_id, in.side, in.phase, in.mode, in.core,
                                               in.default_choice, in.this_status, in.theirs_status, hexOf(in.this_digest),
                                               entriesOf(in.this_digest), hexOf(in.theirs_digest),
                                               entriesOf(in.theirs_digest), in.summary.dump(), in.by_node, in.by_id,
                                               in.by_name ? std::optional<std::string>(in.by_name->substr(0, 255))
-                                                         : std::nullopt})
+                                                         : std::nullopt,
+                                              in.expires_at ? std::optional<int64_t>(*in.expires_at) : std::nullopt,
+                                              in.accepted_at ? std::optional<int64_t>(*in.accepted_at) : std::nullopt,
+                                              in.accepted_by ? std::optional<std::string>(in.accepted_by->substr(0, 255))
+                                                             : std::nullopt})
                             .one_field()
                             .as<int64_t>();
         return *relinkOne(txn, "WHERE id = $1", pqxx::params{id});
@@ -383,8 +405,8 @@ std::optional<Relink> Relinks::byUid(const uint32_t vaultId, const std::string& 
 
 std::optional<Relink> Relinks::openOf(const uint32_t vaultId) {
     return Transactions::exec("mirror::Relinks::openOf", [&](pqxx::work& txn) {
-        return relink_db_detail::relinkOne(txn, "WHERE vault_id = $1 AND phase IN ('open', 'prepared', 'bring', 'copying') "
-                                                "ORDER BY id DESC LIMIT 1",
+        return relink_db_detail::relinkOne(txn, std::string("WHERE vault_id = $1 AND phase IN ") +
+                                                    relink_db_detail::kOpenPhases + " ORDER BY id DESC LIMIT 1",
                                            pqxx::params{vaultId});
     });
 }
@@ -409,13 +431,96 @@ std::vector<Relink> Relinks::inPhase(const std::string& phase) {
 bool Relinks::setPhase(const uint64_t id, const std::vector<std::string>& from, const std::string& to,
                        const std::optional<std::string>& error) {
     return Transactions::exec("mirror::Relinks::setPhase", [&](pqxx::work& txn) {
-        const bool finished = to == "done" || to == "failed" || to == "stale" || to == "cancelled";
+        const bool finished = to == "done" || to == "failed" || to == "stale" || to == "cancelled" || to == "declined" ||
+                              to == "expired";
         return txn.exec("UPDATE mirror_relink SET phase = $2, error = COALESCE($4, error), updated_at = CURRENT_TIMESTAMP, "
                         "  finished_at = CASE WHEN $5 THEN CURRENT_TIMESTAMP ELSE finished_at END "
                         "WHERE id = $1 AND phase IN (SELECT jsonb_array_elements_text($3::jsonb))",
                         pqxx::params{static_cast<int64_t>(id), to, nlohmann::json(from).dump(),
                                      error ? std::optional<std::string>(error->substr(0, 2000)) : std::nullopt, finished})
                    .affected_rows() > 0;
+    });
+}
+
+bool Relinks::accept(const uint64_t id, const std::vector<std::string>& from, const std::string& by,
+                     const std::chrono::seconds holds) {
+    return Transactions::exec("mirror::Relinks::accept", [&](pqxx::work& txn) {
+        return txn.exec("UPDATE mirror_relink SET phase = 'accepted', accepted_at = CURRENT_TIMESTAMP, accepted_by = $3, "
+                        "  expires_at = CURRENT_TIMESTAMP + make_interval(secs => $4), updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = $1 AND phase IN (SELECT jsonb_array_elements_text($2::jsonb))",
+                        pqxx::params{static_cast<int64_t>(id), nlohmann::json(from).dump(), by.substr(0, 255),
+                                     static_cast<double>(holds.count())})
+                   .affected_rows() > 0;
+    });
+}
+
+bool Relinks::propose(const uint64_t id, const std::vector<std::string>& from, const nlohmann::json& proposal) {
+    return Transactions::exec("mirror::Relinks::propose", [&](pqxx::work& txn) {
+        return txn.exec("UPDATE mirror_relink SET phase = 'proposed', proposal = $3::jsonb, approved_at = NULL, "
+                        "  approved_by = NULL, error = NULL, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = $1 AND phase IN (SELECT jsonb_array_elements_text($2::jsonb))",
+                        pqxx::params{static_cast<int64_t>(id), nlohmann::json(from).dump(), proposal.dump()})
+                   .affected_rows() > 0;
+    });
+}
+
+bool Relinks::approve(const uint64_t id, const std::string& by, const std::string& planHash) {
+    return Transactions::exec("mirror::Relinks::approve", [&](pqxx::work& txn) {
+        return txn.exec("UPDATE mirror_relink SET phase = 'approved', approved_at = CURRENT_TIMESTAMP, approved_by = $2, "
+                        "  updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = $1 AND phase = 'proposed' AND proposal ->> 'plan_hash' = $3",
+                        pqxx::params{static_cast<int64_t>(id), by.substr(0, 255), planHash})
+                   .affected_rows() > 0;
+    });
+}
+
+bool Relinks::unapprove(const uint64_t id, const std::vector<std::string>& from, const std::string& to,
+                        const std::string& why) {
+    return Transactions::exec("mirror::Relinks::unapprove", [&](pqxx::work& txn) {
+        return txn.exec("UPDATE mirror_relink SET phase = $3, proposal = NULL, approved_at = NULL, approved_by = NULL, "
+                        "  error = $4, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE id = $1 AND phase IN (SELECT jsonb_array_elements_text($2::jsonb))",
+                        pqxx::params{static_cast<int64_t>(id), nlohmann::json(from).dump(), to, why.substr(0, 2000)})
+                   .affected_rows() > 0;
+    });
+}
+
+void Relinks::setExpiry(const uint64_t id, const std::time_t at) {
+    Transactions::exec("mirror::Relinks::setExpiry", [&](pqxx::work& txn) {
+        txn.exec("UPDATE mirror_relink SET expires_at = to_timestamp($2), updated_at = CURRENT_TIMESTAMP WHERE id = $1",
+                 pqxx::params{static_cast<int64_t>(id), static_cast<int64_t>(at)});
+    });
+}
+
+std::vector<Relink> Relinks::expire() {
+    return Transactions::exec("mirror::Relinks::expire", [&](pqxx::work& txn) {
+        std::vector<Relink> out;
+        for (const auto row : txn.exec(std::string("UPDATE mirror_relink SET phase = 'expired', updated_at = CURRENT_TIMESTAMP, "
+                                                   "  finished_at = CURRENT_TIMESTAMP, error = CASE phase WHEN 'requested' "
+                                                   "  THEN 'the request was not answered in time' ELSE 'the relink was not "
+                                                   "  carried out in time: ask again' END "
+                                                   "WHERE phase IN ('requested', 'accepted', 'open', 'proposed', 'approved') "
+                                                   "  AND expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP "
+                                                   "RETURNING ") + relink_db_detail::kRelinkColumns))
+            out.push_back(relink_db_detail::relinkFrom(row));
+        return out;
+    });
+}
+
+std::vector<Relink> Relinks::requests() {
+    return Transactions::exec("mirror::Relinks::requests", [&](pqxx::work& txn) {
+        std::vector<Relink> out;
+        for (const auto row : txn.exec(std::string("SELECT ") + relink_db_detail::kRelinkColumns +
+                                       " FROM mirror_relink WHERE side = 'responder' "
+                                       "  AND phase IN ('requested', 'accepted', 'proposed', 'approved') ORDER BY id DESC"))
+            out.push_back(relink_db_detail::relinkFrom(row));
+        return out;
+    });
+}
+
+void Relinks::clearEntries(const uint64_t id) {
+    Transactions::exec("mirror::Relinks::clearEntries", [&](pqxx::work& txn) {
+        txn.exec("DELETE FROM mirror_relink_entry WHERE relink_id = $1", pqxx::params{static_cast<int64_t>(id)});
     });
 }
 
