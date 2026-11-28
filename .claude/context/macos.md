@@ -75,7 +75,7 @@ Provider extension that talks to the daemon over the mTLS device listener under 
 - Health / `vh status` / console: `mount: disabled -> disabled — the server never mounts on this platform; Finder
   access is provided by Vaulthalla Desktop` (backend `none`, isolation `not_applicable`); health is not degraded by
   it. The console's Runtime page shows the same note.
-- `vh fs ls|get|put` stays the CLI file path on macOS (still "don't grow it"; see architecture.md).
+- `vh fs ls|get|put` (and `mkdir|mv|rm`, over `ops::fs`) stays the CLI file path on macOS (still "don't grow it"; see architecture.md).
 
 ## System service (launchd, #216/#202)
 

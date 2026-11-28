@@ -181,9 +181,11 @@ shipped. The client waits at most `VAULTHALLA_CLI_TIMEOUT` (default 10s) for the
 75 (not responding), 77 (not in the `vaulthalla` group), 76 (reply without exit status). `vh status` exits 0/1/2 for
 healthy/degraded/critical and includes a live `SELECT 1` DB probe.
 
-**File transfer (`vh fs ls|get|put`, #229).** The CLI file path on hosts without a mount (macOS: the server never
+**File transfer (`vh fs ls|get|put`, #229; `vh fs mkdir|mv|rm` call `ops::fs`).** The CLI file path on hosts without a mount (macOS: the server never
 mounts there, and Finder access is Vaulthalla Desktop's File Provider, valkyrianlabs/vaulthalla-desktop#1; #262). No macOS FUSE
-identity adapter is coming, so nothing retires it, but don't grow it into a second file API. Bytes ride the same length-prefixed JSON frames, never a second channel
+identity adapter is coming, so nothing retires it, but don't grow it into a second file API: `mkdir`, `mv` (rename within
+a folder, move into another) and `rm` (`--recursive` for a folder that isn't empty) are thin adapters over `ops::fs`, the
+console's own operations, with their refusals mapped to the transfer exit codes. Bytes ride the same length-prefixed JSON frames, never a second channel
 (`protocols/shell/Transfer.hpp`, header-only and shared with the client): the request carries `"transfer": {"v":1}`
 (`put_size` for put), the daemon answers `transfer`/`transfer-ready`, then `data` frames (`seq`, base64 of at most
 256 KiB) and `transfer-end`/`transfer-abort`, then the usual `result`. Limits are checked before allocation: 512 KiB
@@ -2140,8 +2142,8 @@ the `operations` row (move, rename, copy only, as before), the audit event (`fs.
 id; `fs.commit` for `commitSealed`) and the early sync pass. Refusals: `Denied`, `NotFound`, `Conflict` (a taken
 name), `Invalid` (into itself), and `ops::fs::ContentConflict` (a `Conflict`: the base generation is gone). The vault's RBAC
 refuses an action on a missing entry, so a missing source (or a replacement whose file is gone) is `Denied` for any
-account the check applies to, and NotFound/ContentConflict only for one it passes (the super admin). Only the ws
-`fs.*` handlers (`handler/fs/Storage.cpp`, `Upload.cpp`) call it; they keep parsing, envelopes and upload-session
+account the check applies to, and NotFound/ContentConflict only for one it passes (the super admin). The ws
+`fs.*` handlers (`handler/fs/Storage.cpp`, `Upload.cpp`) and `vh fs mkdir|mv|rm` call it; they keep parsing, envelopes and upload-session
 bookkeeping. The HTTP lanes, text save, `vh fs put`, shares, the S3 gateway and FUSE keep their own paths to
 `Filesystem` until each is lifted. The only space check on these ops is the one `Filesystem::copy` makes (-ENOSPC);
 `commitSealed` checks none (the HTTP lanes check when an upload begins). Inside `vh::ops`, `fs::` now names this

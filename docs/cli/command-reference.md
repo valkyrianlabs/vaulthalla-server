@@ -306,6 +306,9 @@ vh sync resolve --vault <vault> --all --keep-local | --keep-remote [--yes]
 vh fs ls <vault> <path> [--owner <user>]
 vh fs get <vault> <path> [-o <file>|-] [--owner <user>]
 vh fs put <vault> <local-file|-> <path> [--overwrite] [--owner <user>]
+vh fs mkdir <vault> <path> [--owner <user>]
+vh fs mv <vault> <from> <to> [--owner <user>]
+vh fs rm <vault> <path> [--recursive] [--owner <user>]
 ```
 
 :::callout{theme="info" title="Where it fits"}
@@ -318,7 +321,9 @@ Reads and writes vault files without a mount, through the control socket. `vh` i
 
 `get -o <file>` writes to a temporary file next to `<file>` and replaces `<file>` only when every byte arrived and the stored file passed its integrity check; anything else leaves `<file>` as it was. Without `-o`, the bytes go to standard output, and `vh` refuses to write them to a terminal unless you pass `-o -`. A `put` stores nothing unless the whole file arrives, and a replacement fails if the file changed while uploading. Removing someone's access stops their running transfer.
 
-Exit status: `0` done; `64` invalid arguments; `65` a damaged or incomplete transfer; `66` no such file (local or, where you can read, in the vault); `73` the vault path exists (no `--overwrite`) or the local output can't be written; `74` reading or writing a local file failed; `75` too many transfers in progress; `77` permission denied.
+`mkdir`, `mv` and `rm` do what the web console's folder, move, rename and delete actions do, with the same permissions (Touch for a new folder; Rename within a folder, Move into another; Delete) and the same audit events. `rm` moves a file to the vault's trash, from where it can be restored; a folder is removed with its files going to the trash, and one that isn't empty needs `--recursive`. `mkdir` creates one folder in an existing one, and `mv` never replaces an entry at its destination. On a copy of another server's vault that is read-only here, all three exit `69`.
+
+Exit status: `0` done; `64` invalid arguments; `65` a damaged or incomplete transfer; `66` no such file (local or, where you can read, in the vault); `1` (`rm`) a folder that isn't empty without `--recursive`; `69` the vault is read-only here; `73` the vault path exists (no `--overwrite`; for `mkdir` and `mv`, the path or destination) or the local output can't be written; `74` reading or writing a local file failed; `75` too many transfers in progress; `77` permission denied.
 
 ## Vault Keys
 

@@ -22,6 +22,7 @@
 #include "log/Redact.hpp"
 #include "mirror/access/Access.hpp"
 #include "ops/Error.hpp"
+#include "ops/Fs.hpp"
 #include "rbac/fs/Visibility.hpp"
 #include "rbac/permission/vault/Filesystem.hpp"
 #include "runtime/Deps.hpp"
@@ -44,6 +45,8 @@
 #include <cstring>
 #include <ctime>
 #include <filesystem>
+#include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -455,12 +458,133 @@ CommandResult handlePut(const CommandCall& call) {
     return {0, "stored " + humanSize(size) + " at " + vaultPath + "\n", ""};
 }
 
+// ------------------------------------------------------------------------------------------------ rm, mkdir, mv ----
+
+// These go through the operation layer the console's fs.* commands use (ops::fs): the same permission check, mirror
+// gate, pending change on a Live mirror, audit event and early sync pass. Its refusals become the exit codes above.
+CommandResult opsFailure(const std::string& prefix) {
+    try {
+        throw;
+    } catch (const ::vh::ops::ReadOnly& e) {
+        return readOnlyFailure(prefix, e);
+    } catch (const ::vh::ops::Denied&) {
+        return fail(tx::exitcode::kNoPerm, prefix, "permission denied");
+    } catch (const ::vh::ops::NotFound&) {
+        return fail(tx::exitcode::kNoInput, prefix, "no such file or directory");
+    } catch (const ::vh::ops::Conflict& e) {
+        return fail(tx::exitcode::kCantCreat, prefix, e.what());
+    } catch (const ::vh::ops::Invalid& e) {
+        return fail(tx::exitcode::kUsage, prefix, e.what());
+    } catch (const ::vh::ops::Error& e) {
+        return fail(1, prefix, e.what());
+    }
+}
+
+// A vault path from the command line, normalized as the other lanes do; nullopt (and `error`) for one outside the vault
+// or, unless `rootOk`, the vault's top folder.
+std::optional<std::string> vaultPathArg(const std::string& raw, const std::string& prefix, CommandResult& error) {
+    if (!share::Scope::contains("/", raw)) {
+        error = fail(tx::exitcode::kUsage, prefix, "the path escapes the vault");
+        return std::nullopt;
+    }
+    auto path = share::Scope::normalizeVaultPath(raw);
+    if (path == "/") {
+        error = fail(tx::exitcode::kUsage, prefix, "the vault's top folder can't be " +
+                                                       std::string(prefix == "fs mkdir" ? "created" : "changed"));
+        return std::nullopt;
+    }
+    return path;
+}
+
+CommandResult handleRm(const CommandCall& call) {
+    const std::string prefix = "fs rm";
+    const auto usage = resolveUsage({"fs", "rm"});
+    if (call.positionals.size() != usage->positionals.size())
+        return fail(tx::exitcode::kUsage, prefix, "usage: vh fs rm <vault> <path> [--recursive]");
+    std::string error;
+    const auto ref = vaultFor(call, usage, prefix, error);
+    if (!ref) return {tx::exitcode::kNoInput, "", error};
+    CommandResult refused;
+    const auto path = vaultPathArg(call.positionals.at(1), prefix, refused);
+    if (!path) return refused;
+    const auto vaultId = ref->vault->id;
+
+    std::shared_ptr<fs::model::Entry> entry;
+    try {
+        // Delete on the path first, telling a missing entry from a refusal without an existence oracle (ops::fs::check).
+        switch (::vh::ops::fs::check(call.user, vaultId, *path, FsAction::Delete)) {
+            case ::vh::ops::fs::Access::Allowed: break;
+            case ::vh::ops::fs::Access::Denied: return fail(tx::exitcode::kNoPerm, prefix, "permission denied");
+            case ::vh::ops::fs::Access::Missing: return fail(tx::exitcode::kNoInput, prefix, "no such file or directory");
+        }
+        entry = runtime::Deps::get().fsCache->getEntry(ref->engine->vaultPathToFusePath(*path));
+        if (!entry) return fail(tx::exitcode::kNoInput, prefix, "no such file or directory");
+        // Like rm(1): a folder that holds anything goes only when asked for, with everything in it.
+        if (entry->isDirectory() && !hasFlag(call, std::vector<std::string>{"recursive", "r"}) &&
+            !runtime::Deps::get().fsCache->listDir(entry->id, false).empty())
+            return fail(1, prefix, *path + " is a folder that isn't empty; --recursive removes it and everything in it");
+        ::vh::ops::fs::remove(call.user, vaultId, *path);
+    } catch (...) {
+        return opsFailure(prefix);
+    }
+    const auto what = entry->isDirectory() ? "removed folder " + *path + " (its files are in the vault's trash)\n"
+                    : entry->isSymlink()   ? "removed link " + *path + "\n"
+                                           : "moved " + *path + " to the vault's trash\n";
+    return {0, what, ""};
+}
+
+CommandResult handleMkdir(const CommandCall& call) {
+    const std::string prefix = "fs mkdir";
+    const auto usage = resolveUsage({"fs", "mkdir"});
+    if (call.positionals.size() != usage->positionals.size())
+        return fail(tx::exitcode::kUsage, prefix, "usage: vh fs mkdir <vault> <path>");
+    std::string error;
+    const auto ref = vaultFor(call, usage, prefix, error);
+    if (!ref) return {tx::exitcode::kNoInput, "", error};
+    CommandResult refused;
+    const auto path = vaultPathArg(call.positionals.at(1), prefix, refused);
+    if (!path) return refused;
+    try {
+        ::vh::ops::fs::mkdir(call.user, ref->vault->id, *path);
+    } catch (...) {
+        return opsFailure(prefix);
+    }
+    return {0, "created folder " + *path + "\n", ""};
+}
+
+CommandResult handleMv(const CommandCall& call) {
+    const std::string prefix = "fs mv";
+    const auto usage = resolveUsage({"fs", "mv"});
+    if (call.positionals.size() != usage->positionals.size())
+        return fail(tx::exitcode::kUsage, prefix, "usage: vh fs mv <vault> <from> <to>");
+    std::string error;
+    const auto ref = vaultFor(call, usage, prefix, error);
+    if (!ref) return {tx::exitcode::kNoInput, "", error};
+    CommandResult refused;
+    const auto from = vaultPathArg(call.positionals.at(1), prefix, refused);
+    if (!from) return refused;
+    const auto to = vaultPathArg(call.positionals.at(2), prefix, refused);
+    if (!to) return refused;
+    try {
+        // Within one folder it is a rename (the Rename permission), into another a move, as in the console.
+        const std::filesystem::path f(*from), t(*to);
+        if (f.parent_path() == t.parent_path()) ::vh::ops::fs::rename(call.user, ref->vault->id, f, t);
+        else ::vh::ops::fs::move(call.user, ref->vault->id, f, t);
+    } catch (...) {
+        return opsFailure(prefix);
+    }
+    return {0, "moved " + *from + " to " + *to + "\n", ""};
+}
+
 CommandResult handleFs(const CommandCall& call) {
     if (call.positionals.empty() || hasKey(call, "help") || hasKey(call, "h")) return usage(call.constructFullArgs());
     const auto [sub, subcall] = descend(call);
     if (isCommandMatch({"fs", "ls"}, sub)) return handleLs(subcall);
     if (isCommandMatch({"fs", "get"}, sub)) return handleGet(subcall);
     if (isCommandMatch({"fs", "put"}, sub)) return handlePut(subcall);
+    if (isCommandMatch({"fs", "rm"}, sub)) return handleRm(subcall);
+    if (isCommandMatch({"fs", "mkdir"}, sub)) return handleMkdir(subcall);
+    if (isCommandMatch({"fs", "mv"}, sub)) return handleMv(subcall);
     return invalid(call.constructFullArgs(), "Unknown fs subcommand: '" + std::string(sub) + "'");
 }
 
