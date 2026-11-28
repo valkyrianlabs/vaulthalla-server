@@ -1,5 +1,91 @@
 # Vaulthalla release notes
 
+<!-- vl-release:entry version=1.28.0 -->
+## 1.28.0 — Reconnect a mirror, and server health findings
+
+_Released 2026-11-28_
+
+### Command line
+
+- **`--help` never runs a command.** `--help` (or `-h`) anywhere on a `vh` command line prints that command's usage
+  and does nothing else. Before, `vh peer pair --help` opened a real pairing window and `vh peer link --help`
+  complained about its arguments.
+- **`vh fs rm`, `vh fs mkdir` and `vh fs mv`.** Delete, create folders and move or rename from the command line, with
+  the web console's permissions and audit events. `vh fs rm <vault> <path>` moves a file to the vault's trash; a
+  folder that isn't empty needs `--recursive`.
+- **Folder times on a mirrored vault.** A server holding a copy of another server's vault now shows the core's
+  modification time for its folders (in `vh fs ls` and the console), not the time the copy created them.
+- **Clearer refusals for linked servers and mirrors.** `vh peer ...` and `vh mirror ...` refused to someone else now
+  say who may run them and who you are signed in as. Run with `sudo`, they explain that root, the host's system
+  account, is not a super admin for these commands: run `vh` without `sudo`, as your own account.
+
+### Acknowledge and silence findings in the web console
+
+The Health Overview's "Needs attention" list now shows what has been said about each finding: not acknowledged,
+acknowledged by whom and when, or silenced by whom and until when, with the note if one was left. Accounts that may
+manage findings (`admin.stats.manage`) get **Acknowledge**, **Silence** (1 hour, 24 hours, 7 days or until turned
+back on, with an optional note of up to 500 characters) and a link to the page that helps, next to each finding.
+A new **Silenced** list shows every silence, including those whose finding is not active now, with **Turn back on**.
+
+The health dot in the top bar now counts only what nobody has acknowledged or silenced, and says "Nothing new" when
+everything has been seen. The Health pages keep the true status and counts: a silenced error is still an error there.
+
+The console now follows health changes by push instead of polling the health status, so the dot and the lists update
+within seconds of a change or of another operator acknowledging or silencing a finding.
+
+### Health findings you can acknowledge and silence
+
+A warning or error on the Health pages now leads somewhere. Each finding has a stable class (the code it has always
+carried, such as `system.fuse.error_rate_high`), and an operator can say two things about it:
+
+- **Acknowledge** ("I have seen this"): marks the finding that is active now. The mark ends by itself when the
+  finding clears or gets worse.
+- **Silence** ("stop telling me about this"): silences a class of finding, active or not, for a time or until it is
+  turned back on. A silence does not cover the finding getting worse.
+
+The server keeps this state, so every operator, the CLI and every paired Mac see the same thing. Nothing is hidden
+or made to look healthy: a silenced error is still an error on the Health pages and in `overall_status`, and it is
+listed as silenced with who did it and until when. What changes is the new "unattended" counts
+(`unattended_error_count`, `unattended_warning_count`): the findings that still ask for a person.
+
+- `vh health` lists the findings and their state (exit status 0 when nothing is unattended, 1 for a warning, 2 for
+  an error). `vh health ack <class>`, `vh health silence <class> [--for 24h]` and `vh health unsilence <class>`
+  change it.
+- **A new permission, `admin.stats.manage`,** is needed to acknowledge, silence and turn back on. Seeing the
+  dashboard (`admin.stats.view`) is not enough. The built-in `super_admin` role has it; add it to any other role
+  that should (`--allow-stats-manage`).
+- Every change is recorded in the audit trail (`health.finding.acknowledge`, `.silence`, `.unsilence`).
+- AI agents can read findings and cannot change their state, on any path.
+- Each finding also names what can be done about it: today, the page to open.
+- **Paired Macs and other clients hear about changes by push.** A client that subscribes (`health.subscribe`) is told
+  within 15 seconds when a finding appears, clears or changes, and at once when someone acknowledges, silences or
+  turns one back on. Nothing about the findings is sent to an account that can no longer see them.
+
+### Linked servers and mirrored vaults
+
+- **Reconnecting a vault two servers once mirrored.** When a mirror ended but both servers still hold the vault (one
+  detached it, the core ended the mirror or the servers were unlinked and linked again, or an old core stopped after a
+  take over), `vh mirror relink <vault> --with <server>` on either server compares the two copies entry by entry: what
+  only one holds, and what both hold and changed on this side, the other or both since they last agreed. Then either
+  keep one server's files everywhere (`--keep this` or `--keep theirs`, with `--confirm <vault name>`), or go through
+  the changes (`--review`, `--choose`, `--apply`): for each entry keep this server's version, the other's, or both
+  (the second as a conflict copy beside the first). The server whose files win becomes the vault's core and the other
+  its mirror again. Nothing is dropped: whatever the losing side had that differs is kept as a held change with its
+  bytes (`vh mirror held`), a conflict copy, or in the core's trash. A plan is refused once either copy changes under
+  it (compare again), and while either server has changes waiting, a switch or a start running, or is deleting the
+  vault. Super admins only; the console's Reconnect action on a detached, orphaned, rejoining or forked vault does the
+  same, after confirming your identity. Both servers must hold the same keys for the vault: a relink moves no keys.
+- **Both servers agree to a relink.** A detach, an ended mirror or an unlink ends the trust between two servers about a
+  vault, so neither can reconnect it alone. Starting a relink asks the other server: a super admin there sees the
+  request in `vh mirror pending` (and under Relink requests in the console), with who asks, which vault, and that
+  accepting lets the other server see the vault's file and folder names and structure (never contents). Only after
+  they accept is the comparison made. Applying then proposes the outcome (which server becomes the core, and how many
+  entries the other server's vault takes, keeps as held changes or gains as conflict copies); nothing changes on either
+  server until a super admin there approves it (`vh mirror relink <vault> --approve --confirm <name>`), and the server
+  that asked then carries it out on its own. A changed plan or a change to either copy since voids the approval.
+  Requests expire after a day; declining or cancelling changes nothing. There is no setting to accept relinks
+  automatically.
+
 <!-- vl-release:entry version=1.27.1 -->
 ## 1.27.1 — Linked servers and mirrored vaults
 
