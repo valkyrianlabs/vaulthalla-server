@@ -121,7 +121,7 @@ export default function RelinkRequestsPanel({ requests }: { requests: RelinkRequ
 const ApproveDialog = ({ request: q, onClose }: { request: RelinkRequest; onClose: () => void }) => {
   const ids = useId()
   const [typed, setTyped] = useState('')
-  const approve = useWsMutation('mirror.relink.approve', {
+  const approve = useWsMutation<'mirror.relink.approve', void>('mirror.relink.approve', {
     toPayload: () => ({ vault_id: q.vault_id, confirm: typed }),
     invalidates: [...RELINK_REQUEST_READS],
     onSuccess: () => {

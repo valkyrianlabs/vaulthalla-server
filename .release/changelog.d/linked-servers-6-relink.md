@@ -8,3 +8,16 @@
   changes with their bytes or conflict copies. Peer wire peer.mirror.relink.state, .tree, .prepare, .go, .abort. Detach,
   take over and rejoin records settle (`relinked`). Refused for a stale plan, pending changes, a running switch or
   start, a deletion, or keys that differ.
+- Mirror relink is a two-sided handshake (no server acts on the other's word alone): comparing sends
+  peer.mirror.relink.request, recorded on the other server as waiting for its super admin (a day); until a person there
+  accepts it (`vh mirror pending`, `vh mirror relink <vault> --accept | --decline`, ws mirror.relink.pending, .accept,
+  .decline) peer.mirror.relink.state answers only the vault's status and .tree, .prepare and .go are refused
+  (mirror_relink_not_accepted). Applying proposes the outcome (peer.mirror.relink.propose: the core, the mode, what the
+  other vault gains and loses, both digests, the plan's hash) and waits for that server's super admin to approve it
+  (`--approve --confirm <name>`, ws mirror.relink.approve, the keys step-up bound to mirror.relink:<vault>); the other
+  server prepares only the approved plan (mirror_relink_not_approved otherwise), the asking server then carries it out
+  (its follower's pass, or the command again). A changed plan or tree voids the approval; declines, cancels
+  (peer.mirror.relink.cancel) and expiries change neither vault; answers travel as peer.mirror.relink.answer. Every step
+  is audited on both servers (mirror.relink.request, .accept, .decline, .propose, .approve, .answer, .cancel, .expired,
+  .voided). Migration 171 gains the phases requested, accepted, proposed, approved, declined, expired and the columns
+  expires_at, accepted_at, accepted_by, proposal, approved_at, approved_by.

@@ -2098,6 +2098,7 @@ json servePrepare(const uint32_t callerPeerId, const json& payload) {
         !relinkSameGains(gains["theirs"], approved["theirs"]))
         throw voidIt("mirror_relink_not_approved", "the plan sent is not the one approved here (its entries or what it "
                                                    "does to this vault differ): the approval is void; ask again");
+    r->mode = mode;   // recorded as applied
     try {
         if (role == "core") relinkPrepareCore(*r, callerPeerId, term, by);
         else relinkPrepareMirror(*r, callerPeerId, term, by);

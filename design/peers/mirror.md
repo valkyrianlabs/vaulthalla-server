@@ -1644,8 +1644,23 @@ two servers once mirrored, with a hard override either way and a step-through of
 - **Who.** Super admins, people only (`requireSuperAdmin`); apply and the override take the keys step-up in the console,
   bound to `mirror.relink:<vault>`, after the vault's name typed. Audited `mirror.relink` on both servers and
   `mirror.relink.done` when each side completes.
+- **Both sides agree (the handshake).** Trust between two servers about a vault holds until either ends it; a detach, an
+  ended mirror or an unlink did, so a relink needs a person on each server. Comparing on X first sends
+  `peer.mirror.relink.request`: Y keeps a `responder` row `requested` for a day and serves nothing of its tree (`state`
+  answers only its status; `tree`, `prepare`, `go` refuse `mirror_relink_not_accepted`) until a super admin of Y accepts
+  (`vh mirror pending`, `vh mirror relink <vault> --accept`, `mirror.relink.accept`); the acceptance holds a day. X's
+  apply sends the outcome (`peer.mirror.relink.propose`: Y's side of the core and mode, what each vault gains and loses,
+  both digests, the plan's hash over each entry's choice and version hashes) and waits (`proposed`); a super admin of Y
+  approves it (`--approve --confirm <name>`, `mirror.relink.approve`, the keys step-up bound to Y's vault) or declines.
+  X then carries it out (its apply again, or `relink::tick` on its `approved` row); Y's `prepare` takes only the approved
+  plan: its role and mode, its digest unchanged, the plan hash and the gains it recomputes from the entries it receives
+  (else `mirror_relink_not_approved`, and the approval is void). A plan edited after it was proposed, or a tree that
+  changed on either server, voids the approval and asks again. Declines, cancels (`peer.mirror.relink.cancel`) and
+  expiries change neither vault; answers travel back as `peer.mirror.relink.answer` (informational: each server checks
+  its own rows). Every step is audited on both servers. The link's "accept every vault" never applies to a relink.
 
-Known limits: the plan and its entries are kept on the initiator only (the other server keeps its part once applied);
+Known limits: the plan and its entries are kept on the initiator only (the other server keeps the approved outcome's
+counts and hash, and its part once applied);
 metadata other than place (mode, times) is the core's afterwards, as for resync; a vault whose two sides use different
 keys is refused rather than re-keyed; a failure after the core prepared leaves the mirror stopped (`mirror_relinking`),
 which `vh mirror resync` there resumes.
