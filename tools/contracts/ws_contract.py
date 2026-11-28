@@ -25,6 +25,7 @@ Standard library only.
 from __future__ import annotations
 
 import argparse
+import collections
 import difflib
 import hashlib
 import json
@@ -272,9 +273,18 @@ def generate_ts(snapshot: dict[str, Any]) -> str:
     out.extend(f"  {ts_string(c['command'])}: {ts_string(c['step_up'])}," for c in commands if c.get("step_up"))
     out.append("}")
     out.append("")
-    out.append("// Client timeouts the server declares per command (a timeout means \"no answer yet\", never \"failed\").")
-    out.append("export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> = {")
-    out.extend(f"  {ts_string(c['command'])}: {c['client_timeout_ms']}," for c in commands)
+    # The timeouts are runtime data in every route's first load (the ws client), so most commands, which declare the
+    # same timeout, share one constant and only the others are listed: a new command at the common timeout adds
+    # nothing to the bundle.
+    tally = collections.Counter(c["client_timeout_ms"] for c in commands)
+    default_timeout = min(tally, key=lambda ms: (-tally[ms], ms)) if tally else 15000
+    out.append("// Client timeouts the server declares per command (a timeout means \"no answer yet\", never \"failed\"): the")
+    out.append("// timeout most commands declare, and every command that declares another one.")
+    out.append(f"export const WS_CONTRACT_DEFAULT_TIMEOUT_MS = {default_timeout}")
+    out.append("")
+    out.append("export const WS_CONTRACT_TIMEOUTS: Readonly<Partial<Record<WsContractCommand, number>>> = {")
+    out.extend(f"  {ts_string(c['command'])}: {c['client_timeout_ms']}," for c in commands
+               if c["client_timeout_ms"] != default_timeout)
     out.append("}")
     out.append("")
     return "\n".join(out)

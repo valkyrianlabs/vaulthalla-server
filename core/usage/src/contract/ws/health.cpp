@@ -79,6 +79,33 @@ std::vector<WsCommandUsage> healthCommands() {
         .client_timeout = kDefaultTimeout,
     });
 
+    out.push_back({
+        .command = "health.subscribe",
+        .description = "Follow the health findings by push (design/health/findings.md §6): whenever the findings or "
+                       "their state change, the session gets an unsolicited frame {\"command\": \"health.changed\", "
+                       "\"data\": {\"revision\", \"overall_status\", \"error_count\", \"warning_count\", "
+                       "\"unattended_error_count\", \"unattended_warning_count\"}} (no requestId) and calls "
+                       "health.findings.list; the event carries no findings. Findings are evaluated every 15 seconds "
+                       "while anyone is subscribed; an acknowledge, silence or unsilence is pushed at once. Needs "
+                       "admin.stats.view, re-checked every 30 seconds: a session that lost it gets one last event "
+                       "{\"revision\", \"subscribed\": false}. One pending event per session, the newest wins, held "
+                       "while the session is slow to read. Subscribing again is harmless; the subscription ends with "
+                       "the session.",
+        .input = "none",
+        .response = {uinteger("revision").desc("The findings' revision now; each health.changed carries a higher one.")},
+        .refusal_codes = {"unauthorized", "denied"},
+        .client_timeout = kDefaultTimeout,
+    });
+
+    out.push_back({
+        .command = "health.unsubscribe",
+        .description = "Stop following the health findings by push (health.subscribe). Harmless when not subscribed.",
+        .input = "none",
+        .response = {boolean("subscribed").desc("Always false.")},
+        .refusal_codes = {"unauthorized"},
+        .client_timeout = kDefaultTimeout,
+    });
+
     return out;
 }
 

@@ -564,6 +564,11 @@ export interface WebSocketCommandMap {
   'health.finding.acknowledge': WsContract['health.finding.acknowledge']
   'health.finding.silence': WsContract['health.finding.silence']
   'health.finding.unsilence': WsContract['health.finding.unsilence']
+  // Push: the server then sends unsolicited { command: 'health.changed', data: { revision, overall_status,
+  // error_count, warning_count, unattended_error_count, unattended_warning_count } }, or data
+  // { revision, subscribed: false } once the account can no longer see the findings. Then call health.findings.list.
+  'health.subscribe': WsContract['health.subscribe']
+  'health.unsubscribe': WsContract['health.unsubscribe']
 
   // Settings
   'settings.get': { payload: null; response: { settings: Settings } }
@@ -971,6 +976,9 @@ export interface WebSocketCommandMap {
         overall_status: DashboardSeverity
         error_count: number
         warning_count: number
+        // Without acknowledged and silenced findings (design/health/findings.md §3): what the top bar badge counts.
+        unattended_error_count?: number
+        unattended_warning_count?: number
         checked_at: number | string | null
       }
     }

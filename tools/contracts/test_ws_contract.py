@@ -84,6 +84,19 @@ class WsContractTests(unittest.TestCase):
         self.assertFalse(overridden, "client.ts overrides server-declared timeouts (change core/usage instead): "
                          + ", ".join(overridden))
 
+    def test_the_generated_timeouts_resolve_to_what_each_command_declares(self) -> None:
+        # Only commands off the common timeout are listed (the table ships in every route's first load), and the
+        # client falls back to the generated default, so every command still gets the timeout the server declares.
+        ts = ws_contract.generate_ts(committed())
+        default = int(re.search(r"WS_CONTRACT_DEFAULT_TIMEOUT_MS = (\d+)", ts).group(1))
+        table = ts[ts.index("export const WS_CONTRACT_TIMEOUTS"):]
+        table = table[:table.index("\n}\n")]
+        listed = {name: int(ms) for name, ms in re.findall(r"^\s*'([^']+)': (\d+),", table, flags=re.M)}
+        for c in committed()["ws"]:
+            self.assertEqual(listed.get(c["command"], default), c["client_timeout_ms"], c["command"])
+        self.assertNotIn(default, listed.values())
+        self.assertIn("?? WS_CONTRACT_DEFAULT_TIMEOUT_MS", CLIENT_TS.read_text(encoding="utf-8"))
+
     def test_a_server_side_change_is_drift(self) -> None:
         changed = copy.deepcopy(committed())
         group_add = next(c for c in changed["ws"] if c["command"] == "group.add")
