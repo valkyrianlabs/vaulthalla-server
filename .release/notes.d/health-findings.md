@@ -22,3 +22,6 @@ listed as silenced with who did it and until when. What changes is the new "unat
 - Every change is recorded in the audit trail (`health.finding.acknowledge`, `.silence`, `.unsilence`).
 - AI agents can read findings and cannot change their state, on any path.
 - Each finding also names what can be done about it: today, the page to open.
+- **Paired Macs and other clients hear about changes by push.** A client that subscribes (`health.subscribe`) is told
+  within 15 seconds when a finding appears, clears or changes, and at once when someone acknowledges, silences or
+  turns one back on. Nothing about the findings is sent to an account that can no longer see them.

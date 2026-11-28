@@ -564,6 +564,11 @@ export interface WebSocketCommandMap {
   'health.finding.acknowledge': WsContract['health.finding.acknowledge']
   'health.finding.silence': WsContract['health.finding.silence']
   'health.finding.unsilence': WsContract['health.finding.unsilence']
+  // Push: the server then sends unsolicited { command: 'health.changed', data: { revision, overall_status,
+  // error_count, warning_count, unattended_error_count, unattended_warning_count } }, or data
+  // { revision, subscribed: false } once the account can no longer see the findings. Then call health.findings.list.
+  'health.subscribe': WsContract['health.subscribe']
+  'health.unsubscribe': WsContract['health.unsubscribe']
 
   // Settings
   'settings.get': { payload: null; response: { settings: Settings } }

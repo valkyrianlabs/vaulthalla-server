@@ -6,7 +6,7 @@
 export const WS_CONTRACT_VERSION = 3
 
 // What the daemon's meta.contract.get answers as ws_hash when it was built from the same book.
-export const WS_CONTRACT_HASH = 'f9647cd0a3ece2f68aa8ae5f09aa77c92012bf9921247bf721e39ad45d1dd5b3'
+export const WS_CONTRACT_HASH = '79e188e016173bc52e47c6d38443611328e5c2cd1eef6b0f13649751f10df740'
 
 // What meta.contract.get answers as models_hash when the daemon's model shapes are these.
 export const WS_MODELS_HASH = 'fb2eb50b685f7091174b75d352410329a3ab874281197b5e75237c9eacb3def9'
@@ -34,6 +34,7 @@ export const WS_CAPABILITIES: readonly string[] = [
   'fs.entry.metadata_version',
   'fs.entry.stable_id',
   'health.findings',
+  'health.push',
   'http.upload.content',
   'http.upload.resumable',
   'ws.envelope.optional_payload',
@@ -5606,6 +5607,27 @@ export interface WsContract {
     response: { health: WsModels['HealthFindings'] }
   }
   /**
+   * Follow the health findings by push (design/health/findings.md §6): whenever the findings or their state
+   * change, the session gets an unsolicited frame {"command": "health.changed", "data": {"revision",
+   * "overall_status", "error_count", "warning_count", "unattended_error_count", "unattended_warning_count"}}
+   * (no requestId) and calls health.findings.list; the event carries no findings. Findings are evaluated
+   * every 15 seconds while anyone is subscribed; an acknowledge, silence or unsilence is pushed at once.
+   * Needs admin.stats.view, re-checked every 30 seconds: a session that lost it gets one last event
+   * {"revision", "subscribed": false}. One pending event per session, the newest wins, held while the session
+   * is slow to read. Subscribing again is harmless; the subscription ends with the session.
+   */
+  'health.subscribe': {
+    payload: null
+    response: { revision: number }
+  }
+  /**
+   * Stop following the health findings by push (health.subscribe). Harmless when not subscribed.
+   */
+  'health.unsubscribe': {
+    payload: null
+    response: { subscribed: boolean }
+  }
+  /**
    * The contract this daemon was built from: contract_version, contract_hash (the whole document vh_usage
    * --json publishes), ws_hash (the ws command book, what the web console is generated from) and models_hash
    * (the model shapes the book refers to). Read-only, no secrets; needs a signed-in session (no build
@@ -9951,6 +9973,8 @@ export const WS_CONTRACT_COMMANDS: readonly WsContractCommand[] = [
   'health.finding.silence',
   'health.finding.unsilence',
   'health.findings.list',
+  'health.subscribe',
+  'health.unsubscribe',
   'meta.contract.get',
   'meta.hello',
   'mirror.accept',
@@ -10464,6 +10488,8 @@ export const WS_CONTRACT_TIMEOUTS: Readonly<Record<WsContractCommand, number>> =
   'health.finding.silence': 15000,
   'health.finding.unsilence': 15000,
   'health.findings.list': 15000,
+  'health.subscribe': 15000,
+  'health.unsubscribe': 15000,
   'meta.contract.get': 15000,
   'meta.hello': 15000,
   'mirror.accept': 15000,

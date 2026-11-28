@@ -1,5 +1,6 @@
 // Health findings (design/health/findings.md): the catalog covers what the cards raise, the rules for acknowledged
-// and silenced marks, who may set them, what the audit trail records, and that no agent path can.
+// and silenced marks, who may set them, what the audit trail records, that no agent path can, and the push
+// (health.subscribe, health.changed; protocols::ws::HealthNotifier).
 
 #include "../helpers/db_suite.hpp"
 #include "../helpers/identities.hpp"
@@ -12,6 +13,7 @@
 #include "ops/Audit.hpp"
 #include "ops/Error.hpp"
 #include "ops/Health.hpp"
+#include "protocols/ws/HealthNotifier.hpp"
 #include "protocols/ws/Router.hpp"
 #include "protocols/ws/Session.hpp"
 #include "protocols/ws/handler/Health.hpp"
@@ -22,12 +24,15 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <regex>
 #include <set>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace vh::test_health_findings {
 
@@ -371,6 +376,220 @@ TEST_F(HealthFindingsDb, EachChangeIsInTheAuditTrailWithoutTheNote) {
     std::ranges::sort(actions);
     EXPECT_EQ(actions, (std::vector<std::string>{"health.finding.acknowledge", "health.finding.silence",
                                                 "health.finding.unsilence"}));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The push (DB): health.subscribe and health.changed
+// ---------------------------------------------------------------------------------------------------------------
+
+// Events are captured through the notifier's delivery seam (a test session has no socket); the default delivery
+// holds them the same way while Session::queuedFrames() is at HealthNotifier::kMaxQueuedFrames. Each test drives
+// its own notifier's passes with explicit times, and points health::stateChanged() at it.
+class HealthPushDb : public HealthFindingsDb {
+protected:
+    using HealthNotifier = protocols::ws::HealthNotifier;
+    using Clock = HealthNotifier::Clock;
+    using SessionPtr = std::shared_ptr<protocols::ws::Session>;
+
+    static void SetUpTestSuite() { setUpDbSuite("health_push", {.seed = true, .runtime = true}); }
+    static void TearDownTestSuite() {
+        health::setActiveSourceForTesting({});
+        tearDownDbSuite();
+    }
+
+    void SetUp() override {
+        HealthFindingsDb::SetUp();
+        if (IsSkipped()) return;
+        notifier = std::make_shared<HealthNotifier>();
+        notifier->setDeliveryForTesting([this](const SessionPtr& session, const json& event) {
+            if (full) return false;
+            delivered[session->uuid].push_back(event);
+            return true;
+        });
+        HealthNotifier::listenForStateChanges(notifier);
+        t0 = Clock::now();
+    }
+
+    void TearDown() override { HealthNotifier::listenForStateChanges(HealthNotifier::instance()); }
+
+    [[nodiscard]] std::vector<json> take(const SessionPtr& session) {
+        auto out = std::move(delivered[session->uuid]);
+        delivered.erase(session->uuid);
+        return out;
+    }
+
+    // Later than t0 by `seconds`: subscribe() evaluates on the real clock, so a pass is due 15 s after it.
+    [[nodiscard]] Clock::time_point at(const int seconds) const { return t0 + std::chrono::seconds(seconds); }
+
+    std::shared_ptr<HealthNotifier> notifier;
+    std::map<std::string, std::vector<json>> delivered;  // by session uuid
+    bool full = false;                                   // the consumer is not reading
+    Clock::time_point t0{};
+};
+
+TEST_F(HealthPushDb, NoSubscriberNoEvaluation) {
+    notifier->tick(at(0));
+    notifier->stateChanged();
+    notifier->tick(at(60));
+    notifier->tick(at(120));
+    EXPECT_EQ(notifier->evaluations(), 0u);
+
+    const auto admin = sessionFor(superUser);
+    const auto revision = notifier->subscribe(admin);
+    EXPECT_EQ(notifier->evaluations(), 1u) << "the first subscriber after none looks now";
+    EXPECT_GE(revision, 1u);
+    EXPECT_TRUE(notifier->subscribed(*admin));
+    EXPECT_EQ(notifier->subscribe(admin), revision) << "subscribing again changes nothing";
+    EXPECT_EQ(notifier->evaluations(), 1u);
+    EXPECT_EQ(notifier->sessionCount(), 1u);
+
+    notifier->unsubscribe(admin);
+    EXPECT_FALSE(notifier->subscribed(*admin));
+    active.push_back(raised("system.retention.overdue", "error"));
+    notifier->tick(at(200));
+    EXPECT_EQ(notifier->evaluations(), 1u);
+    EXPECT_TRUE(delivered.empty());
+
+    // The ws commands are the same notifier's (the process's), refused without admin.stats.view.
+    using protocols::ws::handler::Health;
+    const auto none = test::identities::detachedUser(9103, "health_push_none",
+                                                     std::make_shared<rbac::role::Admin>(rbac::role::Admin::None()));
+    EXPECT_THROW((void)Health::subscribe(sessionFor(none)), ops::Denied);
+    EXPECT_THROW((void)Health::subscribe(sessionFor(nullptr)), ops::Denied);
+    const auto viaWs = sessionFor(viewer);
+    EXPECT_TRUE(Health::subscribe(viaWs).at("revision").is_number_unsigned());
+    EXPECT_TRUE(HealthNotifier::instance()->subscribed(*viaWs));
+    EXPECT_EQ(Health::unsubscribe(viaWs), (json{{"subscribed", false}}));
+    EXPECT_FALSE(HealthNotifier::instance()->subscribed(*viaWs));
+}
+
+TEST_F(HealthPushDb, ADigestChangePushesOnce) {
+    const auto admin = sessionFor(superUser);
+    const auto r0 = notifier->subscribe(admin);
+    notifier->tick(at(1));
+    EXPECT_TRUE(take(admin).empty()) << "nothing changed, nothing due";
+    EXPECT_EQ(notifier->evaluations(), 1u);
+
+    notifier->tick(at(20));
+    EXPECT_EQ(notifier->evaluations(), 2u) << "evaluated every 15 seconds while subscribed";
+    EXPECT_TRUE(take(admin).empty()) << "the same findings: no event";
+
+    active.push_back(raised("system.retention.overdue", "error"));
+    notifier->tick(at(40));
+    const auto events = take(admin);
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].at("command"), "health.changed");
+    EXPECT_FALSE(events[0].contains("requestId"));
+    EXPECT_EQ(events[0].at("data"), (json{{"revision", r0 + 1},
+                                          {"overall_status", "error"},
+                                          {"error_count", 2},
+                                          {"warning_count", 1},
+                                          {"unattended_error_count", 2},
+                                          {"unattended_warning_count", 1}}))
+        << "the summary only: no findings";
+
+    notifier->tick(at(60));
+    notifier->tick(at(80));
+    EXPECT_TRUE(take(admin).empty()) << "pushed once";
+    EXPECT_EQ(notifier->revision(), r0 + 1);
+}
+
+TEST_F(HealthPushDb, ASlowConsumerGetsOneEventTheNewest) {
+    const auto admin = sessionFor(superUser);
+    const auto r0 = notifier->subscribe(admin);
+    full = true;
+    active.push_back(raised("system.retention.overdue", "error"));
+    notifier->tick(at(20));
+    active.clear();
+    notifier->tick(at(40));
+    EXPECT_EQ(notifier->revision(), r0 + 2);
+    EXPECT_TRUE(delivered.empty());
+
+    full = false;
+    notifier->tick(at(45));  // no evaluation due: what was held goes out
+    const auto events = take(admin);
+    ASSERT_EQ(events.size(), 1u) << "coalesced";
+    EXPECT_EQ(events[0].at("data").at("revision"), r0 + 2);
+    EXPECT_EQ(events[0].at("data").at("overall_status"), "healthy");
+    EXPECT_EQ(events[0].at("data").at("error_count"), 0);
+    notifier->tick(at(50));
+    EXPECT_TRUE(take(admin).empty());
+}
+
+TEST_F(HealthPushDb, ASessionThatLostThePermissionGetsOneLastEvent) {
+    const auto admin = sessionFor(superUser);
+    const auto watcher = sessionFor(viewer);
+    (void)notifier->subscribe(admin);
+    (void)notifier->subscribe(watcher);
+    notifier->tick(at(1));  // the first revalidation: both may
+    EXPECT_EQ(notifier->sessionCount(), 2u);
+
+    // Its role lost admin.stats.view (a signed-out session reads the same: no user).
+    watcher->user = test::identities::detachedUser(9104, "health_push_demoted",
+                                                   std::make_shared<rbac::role::Admin>(rbac::role::Admin::None()));
+    notifier->tick(at(10));
+    EXPECT_TRUE(take(watcher).empty()) << "re-checked every 30 seconds, not every pass";
+
+    active.push_back(raised("system.retention.overdue", "error"));
+    notifier->tick(at(32));
+    const auto last = take(watcher);
+    ASSERT_EQ(last.size(), 1u);
+    EXPECT_EQ(last[0].at("command"), "health.changed");
+    EXPECT_EQ(last[0].at("data").at("subscribed"), false);
+    EXPECT_TRUE(last[0].at("data").contains("revision"));
+    EXPECT_FALSE(last[0].at("data").contains("overall_status")) << "nothing about findings it may not see";
+    EXPECT_FALSE(notifier->subscribed(*watcher));
+    EXPECT_EQ(notifier->sessionCount(), 1u);
+    EXPECT_EQ(take(admin).size(), 1u) << "the others are told as usual";
+
+    active.clear();
+    notifier->tick(at(64));
+    EXPECT_TRUE(take(watcher).empty());
+    EXPECT_EQ(take(admin).size(), 1u);
+}
+
+TEST_F(HealthPushDb, AnAcknowledgeSilenceOrUnsilencePushesAtOnce) {
+    const auto admin = sessionFor(superUser);
+    const auto r0 = notifier->subscribe(admin);
+    notifier->tick(at(1));
+    ASSERT_TRUE(take(admin).empty());
+
+    (void)ops::health::silence(superUser, {.cls = "system.fuse.error_rate_elevated", .forSeconds = 3600});
+    notifier->tick(at(2));  // well before the next evaluation is due
+    auto events = take(admin);
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].at("data").at("revision"), r0 + 1);
+    EXPECT_EQ(events[0].at("data").at("warning_count"), 1) << "a silenced warning is still a warning";
+    EXPECT_EQ(events[0].at("data").at("unattended_warning_count"), 0);
+
+    (void)ops::health::acknowledge(superUser, "system.db.disconnected", "", {});
+    notifier->tick(at(3));
+    events = take(admin);
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].at("data").at("unattended_error_count"), 0);
+    EXPECT_EQ(events[0].at("data").at("overall_status"), "error");
+
+    (void)ops::health::unsilence(superUser, "system.fuse.error_rate_elevated", "");
+    notifier->tick(at(4));
+    events = take(admin);
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].at("data").at("revision"), r0 + 3);
+    EXPECT_EQ(events[0].at("data").at("unattended_warning_count"), 1);
+
+    notifier->tick(at(5));
+    EXPECT_TRUE(take(admin).empty());
+    EXPECT_EQ(notifier->evaluations(), 4u) << "one on subscribe, one per change";
+}
+
+// A closed session is forgotten at the next pass, with nothing sent.
+TEST_F(HealthPushDb, AClosedSessionIsForgotten) {
+    auto gone = sessionFor(superUser);
+    (void)notifier->subscribe(gone);
+    gone.reset();
+    active.push_back(raised("system.retention.overdue", "error"));
+    notifier->tick(at(20));
+    EXPECT_EQ(notifier->sessionCount(), 0u);
+    EXPECT_TRUE(delivered.empty());
 }
 
 }

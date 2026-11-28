@@ -1,7 +1,9 @@
 # Health findings: classes, acknowledge and silence, remedies, push
 
 Design for the server half of the "Round out the Mac experience" epic (valkyrianlabs/vaulthalla-desktop;
-its Desktop half is `docs/mac-experience.md` there). Status: design, 2026-11-26. Nothing here is built yet.
+its Desktop half is `docs/mac-experience.md` there). Status: design 2026-11-26; built 2026-11-27: classes, state,
+commands, agents, remedies as data and audit (#499), and the push of §6 (`protocols::ws::HealthNotifier`). Not built:
+the console (§11, #483).
 
 The goal: a warning or error should lead somewhere. A person can say "I have seen this" (acknowledge), "stop
 telling me about this kind of thing" (silence), or do something about it (a remedy), and every surface (the web
@@ -195,7 +197,7 @@ Making email respect a silence is a separate change once findings, not the healt
 ## 12. Compatibility
 
 - Additive on the wire: new commands, optional response members. `contract_version` and the capability list
-  gain `health.findings`.
+  gain `health.findings`, and `health.push` for §6.
 - Migration 170 creates one table and adds no bit to any existing role.
 - No data, key or recovery material is involved.
 

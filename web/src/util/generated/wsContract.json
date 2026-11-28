@@ -86,6 +86,11 @@
       "since": "1.28.0"
     },
     {
+      "description": "health.subscribe / health.unsubscribe and the unsolicited health.changed event (the status, the counts and a revision; no findings) whenever the findings or their state change (design/health/findings.md §6). Without it, poll stats.dashboard.severity.",
+      "name": "health.push",
+      "since": "1.28.0"
+    },
+    {
       "description": "PUT /upload/content: a streaming conditional create (If-None-Match) or replace (If-Match) on the web and device listeners.",
       "name": "http.upload.content",
       "since": "1.17.0"
@@ -38495,6 +38500,69 @@
       "variants": []
     },
     {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "health.subscribe",
+      "confirmations": [],
+      "description": "Follow the health findings by push (design/health/findings.md §6): whenever the findings or their state change, the session gets an unsolicited frame {\"command\": \"health.changed\", \"data\": {\"revision\", \"overall_status\", \"error_count\", \"warning_count\", \"unattended_error_count\", \"unattended_warning_count\"}} (no requestId) and calls health.findings.list; the event carries no findings. Findings are evaluated every 15 seconds while anyone is subscribed; an acknowledge, silence or unsilence is pushed at once. Needs admin.stats.view, re-checked every 30 seconds: a session that lost it gets one last event {\"revision\", \"subscribed\": false}. One pending event per session, the newest wins, held while the session is slow to read. Subscribing again is harmless; the subscription ends with the session.",
+      "effect": "read",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "unauthorized",
+        "denied"
+      ],
+      "refusal_kinds": [
+        "unauthorized",
+        "denied"
+      ],
+      "response": [
+        {
+          "description": "The findings' revision now; each health.changed carries a higher one.",
+          "minimum": 0,
+          "name": "revision",
+          "required": true,
+          "types": [
+            "integer"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
+      "auth": "human",
+      "client_timeout_ms": 15000,
+      "command": "health.unsubscribe",
+      "confirmations": [],
+      "description": "Stop following the health findings by push (health.subscribe). Harmless when not subscribed.",
+      "effect": "read",
+      "input": "none",
+      "operation": null,
+      "payload": [],
+      "refusal_codes": [
+        "unauthorized"
+      ],
+      "refusal_kinds": [
+        "unauthorized"
+      ],
+      "response": [
+        {
+          "description": "Always false.",
+          "name": "subscribed",
+          "required": true,
+          "types": [
+            "boolean"
+          ]
+        }
+      ],
+      "response_model": null,
+      "untyped_refusals": [],
+      "variants": []
+    },
+    {
       "auth": "session",
       "client_timeout_ms": 15000,
       "command": "meta.contract.get",
@@ -73696,5 +73764,5 @@
       "variants": []
     }
   ],
-  "ws_hash": "f9647cd0a3ece2f68aa8ae5f09aa77c92012bf9921247bf721e39ad45d1dd5b3"
+  "ws_hash": "79e188e016173bc52e47c6d38443611328e5c2cd1eef6b0f13649751f10df740"
 }

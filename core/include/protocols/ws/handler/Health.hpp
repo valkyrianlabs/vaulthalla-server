@@ -15,6 +15,9 @@ struct Health {
     static json findingAcknowledge(const json& payload, const std::shared_ptr<Session>& session);
     static json findingSilence(const json& payload, const std::shared_ptr<Session>& session);
     static json findingUnsilence(const json& payload, const std::shared_ptr<Session>& session);
+    // The push (§6): health.changed while subscribed (protocols::ws::HealthNotifier).
+    static json subscribe(const std::shared_ptr<Session>& session);
+    static json unsubscribe(const std::shared_ptr<Session>& session);
 };
 
 }
