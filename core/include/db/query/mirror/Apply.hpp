@@ -91,6 +91,9 @@ public:
     // Opens an apply in `txn`: the core's changes (Log::markMirrorApply: no log rows, no entry hashes moved by the
     // triggers), with the times it sent kept as they are (vh.keep_mtime).
     static void begin(pqxx::work& txn);
+    // For the rest of the transaction the totals statements leave folder times alone (vh.keep_folder_times): a copy's
+    // page applies each folder's own time (migration 173) and must keep it while it adds what is below.
+    static void keepFolderTimes(pqxx::work& txn);
     // The vault's mirror row, FOR UPDATE (one apply of a vault at a time); nullopt without one.
     [[nodiscard]] static std::optional<MirrorVault> lock(pqxx::work& txn, uint32_t vaultId);
 
