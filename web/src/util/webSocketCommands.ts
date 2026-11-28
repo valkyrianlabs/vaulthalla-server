@@ -558,6 +558,13 @@ export interface WebSocketCommandMap {
   'audit.verify': WsContract['audit.verify']
   'audit.export': WsContract['audit.export']
 
+  // Health findings (design/health/findings.md): admin.stats.view reads; acknowledging and silencing take
+  // admin.stats.manage and a human (paired devices and agents are refused).
+  'health.findings.list': WsContract['health.findings.list']
+  'health.finding.acknowledge': WsContract['health.finding.acknowledge']
+  'health.finding.silence': WsContract['health.finding.silence']
+  'health.finding.unsilence': WsContract['health.finding.unsilence']
+
   // Settings
   'settings.get': { payload: null; response: { settings: Settings } }
 
