@@ -25,6 +25,7 @@
 #include "mirror/submit/Local.hpp"
 #include "ops/Error.hpp"
 #include "ops/Fs.hpp"
+#include "rbac/Mirrored.hpp"
 #include "runtime/Deps.hpp"
 #include "vault/model/Vault.hpp"
 
@@ -512,7 +513,9 @@ std::shared_ptr<vh::identities::User> relinkUser(const Who& w) {
 
 // ---- preparing each side ---------------------------------------------------------------------------------------------
 
+// Who may use the vault here and what its gate says follow its rows (rbac::mirrored, mirror::access).
 void relinkRepublish() {
+    vh::rbac::mirrored::reload();
     vh::mirror::access::reload();
 }
 
